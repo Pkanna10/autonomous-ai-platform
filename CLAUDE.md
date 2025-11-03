@@ -899,20 +899,168 @@ Used for: Vector embeddings, semantic search
 
 **Target: 90%+ test coverage**
 
+**🔴🟢🔵 TDD Workflow (MANDATORY):**
+
+Every feature MUST follow Red-Green-Refactor:
+1. **RED:** Write failing test first → Verify it fails
+2. **GREEN:** Write minimal code → Make test pass
+3. **REFACTOR:** Clean up code → Keep tests green
+4. **REPEAT:** For each requirement
+
+**See the 🧪 Test-Driven Development (TDD) Guidelines section for complete workflow and examples.**
+
+#### Test Type Decision Matrix
+
+Use this to decide which test to write:
+
+| What You're Testing | Test Type | Framework | Example |
+|---------------------|-----------|-----------|---------|
+| Pure function | Unit | Vitest/pytest | `parseIntent()` |
+| Class (isolated) | Unit | Vitest/pytest | `ClaudeClient` (mocked) |
+| Database query | Integration | Testcontainers | `PackageRepo.findByName()` |
+| API endpoint | Integration | Vitest + Supertest | `POST /tasks` |
+| External API | Unit (mocked) | vi.mock() | `anthropic.messages.create()` |
+| User workflow | E2E | Playwright | Full task creation flow |
+
 #### Unit Tests
 - **Framework:** Vitest (TypeScript), pytest (Python)
-- **Location:** `*.test.ts`, `*_test.py`
-- **Coverage:** 90%+
+- **Location:** `*.test.ts` (colocated with source), `*_test.py`
+- **Coverage:** 90%+ of all functions/classes
+- **Scope:** Pure functions, business logic, utilities
+- **Speed:** Fast (<100ms per test)
+- **Isolation:** Mock ALL external dependencies
+
+**Example:**
+```typescript
+// packages/agent-core/src/parser/intent-parser.test.ts
+describe('parseIntent', () => {
+  it('should identify package installation intent', () => {
+    const result = parseIntent('install lodash');
+    expect(result.type).toBe('INSTALL_PACKAGE');
+    expect(result.packageName).toBe('lodash');
+  });
+});
+```
 
 #### Integration Tests
-- **Framework:** Vitest + Testcontainers
-- **Scope:** Database, Redis, Qdrant interactions
-- **Coverage:** 80%+
+- **Framework:** Vitest + Testcontainers (TypeScript), pytest (Python)
+- **Location:** `*.integration.test.ts`, `*_integration_test.py`
+- **Coverage:** 80%+ of database/API/service interactions
+- **Scope:** Database queries, Redis caching, Qdrant vector search, API calls
+- **Speed:** Medium (1-5s per test)
+- **Setup:** Docker containers for real dependencies
+
+**Example with Testcontainers:**
+```typescript
+let container: StartedPostgreSqlContainer;
+
+beforeAll(async () => {
+  container = await new PostgreSqlContainer('pgvector/pgvector:pg15').start();
+}, 60000);
+
+afterAll(async () => {
+  await container.stop();
+});
+```
 
 #### E2E Tests
 - **Framework:** Playwright
-- **Scope:** Full user workflows
-- **Coverage:** Critical paths only
+- **Location:** `e2e/*.spec.ts`
+- **Scope:** Critical user workflows (not aiming for high coverage)
+- **Speed:** Slow (10-60s per test)
+- **Coverage:** Essential user journeys only
+
+**Critical Workflows:**
+- Create task → Execute → View results
+- Install package → Verify installation
+- Search paper → Extract algorithm → Generate code
+
+#### Mocking External Services
+
+**Always mock external APIs in unit tests:**
+
+```typescript
+// Mock Anthropic API
+vi.mock('@anthropic-ai/sdk', () => ({
+  Anthropic: vi.fn().mockImplementation(() => ({
+    messages: {
+      create: vi.fn().mockResolvedValue({
+        content: [{ text: 'Mocked response' }]
+      })
+    }
+  }))
+}));
+
+// Mock arXiv API
+vi.spyOn(global, 'fetch').mockResolvedValue({
+  json: () => Promise.resolve({ papers: [] })
+});
+```
+
+#### Test Data Management
+
+**Use factories for consistent test data:**
+
+```typescript
+// test/factories/package.factory.ts
+export function createMockPackage(overrides = {}) {
+  return {
+    id: randomUUID(),
+    name: 'test-package',
+    version: '1.0.0',
+    ...overrides
+  };
+}
+```
+
+**Use fixtures in pytest:**
+
+```python
+@pytest.fixture
+def sample_paper():
+    return Paper(title="Test", authors=["Author"])
+```
+
+#### Pre-Commit Workflow
+
+**Required before EVERY commit:**
+
+```bash
+# 1. Run all tests
+pnpm test
+
+# 2. Verify coverage ≥90%
+pnpm test:coverage
+
+# 3. Lint code
+pnpm lint
+
+# 4. Type check
+pnpm typecheck
+```
+
+#### Continuous Testing
+
+**During development (recommended):**
+
+```bash
+# Watch mode - auto-run tests on changes
+pnpm test:watch
+
+# Run specific test file
+pnpm test packages/agent-core/src/parser.test.ts
+```
+
+**Testing Checklist (before marking task complete):**
+
+- [ ] Tests written FIRST (TDD Red-Green-Refactor)
+- [ ] All tests passing
+- [ ] Coverage ≥90% verified
+- [ ] Edge cases tested (null, empty, boundaries)
+- [ ] Error conditions tested
+- [ ] External dependencies mocked
+- [ ] Test names are descriptive
+- [ ] AAA/Given-When-Then pattern followed
 
 ---
 
@@ -1072,10 +1220,24 @@ import { createClient } from '@/packages/agent-core/src/clients/database';
 - ✅ YES: Use `.env` files (already in `.gitignore`)
 - ⚠️ VERIFY: Before any commit, check for secrets
 
-#### 5. Test Everything
-- **Minimum Coverage:** 90%+ (project target)
+#### 5. Test Everything (TDD Mandatory)
+- **TDD Workflow:** ALWAYS write tests BEFORE implementation (Red-Green-Refactor)
+- **Red-Green-Refactor Cycle:**
+  1. 🔴 RED: Write failing test first
+  2. 🟢 GREEN: Write minimal code to pass
+  3. 🔵 REFACTOR: Improve code quality
+- **No Exceptions:** No code without tests. Period.
+- **Test Types Required:**
+  - Unit: All pure functions, classes, utilities
+  - Integration: Database, API, external service interactions
+  - E2E: Critical user workflows only
+- **Minimum Coverage:** 90%+ (enforced before commit)
 - **Test Files:** `*.test.ts` (TypeScript), `*_test.py` (Python)
-- **Run Before Commit:** `pnpm test`
+- **Pre-Commit Requirements:**
+  - All tests passing (`pnpm test`)
+  - Coverage ≥90% (`pnpm test:coverage`)
+  - No skipped/disabled tests without justification
+- **See:** 🧪 Test-Driven Development (TDD) Guidelines section for complete details
 
 #### 6. Follow Monorepo Structure
 ```
@@ -1242,6 +1404,111 @@ class Paper:
     abstract: str
 ```
 
+#### Test Code
+
+**TypeScript (Vitest) - AAA Pattern**
+
+```typescript
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+// ✅ GOOD: Descriptive names, AAA pattern, proper mocking
+describe('ClaudeClient', () => {
+  let client: ClaudeClient;
+
+  beforeEach(() => {
+    // Fresh instance for each test
+    client = new ClaudeClient();
+  });
+
+  it('should send message and receive response from Claude API', async () => {
+    // ARRANGE
+    const messages = [{ role: 'user', content: 'Hello' }];
+    const expectedResponse = { content: [{ text: 'Hi there!' }] };
+    vi.spyOn(client['client'].messages, 'create').mockResolvedValue(expectedResponse);
+
+    // ACT
+    const response = await client.chat(messages);
+
+    // ASSERT
+    expect(response.content[0].text).toBe('Hi there!');
+  });
+
+  it('should throw ApiError when network request fails', async () => {
+    // ARRANGE
+    vi.spyOn(client['client'].messages, 'create').mockRejectedValue(
+      new Error('Network timeout')
+    );
+
+    // ACT & ASSERT
+    await expect(
+      client.chat([{ role: 'user', content: 'Test' }])
+    ).rejects.toThrow('Network timeout');
+  });
+});
+
+// ❌ BAD: Vague names, no structure, hard to understand
+test('client works', async () => {
+  const c = new ClaudeClient();
+  const r = await c.chat([{ role: 'user', content: 'hi' }]);
+  expect(r).toBeDefined();
+});
+```
+
+**Python (pytest) - Given-When-Then Pattern**
+
+```python
+import pytest
+from unittest.mock import Mock, patch
+
+# ✅ GOOD: Fixtures, descriptive names, Given-When-Then structure
+class TestPaperParser:
+    @pytest.fixture
+    def parser(self):
+        """Provide fresh parser for each test."""
+        return PaperParser()
+
+    @pytest.fixture
+    def valid_pdf(self, tmp_path):
+        """Provide a valid PDF file."""
+        pdf = tmp_path / "paper.pdf"
+        pdf.write_bytes(SAMPLE_PDF_BYTES)
+        return pdf
+
+    def test_should_extract_title_when_pdf_is_valid(self, parser, valid_pdf):
+        """
+        GIVEN a valid PDF with title metadata
+        WHEN parsing the PDF
+        THEN should return paper with extracted title
+        """
+        # WHEN
+        paper = parser.parse(valid_pdf)
+
+        # THEN
+        assert paper.title == "Expected Title"
+        assert paper.authors == ["Author One", "Author Two"]
+
+    def test_should_raise_parse_error_when_pdf_is_corrupted(self, parser, tmp_path):
+        """
+        GIVEN a corrupted PDF file
+        WHEN attempting to parse
+        THEN should raise ParseError
+        """
+        # GIVEN
+        corrupt_pdf = tmp_path / "corrupt.pdf"
+        corrupt_pdf.write_bytes(b"invalid")
+
+        # WHEN & THEN
+        with pytest.raises(ParseError) as exc:
+            parser.parse(corrupt_pdf)
+        assert "corrupted" in str(exc.value).lower()
+
+# ❌ BAD: No structure, unclear expectations
+def test_parser():
+    p = PaperParser()
+    result = p.parse("file.pdf")
+    assert result
+```
+
 ### 🔒 Security Considerations
 
 #### Never Do:
@@ -1405,26 +1672,58 @@ async function generateCode(
 
 Before marking any task complete, verify:
 
+**Code Quality:**
 - [ ] Code compiles/runs without errors
-- [ ] Tests written and passing (90%+ coverage)
 - [ ] Types are explicit (no `any`)
 - [ ] Documentation added (JSDoc comments)
+- [ ] Follows project structure
+- [ ] No secrets committed
+
+**Testing (TDD Required):**
+- [ ] Tests written FIRST (TDD: Red-Green-Refactor cycle followed)
+- [ ] All tests passing (90%+ coverage verified)
+- [ ] Unit tests for all functions/classes/utilities
+- [ ] Integration tests for database/API/external service interactions
+- [ ] E2E tests for critical user workflows (if applicable)
+- [ ] Edge cases and error conditions tested
+- [ ] Mocks/stubs used appropriately (no real external API calls in tests)
+- [ ] Test names are descriptive and follow conventions
+- [ ] Test data properly managed (factories/fixtures used)
+
+**Security & Performance:**
 - [ ] Security checked (no vulnerabilities)
 - [ ] Performance acceptable (<2s P99 latency)
-- [ ] Follows project structure
+
+**Version Control:**
 - [ ] Git commit message follows format
-- [ ] No secrets committed
 
 ### 🔄 Self-Check Questions
 
 Before every response to user, ask yourself:
 
+**Phase & Architecture:**
 1. Am I working on the right phase? (Currently: Phase 1)
 2. Did I follow TypeScript/Python style guidelines?
-3. Did I add tests?
-4. Did I check for security issues?
-5. Did I document my changes?
-6. Did I verify nothing breaks?
+3. Does this follow the project structure?
+
+**Testing (TDD):**
+4. Did I write tests FIRST before implementation? (Red-Green-Refactor)
+5. Did I write unit tests for all new functions/classes?
+6. Did I write integration tests for database/API interactions?
+7. Are all tests passing with 90%+ coverage?
+8. Did I test edge cases and error conditions?
+9. Did I use proper mocking for external services?
+10. Are test names descriptive and follow conventions?
+
+**Quality & Security:**
+11. Did I check for security issues?
+12. Did I document my changes (JSDoc comments)?
+13. Did I verify nothing breaks (all existing tests still pass)?
+14. Are types explicit (no `any`)?
+
+**Performance:**
+15. Is performance acceptable (<2s P99 latency)?
+16. Did I profile if making performance changes?
 
 ### 📞 When to Ask User
 
@@ -1444,6 +1743,549 @@ Before every response to user, ask yourself:
 2. Wait until Phase 3 as planned
 3. Adjust the timeline to prioritize this feature"
 ```
+
+### 🧪 Test-Driven Development (TDD) Guidelines
+
+**CRITICAL: Test-Driven Development is MANDATORY for all code in this project.**
+
+#### TDD Workflow (Red-Green-Refactor)
+
+Every single feature, function, or class MUST follow this cycle:
+
+```
+1. 🔴 RED: Write a failing test first
+   - Write the test for functionality that doesn't exist yet
+   - Run test → verify it fails (red)
+   - This proves the test is actually testing something
+
+2. 🟢 GREEN: Write minimal code to pass the test
+   - Write the simplest code that makes the test pass
+   - Don't worry about perfection yet
+   - Run test → verify it passes (green)
+
+3. 🔵 REFACTOR: Improve the code quality
+   - Clean up the code
+   - Remove duplication
+   - Improve naming and structure
+   - Run tests → verify still passing
+
+4. ♻️ REPEAT: For each new requirement
+```
+
+**Example TDD Workflow:**
+
+```typescript
+// Step 1: RED - Write failing test
+describe('parseIntent', () => {
+  it('should identify package installation intent', () => {
+    const result = parseIntent('Install lodash');
+    expect(result.type).toBe('INSTALL_PACKAGE');
+    expect(result.packageName).toBe('lodash');
+  });
+});
+// Run test → FAILS (parseIntent doesn't exist yet) ✓
+
+// Step 2: GREEN - Minimal implementation
+export function parseIntent(input: string) {
+  if (input.toLowerCase().includes('install')) {
+    const packageName = input.split(' ')[1];
+    return { type: 'INSTALL_PACKAGE', packageName };
+  }
+  return { type: 'UNKNOWN', packageName: null };
+}
+// Run test → PASSES ✓
+
+// Step 3: REFACTOR - Improve code quality
+export function parseIntent(input: string): Intent {
+  const normalizedInput = input.toLowerCase().trim();
+  const words = normalizedInput.split(/\s+/);
+
+  if (words[0] === 'install' && words[1]) {
+    return {
+      type: IntentType.INSTALL_PACKAGE,
+      packageName: words[1]
+    };
+  }
+
+  return {
+    type: IntentType.UNKNOWN,
+    packageName: null
+  };
+}
+// Run test → STILL PASSES ✓
+
+// Step 4: REPEAT - Add edge case tests and implement
+it('should handle install command with extra spaces', () => {
+  const result = parseIntent('  install   lodash  ');
+  expect(result.type).toBe('INSTALL_PACKAGE');
+  expect(result.packageName).toBe('lodash');
+});
+```
+
+#### Test Type Decision Matrix
+
+**Use this table to decide which type of test to write:**
+
+| What You're Testing | Test Type | Framework | Speed | Example |
+|---------------------|-----------|-----------|-------|---------|
+| Pure function (no I/O) | Unit | Vitest/pytest | <100ms | `parseIntent()`, `calculateComplexity()` |
+| Class/module (isolated) | Unit | Vitest/pytest | <100ms | `ClaudeClient` (mocked), `IntentParser` |
+| Utility functions | Unit | Vitest/pytest | <100ms | `formatDate()`, `validateEmail()` |
+| Database query | Integration | Testcontainers | 1-5s | `PackageRepo.findByName()` |
+| Redis caching | Integration | Testcontainers | 1-5s | `CacheService.get()` |
+| API endpoint | Integration | Vitest + Supertest | 1-5s | `POST /api/tasks` |
+| External API call | Unit (mocked) | Vitest + vi.mock() | <100ms | `anthropic.messages.create()` |
+| File system operations | Integration | Vitest + tmp | <1s | `PdfParser.parse()` |
+| Complete user workflow | E2E | Playwright | 10-60s | "Create task → Execute → View results" |
+
+**Decision Rules:**
+- If it has **NO external dependencies** → Unit test (fast, isolated)
+- If it touches **database/cache/filesystem** → Integration test (slower, real dependencies)
+- If it's a **critical user journey** → E2E test (slowest, end-to-end)
+
+#### Test Structure Patterns
+
+**AAA Pattern (Arrange-Act-Assert) - TypeScript**
+
+```typescript
+import { describe, it, expect, beforeEach } from 'vitest';
+
+describe('PackageRepository', () => {
+  let repo: PackageRepository;
+  let mockDb: Database;
+
+  beforeEach(() => {
+    // Setup fresh state for each test
+    mockDb = createMockDatabase();
+    repo = new PackageRepository(mockDb);
+  });
+
+  it('should return package when found by exact name', async () => {
+    // ✅ ARRANGE: Set up test data
+    const expectedPackage = {
+      id: '123',
+      name: 'lodash',
+      version: '4.17.21',
+      ecosystem: 'npm'
+    };
+    await mockDb.packages.insert(expectedPackage);
+
+    // ✅ ACT: Execute the function under test
+    const result = await repo.findByName('lodash');
+
+    // ✅ ASSERT: Verify the outcome
+    expect(result).toEqual(expectedPackage);
+  });
+
+  it('should return null when package not found', async () => {
+    // ARRANGE: Empty database (no setup needed)
+
+    // ACT
+    const result = await repo.findByName('nonexistent');
+
+    // ASSERT
+    expect(result).toBeNull();
+  });
+
+  it('should throw DatabaseError when connection fails', async () => {
+    // ARRANGE
+    mockDb.simulateConnectionFailure();
+
+    // ACT & ASSERT combined for exceptions
+    await expect(repo.findByName('lodash')).rejects.toThrow(DatabaseError);
+    await expect(repo.findByName('lodash')).rejects.toThrow('Connection lost');
+  });
+});
+```
+
+**Given-When-Then Pattern - Python (pytest)**
+
+```python
+import pytest
+from unittest.mock import Mock, patch
+
+class TestPaperParser:
+    """Test suite for PDF paper parsing functionality."""
+
+    @pytest.fixture
+    def parser(self):
+        """Provide a fresh parser instance for each test."""
+        return PaperParser()
+
+    @pytest.fixture
+    def sample_pdf(self, tmp_path):
+        """Provide a sample PDF file for testing."""
+        pdf_file = tmp_path / "sample_paper.pdf"
+        pdf_file.write_bytes(VALID_PDF_CONTENT)
+        return pdf_file
+
+    def test_should_extract_title_from_valid_pdf(self, parser, sample_pdf):
+        """
+        GIVEN a valid PDF with title in metadata
+        WHEN parsing the PDF
+        THEN should extract the title correctly
+        """
+        # GIVEN - fixtures provide the setup
+
+        # WHEN
+        paper = parser.parse(sample_pdf)
+
+        # THEN
+        assert paper.title == "Sample Research Paper"
+        assert paper.title is not None
+        assert len(paper.title) > 0
+
+    def test_should_raise_error_when_pdf_is_corrupted(self, parser, tmp_path):
+        """
+        GIVEN a corrupted PDF file
+        WHEN attempting to parse
+        THEN should raise ParseError with descriptive message
+        """
+        # GIVEN
+        corrupted_pdf = tmp_path / "corrupted.pdf"
+        corrupted_pdf.write_bytes(b"not a valid pdf")
+
+        # WHEN & THEN
+        with pytest.raises(ParseError) as exc_info:
+            parser.parse(corrupted_pdf)
+
+        assert "corrupted" in str(exc_info.value).lower()
+```
+
+**Descriptive Test Naming Conventions:**
+
+```typescript
+// ❌ BAD: Vague, non-descriptive names
+test('works')
+test('package test')
+test('should work correctly')
+
+// ✅ GOOD: Describes what, when, and expected outcome
+it('should return 404 when package not found in database')
+it('should parse install intent from "install lodash" command')
+it('should throw ApiError when network request times out')
+it('should cache result for 5 minutes after successful fetch')
+it('should retry 3 times before failing on network errors')
+
+// Pattern: should [expected behavior] when [condition]
+```
+
+#### Mocking & Stubbing External Dependencies
+
+**Mocking Anthropic API Calls (Vitest)**
+
+```typescript
+import { vi } from 'vitest';
+import { ClaudeClient } from './claude-client';
+
+// Mock the entire module
+vi.mock('@anthropic-ai/sdk', () => ({
+  Anthropic: vi.fn().mockImplementation(() => ({
+    messages: {
+      create: vi.fn().mockResolvedValue({
+        content: [{ type: 'text', text: 'Mocked response' }],
+        usage: { input_tokens: 10, output_tokens: 20 }
+      })
+    }
+  }))
+}));
+
+describe('ClaudeClient', () => {
+  it('should send message and return response', async () => {
+    // ARRANGE
+    const client = new ClaudeClient();
+
+    // ACT
+    const response = await client.chat([
+      { role: 'user', content: 'Test message' }
+    ]);
+
+    // ASSERT
+    expect(response.content[0].text).toBe('Mocked response');
+  });
+});
+```
+
+**Mocking Database with Spies (Vitest)**
+
+```typescript
+import { vi } from 'vitest';
+
+describe('PackageService', () => {
+  it('should call repository findByName method', async () => {
+    // ARRANGE
+    const mockRepo = {
+      findByName: vi.fn().mockResolvedValue({ name: 'lodash' })
+    };
+    const service = new PackageService(mockRepo);
+
+    // ACT
+    await service.getPackage('lodash');
+
+    // ASSERT
+    expect(mockRepo.findByName).toHaveBeenCalledWith('lodash');
+    expect(mockRepo.findByName).toHaveBeenCalledTimes(1);
+  });
+});
+```
+
+**Mocking with pytest (Python)**
+
+```python
+from unittest.mock import Mock, patch, MagicMock
+
+def test_should_call_arxiv_api_with_correct_parameters():
+    """GIVEN a paper ID, WHEN fetching from arXiv, THEN should call API correctly."""
+    # ARRANGE
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {'title': 'Test Paper'}
+
+    with patch('requests.get', return_value=mock_response) as mock_get:
+        fetcher = ArxivFetcher()
+
+        # ACT
+        paper = fetcher.fetch('2301.12345')
+
+        # ASSERT
+        mock_get.assert_called_once_with(
+            'https://export.arxiv.org/api/query',
+            params={'id_list': '2301.12345'}
+        )
+        assert paper['title'] == 'Test Paper'
+```
+
+#### Test Data Management
+
+**Factory Functions (TypeScript)**
+
+```typescript
+// test/factories/package.factory.ts
+import { randomUUID } from 'crypto';
+
+export function createMockPackage(overrides: Partial<Package> = {}): Package {
+  return {
+    id: randomUUID(),
+    name: 'test-package',
+    version: '1.0.0',
+    ecosystem: 'npm',
+    description: 'Test package description',
+    downloads_last_month: 1000,
+    github_stars: 100,
+    created_at: new Date(),
+    ...overrides  // Allow customization
+  };
+}
+
+// Usage in tests
+it('should save package to database', async () => {
+  const package = createMockPackage({ name: 'lodash', version: '4.17.21' });
+  await repo.save(package);
+
+  const found = await repo.findByName('lodash');
+  expect(found.version).toBe('4.17.21');
+});
+```
+
+**Fixtures (pytest)**
+
+```python
+# tests/fixtures.py
+import pytest
+from datetime import datetime
+
+@pytest.fixture
+def sample_paper():
+    """Provide a sample research paper for testing."""
+    return Paper(
+        id='123',
+        arxiv_id='2301.12345',
+        title='Test Paper',
+        authors=['Author One', 'Author Two'],
+        abstract='This is a test abstract',
+        published_date=datetime(2023, 1, 15)
+    )
+
+@pytest.fixture
+def empty_database(db_session):
+    """Provide a clean database for each test."""
+    db_session.query(Paper).delete()
+    db_session.commit()
+    yield db_session
+    db_session.rollback()
+
+# Usage in tests
+def test_should_store_paper_in_database(empty_database, sample_paper):
+    empty_database.add(sample_paper)
+    empty_database.commit()
+
+    found = empty_database.query(Paper).filter_by(arxiv_id='2301.12345').first()
+    assert found.title == 'Test Paper'
+```
+
+#### Edge Cases and Error Conditions
+
+**Always test these scenarios:**
+
+```typescript
+describe('Edge Cases and Errors', () => {
+  // Null/undefined inputs
+  it('should handle null input gracefully', () => {
+    expect(() => parseIntent(null)).toThrow(ValidationError);
+  });
+
+  it('should handle undefined input gracefully', () => {
+    expect(() => parseIntent(undefined)).toThrow(ValidationError);
+  });
+
+  // Empty inputs
+  it('should handle empty string', () => {
+    const result = parseIntent('');
+    expect(result.type).toBe('UNKNOWN');
+  });
+
+  // Boundary conditions
+  it('should handle maximum length input', () => {
+    const longInput = 'a'.repeat(10000);
+    expect(() => parseIntent(longInput)).not.toThrow();
+  });
+
+  // Invalid formats
+  it('should handle malformed JSON gracefully', () => {
+    expect(() => JSON.parse('invalid')).toThrow(SyntaxError);
+  });
+
+  // Network errors
+  it('should retry on network timeout', async () => {
+    const mockFetch = vi.fn()
+      .mockRejectedValueOnce(new Error('ETIMEDOUT'))
+      .mockRejectedValueOnce(new Error('ETIMEDOUT'))
+      .mockResolvedValueOnce({ data: 'success' });
+
+    const result = await fetchWithRetry(mockFetch);
+    expect(result.data).toBe('success');
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
+  // Permission errors
+  it('should throw PermissionError when unauthorized', async () => {
+    await expect(
+      deletePackage('lodash')
+    ).rejects.toThrow(PermissionError);
+  });
+});
+```
+
+#### Integration Test Setup with Testcontainers
+
+**PostgreSQL Integration Tests**
+
+```typescript
+// packages/agent-core/src/repositories/package.integration.test.ts
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import {
+  PostgreSqlContainer,
+  StartedPostgreSqlContainer
+} from '@testcontainers/postgresql';
+import { Client } from 'pg';
+
+let container: StartedPostgreSqlContainer;
+let client: Client;
+
+beforeAll(async () => {
+  // Start PostgreSQL container
+  container = await new PostgreSqlContainer('pgvector/pgvector:pg15')
+    .withDatabase('test_db')
+    .withUsername('test')
+    .withPassword('test')
+    .start();
+
+  // Connect and run migrations
+  client = new Client({
+    host: container.getHost(),
+    port: container.getPort(),
+    database: container.getDatabase(),
+    user: container.getUsername(),
+    password: container.getPassword(),
+  });
+
+  await client.connect();
+  await runMigrations(client);
+}, 60000); // 60s timeout for container start
+
+afterAll(async () => {
+  await client.end();
+  await container.stop();
+});
+
+describe('PackageRepository Integration Tests', () => {
+  it('should insert and retrieve package from real database', async () => {
+    // ARRANGE
+    const repo = new PackageRepository(client);
+    const package = {
+      name: 'lodash',
+      version: '4.17.21',
+      ecosystem: 'npm'
+    };
+
+    // ACT
+    await repo.save(package);
+    const found = await repo.findByName('lodash');
+
+    // ASSERT
+    expect(found).toBeDefined();
+    expect(found.name).toBe('lodash');
+    expect(found.version).toBe('4.17.21');
+  });
+});
+```
+
+#### Pre-Commit Testing Requirements
+
+**Before EVERY commit, you MUST:**
+
+```bash
+# 1. Run all tests
+pnpm test
+
+# 2. Verify coverage meets 90%+ threshold
+pnpm test:coverage
+
+# 3. Run linter
+pnpm lint
+
+# 4. Type check
+pnpm typecheck
+```
+
+**Continuous Testing During Development:**
+
+```bash
+# Watch mode - auto-run tests on file changes
+pnpm test:watch
+
+# Watch specific file
+pnpm test:watch packages/agent-core/src/parser.test.ts
+```
+
+#### Summary: TDD Checklist for Every Feature
+
+Before marking any task complete, verify:
+
+- [ ] **RED:** Wrote failing test first
+- [ ] **GREEN:** Implemented minimal code to pass
+- [ ] **REFACTOR:** Cleaned up code while keeping tests green
+- [ ] **Unit tests:** All functions/classes have unit tests
+- [ ] **Integration tests:** Database/API interactions tested
+- [ ] **Edge cases:** Null, empty, boundary conditions tested
+- [ ] **Error conditions:** All error paths tested
+- [ ] **Mocks:** External dependencies properly mocked
+- [ ] **Coverage:** ≥90% test coverage achieved
+- [ ] **Descriptive names:** Test names clearly describe behavior
+- [ ] **AAA pattern:** Tests follow Arrange-Act-Assert structure
+- [ ] **Tests passing:** All tests green before commit
+
+**Remember: No code without tests. No exceptions.**
 
 ---
 
@@ -1494,7 +2336,7 @@ pnpm build                      # Build all packages (when ready)
 
 ---
 
-**Last Updated:** 2025-11-01 (Week 1-2 of implementation)
+**Last Updated:** 2025-11-03 (Week 2 of implementation - TDD guidelines added)
 
 **Status:** Foundation phase - Early development
 
