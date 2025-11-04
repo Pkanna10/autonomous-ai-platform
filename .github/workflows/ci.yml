@@ -130,6 +130,7 @@ jobs:
     permissions:
       contents: read
       security-events: write # Required for uploading SARIF results
+      actions: read # Required for workflow run telemetry
 
     steps:
       - name: Checkout code
