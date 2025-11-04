@@ -1,0 +1,99 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Dependencies
+node_modules
+pnpm-lock.yaml
+package-lock.json
+yarn.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+env/
+.venv/
+
+# Environment & Secrets (CRITICAL: Never copy into images)
+.env
+.env.*
+!.env.example
+
+# Documentation (exclude from images, keep README for metadata)
+*.md
+!README.md
+CLAUDE.md
+STATUS.md
+documentation_guide/
+
+# Tests (no tests in production images)
+**/*.test.ts
+**/*.spec.ts
+**/*.test.py
+**/*_test.py
+test/
+tests/
+__tests__/
+coverage/
+.coverage
+.pytest_cache/
+*.cover
+
+# Development files
+.vscode/
+.idea/
+*.log
+*.swp
+*.swo
+*~
+.editorconfig
+
+# Build artifacts
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# Docker (don't copy Docker files into Docker images)
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.circleci/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
+
+# Monitoring & logs (generated at runtime)
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Database files (use volumes, not copied files)
+*.sql
+*.db
+*.sqlite
+*.sqlite3
+infrastructure/schema/
+
+# Lock files (install from package.json instead)
+pnpm-lock.yaml
+package-lock.json
