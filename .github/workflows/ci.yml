@@ -84,7 +84,12 @@ jobs:
         run: black --check .
 
       - name: Type check with Mypy
-        run: mypy .
+        run: |
+          if find . -name "*.py" -type f | grep -q .; then
+            mypy .
+          else
+            echo "No Python files found, skipping mypy"
+          fi
         continue-on-error: true # Don't fail yet since Python code is early stage
 
       - name: Run tests
@@ -100,14 +105,31 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Run npm audit
-        run: npm audit --audit-level=moderate
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.20.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run pnpm audit
+        run: pnpm audit --audit-level=moderate
         continue-on-error: true # Don't fail CI on vulnerabilities yet
 
   # Docker security scan
   docker-security:
     name: Docker Security
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # Required for uploading SARIF results
 
     steps:
       - name: Checkout code
