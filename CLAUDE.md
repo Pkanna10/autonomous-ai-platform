@@ -1,6 +1,7 @@
 # Autonomous AI Development Platform - Documentation for Claude
 
 ## Table of Contents
+
 1. [Project Changelog](#project-changelog)
 2. [Project Overview](#project-overview)
 3. [Architecture](#architecture)
@@ -18,26 +19,31 @@
 
 ## ⚠️ CURRENT PROJECT STATUS - READ THIS FIRST
 
-> **🚨 CRITICAL: Read this section and "Critical Instructions for Claude" BEFORE making any changes 🚨**
+> **🚨 CRITICAL: Read this section and "Critical Instructions for Claude" BEFORE
+> making any changes 🚨**
 
 **Phase:** Week 1-2 of 52 (Foundation Phase - Month 1 of 12-month timeline)
-**Current Focus:** LangGraph orchestrator, package manager, research engine (Phase 1 ONLY)
-**Do NOT Implement:** Code generation, optimization, multi-agent systems (Phase 2-6)
+**Current Focus:** LangGraph orchestrator, package manager, research engine
+(Phase 1 ONLY) **Do NOT Implement:** Code generation, optimization, multi-agent
+systems (Phase 2-6)
 
 **Project Reality:**
+
 - This is a **12-month solo developer project** in its **very early stages**
 - Most components are **NOT implemented yet** - still in foundation phase
 - Focus on **incremental development** - one phase at a time
 - Building advanced features before foundation = technical debt
 
 **Mandatory Requirements:**
+
 - ✅ **TDD Required:** Write tests FIRST (Red-Green-Refactor cycle)
 - ✅ **Only 3 docs:** CLAUDE.md, STATUS.md, README.md (never create others)
 - ✅ **Explicit types:** No `any` types in TypeScript
 - ✅ **No secrets:** Never commit API keys or passwords
 - ✅ **Phase 1 only:** Stay focused on current phase
 
-**Next Step:** Read the complete "Critical Instructions for Claude" section below ↓
+**Next Step:** Read the complete "Critical Instructions for Claude" section
+below ↓
 
 ---
 
@@ -45,21 +51,28 @@
 
 ### 🎯 Context: What This Project Is
 
-This is a **12-month solo developer project** in its **very early stages (Week 1-2 of 52)**. When working on this codebase, understand that:
+This is a **12-month solo developer project** in its **very early stages (Week
+1-2 of 52)**. When working on this codebase, understand that:
 
-1. **Current Reality:** Most components are NOT implemented yet. The project is still in foundation phase.
-2. **Long-term Vision:** This will become a full autonomous AI platform with research integration.
-3. **Incremental Development:** Focus on one phase at a time, don't try to build everything at once.
+1. **Current Reality:** Most components are NOT implemented yet. The project is
+   still in foundation phase.
+2. **Long-term Vision:** This will become a full autonomous AI platform with
+   research integration.
+3. **Incremental Development:** Focus on one phase at a time, don't try to build
+   everything at once.
 
 ### 🚨 Critical Rules (ALWAYS FOLLOW)
 
 #### 1. Never Break the Timeline
+
 - **Current Phase:** Week 1-9 (Foundation)
 - **DO NOT:** Jump ahead to Phase 3+ features
-- **DO:** Focus on LangGraph orchestrator, package manager, research engine (Phase 1)
+- **DO:** Focus on LangGraph orchestrator, package manager, research engine
+  (Phase 1)
 - **REASON:** Building advanced features before foundation = technical debt
 
 #### 2. Always Use TypeScript Types
+
 ```typescript
 // ✅ GOOD: Explicit types
 interface TaskRequest {
@@ -69,10 +82,11 @@ interface TaskRequest {
 }
 
 // ❌ BAD: Any types
-function processTask(data: any) { }
+function processTask(data: any) {}
 ```
 
 #### 3. Database Access Pattern
+
 ```typescript
 // ✅ GOOD: Use pg client from packages/agent-core
 import { createClient } from '@/packages/agent-core/src/clients/database';
@@ -81,12 +95,15 @@ import { createClient } from '@/packages/agent-core/src/clients/database';
 ```
 
 #### 4. Never Commit Secrets
+
 - ❌ NO: API keys, passwords in code
 - ✅ YES: Use `.env` files (already in `.gitignore`)
 - ⚠️ VERIFY: Before any commit, check for secrets
 
 #### 5. Test Everything (TDD Mandatory)
-- **TDD Workflow:** ALWAYS write tests BEFORE implementation (Red-Green-Refactor)
+
+- **TDD Workflow:** ALWAYS write tests BEFORE implementation
+  (Red-Green-Refactor)
 - **Red-Green-Refactor Cycle:**
   1. 🔴 RED: Write failing test first
   2. 🟢 GREEN: Write minimal code to pass
@@ -99,12 +116,17 @@ import { createClient } from '@/packages/agent-core/src/clients/database';
 - **Minimum Coverage:** 90%+ (enforced before commit)
 - **Test Files:** `*.test.ts` (TypeScript), `*_test.py` (Python)
 - **Pre-Commit Requirements:**
+  - **Shortcut:** Run `pnpm run pre-commit` (runs all 4 checks below)
   - All tests passing (`pnpm test`)
   - Coverage ≥90% (`pnpm test:coverage`)
+  - Linting passing (`pnpm lint`)
+  - Type checking passing (`pnpm typecheck`)
   - No skipped/disabled tests without justification
-- **See:** 🧪 Test-Driven Development (TDD) Guidelines section for complete details
+- **See:** 🧪 Test-Driven Development (TDD) Guidelines section for complete
+  details
 
 #### 6. Follow Monorepo Structure
+
 ```
 ✅ GOOD: Place code in correct package
 - Agent logic → packages/agent-core/
@@ -117,27 +139,32 @@ import { createClient } from '@/packages/agent-core/src/clients/database';
 
 ### 📝 Documentation Management Rules
 
-**CRITICAL: This project uses EXACTLY THREE documentation files. No more, no less.**
+**CRITICAL: This project uses EXACTLY THREE documentation files. No more, no
+less.**
 
 #### Files You CAN and MUST Update
 
-| File | Update Frequency | What to Update |
-|------|------------------|----------------|
-| **CLAUDE.md** | Weekly | Implementation status, metrics, timeline progress, environment changes |
-| **STATUS.md** | Every 2-3 days | Active work tracking, current goals, blockers, decisions |
-| **README.md** | Monthly or as needed | User-facing overview, setup instructions, getting started guide |
+| File          | Update Frequency     | What to Update                                                         |
+| ------------- | -------------------- | ---------------------------------------------------------------------- |
+| **CLAUDE.md** | Weekly               | Implementation status, metrics, timeline progress, environment changes |
+| **STATUS.md** | Every 2-3 days       | Active work tracking, current goals, blockers, decisions               |
+| **README.md** | Monthly or as needed | User-facing overview, setup instructions, getting started guide        |
 
 #### What to Update in Each File
 
 **CLAUDE.md** - Update these sections only:
-- **Current Implementation Status** (Project Structure section) - Mark components as complete/in-progress
+
+- **Current Implementation Status** (Project Structure section) - Mark
+  components as complete/in-progress
 - **Current Status** in Project Overview - Update week number and phase
-- **Success Metrics table** - Update "Current Status" column when you measure something
+- **Success Metrics table** - Update "Current Status" column when you measure
+  something
 - **Environment Variables** - Add new variables when services are added
 - **Key Files Reference** - Add important new files
 - **Last Updated date** at bottom - Update to current date
 
 **STATUS.md** - Update entire file as work progresses:
+
 - Current week and phase
 - This week's goals (checkboxes)
 - Blockers encountered
@@ -145,6 +172,7 @@ import { createClient } from '@/packages/agent-core/src/clients/database';
 - Next week preview
 
 **README.md** - Update as needed:
+
 - Project description (rarely changes)
 - Setup instructions (when new services added)
 - Quick start guide (when workflow changes)
@@ -153,6 +181,7 @@ import { createClient } from '@/packages/agent-core/src/clients/database';
 #### Strict Prohibitions - DO NOT:
 
 ❌ **NEVER create these files:**
+
 - ARCHITECTURE.md
 - DESIGN.md
 - SPECS.md
@@ -163,11 +192,16 @@ import { createClient } from '@/packages/agent-core/src/clients/database';
 - Any other .md files
 
 ❌ **NEVER modify these files:**
-- `documentation_guide/FINAL_Autonomous_AI_Platform_Implementation_Guide.md` (original spec)
-- `documentation_guide/Unified_Autonomous_Research_Platform_Architecture.md` (original spec)
-- Any other files in `documentation_guide/` (these are frozen reference documents)
+
+- `documentation_guide/FINAL_Autonomous_AI_Platform_Implementation_Guide.md`
+  (original spec)
+- `documentation_guide/Unified_Autonomous_Research_Platform_Architecture.md`
+  (original spec)
+- Any other files in `documentation_guide/` (these are frozen reference
+  documents)
 
 ❌ **NEVER create documentation directories:**
+
 - `/docs`
 - `/documentation`
 - `/wiki`
@@ -205,6 +239,7 @@ import { createClient } from '@/packages/agent-core/src/clients/database';
 4. If still unsure: **Ask the user first** before creating any file
 
 **Example of what to do:**
+
 ```
 ❌ Wrong: "I'll create an API.md file to document the endpoints"
 ✅ Right: "I'll add JSDoc comments to the endpoint functions and update
@@ -221,16 +256,20 @@ import { createClient } from '@/packages/agent-core/src/clients/database';
 #### Rationale
 
 **Why only 3 files?**
+
 - **Focus:** Solo developer should code, not maintain documentation
 - **Simplicity:** One source of truth (CLAUDE.md) for AI context
 - **Overhead:** Multiple docs = stale docs = wrong information
 - **Git History:** Commit messages already provide detailed changelog
 
-**Remember:** Code and tests are the best documentation. Write clear code, comprehensive tests, and JSDoc comments. Use CLAUDE.md, STATUS.md, and README.md only for what can't be expressed in code.
+**Remember:** Code and tests are the best documentation. Write clear code,
+comprehensive tests, and JSDoc comments. Use CLAUDE.md, STATUS.md, and README.md
+only for what can't be expressed in code.
 
 ### 📋 Code Style Guidelines
 
 #### TypeScript
+
 ```typescript
 // Use modern ES6+ syntax
 import { ClaudeClient } from './clients/claude';
@@ -253,6 +292,7 @@ try {
 ```
 
 #### Python
+
 ```python
 # Type hints required
 def parse_paper(pdf_path: str) -> Paper:
@@ -289,7 +329,9 @@ describe('ClaudeClient', () => {
     // ARRANGE
     const messages = [{ role: 'user', content: 'Hello' }];
     const expectedResponse = { content: [{ text: 'Hi there!' }] };
-    vi.spyOn(client['client'].messages, 'create').mockResolvedValue(expectedResponse);
+    vi.spyOn(client['client'].messages, 'create').mockResolvedValue(
+      expectedResponse
+    );
 
     // ACT
     const response = await client.chat(messages);
@@ -377,6 +419,7 @@ def test_parser():
 ### 🔒 Security Considerations
 
 #### Never Do:
+
 1. **SQL Injection:** Always use parameterized queries
 2. **XSS:** Always sanitize user input
 3. **Command Injection:** Never use `exec()` with user input
@@ -384,6 +427,7 @@ def test_parser():
 5. **Secrets in Code:** Use environment variables
 
 #### Always Do:
+
 1. **Input Validation:** Validate all user inputs
 2. **Output Encoding:** Encode all outputs
 3. **Least Privilege:** Containers run as non-root
@@ -393,6 +437,7 @@ def test_parser():
 ### 🎨 Architecture Patterns to Follow
 
 #### 1. Orchestrator Pattern (LangGraph)
+
 ```python
 # Use LangGraph for agent orchestration
 from langgraph.graph import StateGraph
@@ -404,6 +449,7 @@ graph.add_edge("intent_parser", "task_planner")
 ```
 
 #### 2. Repository Pattern (Database Access)
+
 ```typescript
 // Use repository pattern for data access
 class PackageRepository {
@@ -414,6 +460,7 @@ class PackageRepository {
 ```
 
 #### 3. Strategy Pattern (Algorithm Selection)
+
 ```typescript
 // Use strategy pattern for different algorithms
 interface OptimizationStrategy {
@@ -428,6 +475,7 @@ class HyperLogLogStrategy implements OptimizationStrategy {
 ### 📊 When Making Changes
 
 #### Before Any Code Change, Ask:
+
 1. **Is this in the current phase?** (Check timeline section)
 2. **Does this require new dependencies?** (Document in package.json)
 3. **Is this tested?** (Write tests first/alongside)
@@ -435,6 +483,7 @@ class HyperLogLogStrategy implements OptimizationStrategy {
 5. **Is this documented?** (Add JSDoc comments)
 
 #### Commit Message Format
+
 ```
 <type>(<scope>): <subject>
 
@@ -446,6 +495,7 @@ class HyperLogLogStrategy implements OptimizationStrategy {
 **Types:** feat, fix, docs, style, refactor, test, chore
 
 **Example:**
+
 ```
 feat(agent-core): implement LangGraph orchestrator
 
@@ -455,6 +505,9 @@ feat(agent-core): implement LangGraph orchestrator
 
 Addresses Phase 1, Week 3-4 milestone
 ```
+
+**Before Committing:** Always run `pnpm run pre-commit` to ensure all checks
+pass (typecheck, lint, test, coverage).
 
 ### 🐛 Debugging Guidelines
 
@@ -467,6 +520,7 @@ Addresses Phase 1, Week 3-4 milestone
 5. **Ask User:** If unclear, ask before proceeding
 
 #### Logging Pattern
+
 ```typescript
 import { logger } from '@/lib/logger';
 
@@ -477,6 +531,7 @@ logger.error('Task execution failed', { error, taskId });
 ### 📚 Documentation Requirements
 
 #### Always Document:
+
 1. **Functions:** JSDoc comments for all public functions
 2. **Types:** Description for all interfaces
 3. **Decisions:** Why you chose an approach
@@ -503,12 +558,14 @@ async function generateCode(
 ### ⚡ Performance Guidelines
 
 #### DO:
+
 - Cache Claude API responses (90% cost reduction target)
 - Use indexes on database queries
 - Batch operations when possible
 - Profile before optimizing
 
 #### DON'T:
+
 - Make multiple API calls when one suffices
 - Load entire datasets into memory
 - Optimize without measuring first
@@ -538,6 +595,7 @@ async function generateCode(
 Before marking any task complete, verify:
 
 **Code Quality:**
+
 - [ ] Code compiles/runs without errors
 - [ ] Types are explicit (no `any`)
 - [ ] Documentation added (JSDoc comments)
@@ -545,6 +603,7 @@ Before marking any task complete, verify:
 - [ ] No secrets committed
 
 **Testing (TDD Required):**
+
 - [ ] Tests written FIRST (TDD: Red-Green-Refactor cycle followed)
 - [ ] All tests passing (90%+ coverage verified)
 - [ ] Unit tests for all functions/classes/utilities
@@ -556,10 +615,12 @@ Before marking any task complete, verify:
 - [ ] Test data properly managed (factories/fixtures used)
 
 **Security & Performance:**
+
 - [ ] Security checked (no vulnerabilities)
 - [ ] Performance acceptable (<2s P99 latency)
 
 **Version Control:**
+
 - [ ] Git commit message follows format
 
 ### 🔄 Self-Check Questions
@@ -567,32 +628,29 @@ Before marking any task complete, verify:
 Before every response to user, ask yourself:
 
 **Phase & Architecture:**
+
 1. Am I working on the right phase? (Currently: Phase 1)
 2. Did I follow TypeScript/Python style guidelines?
 3. Does this follow the project structure?
 
-**Testing (TDD):**
-4. Did I write tests FIRST before implementation? (Red-Green-Refactor)
-5. Did I write unit tests for all new functions/classes?
-6. Did I write integration tests for database/API interactions?
-7. Are all tests passing with 90%+ coverage?
-8. Did I test edge cases and error conditions?
-9. Did I use proper mocking for external services?
-10. Are test names descriptive and follow conventions?
+**Testing (TDD):** 4. Did I write tests FIRST before implementation?
+(Red-Green-Refactor) 5. Did I write unit tests for all new functions/classes? 6.
+Did I write integration tests for database/API interactions? 7. Are all tests
+passing with 90%+ coverage? 8. Did I test edge cases and error conditions? 9.
+Did I use proper mocking for external services? 10. Are test names descriptive
+and follow conventions?
 
-**Quality & Security:**
-11. Did I check for security issues?
-12. Did I document my changes (JSDoc comments)?
-13. Did I verify nothing breaks (all existing tests still pass)?
-14. Are types explicit (no `any`)?
+**Quality & Security:** 11. Did I check for security issues? 12. Did I document
+my changes (JSDoc comments)? 13. Did I verify nothing breaks (all existing tests
+still pass)? 14. Are types explicit (no `any`)?
 
-**Performance:**
-15. Is performance acceptable (<2s P99 latency)?
-16. Did I profile if making performance changes?
+**Performance:** 15. Is performance acceptable (<2s P99 latency)? 16. Did I
+profile if making performance changes?
 
 ### 📞 When to Ask User
 
 **Always ask user when:**
+
 - Requirements are ambiguous
 - Multiple valid approaches exist
 - About to make breaking changes
@@ -601,6 +659,7 @@ Before every response to user, ask yourself:
 - Need additional API keys/credentials
 
 **Example:**
+
 ```
 "I notice you're asking for feature X, which is planned for Phase 3
 (Week 20). Would you like me to:
@@ -668,13 +727,13 @@ export function parseIntent(input: string): Intent {
   if (words[0] === 'install' && words[1]) {
     return {
       type: IntentType.INSTALL_PACKAGE,
-      packageName: words[1]
+      packageName: words[1],
     };
   }
 
   return {
     type: IntentType.UNKNOWN,
-    packageName: null
+    packageName: null,
   };
 }
 // Run test → STILL PASSES ✓
@@ -691,21 +750,23 @@ it('should handle install command with extra spaces', () => {
 
 **Use this table to decide which type of test to write:**
 
-| What You're Testing | Test Type | Framework | Speed | Example |
-|---------------------|-----------|-----------|-------|---------|
-| Pure function (no I/O) | Unit | Vitest/pytest | <100ms | `parseIntent()`, `calculateComplexity()` |
-| Class/module (isolated) | Unit | Vitest/pytest | <100ms | `ClaudeClient` (mocked), `IntentParser` |
-| Utility functions | Unit | Vitest/pytest | <100ms | `formatDate()`, `validateEmail()` |
-| Database query | Integration | Testcontainers | 1-5s | `PackageRepo.findByName()` |
-| Redis caching | Integration | Testcontainers | 1-5s | `CacheService.get()` |
-| API endpoint | Integration | Vitest + Supertest | 1-5s | `POST /api/tasks` |
-| External API call | Unit (mocked) | Vitest + vi.mock() | <100ms | `anthropic.messages.create()` |
-| File system operations | Integration | Vitest + tmp | <1s | `PdfParser.parse()` |
-| Complete user workflow | E2E | Playwright | 10-60s | "Create task → Execute → View results" |
+| What You're Testing     | Test Type     | Framework          | Speed  | Example                                  |
+| ----------------------- | ------------- | ------------------ | ------ | ---------------------------------------- |
+| Pure function (no I/O)  | Unit          | Vitest/pytest      | <100ms | `parseIntent()`, `calculateComplexity()` |
+| Class/module (isolated) | Unit          | Vitest/pytest      | <100ms | `ClaudeClient` (mocked), `IntentParser`  |
+| Utility functions       | Unit          | Vitest/pytest      | <100ms | `formatDate()`, `validateEmail()`        |
+| Database query          | Integration   | Testcontainers     | 1-5s   | `PackageRepo.findByName()`               |
+| Redis caching           | Integration   | Testcontainers     | 1-5s   | `CacheService.get()`                     |
+| API endpoint            | Integration   | Vitest + Supertest | 1-5s   | `POST /api/tasks`                        |
+| External API call       | Unit (mocked) | Vitest + vi.mock() | <100ms | `anthropic.messages.create()`            |
+| File system operations  | Integration   | Vitest + tmp       | <1s    | `PdfParser.parse()`                      |
+| Complete user workflow  | E2E           | Playwright         | 10-60s | "Create task → Execute → View results"   |
 
 **Decision Rules:**
+
 - If it has **NO external dependencies** → Unit test (fast, isolated)
-- If it touches **database/cache/filesystem** → Integration test (slower, real dependencies)
+- If it touches **database/cache/filesystem** → Integration test (slower, real
+  dependencies)
 - If it's a **critical user journey** → E2E test (slowest, end-to-end)
 
 #### Test Structure Patterns
@@ -731,7 +792,7 @@ describe('PackageRepository', () => {
       id: '123',
       name: 'lodash',
       version: '4.17.21',
-      ecosystem: 'npm'
+      ecosystem: 'npm',
     };
     await mockDb.packages.insert(expectedPackage);
 
@@ -821,16 +882,16 @@ class TestPaperParser:
 
 ```typescript
 // ❌ BAD: Vague, non-descriptive names
-test('works')
-test('package test')
-test('should work correctly')
+test('works');
+test('package test');
+test('should work correctly');
 
 // ✅ GOOD: Describes what, when, and expected outcome
-it('should return 404 when package not found in database')
-it('should parse install intent from "install lodash" command')
-it('should throw ApiError when network request times out')
-it('should cache result for 5 minutes after successful fetch')
-it('should retry 3 times before failing on network errors')
+it('should return 404 when package not found in database');
+it('should parse install intent from "install lodash" command');
+it('should throw ApiError when network request times out');
+it('should cache result for 5 minutes after successful fetch');
+it('should retry 3 times before failing on network errors');
 
 // Pattern: should [expected behavior] when [condition]
 ```
@@ -849,10 +910,10 @@ vi.mock('@anthropic-ai/sdk', () => ({
     messages: {
       create: vi.fn().mockResolvedValue({
         content: [{ type: 'text', text: 'Mocked response' }],
-        usage: { input_tokens: 10, output_tokens: 20 }
-      })
-    }
-  }))
+        usage: { input_tokens: 10, output_tokens: 20 },
+      }),
+    },
+  })),
 }));
 
 describe('ClaudeClient', () => {
@@ -862,7 +923,7 @@ describe('ClaudeClient', () => {
 
     // ACT
     const response = await client.chat([
-      { role: 'user', content: 'Test message' }
+      { role: 'user', content: 'Test message' },
     ]);
 
     // ASSERT
@@ -880,7 +941,7 @@ describe('PackageService', () => {
   it('should call repository findByName method', async () => {
     // ARRANGE
     const mockRepo = {
-      findByName: vi.fn().mockResolvedValue({ name: 'lodash' })
+      findByName: vi.fn().mockResolvedValue({ name: 'lodash' }),
     };
     const service = new PackageService(mockRepo);
 
@@ -938,7 +999,7 @@ export function createMockPackage(overrides: Partial<Package> = {}): Package {
     downloads_last_month: 1000,
     github_stars: 100,
     created_at: new Date(),
-    ...overrides  // Allow customization
+    ...overrides, // Allow customization
   };
 }
 
@@ -1022,7 +1083,8 @@ describe('Edge Cases and Errors', () => {
 
   // Network errors
   it('should retry on network timeout', async () => {
-    const mockFetch = vi.fn()
+    const mockFetch = vi
+      .fn()
       .mockRejectedValueOnce(new Error('ETIMEDOUT'))
       .mockRejectedValueOnce(new Error('ETIMEDOUT'))
       .mockResolvedValueOnce({ data: 'success' });
@@ -1034,9 +1096,7 @@ describe('Edge Cases and Errors', () => {
 
   // Permission errors
   it('should throw PermissionError when unauthorized', async () => {
-    await expect(
-      deletePackage('lodash')
-    ).rejects.toThrow(PermissionError);
+    await expect(deletePackage('lodash')).rejects.toThrow(PermissionError);
   });
 });
 ```
@@ -1050,7 +1110,7 @@ describe('Edge Cases and Errors', () => {
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
   PostgreSqlContainer,
-  StartedPostgreSqlContainer
+  StartedPostgreSqlContainer,
 } from '@testcontainers/postgresql';
 import { Client } from 'pg';
 
@@ -1090,7 +1150,7 @@ describe('PackageRepository Integration Tests', () => {
     const package = {
       name: 'lodash',
       version: '4.17.21',
-      ecosystem: 'npm'
+      ecosystem: 'npm',
     };
 
     // ACT
@@ -1110,6 +1170,10 @@ describe('PackageRepository Integration Tests', () => {
 **Before EVERY commit, you MUST:**
 
 ```bash
+# Shortcut: Run all 4 checks at once
+pnpm run pre-commit
+
+# OR run individually:
 # 1. Run all tests
 pnpm test
 
@@ -1122,6 +1186,15 @@ pnpm lint
 # 4. Type check
 pnpm typecheck
 ```
+
+**What `pnpm run pre-commit` does:**
+
+- Runs `pnpm typecheck` → TypeScript type validation
+- Runs `pnpm lint` → ESLint code quality checks
+- Runs `pnpm test` → All unit/integration tests
+- Runs `pnpm test:coverage` → Enforces 90%+ coverage threshold
+
+**All checks MUST pass before committing code.**
 
 **Continuous Testing During Development:**
 
@@ -1159,6 +1232,7 @@ Before marking any task complete, verify:
 ### 2025-11-01 (Week 2)
 
 **Documentation System Established**
+
 - ✅ Created CLAUDE.md (1,100+ lines) - Comprehensive technical documentation
   - 10 major sections covering all aspects of the platform
   - Critical instructions for Claude with strict guidelines
@@ -1173,6 +1247,7 @@ Before marking any task complete, verify:
   - Troubleshooting section
 
 **Infrastructure Complete**
+
 - ✅ Docker environment configured
   - PostgreSQL 15 + pgvector extension (port 5432)
   - Redis 7.x (port 6379)
@@ -1186,6 +1261,7 @@ Before marking any task complete, verify:
   - Shared dependencies and build configuration
 
 **Development Foundation**
+
 - ✅ Environment configuration (.env setup)
 - ✅ Agent core package started (30% complete)
   - ClaudeClient implemented
@@ -1193,9 +1269,12 @@ Before marking any task complete, verify:
 - ✅ Project structure defined for all components
 
 **Decisions Made:**
-1. **Documentation Strategy** - 3-file system only (CLAUDE.md, STATUS.md, README.md)
+
+1. **Documentation Strategy** - 3-file system only (CLAUDE.md, STATUS.md,
+   README.md)
 2. **Monorepo Structure** - pnpm workspaces for better code sharing
-3. **Database** - PostgreSQL + pgvector over separate vector DB for semantic search
+3. **Database** - PostgreSQL + pgvector over separate vector DB for semantic
+   search
 4. **Agent Framework** - LangGraph 0.2.x with Claude Sonnet 4.5
 
 **Next:** Week 3 - LangGraph orchestrator implementation
@@ -1205,12 +1284,14 @@ Before marking any task complete, verify:
 ### 2025-11-01 (Week 2 - Afternoon) - Infrastructure Verification & Fixes
 
 **Verification Completed**
+
 - ✅ Comprehensive infrastructure audit performed
   - Docker environment: VERIFIED (all 3 services correctly configured)
   - Monorepo structure: VERIFIED (pnpm workspaces operational)
   - Git configuration: VERIFIED (.gitignore properly set up)
 
 **Issues Identified & Fixed**
+
 - ✅ Database schema completion (CRITICAL FIX)
   - **Problem:** Changelog claimed 6 tables, but only 4 existed
   - **Fixed:** Added missing `performance_metrics` and `user_feedback` tables
@@ -1227,12 +1308,14 @@ Before marking any task complete, verify:
   - **Result:** Code structure now matches CLAUDE.md specifications
 
 **Infrastructure Now 100% Complete**
+
 - All 6 database tables implemented and documented
 - Environment template available for onboarding
 - File structure aligned with architectural documentation
 - Ready for Week 3: LangGraph orchestrator implementation
 
 **Git Repository Setup**
+
 - ✅ Initialized git repository (master branch)
 - ✅ Created private GitHub repository: autonomous-ai-platform
 - ✅ Initial commit with 17 files (9,399 lines of code + documentation)
@@ -1244,6 +1327,7 @@ Before marking any task complete, verify:
 ### 2025-10-25 to 2025-10-31 (Week 1)
 
 **Project Initialization**
+
 - ✅ Repository created
 - ✅ Initial documentation written (6,388 lines in documentation_guide/)
   - FINAL_Autonomous_AI_Platform_Implementation_Guide.md (1,797 lines)
@@ -1256,6 +1340,7 @@ Before marking any task complete, verify:
   - Frontend: Next.js 14+ (planned)
 
 **Decisions Made:**
+
 1. **Timeline** - 12-month development cycle with 6 distinct phases
 2. **Architecture** - 7-layer architecture design
 3. **Key Innovation** - Research paper integration as differentiator
@@ -1266,9 +1351,14 @@ Before marking any task complete, verify:
 
 ### Executive Summary
 
-This is an **autonomous AI development platform** designed to revolutionize solo developer productivity by combining AI agents, research paper integration, and self-improving systems. The platform can understand natural language requirements, automatically discover and install packages, read research papers, implement cutting-edge algorithms, and continuously optimize itself.
+This is an **autonomous AI development platform** designed to revolutionize solo
+developer productivity by combining AI agents, research paper integration, and
+self-improving systems. The platform can understand natural language
+requirements, automatically discover and install packages, read research papers,
+implement cutting-edge algorithms, and continuously optimize itself.
 
 **Key Metrics:**
+
 - 77-82% success rate on complex coding tasks (SWE-bench)
 - 30+ hour continuous operation without human intervention
 - 3-100x performance improvements through research-driven optimization
@@ -1279,24 +1369,32 @@ This is an **autonomous AI development platform** designed to revolutionize solo
 
 ### Vision & Purpose
 
-The platform aims to enable a **single developer to build production systems** that would typically require a team, by:
+The platform aims to enable a **single developer to build production systems**
+that would typically require a team, by:
 
-1. **Autonomous Package Discovery** - Automatically finding and installing the right NPM/PyPI packages
-2. **Research Paper Implementation** - Reading arXiv papers and implementing cutting-edge algorithms
-3. **Self-Optimization** - Continuously improving code performance through algorithmic analysis
-4. **Multi-Agent Orchestration** - Coordinating specialized AI agents for complex tasks
+1. **Autonomous Package Discovery** - Automatically finding and installing the
+   right NPM/PyPI packages
+2. **Research Paper Implementation** - Reading arXiv papers and implementing
+   cutting-edge algorithms
+3. **Self-Optimization** - Continuously improving code performance through
+   algorithmic analysis
+4. **Multi-Agent Orchestration** - Coordinating specialized AI agents for
+   complex tasks
 5. **Self-Healing** - Automatically detecting and fixing errors
 
 ### Key Innovation: Research-Driven Development
 
 **Unique Differentiator:** The ability to:
-1. Monitor arXiv daily for new CS papers (Data Structures, Distributed Computing, Databases)
+
+1. Monitor arXiv daily for new CS papers (Data Structures, Distributed
+   Computing, Databases)
 2. Extract algorithms from PDFs using pattern matching + Claude AI
 3. Analyze complexity and assess applicability to current problems
 4. Generate production code implementing research algorithms
 5. Benchmark and validate against baseline implementations
 
 **Real Example:**
+
 ```
 User Request: "Build a real-time dashboard with Google Analytics handling 1M events/day"
 
@@ -1381,6 +1479,7 @@ Result: 500K events/sec in 18KB memory (3-100x improvement)
 ### Technology Stack
 
 #### Backend
+
 - **Runtime:** Node.js 20+ with TypeScript 5.9
 - **Package Manager:** pnpm (monorepo workspace)
 - **Agent Framework:** LangGraph 0.2.x (Python)
@@ -1388,18 +1487,21 @@ Result: 500K events/sec in 18KB memory (3-100x improvement)
 - **Code Analysis:** ts-morph (TypeScript AST), ast/astor (Python AST)
 
 #### Data Layer
+
 - **Primary Database:** PostgreSQL 15 + pgvector extension
 - **Vector Database:** Qdrant (self-hosted)
 - **Cache/Queue:** Redis 7.x + BullMQ
 - **Embeddings:** sentence-transformers (all-MiniLM-L6-v2)
 
 #### Frontend
+
 - **Framework:** Next.js 14+ (App Router)
 - **UI Components:** shadcn/ui + Tailwind CSS
 - **State Management:** Zustand
 - **Hot Reload:** Vite 5.x
 
 #### Infrastructure
+
 - **Containerization:** Docker + Docker Compose
 - **Monitoring:** Grafana + Prometheus + Loki
 - **Security:** Semgrep (SAST), Socket.dev (supply chain)
@@ -1500,18 +1602,18 @@ autonomous-ai-platform/
 
 ### Current Implementation Status
 
-| Component | Status | Progress |
-|-----------|--------|----------|
-| Project Setup | ✅ Complete | 100% |
-| Docker Environment | ✅ Complete | 100% |
-| Database Schema | ✅ Complete | 100% |
-| Agent Core Package | 🟡 In Progress | 30% |
-| LangGraph Orchestrator | ❌ Not Started | 0% |
-| Package Manager | ❌ Not Started | 0% |
-| Research Engine | ❌ Not Started | 0% |
-| Code Generator | ❌ Not Started | 0% |
-| Web UI | ❌ Not Started | 0% |
-| CLI Tool | ❌ Not Started | 0% |
+| Component              | Status         | Progress |
+| ---------------------- | -------------- | -------- |
+| Project Setup          | ✅ Complete    | 100%     |
+| Docker Environment     | ✅ Complete    | 100%     |
+| Database Schema        | ✅ Complete    | 100%     |
+| Agent Core Package     | 🟡 In Progress | 30%      |
+| LangGraph Orchestrator | ❌ Not Started | 0%       |
+| Package Manager        | ❌ Not Started | 0%       |
+| Research Engine        | ❌ Not Started | 0%       |
+| Code Generator         | ❌ Not Started | 0%       |
+| Web UI                 | ❌ Not Started | 0%       |
+| CLI Tool               | ❌ Not Started | 0%       |
 
 ---
 
@@ -1519,9 +1621,11 @@ autonomous-ai-platform/
 
 ### Tables Overview
 
-The platform uses PostgreSQL 15 with pgvector extension for semantic search capabilities.
+The platform uses PostgreSQL 15 with pgvector extension for semantic search
+capabilities.
 
 #### 1. packages
+
 Tracks NPM and PyPI packages discovered and used by the system.
 
 ```sql
@@ -1543,6 +1647,7 @@ CREATE INDEX idx_packages_ecosystem ON packages(ecosystem);
 ```
 
 #### 2. research_papers
+
 Stores arXiv papers with embeddings for semantic search.
 
 ```sql
@@ -1567,6 +1672,7 @@ CREATE INDEX idx_papers_embedding ON research_papers USING ivfflat (embedding ve
 ```
 
 #### 3. generated_code
+
 All AI-generated code with quality metrics.
 
 ```sql
@@ -1589,6 +1695,7 @@ CREATE INDEX idx_generated_code_task ON generated_code(task_id);
 ```
 
 #### 4. task_executions
+
 End-to-end execution tracking with costs.
 
 ```sql
@@ -1610,6 +1717,7 @@ CREATE INDEX idx_task_started ON task_executions(started_at DESC);
 ```
 
 #### 5. performance_metrics
+
 Performance monitoring for optimization.
 
 ```sql
@@ -1628,6 +1736,7 @@ CREATE INDEX idx_metrics_type ON performance_metrics(metric_type);
 ```
 
 #### 6. user_feedback
+
 Learning from user interactions.
 
 ```sql
@@ -1660,19 +1769,21 @@ CREATE INDEX idx_feedback_type ON user_feedback(feedback_type);
 
 #### Phase 1: Foundation (Weeks 1-9) ⏳ **⚠️ YOU ARE HERE - FOCUS ON THIS PHASE ONLY**
 
-> **🚨 CRITICAL:** Only implement Phase 1 features. Do NOT jump to Phase 2+ (code generation, optimization, multi-agent).
+> **🚨 CRITICAL:** Only implement Phase 1 features. Do NOT jump to Phase 2+
+> (code generation, optimization, multi-agent).
 
 **Status:** Week 1-2 complete, starting Week 3
 
-| Week | Milestone | Status |
-|------|-----------|--------|
-| 1-2 | Project setup, Docker, Database | ✅ Complete |
-| 3-4 | LangGraph orchestrator, Intent parsing | 🔜 Next |
-| 5-6 | Package Manager (NPM/PyPI search) | ⏳ Upcoming |
-| 7-8 | Research Engine (arXiv monitoring) | ⏳ Upcoming |
-| 9 | State persistence, Backup strategy | ⏳ Upcoming |
+| Week | Milestone                              | Status      |
+| ---- | -------------------------------------- | ----------- |
+| 1-2  | Project setup, Docker, Database        | ✅ Complete |
+| 3-4  | LangGraph orchestrator, Intent parsing | 🔜 Next     |
+| 5-6  | Package Manager (NPM/PyPI search)      | ⏳ Upcoming |
+| 7-8  | Research Engine (arXiv monitoring)     | ⏳ Upcoming |
+| 9    | State persistence, Backup strategy     | ⏳ Upcoming |
 
 **Success Criteria:**
+
 - ✅ Detect 95%+ of package imports
 - ✅ 99%+ installation success rate
 - ✅ Find 50+ papers/week
@@ -1682,14 +1793,15 @@ CREATE INDEX idx_feedback_type ON user_feedback(feedback_type);
 
 **Focus:** ts-morph integration, HMR, sandboxed execution
 
-| Week | Milestone |
-|------|-----------|
-| 10-11 | Code generator with ts-morph |
-| 12 | Vite HMR integration (<100ms) |
-| 13 | Docker sandbox execution |
-| 14 | Testing & validation |
+| Week  | Milestone                     |
+| ----- | ----------------------------- |
+| 10-11 | Code generator with ts-morph  |
+| 12    | Vite HMR integration (<100ms) |
+| 13    | Docker sandbox execution      |
+| 14    | Testing & validation          |
 
 **Success Criteria:**
+
 - 95%+ syntax validity
 - Pass linting checks
 - Sub-5s latency for simple components
@@ -1700,15 +1812,16 @@ CREATE INDEX idx_feedback_type ON user_feedback(feedback_type);
 
 **Focus:** Research implementation, learned data structures, self-healing
 
-| Week | Milestone |
-|------|-----------|
-| 15-17 | Research paper analysis pipeline |
-| 18-19 | Algorithm extraction & code generation |
+| Week  | Milestone                                               |
+| ----- | ------------------------------------------------------- |
+| 15-17 | Research paper analysis pipeline                        |
+| 18-19 | Algorithm extraction & code generation                  |
 | 20-21 | Learned data structures (HyperLogLog, Count-Min Sketch) |
-| 22-23 | Predictive pre-computation (ML-based) |
-| 24 | Self-healing system |
+| 22-23 | Predictive pre-computation (ML-based)                   |
+| 24    | Self-healing system                                     |
 
 **Success Criteria:**
+
 - 70%+ first-attempt compilation from papers
 - 3-100x speedups demonstrated
 - 60%+ cache hit rate
@@ -1719,13 +1832,14 @@ CREATE INDEX idx_feedback_type ON user_feedback(feedback_type);
 
 **Focus:** MCP servers, specialized agents, OAuth flows
 
-| Week | Milestone |
-|------|-----------|
-| 25-28 | MCP server integration (48+ servers) |
+| Week  | Milestone                                                |
+| ----- | -------------------------------------------------------- |
+| 25-28 | MCP server integration (48+ servers)                     |
 | 29-32 | 8 specialized agents (Code, Research, Test, Debug, etc.) |
-| 33-36 | OAuth 2.1 flows, API connector hub |
+| 33-36 | OAuth 2.1 flows, API connector hub                       |
 
 **Success Criteria:**
+
 - 99.9%+ MCP server uptime
 - 8 agents operational
 - OAuth flows for 10+ services
@@ -1734,13 +1848,14 @@ CREATE INDEX idx_feedback_type ON user_feedback(feedback_type);
 
 **Focus:** Web UI, CLI, testing
 
-| Week | Milestone |
-|------|-----------|
+| Week  | Milestone             |
+| ----- | --------------------- |
 | 37-39 | Next.js web interface |
-| 40-41 | CLI tool |
-| 42-44 | 90%+ test coverage |
+| 40-41 | CLI tool              |
+| 42-44 | 90%+ test coverage    |
 
 **Success Criteria:**
+
 - Production-ready UI
 - CLI with 20+ commands
 - 90%+ test coverage
@@ -1750,14 +1865,15 @@ CREATE INDEX idx_feedback_type ON user_feedback(feedback_type);
 
 **Focus:** Infrastructure, monitoring, security
 
-| Week | Milestone |
-|------|-----------|
+| Week  | Milestone                                   |
+| ----- | ------------------------------------------- |
 | 45-47 | Production infrastructure (Kubernetes, RDS) |
-| 48-49 | Monitoring (Prometheus/Grafana) |
-| 50-51 | Security audit & penetration testing |
-| 52 | Launch & documentation |
+| 48-49 | Monitoring (Prometheus/Grafana)             |
+| 50-51 | Security audit & penetration testing        |
+| 52    | Launch & documentation                      |
 
 **Success Criteria:**
+
 - 99.9%+ uptime
 - <2s P99 latency
 - Security audit passed
@@ -1769,21 +1885,26 @@ CREATE INDEX idx_feedback_type ON user_feedback(feedback_type);
 
 ### 1. Autonomous Package Discovery
 
-**Purpose:** Automatically find and install the right NPM/PyPI packages for any task.
+**Purpose:** Automatically find and install the right NPM/PyPI packages for any
+task.
 
 **How it works:**
-1. Parse user intent to detect package needs (e.g., "visualize data" → needs charting library)
+
+1. Parse user intent to detect package needs (e.g., "visualize data" → needs
+   charting library)
 2. Search NPM/PyPI registries with semantic ranking
 3. Use Claude to rank by quality (not just download count)
 4. Install in sandbox environment
 5. Verify installation and track dependencies
 
 **Key Metrics:**
+
 - 95%+ detection rate for package needs
 - 99%+ installation success rate
 - Avg 2-3 packages per task
 
 **Example:**
+
 ```
 User: "Build a dashboard showing sales data"
 System: Detects needs: UI framework, charting, data formatting
@@ -1796,7 +1917,9 @@ Installs: All successfully in sandbox
 **Purpose:** Read academic papers and implement cutting-edge algorithms.
 
 **Pipeline:**
-1. **Monitor:** Daily arXiv scans for CS papers (Data Structures, Databases, Performance)
+
+1. **Monitor:** Daily arXiv scans for CS papers (Data Structures, Databases,
+   Performance)
 2. **Parse:** Extract text, figures, pseudocode from PDFs
 3. **Extract:** Identify algorithms using pattern matching + Claude
 4. **Analyze:** Determine time/space complexity
@@ -1805,6 +1928,7 @@ Installs: All successfully in sandbox
 7. **Validate:** Benchmark against baseline
 
 **Key Papers Targeted:**
+
 - HyperLogLog (streaming aggregation)
 - Count-Min Sketch (approximate counting)
 - Bloom filters (set membership)
@@ -1812,6 +1936,7 @@ Installs: All successfully in sandbox
 - CRDT (distributed systems)
 
 **Success Rate:**
+
 - 70%+ first-attempt compilation from papers
 - 3-100x demonstrated speedups
 - 50+ papers/week processed
@@ -1821,6 +1946,7 @@ Installs: All successfully in sandbox
 **Purpose:** Generate type-safe, production-ready code.
 
 **Approach:**
+
 - **AST-based:** Uses ts-morph (TypeScript) and ast module (Python)
 - **Type-safe:** Generates proper TypeScript types
 - **Import resolution:** Automatically detects and adds imports
@@ -1828,12 +1954,14 @@ Installs: All successfully in sandbox
 - **Research integration:** Incorporates algorithms from papers
 
 **Quality Metrics:**
+
 - 95%+ syntax validity
 - 90%+ lint passing
 - 85%+ type safety
 - Sub-5s latency for simple components
 
 **Example Output:**
+
 ```typescript
 // Generated code with proper types and imports
 import { HyperLogLog } from '@/lib/hyperloglog';
@@ -1862,12 +1990,14 @@ export function Dashboard({ events }: DashboardProps) {
 **Purpose:** Instant feedback loop with sub-100ms updates.
 
 **Implementation:**
+
 - **Vite 5.x:** Fast build tool with native HMR
 - **Custom boundaries:** Preserve state across reloads
 - **Error overlay:** Visual feedback for errors
 - **State preservation:** Maintain React state during updates
 
 **Performance:**
+
 - Sub-100ms updates (target: 50ms)
 - State preserved 99%+ of time
 - Error recovery in <1s
@@ -1877,6 +2007,7 @@ export function Dashboard({ events }: DashboardProps) {
 **Purpose:** Safe, isolated code execution environment.
 
 **Security Measures:**
+
 - Docker containers with resource limits
 - Read-only filesystem
 - Network isolation (no outbound by default)
@@ -1885,6 +2016,7 @@ export function Dashboard({ events }: DashboardProps) {
 - Resource limits: 512MB RAM, 50% CPU
 
 **Safety:**
+
 - 99.9%+ isolation effectiveness
 - Zero production incidents (target)
 - Automatic cleanup after execution
@@ -1912,6 +2044,7 @@ export function Dashboard({ events }: DashboardProps) {
    - Predictive pre-computation
 
 **Results:**
+
 - 80%+ bottleneck detection rate
 - 3-100x speedups on optimizable code
 - 60%+ cache hit rate
@@ -1921,6 +2054,7 @@ export function Dashboard({ events }: DashboardProps) {
 **Purpose:** Automatically detect and fix errors.
 
 **Process:**
+
 1. **Detect:** Monitor for errors (syntax, type, runtime)
 2. **Analyze:** Understand error pattern using Claude
 3. **Generate Fix:** Create patch using AI
@@ -1928,6 +2062,7 @@ export function Dashboard({ events }: DashboardProps) {
 5. **Deploy:** Gradual rollout (1% → 5% → 25% → 100%)
 
 **Success Rate:**
+
 - 50%+ auto-fix success rate
 - 90%+ error detection rate
 - <5min time to fix
@@ -1937,16 +2072,19 @@ export function Dashboard({ events }: DashboardProps) {
 **Purpose:** Continuously improve system performance.
 
 **Feedback Collection:**
+
 - **Explicit:** 👍👎 ratings, comments
 - **Implicit:** User edits, deletions, compile errors
 - **Quality:** Syntax validity, lint passing, test passing
 
 **Optimization Strategies:**
+
 1. **Prompt Engineering (70% gains):** Iterative refinement
 2. **Supervised Fine-tuning (20% gains):** Fine-tune on successful examples
 3. **RLHF (10% gains):** Reinforcement learning from feedback
 
 **Tracking:**
+
 - Task success rates
 - Token usage and costs
 - Latency (P50, P95, P99)
@@ -1959,6 +2097,7 @@ export function Dashboard({ events }: DashboardProps) {
 ### Environment Setup
 
 #### Prerequisites
+
 - macOS (Darwin) or Linux
 - Docker Desktop
 - Node.js 20+
@@ -2008,6 +2147,7 @@ NODE_ENV=development
 ### Infrastructure Services
 
 #### PostgreSQL (Port 5432)
+
 ```yaml
 Image: pgvector/pgvector:pg15
 Database: ai_platform
@@ -2017,12 +2157,14 @@ Extensions: uuid-ossp, vector
 ```
 
 #### Redis (Port 6379)
+
 ```yaml
 Image: redis:7-alpine
 Used for: Caching, queues, sessions, rate limiting
 ```
 
 #### Qdrant (Port 6333)
+
 ```yaml
 Image: qdrant/qdrant:latest
 Used for: Vector embeddings, semantic search
@@ -2043,27 +2185,30 @@ Used for: Vector embeddings, semantic search
 **🔴🟢🔵 TDD Workflow (MANDATORY):**
 
 Every feature MUST follow Red-Green-Refactor:
+
 1. **RED:** Write failing test first → Verify it fails
 2. **GREEN:** Write minimal code → Make test pass
 3. **REFACTOR:** Clean up code → Keep tests green
 4. **REPEAT:** For each requirement
 
-**See the 🧪 Test-Driven Development (TDD) Guidelines section for complete workflow and examples.**
+**See the 🧪 Test-Driven Development (TDD) Guidelines section for complete
+workflow and examples.**
 
 #### Test Type Decision Matrix
 
 Use this to decide which test to write:
 
-| What You're Testing | Test Type | Framework | Example |
-|---------------------|-----------|-----------|---------|
-| Pure function | Unit | Vitest/pytest | `parseIntent()` |
-| Class (isolated) | Unit | Vitest/pytest | `ClaudeClient` (mocked) |
-| Database query | Integration | Testcontainers | `PackageRepo.findByName()` |
-| API endpoint | Integration | Vitest + Supertest | `POST /tasks` |
-| External API | Unit (mocked) | vi.mock() | `anthropic.messages.create()` |
-| User workflow | E2E | Playwright | Full task creation flow |
+| What You're Testing | Test Type     | Framework          | Example                       |
+| ------------------- | ------------- | ------------------ | ----------------------------- |
+| Pure function       | Unit          | Vitest/pytest      | `parseIntent()`               |
+| Class (isolated)    | Unit          | Vitest/pytest      | `ClaudeClient` (mocked)       |
+| Database query      | Integration   | Testcontainers     | `PackageRepo.findByName()`    |
+| API endpoint        | Integration   | Vitest + Supertest | `POST /tasks`                 |
+| External API        | Unit (mocked) | vi.mock()          | `anthropic.messages.create()` |
+| User workflow       | E2E           | Playwright         | Full task creation flow       |
 
 #### Unit Tests
+
 - **Framework:** Vitest (TypeScript), pytest (Python)
 - **Location:** `*.test.ts` (colocated with source), `*_test.py`
 - **Coverage:** 90%+ of all functions/classes
@@ -2072,6 +2217,7 @@ Use this to decide which test to write:
 - **Isolation:** Mock ALL external dependencies
 
 **Example:**
+
 ```typescript
 // packages/agent-core/src/parser/intent-parser.test.ts
 describe('parseIntent', () => {
@@ -2084,6 +2230,7 @@ describe('parseIntent', () => {
 ```
 
 #### Integration Tests
+
 - **Framework:** Vitest + Testcontainers (TypeScript), pytest (Python)
 - **Location:** `*.integration.test.ts`, `*_integration_test.py`
 - **Coverage:** 80%+ of database/API/service interactions
@@ -2092,6 +2239,7 @@ describe('parseIntent', () => {
 - **Setup:** Docker containers for real dependencies
 
 **Example with Testcontainers:**
+
 ```typescript
 let container: StartedPostgreSqlContainer;
 
@@ -2105,6 +2253,7 @@ afterAll(async () => {
 ```
 
 #### E2E Tests
+
 - **Framework:** Playwright
 - **Location:** `e2e/*.spec.ts`
 - **Scope:** Critical user workflows (not aiming for high coverage)
@@ -2112,6 +2261,7 @@ afterAll(async () => {
 - **Coverage:** Essential user journeys only
 
 **Critical Workflows:**
+
 - Create task → Execute → View results
 - Install package → Verify installation
 - Search paper → Extract algorithm → Generate code
@@ -2126,15 +2276,15 @@ vi.mock('@anthropic-ai/sdk', () => ({
   Anthropic: vi.fn().mockImplementation(() => ({
     messages: {
       create: vi.fn().mockResolvedValue({
-        content: [{ text: 'Mocked response' }]
-      })
-    }
-  }))
+        content: [{ text: 'Mocked response' }],
+      }),
+    },
+  })),
 }));
 
 // Mock arXiv API
 vi.spyOn(global, 'fetch').mockResolvedValue({
-  json: () => Promise.resolve({ papers: [] })
+  json: () => Promise.resolve({ papers: [] }),
 });
 ```
 
@@ -2149,7 +2299,7 @@ export function createMockPackage(overrides = {}) {
     id: randomUUID(),
     name: 'test-package',
     version: '1.0.0',
-    ...overrides
+    ...overrides,
   };
 }
 ```
@@ -2167,6 +2317,10 @@ def sample_paper():
 **Required before EVERY commit:**
 
 ```bash
+# Shortcut: Run all checks at once (RECOMMENDED)
+pnpm run pre-commit
+
+# OR run individually:
 # 1. Run all tests
 pnpm test
 
@@ -2179,6 +2333,9 @@ pnpm lint
 # 4. Type check
 pnpm typecheck
 ```
+
+**Important:** The `pnpm run pre-commit` command runs all 4 checks sequentially.
+All must pass before you commit code to git.
 
 #### Continuous Testing
 
@@ -2280,40 +2437,40 @@ pnpm test packages/agent-core/src/parser.test.ts
 
 ### Technical KPIs
 
-| Metric | Target | Current Status |
-|--------|--------|----------------|
-| Code syntax validity | 95%+ | Not measured yet |
-| Lint passing rate | 90%+ | Not measured yet |
-| Test coverage | 90%+ | 0% (no tests yet) |
-| Research papers/week | 50+ | 0 (not implemented) |
-| Optimization detection | 80%+ | 0 (not implemented) |
-| Self-healing success | 50%+ | 0 (not implemented) |
-| Cache hit rate | 60%+ | 0 (not implemented) |
-| API latency P99 | <2s | Not measured |
-| System uptime | 99.9%+ | N/A (dev only) |
-| Package detection | 95%+ | Not measured |
-| Installation success | 99%+ | Not measured |
+| Metric                 | Target | Current Status      |
+| ---------------------- | ------ | ------------------- |
+| Code syntax validity   | 95%+   | Not measured yet    |
+| Lint passing rate      | 90%+   | Not measured yet    |
+| Test coverage          | 90%+   | 0% (no tests yet)   |
+| Research papers/week   | 50+    | 0 (not implemented) |
+| Optimization detection | 80%+   | 0 (not implemented) |
+| Self-healing success   | 50%+   | 0 (not implemented) |
+| Cache hit rate         | 60%+   | 0 (not implemented) |
+| API latency P99        | <2s    | Not measured        |
+| System uptime          | 99.9%+ | N/A (dev only)      |
+| Package detection      | 95%+   | Not measured        |
+| Installation success   | 99%+   | Not measured        |
 
 ### Business KPIs
 
-| Metric | Target |
-|--------|--------|
-| User satisfaction | 4.5+/5 |
-| Task success rate | 70%+ |
-| Time savings | 10x vs manual |
-| Cost per task | <$1 |
-| User retention (30d) | 60%+ |
-| Growth rate | 20%+ MoM |
+| Metric               | Target        |
+| -------------------- | ------------- |
+| User satisfaction    | 4.5+/5        |
+| Task success rate    | 70%+          |
+| Time savings         | 10x vs manual |
+| Cost per task        | <$1           |
+| User retention (30d) | 60%+          |
+| Growth rate          | 20%+ MoM      |
 
 ### Innovation KPIs
 
-| Metric | Target |
-|--------|--------|
-| Papers implemented | 20+ |
+| Metric                   | Target |
+| ------------------------ | ------ |
+| Papers implemented       | 20+    |
 | Performance improvements | 3-100x |
-| Novel combinations | 5+ |
-| Community contributions | 10+ |
-| Research citations | 3+ |
+| Novel combinations       | 5+     |
+| Community contributions  | 10+    |
+| Research citations       | 3+     |
 
 ---
 
@@ -2333,6 +2490,7 @@ pnpm test packages/agent-core/src/parser.test.ts
 ### Decision Trees
 
 **"Should I implement this feature?"**
+
 ```
 Is it in Phase 1?
 ├─ YES → Proceed with implementation (TDD workflow)
@@ -2340,6 +2498,7 @@ Is it in Phase 1?
 ```
 
 **"Should I create this documentation file?"**
+
 ```
 Is it CLAUDE.md, STATUS.md, or README.md?
 ├─ YES → Proceed with update
@@ -2347,6 +2506,7 @@ Is it CLAUDE.md, STATUS.md, or README.md?
 ```
 
 **"How do I test this?"**
+
 ```
 Does it have external dependencies?
 ├─ NO (pure function) → Unit test (Vitest/pytest, <100ms)
@@ -2371,6 +2531,7 @@ docker-compose -f docker-compose.dev.yml up -d  # Start services
 ### When to Ask User
 
 **Always ask when:**
+
 - Requirements are ambiguous or unclear
 - Multiple valid approaches exist
 - About to make breaking changes
@@ -2379,7 +2540,9 @@ docker-compose -f docker-compose.dev.yml up -d  # Start services
 - Need API keys/credentials
 
 **Example:**
+
 > "I notice this feature is planned for Phase 3 (Week 20). Would you like me to:
+>
 > 1. Implement a simplified version now for Phase 1
 > 2. Wait until Phase 3 as planned
 > 3. Adjust the timeline to prioritize this feature?"
@@ -2387,20 +2550,22 @@ docker-compose -f docker-compose.dev.yml up -d  # Start services
 ### TDD Quick Reference
 
 **Red-Green-Refactor Cycle:**
+
 1. 🔴 **RED:** Write failing test → Verify it fails
 2. 🟢 **GREEN:** Write minimal code → Make test pass
 3. 🔵 **REFACTOR:** Clean up code → Keep tests green
 4. ♻️ **REPEAT:** For each requirement
 
 **Test Naming Pattern:**
+
 ```typescript
 // ✅ Good: Descriptive, clear behavior
-it('should return 404 when package not found in database')
-it('should retry 3 times before failing on network errors')
+it('should return 404 when package not found in database');
+it('should retry 3 times before failing on network errors');
 
 // ❌ Bad: Vague, unclear
-test('works')
-test('package test')
+test('works');
+test('package test');
 ```
 
 ---
@@ -2434,13 +2599,13 @@ pnpm build                      # Build all packages (when ready)
 
 ### Key Files Reference
 
-| File | Purpose |
-|------|---------|
-| [docker-compose.dev.yml](docker-compose.dev.yml) | Development services |
-| [infrastructure/schema/001_initial.sql](infrastructure/schema/001_initial.sql) | Database schema |
-| [packages/agent-core/src/clients/claude.ts](packages/agent-core/src/clients/claude.ts) | Claude API client |
+| File                                                                                                                                                 | Purpose                       |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| [docker-compose.dev.yml](docker-compose.dev.yml)                                                                                                     | Development services          |
+| [infrastructure/schema/001_initial.sql](infrastructure/schema/001_initial.sql)                                                                       | Database schema               |
+| [packages/agent-core/src/clients/claude.ts](packages/agent-core/src/clients/claude.ts)                                                               | Claude API client             |
 | [documentation_guide/FINAL_Autonomous_AI_Platform_Implementation_Guide.md](documentation_guide/FINAL_Autonomous_AI_Platform_Implementation_Guide.md) | Detailed implementation guide |
-| [documentation_guide/Unified_Autonomous_Research_Platform_Architecture.md](documentation_guide/Unified_Autonomous_Research_Platform_Architecture.md) | Architecture reference |
+| [documentation_guide/Unified_Autonomous_Research_Platform_Architecture.md](documentation_guide/Unified_Autonomous_Research_Platform_Architecture.md) | Architecture reference        |
 
 ### External Resources
 
@@ -2452,7 +2617,8 @@ pnpm build                      # Build all packages (when ready)
 
 ---
 
-**Last Updated:** 2025-11-03 (Week 2 - Document reorganized: Critical Instructions moved to top for optimal Claude processing)
+**Last Updated:** 2025-11-03 (Week 2 - Document reorganized: Critical
+Instructions moved to top for optimal Claude processing)
 
 **Status:** Foundation phase - Early development
 
@@ -2460,4 +2626,5 @@ pnpm build                      # Build all packages (when ready)
 
 ---
 
-*This document is the single source of truth for Claude when working on this project. Always refer to this file before making significant changes.*
+_This document is the single source of truth for Claude when working on this
+project. Always refer to this file before making significant changes._

@@ -51,6 +51,20 @@ coverage/
 *.swo
 *~
 .editorconfig
+eslint.config.js
+.prettierrc.json
+.prettierignore
+vitest.config.ts
+.nvmrc
+.npmrc
+tsconfig.json
+tsconfig.*.json
+packages/*/tsconfig.json
+
+# Cache directories
+.eslintcache
+.vitest/
+.pnpm-store/
 
 # Build artifacts
 dist/
