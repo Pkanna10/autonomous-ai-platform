@@ -125,27 +125,153 @@ jobs:
 
   # Docker security scan
   docker-security:
-    name: Docker Security
+    name: Docker Security Scan
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      security-events: write # Required for uploading SARIF results
-      actions: read # Required for workflow run telemetry
+      security-events: write
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Run Trivy vulnerability scanner
+      # Scan for MEDIUM/LOW (warning only, don't fail)
+      - name: Run Trivy - MEDIUM/LOW Severity
         uses: aquasecurity/trivy-action@master
+        continue-on-error: true
         with:
           scan-type: 'config'
           scan-ref: '.'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
+          format: 'table'
+          output: 'trivy-medium-low.txt'
+          severity: 'MEDIUM,LOW'
+          exit-code: '0'
 
-      - name: Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+      # Scan for HIGH/CRITICAL (will fail the build)
+      - name: Run Trivy - HIGH/CRITICAL Severity
+        uses: aquasecurity/trivy-action@master
+        continue-on-error: true
+        with:
+          scan-type: 'config'
+          scan-ref: '.'
+          format: 'table'
+          output: 'trivy-high-critical.txt'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+
+      # Generate JSON for artifacts
+      - name: Run Trivy - JSON Report
+        uses: aquasecurity/trivy-action@master
+        continue-on-error: true
+        with:
+          scan-type: 'config'
+          scan-ref: '.'
+          format: 'json'
+          output: 'trivy-results.json'
+          severity: 'CRITICAL,HIGH,MEDIUM,LOW'
+          exit-code: '0'
+
+      # Upload artifacts
+      - name: Upload Trivy Results
+        uses: actions/upload-artifact@v4
         if: always()
         with:
-          sarif_file: 'trivy-results.sarif'
+          name: trivy-security-scan-${{ github.run_number }}
+          path: |
+            trivy-high-critical.txt
+            trivy-medium-low.txt
+            trivy-results.json
+          retention-days: 30
+
+      # Generate enhanced security summary
+      - name: Generate Enhanced Security Summary
+        if: always()
+        run: |
+          echo "# 🔒 Trivy Security Scan Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Determine overall status
+          CRITICAL_HIGH_FOUND=false
+          MEDIUM_LOW_FOUND=false
+
+          if [ -f trivy-high-critical.txt ] && grep -q "Total: [1-9]" trivy-high-critical.txt 2>/dev/null; then
+            CRITICAL_HIGH_FOUND=true
+          fi
+
+          if [ -f trivy-medium-low.txt ] && grep -q "Total: [1-9]" trivy-medium-low.txt 2>/dev/null; then
+            MEDIUM_LOW_FOUND=true
+          fi
+
+          # Status badges
+          if [ "$CRITICAL_HIGH_FOUND" = true ]; then
+            echo "![Status](https://img.shields.io/badge/Security-FAILED-red?style=for-the-badge&logo=security)" >> $GITHUB_STEP_SUMMARY
+          elif [ "$MEDIUM_LOW_FOUND" = true ]; then
+            echo "![Status](https://img.shields.io/badge/Security-WARNING-yellow?style=for-the-badge&logo=security)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "![Status](https://img.shields.io/badge/Security-PASSED-brightgreen?style=for-the-badge&logo=security)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 📅 Scan Date | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📦 Repository | \`${{ github.repository }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🌿 Branch | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📝 Commit | \`${GITHUB_SHA:0:7}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| 👤 Author | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Check for HIGH/CRITICAL vulnerabilities
+          if [ -f trivy-high-critical.txt ]; then
+            if grep -q "Total: [1-9]" trivy-high-critical.txt 2>/dev/null; then
+              echo "## 🚨 CRITICAL/HIGH Severity Issues Found" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "<details>" >> $GITHUB_STEP_SUMMARY
+              echo "<summary>⚠️ Click to view HIGH/CRITICAL vulnerabilities</summary>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              cat trivy-high-critical.txt >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              echo "</details>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "## ✅ No HIGH/CRITICAL Issues Found" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+
+          # Check for MEDIUM/LOW vulnerabilities
+          if [ -f trivy-medium-low.txt ]; then
+            if grep -q "Total: [1-9]" trivy-medium-low.txt 2>/dev/null; then
+              echo "## ⚡ MEDIUM/LOW Severity Issues (Informational)" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "<details>" >> $GITHUB_STEP_SUMMARY
+              echo "<summary>ℹ️ Click to view MEDIUM/LOW vulnerabilities</summary>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              cat trivy-medium-low.txt >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              echo "</details>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "## ✅ No MEDIUM/LOW Issues Found" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "📦 **[Download detailed reports from Artifacts](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})**" >> $GITHUB_STEP_SUMMARY
+
+      # FAIL the build if HIGH/CRITICAL vulnerabilities found
+      - name: Check for HIGH/CRITICAL Vulnerabilities
+        if: always()
+        run: |
+          if [ -f trivy-high-critical.txt ]; then
+            if grep -q "Total: [1-9]" trivy-high-critical.txt; then
+              echo "❌ CRITICAL or HIGH severity vulnerabilities found!"
+              echo "Please review the security scan results above."
+              exit 1
+            else
+              echo "✅ No CRITICAL or HIGH severity vulnerabilities found."
+            fi
+          fi
