@@ -1,9 +1,37 @@
 {
   "name": "autonomous-ai-platform",
   "version": "1.0.0",
-  "description": "",
+  "description": "Autonomous AI development platform combining AI agents, research paper integration, and self-improving systems",
   "type": "module",
   "main": "index.js",
+  "keywords": [
+    "ai",
+    "autonomous",
+    "langgraph",
+    "claude",
+    "anthropic",
+    "research",
+    "code-generation",
+    "ai-agents",
+    "machine-learning",
+    "arxiv",
+    "typescript",
+    "python"
+  ],
+  "author": "Praveen Kanna",
+  "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Pkanna10/autonomous-ai-platform.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Pkanna10/autonomous-ai-platform/issues"
+  },
+  "homepage": "https://github.com/Pkanna10/autonomous-ai-platform#readme",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=10.20.0"
+  },
   "scripts": {
     "dev": "pnpm --filter agent-core dev",
     "test": "vitest run",

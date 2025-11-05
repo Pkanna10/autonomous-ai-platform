@@ -2,6 +2,7 @@
 .env
 .env.local
 .env.*.local
+.env.vault
 
 # API keys
 *.key
@@ -9,6 +10,16 @@
 
 # Dependencies
 node_modules/
+
+# Husky internal files (auto-generated)
+.husky/_
+
+# Yarn (if accidentally used)
+.yarn/
+.yarnrc.yml
+
+# Turbo cache (future-proofing)
+.turbo/
 
 # Build outputs
 dist/
@@ -36,9 +47,12 @@ coverage/
 .DS_Store
 .AppleDouble
 .LSOverride
+.Spotlight-V100
+.Trashes
 
 # IDE
 .vscode/
+*.code-workspace
 .idea/
 *.swp
 *.swo
