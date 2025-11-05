@@ -1,23 +1,73 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:base"],
-  "packageRules": [
-    {
-      "matchManagers": ["npm"],
-      "groupName": "TypeScript dependencies",
-      "rangeStrategy": "bump"
-    },
-    {
-      "matchManagers": ["pip_requirements"],
-      "groupName": "Python dependencies",
-      "rangeStrategy": "bump"
-    }
-  ],
-  "schedule": ["before 3am on Monday"],
+  "extends": ["config:base", "schedule:earlyMondays", ":preserveSemverRanges"],
   "timezone": "America/Los_Angeles",
   "labels": ["dependencies"],
   "prConcurrentLimit": 5,
   "prHourlyLimit": 2,
   "separateMajorMinor": true,
-  "separateMinorPatch": false
+  "separateMinorPatch": false,
+  "packageRules": [
+    {
+      "description": "TypeScript dependencies",
+      "matchManagers": ["npm"],
+      "groupName": "TypeScript dependencies",
+      "rangeStrategy": "bump"
+    },
+    {
+      "description": "Python dependencies",
+      "matchManagers": ["pip_requirements"],
+      "groupName": "Python dependencies",
+      "rangeStrategy": "bump"
+    },
+    {
+      "description": "Automerge patch updates",
+      "matchUpdateTypes": ["patch"],
+      "automerge": true,
+      "automergeType": "pr",
+      "ignoreTests": false
+    },
+    {
+      "description": "Automerge dev dependencies (minor)",
+      "matchDepTypes": ["devDependencies"],
+      "matchUpdateTypes": ["minor"],
+      "automerge": true,
+      "automergeType": "pr"
+    },
+    {
+      "description": "Security vulnerability updates (HIGH priority)",
+      "matchDatasources": ["npm", "pypi"],
+      "prPriority": 10,
+      "schedule": ["at any time"]
+    },
+    {
+      "description": "Group ESLint packages",
+      "groupName": "ESLint packages",
+      "matchPackagePatterns": ["^eslint", "^@typescript-eslint/"]
+    },
+    {
+      "description": "Group Vitest packages",
+      "groupName": "Vitest packages",
+      "matchPackagePatterns": ["^vitest", "^@vitest/"]
+    },
+    {
+      "description": "Group Prettier packages",
+      "groupName": "Prettier packages",
+      "matchPackagePatterns": ["^prettier", "^eslint-.*-prettier"]
+    },
+    {
+      "description": "Group Commitlint packages",
+      "groupName": "Commitlint packages",
+      "matchPackagePatterns": ["^@commitlint/"]
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["security"],
+    "prPriority": 10
+  },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 3am on the first day of the month"]
+  }
 }
