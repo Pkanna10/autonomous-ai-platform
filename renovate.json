@@ -5,8 +5,16 @@
     ":dependencyDashboard",
     ":semanticCommits",
     ":enableVulnerabilityAlertsWithLabel(security)",
-    "group:monorepos"
+    "group:monorepos",
+    "schedule:earlyMondays",
+    ":preserveSemverRanges"
   ],
+  "timezone": "America/Los_Angeles",
+  "labels": ["dependencies"],
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "separateMajorMinor": true,
+  "separateMinorPatch": false,
   "packageRules": [
     {
       "description": "Auto-merge security patches",
@@ -33,6 +41,20 @@
       "rangeStrategy": "bump"
     },
     {
+      "description": "Automerge patch updates",
+      "matchUpdateTypes": ["patch"],
+      "automerge": true,
+      "automergeType": "pr",
+      "ignoreTests": false
+    },
+    {
+      "description": "Automerge dev dependencies (minor)",
+      "matchDepTypes": ["devDependencies"],
+      "matchUpdateTypes": ["minor"],
+      "automerge": true,
+      "automergeType": "pr"
+    },
+    {
       "description": "Prioritize security updates",
       "matchPackagePatterns": ["*"],
       "matchUpdateTypes": ["patch"],
@@ -43,11 +65,37 @@
       }
     },
     {
+      "description": "Security vulnerability updates (HIGH priority)",
+      "matchDatasources": ["npm", "pypi"],
+      "prPriority": 10,
+      "schedule": ["at any time"]
+    },
+    {
       "description": "Docker base images",
       "matchDatasources": ["docker"],
       "enabled": true,
       "commitMessagePrefix": "chore(docker):",
       "labels": ["docker", "dependencies"]
+    },
+    {
+      "description": "Group ESLint packages",
+      "groupName": "ESLint packages",
+      "matchPackagePatterns": ["^eslint", "^@typescript-eslint/"]
+    },
+    {
+      "description": "Group Vitest packages",
+      "groupName": "Vitest packages",
+      "matchPackagePatterns": ["^vitest", "^@vitest/"]
+    },
+    {
+      "description": "Group Prettier packages",
+      "groupName": "Prettier packages",
+      "matchPackagePatterns": ["^prettier", "^eslint-.*-prettier"]
+    },
+    {
+      "description": "Group Commitlint packages",
+      "groupName": "Commitlint packages",
+      "matchPackagePatterns": ["^@commitlint/"]
     }
   ],
   "vulnerabilityAlerts": {
@@ -55,15 +103,14 @@
     "labels": ["security"],
     "addLabels": ["priority-high"],
     "assignees": [],
-    "schedule": ["at any time"]
+    "schedule": ["at any time"],
+    "prPriority": 10
+  },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 3am on the first day of the month"]
   },
   "schedule": ["before 3am on Monday"],
-  "timezone": "America/Los_Angeles",
-  "labels": ["dependencies"],
-  "prConcurrentLimit": 5,
-  "prHourlyLimit": 2,
-  "separateMajorMinor": true,
-  "separateMinorPatch": false,
   "dependencyDashboard": true,
   "dependencyDashboardTitle": "🔄 Dependency Updates Dashboard",
   "commitMessagePrefix": "chore(deps):",

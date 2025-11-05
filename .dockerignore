@@ -22,6 +22,7 @@ env/
 .env
 .env.*
 !.env.example
+.env.vault
 
 # Documentation (exclude from images, keep README for metadata)
 *.md
@@ -45,6 +46,7 @@ coverage/
 
 # Development files
 .vscode/
+*.code-workspace
 .idea/
 *.log
 *.swp
@@ -54,6 +56,9 @@ coverage/
 eslint.config.js
 .prettierrc.json
 .prettierignore
+.lintstagedrc.json
+commitlint.config.ts
+renovate.json
 vitest.config.ts
 .nvmrc
 .npmrc
@@ -61,10 +66,16 @@ tsconfig.json
 tsconfig.*.json
 packages/*/tsconfig.json
 
+# Git hooks
+.husky/
+
 # Cache directories
 .eslintcache
 .vitest/
 .pnpm-store/
+.yarn/
+.turbo/
+.nyc_output/
 
 # Build artifacts
 dist/
@@ -85,6 +96,10 @@ Dockerfile*
 
 # OS files
 .DS_Store
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.Trashes
 Thumbs.db
 desktop.ini
 
