@@ -1,0 +1,212 @@
+name: Security Scans
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  schedule:
+    # Run security scans every Monday at 9am UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  # Snyk vulnerability scanning
+  snyk:
+    name: Snyk Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.20.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Snyk code analysis (SAST)
+      - name: Run Snyk Code Analysis
+        uses: snyk/actions/node@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          command: code test
+          args: --sarif-file-output=snyk-code.sarif
+
+      # Snyk dependency scanning (SCA)
+      - name: Run Snyk Dependency Scan
+        uses: snyk/actions/node@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          command: test
+          args: --all-projects --severity-threshold=high --sarif-file-output=snyk-deps.sarif
+
+      # Snyk Docker image scanning
+      - name: Run Snyk Docker Scan - PostgreSQL
+        uses: snyk/actions/docker@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          image: pgvector/pgvector:pg15
+          args: --severity-threshold=high --sarif-file-output=snyk-postgres.sarif
+
+      - name: Run Snyk Docker Scan - Redis
+        uses: snyk/actions/docker@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          image: redis:7-alpine
+          args: --severity-threshold=high --sarif-file-output=snyk-redis.sarif
+
+      - name: Run Snyk Docker Scan - Qdrant
+        uses: snyk/actions/docker@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          image: qdrant/qdrant:latest
+          args: --severity-threshold=high --sarif-file-output=snyk-qdrant.sarif
+
+      # Upload results to GitHub Security tab
+      - name: Upload Snyk results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: |
+            snyk-code.sarif
+            snyk-deps.sarif
+            snyk-postgres.sarif
+            snyk-redis.sarif
+            snyk-qdrant.sarif
+
+  # Socket.dev supply chain security (alternative to Snyk)
+  socket:
+    name: Socket.dev Supply Chain Scan
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Socket.dev Dependency Analysis
+        uses: SocketDev/socket-security-action@v1
+        continue-on-error: true
+        with:
+          api-key: ${{ secrets.SOCKET_API_KEY }}
+          comment-as-user: true
+
+  # npm audit (built-in, free)
+  npm-audit:
+    name: npm Audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.20.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run pnpm audit
+        run: |
+          pnpm audit --audit-level=high --json > npm-audit.json || true
+
+      - name: Parse and display audit results
+        run: |
+          echo "# 📦 npm Audit Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f npm-audit.json ]; then
+            CRITICAL=$(jq '.metadata.vulnerabilities.critical // 0' npm-audit.json)
+            HIGH=$(jq '.metadata.vulnerabilities.high // 0' npm-audit.json)
+            MODERATE=$(jq '.metadata.vulnerabilities.moderate // 0' npm-audit.json)
+            LOW=$(jq '.metadata.vulnerabilities.low // 0' npm-audit.json)
+
+            echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| 🔴 Critical | $CRITICAL |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟠 High | $HIGH |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟡 Moderate | $MODERATE |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟢 Low | $LOW |" >> $GITHUB_STEP_SUMMARY
+
+            if [ "$CRITICAL" -gt 0 ] || [ "$HIGH" -gt 0 ]; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "⚠️ **Action Required:** Critical or High severity vulnerabilities detected!" >> $GITHUB_STEP_SUMMARY
+              exit 1
+            fi
+          fi
+
+      - name: Upload audit results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: npm-audit-results
+          path: npm-audit.json
+          retention-days: 30
+
+  # License compliance check
+  license-check:
+    name: License Compliance
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.20.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check licenses
+        run: |
+          npx license-checker --json > licenses.json
+          npx license-checker --summary
+
+      - name: Upload license report
+        uses: actions/upload-artifact@v4
+        with:
+          name: license-report
+          path: licenses.json
+          retention-days: 90

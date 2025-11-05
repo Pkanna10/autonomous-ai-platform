@@ -48,3 +48,8 @@ coverage/
 .tmp/
 temp/
 *.tmp
+
+# Security scan reports
+trivy-reports/
+npm-audit.json
+licenses.json

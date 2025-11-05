@@ -1,23 +1,75 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:base"],
+  "extends": [
+    "config:base",
+    ":dependencyDashboard",
+    ":semanticCommits",
+    ":enableVulnerabilityAlertsWithLabel(security)",
+    "group:monorepos"
+  ],
   "packageRules": [
     {
+      "description": "Auto-merge security patches",
+      "matchUpdateTypes": ["patch"],
+      "matchCurrentVersion": "!/^0/",
+      "matchPackagePatterns": ["*"],
+      "labels": ["dependencies", "security"],
+      "automerge": true,
+      "automergeType": "pr",
+      "automergeStrategy": "squash",
+      "minimumReleaseAge": "3 days"
+    },
+    {
+      "description": "Group TypeScript dependencies",
       "matchManagers": ["npm"],
+      "matchDepTypes": ["dependencies", "devDependencies"],
       "groupName": "TypeScript dependencies",
       "rangeStrategy": "bump"
     },
     {
+      "description": "Group Python dependencies",
       "matchManagers": ["pip_requirements"],
       "groupName": "Python dependencies",
       "rangeStrategy": "bump"
+    },
+    {
+      "description": "Prioritize security updates",
+      "matchPackagePatterns": ["*"],
+      "matchUpdateTypes": ["patch"],
+      "vulnerabilityAlerts": {
+        "labels": ["security", "priority-high"],
+        "automerge": true,
+        "schedule": ["at any time"]
+      }
+    },
+    {
+      "description": "Docker base images",
+      "matchDatasources": ["docker"],
+      "enabled": true,
+      "commitMessagePrefix": "chore(docker):",
+      "labels": ["docker", "dependencies"]
     }
   ],
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["security"],
+    "addLabels": ["priority-high"],
+    "assignees": [],
+    "schedule": ["at any time"]
+  },
   "schedule": ["before 3am on Monday"],
   "timezone": "America/Los_Angeles",
   "labels": ["dependencies"],
   "prConcurrentLimit": 5,
   "prHourlyLimit": 2,
   "separateMajorMinor": true,
-  "separateMinorPatch": false
+  "separateMinorPatch": false,
+  "dependencyDashboard": true,
+  "dependencyDashboardTitle": "🔄 Dependency Updates Dashboard",
+  "commitMessagePrefix": "chore(deps):",
+  "commitMessageAction": "update",
+  "commitMessageTopic": "{{depName}}",
+  "prTitle": "{{commitMessagePrefix}} {{commitMessageAction}} {{commitMessageTopic}} to {{#if isMajor}}v{{newMajor}}{{else}}{{#if isSingleVersion}}{{newVersion}}{{else}}{{newValue}}{{/if}}{{/if}}",
+  "rebaseWhen": "behind-base-branch",
+  "stopUpdatingLabel": "no-renovate"
 }

@@ -23,7 +23,14 @@
     "validate:format": "prettier --check .",
     "validate:lint": "eslint .",
     "validate:types": "tsc --noEmit",
-    "validate:test": "vitest run"
+    "validate:test": "vitest run",
+    "security": "pnpm run /^security:.*/",
+    "security:audit": "pnpm audit --audit-level=moderate",
+    "security:scan": "bash scripts/security-scan.sh",
+    "security:docker": "bash scripts/docker-security-scan.sh",
+    "security:trivy": "bash scripts/trivy-scan-full.sh",
+    "security:snyk": "snyk test --all-projects",
+    "security:fix": "pnpm audit fix && snyk fix"
   },
   "keywords": [],
   "author": "",

@@ -509,6 +509,345 @@ Addresses Phase 1, Week 3-4 milestone
 **Before Committing:** Always run `pnpm run pre-commit` to ensure all checks
 pass (typecheck, lint, test, coverage).
 
+#### Commit Strategy: When and How to Commit
+
+**CRITICAL: Understanding when to commit and how to handle multiple file changes
+is essential for maintaining a clean git history.**
+
+##### When to Commit
+
+**Commit Frequency Guidelines:**
+
+- ✅ **DO commit** after completing a logical unit of work (feature, fix,
+  refactor)
+- ✅ **DO commit** after TDD cycle completes (Red-Green-Refactor)
+- ✅ **DO commit** when all tests pass and coverage is ≥90%
+- ✅ **DO commit** before switching to a different task
+- ❌ **DON'T commit** incomplete features (use feature branches if needed)
+- ❌ **DON'T commit** broken code (unless explicitly WIP with clear message)
+- ❌ **DON'T batch** unrelated changes into one commit
+
+**Golden Rule:** One logical change = one commit. If you can't describe the
+commit in one sentence, it should probably be split.
+
+##### Multiple Files, Different Types: Decision Framework
+
+When you've changed multiple files that could classify as different commit
+types, use this decision framework:
+
+**Approach 1: Multiple Atomic Commits (✅ RECOMMENDED)**
+
+Split changes into separate, logical commits - one per type/scope.
+
+```bash
+# Scenario: You fixed a bug AND added a new feature
+
+# Commit 1: Bug fix
+git add packages/agent-core/src/parser.ts
+git commit -m "fix(agent-core): resolve intent parsing null error
+
+- Add null check in parseIntent function
+- Handle edge case for empty user input
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+
+# Commit 2: New feature
+git add packages/research-engine/src/arxiv-monitor.ts \
+        packages/research-engine/src/arxiv-monitor.test.ts
+git commit -m "feat(research): add daily arXiv paper monitoring
+
+- Implement daily cron job for arXiv API
+- Add comprehensive test coverage (TDD)
+- Include retry logic for network failures
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+
+# Commit 3: Update docs
+git add CLAUDE.md STATUS.md
+git commit -m "docs: document new arXiv monitoring feature
+
+- Update CLAUDE.md with monitoring architecture
+- Update STATUS.md with Week 2 progress
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+**Benefits:**
+
+- ✅ Clear, focused git history
+- ✅ Easy to revert specific changes
+- ✅ Better code review experience
+- ✅ Clean changelogs
+
+**Approach 2: Choose the Dominant Type**
+
+When changes are tightly coupled, pick the most significant change type.
+
+```bash
+# Feature that requires test updates and doc updates
+
+git add packages/agent-core/src/orchestrator.ts \
+        packages/agent-core/src/orchestrator.test.ts \
+        CLAUDE.md
+
+git commit -m "feat(agent-core): implement LangGraph orchestrator
+
+- Add state machine with intent parser and task planner nodes
+- Add comprehensive test coverage (100%, TDD)
+- Update CLAUDE.md with architecture details
+
+Addresses Phase 1, Week 3-4 milestone
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+**When to use:**
+
+- Feature + its tests → `feat`
+- Bug fix + its tests → `fix`
+- Refactor + updated docs → `refactor`
+
+**Approach 3: Use Broader Scope**
+
+For changes spanning multiple packages, use a parent scope or omit scope.
+
+```bash
+# Changes across multiple packages
+
+# Option A: No scope (project-wide changes)
+git commit -m "chore: upgrade all dependencies to latest versions
+
+- Update package.json for all workspaces
+- Run pnpm update across monorepo
+- Verify all tests still pass
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+
+# Option B: Use "repo" scope
+git commit -m "chore(repo): add pre-commit hooks and CI workflow
+
+- Add Husky for git hooks
+- Add lint-staged for automated checks
+- Add GitHub Actions CI workflow
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+
+# Option C: Multiple scopes (if commitlint allows)
+git commit -m "feat(agent-core,research): integrate paper search with orchestrator
+
+- Connect research engine to main orchestrator
+- Add cross-package integration tests
+- Update both packages' APIs
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+**Approach 4: The "Chore" Escape Hatch**
+
+For tooling/infrastructure changes affecting everything, use `chore`.
+
+```bash
+# Update ESLint, format all files, update CI
+
+git commit -m "chore(tooling): add ESLint and Prettier with auto-formatting
+
+- Add ESLint config with TypeScript support
+- Add Prettier config with project standards
+- Format all existing files (no logic changes)
+- Update CI to run linting checks
+- Add pre-commit hooks for automated formatting
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+##### Decision Tree
+
+```
+Do the changes belong together logically?
+├─ YES: Single commit with dominant type
+│   └─ What's the main purpose?
+│       ├─ Adding capability → feat
+│       ├─ Fixing bug → fix
+│       ├─ Docs/tests supporting above → Use that type
+│       └─ Tooling/config → chore
+│
+└─ NO: Multiple commits
+    └─ Split by:
+        ├─ Type (feat vs fix vs docs)
+        ├─ Scope (different packages)
+        └─ Feature (different user-facing changes)
+```
+
+##### Real Examples from Your Project
+
+**Example 1: Today's Work (Multiple Separate Commits)**
+
+We made multiple separate commits:
+
+```bash
+# Commit 1: Tooling setup
+"chore: add pre-commit hooks and Python tooling"
+
+# Commit 2: Fix Husky deprecation
+"fix(husky): remove deprecated hook format for v10 compatibility"
+
+# Commit 3: Fix CI Python job
+"fix(ci): resolve Python mypy and Docker security scan issues"
+
+# Commit 4: New security feature
+"feat(ci): implement comprehensive Docker security scan with Trivy"
+```
+
+**Why separate?** Each addresses a different concern and could be reverted
+independently.
+
+**Example 2: Feature + Tests + Docs (Single Commit)**
+
+```bash
+git add packages/agent-core/src/clients/claude-client.ts \
+        packages/agent-core/src/clients/claude-client.test.ts \
+        CLAUDE.md
+
+git commit -m "feat(agent-core): add streaming chat support to ClaudeClient
+
+- Implement streamChat() method with onChunk callback
+- Add comprehensive test coverage (100%, TDD)
+- Update CLAUDE.md with usage examples
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+**Why single commit?** Tests and docs directly support the feature.
+
+**Example 3: Multi-Package Feature (Broader Scope)**
+
+```bash
+# Changes span agent-core, research-engine, and execution-engine
+
+git commit -m "feat: implement end-to-end paper-to-code pipeline
+
+- agent-core: Add paper analysis coordinator
+- research-engine: Extract algorithms from PDFs
+- execution-engine: Generate TypeScript from algorithms
+- Add integration tests across packages
+- Update architecture documentation
+
+Addresses Phase 1, Week 7-8 milestone
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+**No scope** because it spans multiple packages for one user-facing feature.
+
+##### TDD Commit Patterns
+
+**Pattern 1: Separate Commits (Recommended for Learning)**
+
+```bash
+# 1. RED: Write failing test
+git add packages/agent-core/src/parser.test.ts
+git commit -m "test(agent-core): add test for package intent detection"
+
+# 2. GREEN: Implement feature
+git add packages/agent-core/src/parser.ts
+git commit -m "feat(agent-core): implement package intent detection"
+
+# 3. REFACTOR: Clean up
+git add packages/agent-core/src/parser.ts
+git commit -m "refactor(agent-core): simplify intent detection logic"
+```
+
+**Pattern 2: Combined (More Common in Practice)**
+
+```bash
+# RED-GREEN-REFACTOR in one commit
+git add packages/agent-core/src/parser.ts \
+        packages/agent-core/src/parser.test.ts
+
+git commit -m "feat(agent-core): implement package intent detection
+
+- Add parseIntent() function with regex matching
+- Add comprehensive test coverage (TDD: Red-Green-Refactor)
+- Handle edge cases: null, empty, malformed input
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+##### Practical Workflow with git add -p
+
+Use selective staging to separate unrelated changes:
+
+```bash
+# You changed 10 files across 3 types of work
+
+# Stage only the bug fix
+git add packages/agent-core/src/parser.ts
+git commit -m "fix(agent-core): handle null intent gracefully"
+
+# Stage the new feature
+git add packages/research-engine/src/monitor.ts \
+        packages/research-engine/src/monitor.test.ts
+git commit -m "feat(research): add arXiv monitoring"
+
+# Stage the docs
+git add CLAUDE.md README.md
+git commit -m "docs: update architecture and setup guide"
+
+# OR use interactive staging
+git add -p  # Pick hunks interactively
+```
+
+##### Quick Reference Table
+
+| Scenario                 | Approach         | Example                                        |
+| ------------------------ | ---------------- | ---------------------------------------------- |
+| Feature + its tests      | Single `feat`    | `feat(agent): add streaming with tests`        |
+| Bug fix + its tests      | Single `fix`     | `fix(api): resolve timeout with test coverage` |
+| Multiple unrelated fixes | Multiple commits | Separate `fix` commits                         |
+| Multi-package feature    | Single, no scope | `feat: implement end-to-end pipeline`          |
+| Tooling across repo      | Single `chore`   | `chore: add linting and formatting`            |
+| Docs + code changes      | Dominant type    | Use `feat`/`fix`, mention docs in body         |
+
+**Golden Rule:** When in doubt, **split into multiple commits**. It's easier to
+squash later than to split apart!
+
+##### Commit Checklist
+
+Before committing, ask yourself:
+
+1. ✅ **Is this a logical unit of work?** (Can describe in one sentence)
+2. ✅ **Do all tests pass?** (`pnpm test`)
+3. ✅ **Is coverage ≥90%?** (`pnpm test:coverage`)
+4. ✅ **Does linting pass?** (`pnpm lint`)
+5. ✅ **Do types check?** (`pnpm typecheck`)
+6. ✅ **Is commit message descriptive?** (Follows conventional commits)
+7. ✅ **Are unrelated changes separated?** (Use `git add -p` if needed)
+8. ✅ **No secrets committed?** (Check .env, API keys)
+
+**Shortcut:** Run `pnpm run pre-commit` to check items 2-5 automatically.
+
 ### 🐛 Debugging Guidelines
 
 #### When Encountering Errors:
