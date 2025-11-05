@@ -37,6 +37,7 @@ lerna-debug.log*
 coverage/
 .nyc_output/
 *.lcov
+junit.xml
 
 # Cache directories
 .eslintcache

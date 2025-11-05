@@ -53,9 +53,6 @@
     "validate:types": "tsc --noEmit",
     "validate:test": "vitest run"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "packageManager": "pnpm@10.20.0",
   "devDependencies": {
     "@commitlint/cli": "^20.0.0",

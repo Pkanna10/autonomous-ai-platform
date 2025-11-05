@@ -11,10 +11,13 @@ export default [
       'dist/**',
       'build/**',
       'coverage/**',
-      '*.config.js',
-      '*.config.ts',
       'documentation_guide/**',
       '**/*.d.ts',
+      // Root-level config files (not part of TypeScript project)
+      'vitest.config.ts',
+      'commitlint.config.ts',
+      'eslint.config.js',
+      // Note: Package-level configs in src/ are still linted
     ],
   },
 
