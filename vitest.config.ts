@@ -67,8 +67,13 @@ export default defineConfig({
     // Hook timeouts
     hookTimeout: 60000,
 
-    // Reporters
-    reporters: ['default', 'verbose'],
+    // Reporters (add JUnit for CI environments)
+    reporters: process.env.CI ? ['default', 'verbose', 'junit'] : ['default', 'verbose'],
+
+    // Output files for reporters
+    outputFile: {
+      junit: './coverage/junit.xml',
+    },
 
     // Watch mode
     watch: false,

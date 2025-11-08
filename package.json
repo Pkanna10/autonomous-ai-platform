@@ -60,9 +60,6 @@
     "security:snyk": "snyk test --all-projects",
     "security:fix": "pnpm audit fix && snyk fix"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "packageManager": "pnpm@10.20.0",
   "devDependencies": {
     "@commitlint/cli": "^20.0.0",
