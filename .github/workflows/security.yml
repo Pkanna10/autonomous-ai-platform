@@ -10,43 +10,21 @@ on:
   workflow_dispatch: # Allow manual trigger
 
 jobs:
-  # OSV-Scanner - Google's free vulnerability scanner
+  # OSV-Scanner - Google's free vulnerability scanner (reusable workflow)
   osv-scanner:
     name: OSV Vulnerability Scan
-    runs-on: ubuntu-latest
     permissions:
       contents: read
       security-events: write
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Run OSV-Scanner
-        uses: google/osv-scanner-action@v1.9.1
-        continue-on-error: true
-        with:
-          scan-args: |-
-            --recursive
-            --skip-git
-            --format sarif
-            --output osv-results.sarif
-            ./
-
-      - name: Upload OSV results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: osv-results.sarif
-          category: osv-scanner
-
-      - name: Generate OSV Summary
-        if: always()
-        run: |
-          echo "# 🔍 OSV Vulnerability Scan Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "✅ OSV-Scanner checks vulnerabilities against Google's comprehensive database" >> $GITHUB_STEP_SUMMARY
-          echo "📊 Results uploaded to GitHub Security tab" >> $GITHUB_STEP_SUMMARY
+      actions: read
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.2.4
+    with:
+      scan-args: |-
+        --recursive
+        --skip-git
+        ./
+      upload-sarif: true
+      fail-on-vuln: false
 
   # Socket.dev supply chain security (FREE for open source, PR-only)
   # NOTE: This job intentionally only runs on pull requests (not direct pushes)
