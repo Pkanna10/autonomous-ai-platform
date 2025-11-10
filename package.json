@@ -2,8 +2,8 @@
   "name": "autonomous-ai-platform",
   "version": "1.0.0",
   "description": "Autonomous AI development platform combining AI agents, research paper integration, and self-improving systems",
+  "private": true,
   "type": "module",
-  "main": "index.js",
   "keywords": [
     "ai",
     "autonomous",

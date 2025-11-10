@@ -1,13 +1,25 @@
 {
-  "name": "research-engine",
+  "name": "@autonomous-ai/research-engine",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Research discovery engine for arXiv papers and algorithm extraction",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest watch",
+    "test:coverage": "vitest run --coverage"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "research",
+    "arxiv",
+    "papers",
+    "algorithm-extraction",
+    "pdf-parsing",
+    "academic",
+    "ai"
+  ],
+  "author": "Praveen Kanna",
   "license": "ISC",
   "packageManager": "pnpm@10.20.0"
 }

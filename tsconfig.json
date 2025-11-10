@@ -1,27 +1,20 @@
 {
   "compilerOptions": {
-    // Language and Environment
     "target": "ES2022",
     "lib": ["ES2022"],
     "module": "ESNext",
     "moduleResolution": "bundler",
-
-    // Emit
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
     "outDir": "./dist",
     "removeComments": false,
     "noEmit": false,
-
-    // Interop Constraints
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "forceConsistentCasingInFileNames": true,
-
-    // Type Checking - STRICT MODE (CLAUDE.md requirement)
     "strict": true,
     "noImplicitAny": true,
     "strictNullChecks": true,
@@ -30,8 +23,6 @@
     "strictPropertyInitialization": true,
     "noImplicitThis": true,
     "alwaysStrict": true,
-
-    // Additional Checks
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noImplicitReturns": true,
@@ -39,12 +30,8 @@
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "noPropertyAccessFromIndexSignature": true,
-
-    // Completeness
     "skipLibCheck": true,
     "skipDefaultLibCheck": true,
-
-    // Path Aliases for Monorepo
     "baseUrl": ".",
     "paths": {
       "@autonomous-ai/agent-core": ["./packages/agent-core/src"],
@@ -55,8 +42,6 @@
       "@autonomous-ai/execution-engine/*": ["./packages/execution-engine/src/*"]
     }
   },
-
-  // Global Includes/Excludes
   "include": [
     "packages/*/src/**/*.ts",
     "apps/*/src/**/*.ts",

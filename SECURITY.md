@@ -269,7 +269,7 @@ pnpm update --latest
 pnpm update <package>@latest
 
 # Update Python dependencies
-cd services/python-agents
+cd services/python_agents
 pip list --outdated
 pip install --upgrade <package>
 ```

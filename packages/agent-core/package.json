@@ -1,13 +1,25 @@
 {
-  "name": "@ai-platform/agent-core",
+  "name": "@autonomous-ai/agent-core",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Core AI agent orchestration logic with Claude Sonnet 4.5 integration",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest watch",
+    "test:coverage": "vitest run --coverage"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "ai",
+    "agent",
+    "claude",
+    "anthropic",
+    "orchestration",
+    "langgraph",
+    "autonomous"
+  ],
+  "author": "Praveen Kanna",
   "license": "ISC",
   "packageManager": "pnpm@10.20.0",
   "dependencies": {

@@ -132,7 +132,7 @@ import { createClient } from '@/packages/agent-core/src/clients/database';
 - Agent logic → packages/agent-core/
 - Research → packages/research-engine/
 - Code gen → packages/execution-engine/
-- Python agents → services/python-agents/
+- Python agents → services/python_agents/
 
 ❌ BAD: Create files in wrong locations or root
 ```
@@ -1655,7 +1655,7 @@ improving code quality, CI/CD integration, and developer onboarding experience.
 **Infrastructure Complete**
 
 - ✅ Docker environment configured
-  - PostgreSQL 15 + pgvector extension (port 5432)
+  - PostgreSQL 16 + pgvector extension (port 5432)
   - Redis 7.x (port 6379)
   - Qdrant vector database (port 6333)
 - ✅ Database schema designed (6 tables)
@@ -1741,7 +1741,7 @@ improving code quality, CI/CD integration, and developer onboarding experience.
 - ✅ 12-month roadmap planned (52 weeks, 6 phases)
 - ✅ Technology stack selected
   - Backend: Node.js 20+ (TypeScript 5.9) + Python 3.10+ (LangGraph)
-  - Database: PostgreSQL 15 + pgvector, Redis 7.x, Qdrant
+  - Database: PostgreSQL 16 + pgvector, Redis 7.x, Qdrant
   - LLM: Claude Sonnet 4.5
   - Frontend: Next.js 14+ (planned)
 
@@ -1894,7 +1894,7 @@ Result: 500K events/sec in 18KB memory (3-100x improvement)
 
 #### Data Layer
 
-- **Primary Database:** PostgreSQL 15 + pgvector extension
+- **Primary Database:** PostgreSQL 16 + pgvector extension
 - **Vector Database:** Qdrant (self-hosted)
 - **Cache/Queue:** Redis 7.x + BullMQ
 - **Embeddings:** sentence-transformers (all-MiniLM-L6-v2)
@@ -1984,7 +1984,7 @@ autonomous-ai-platform/
 │       └── package.json
 │
 ├── services/
-│   └── python-agents/         # Python/LangGraph services (TODO)
+│   └── python_agents/         # Python/LangGraph services (TODO)
 │       ├── orchestrator/      # Main LangGraph orchestrator
 │       ├── research/          # Research agent
 │       └── requirements.txt   # Python dependencies
@@ -2027,7 +2027,7 @@ autonomous-ai-platform/
 
 ### Tables Overview
 
-The platform uses PostgreSQL 15 with pgvector extension for semantic search
+The platform uses PostgreSQL 16 with pgvector extension for semantic search
 capabilities.
 
 #### 1. packages

@@ -175,7 +175,7 @@ autonomous-ai-platform/
 │   ├── research-engine/  # Research paper integration (planned)
 │   └── execution-engine/ # Code generation (planned)
 ├── services/
-│   └── python-agents/    # LangGraph orchestrator (planned)
+│   └── python_agents/    # LangGraph orchestrator (planned)
 ├── infrastructure/
 │   └── schema/           # Database migrations
 └── documentation_guide/  # Original specifications

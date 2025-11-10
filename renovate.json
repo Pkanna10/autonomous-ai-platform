@@ -55,16 +55,6 @@
       "automergeType": "pr"
     },
     {
-      "description": "Prioritize security updates",
-      "matchPackagePatterns": ["*"],
-      "matchUpdateTypes": ["patch"],
-      "vulnerabilityAlerts": {
-        "labels": ["security", "priority-high"],
-        "automerge": true,
-        "schedule": ["at any time"]
-      }
-    },
-    {
       "description": "Security vulnerability updates (HIGH priority)",
       "matchDatasources": ["npm", "pypi"],
       "prPriority": 10,

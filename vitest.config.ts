@@ -54,7 +54,8 @@ export default defineConfig({
         '**/test/**',
         '**/tests/**',
         '**/*.config.ts',
-        '**/test-setup.ts', // Development utility script
+        '**/test-setup.ts',
+        '**/index.ts',
       ],
     },
 
