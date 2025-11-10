@@ -21,15 +21,16 @@ workflows, and security best practices.
 
 ## 🔒 Security Tools Overview
 
-| Tool           | Purpose                            | Frequency                 | Automation |
-| -------------- | ---------------------------------- | ------------------------- | ---------- |
-| **pnpm audit** | Built-in npm vulnerability scanner | Every commit (pre-commit) | Automated  |
-| **Snyk**       | Comprehensive SCA + SAST           | Weekly + PR               | Automated  |
-| **Trivy**      | Container & IaC security scanner   | Weekly + PR               | Automated  |
-| **Socket.dev** | Supply chain attack detection      | On PR only                | Automated  |
-| **Renovate**   | Automated dependency updates       | Weekly                    | Automated  |
-| **Commitlint** | Commit message validation          | Every commit              | Automated  |
-| **ESLint**     | Code quality & security linting    | Every commit              | Automated  |
+| Tool            | Purpose                            | Frequency                 | Cost       | Automation |
+| --------------- | ---------------------------------- | ------------------------- | ---------- | ---------- |
+| **pnpm audit**  | Built-in npm vulnerability scanner | Every commit (pre-commit) | FREE       | Automated  |
+| **OSV-Scanner** | Google's vulnerability database    | Weekly + PR               | FREE       | Automated  |
+| **Trivy**       | Container & IaC security scanner   | Weekly + PR               | FREE       | Automated  |
+| **Socket.dev**  | Supply chain attack detection      | On PR only                | FREE (OSS) | Automated  |
+| **Dependabot**  | Automated dependency updates       | Weekly                    | FREE       | Automated  |
+| **Renovate**    | Advanced dependency updates        | Weekly                    | FREE       | Automated  |
+| **Commitlint**  | Commit message validation          | Every commit              | FREE       | Automated  |
+| **ESLint**      | Code quality & security linting    | Every commit              | FREE       | Automated  |
 
 ---
 
@@ -43,10 +44,10 @@ pnpm security
 
 # Individual scans
 pnpm security:audit      # npm audit (fast, built-in)
-pnpm security:scan       # Comprehensive scan (Trivy, Snyk, gitleaks)
+pnpm security:scan       # Comprehensive scan (Trivy, OSV-Scanner, gitleaks)
 pnpm security:docker     # Docker image security scan
 pnpm security:trivy      # Full Trivy scan with detailed report
-pnpm security:snyk       # Snyk dependency & code analysis
+pnpm security:osv        # OSV-Scanner (Google's vulnerability database)
 
 # Fix vulnerabilities automatically
 pnpm security:fix        # Auto-fix patchable vulnerabilities
@@ -97,13 +98,21 @@ Runs on every push and PR:
 
 Runs weekly (Monday 9am UTC) and on PR:
 
-- **Snyk Code Analysis** (SAST) - Static application security testing
-- **Snyk Dependency Scan** (SCA) - Software composition analysis
-- **Snyk Docker Scan** - Container image vulnerabilities
-- **Socket.dev** - Supply chain security (PR only)
-- **License Compliance Check** - OSS license verification
+- **OSV-Scanner** - Google's comprehensive vulnerability database (FREE)
+- **Socket.dev** - Supply chain security (PR only, FREE for open source)
+- **npm Audit** - Built-in npm vulnerability scanner (FREE)
+- **License Compliance Check** - OSS license verification (FREE)
 
-#### 3. Trivy Docker Security
+#### 3. Dependabot (`.github/dependabot.yml`)
+
+Automated dependency updates:
+
+- **npm Dependencies** - Weekly updates for all packages
+- **Docker Images** - Weekly updates for container images
+- **GitHub Actions** - Weekly updates for workflow dependencies
+- Runs every Monday at 3am PT with automated grouping
+
+#### 4. Trivy Docker Security
 
 Runs on every push/PR with enhanced reporting:
 
@@ -128,7 +137,7 @@ Runs on every push/PR with enhanced reporting:
 ### Vulnerability Response Workflow
 
 1. **Detection:**
-   - Automated: Snyk, Renovate, GitHub Security Alerts
+   - Automated: OSV-Scanner, Dependabot, Renovate, GitHub Security Alerts
    - Manual: Security scan reports, penetration testing
 
 2. **Assessment:**
@@ -137,8 +146,11 @@ Runs on every push/PR with enhanced reporting:
    # View details
    cat trivy-reports/trivy-summary-latest.md
 
-   # Check Snyk dashboard
-   snyk test --severity-threshold=high
+   # Check OSV-Scanner results
+   pnpm security:osv
+
+   # Check npm audit
+   pnpm audit --audit-level=high
    ```
 
 3. **Remediation:**
@@ -160,20 +172,22 @@ Runs on every push/PR with enhanced reporting:
    - Manual verification in staging environment
 
 5. **Documentation:**
-   - Update `.snyk` file with exceptions (if false positive)
+   - Document exceptions in SECURITY.md (if false positive)
    - Add to changelog
    - Create GitHub Security Advisory (if critical)
 
 ### Exception Handling
 
-Add vulnerability exceptions to `.snyk` file (with justification):
+For false positives or accepted risks, document in project documentation
+(SECURITY.md):
 
-```yaml
-ignore:
-  SNYK-JS-MINIMIST-559764:
-    - '*':
-        reason: 'Dev dependency only, not exploitable in our use case'
-        expires: '2025-12-31T00:00:00.000Z'
+```markdown
+## Known Issues (Accepted Risks)
+
+### CVE-2024-XXXXX (minimist)
+
+- **Severity**: LOW reason: 'Dev dependency only, not exploitable in our use
+  case' expires: '2025-12-31T00:00:00.000Z'
 ```
 
 ---

@@ -57,14 +57,14 @@
     "security:scan": "bash scripts/security-scan.sh",
     "security:docker": "bash scripts/docker-security-scan.sh",
     "security:trivy": "bash scripts/trivy-scan-full.sh",
-    "security:snyk": "snyk test --all-projects",
-    "security:fix": "pnpm audit fix && snyk fix"
+    "security:osv": "npx -y @google/osv-scanner -r .",
+    "security:fix": "pnpm audit fix"
   },
   "packageManager": "pnpm@10.20.0",
   "devDependencies": {
-    "@commitlint/cli": "^20.0.0",
+    "@commitlint/cli": "^20.1.0",
     "@commitlint/config-conventional": "^20.0.0",
-    "@types/node": "^24.9.2",
+    "@types/node": "^24.10.0",
     "@typescript-eslint/eslint-plugin": "^8.46.3",
     "@typescript-eslint/parser": "^8.46.3",
     "@vitest/coverage-v8": "^4.0.6",
@@ -73,7 +73,7 @@
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.4",
     "husky": "^9.1.7",
-    "lint-staged": "^15.4.0",
+    "lint-staged": "^16.2.6",
     "prettier": "^3.6.2",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",

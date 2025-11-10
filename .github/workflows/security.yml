@@ -10,9 +10,9 @@ on:
   workflow_dispatch: # Allow manual trigger
 
 jobs:
-  # Snyk vulnerability scanning
-  snyk:
-    name: Snyk Security Scan
+  # OSV-Scanner - Google's free vulnerability scanner
+  osv-scanner:
+    name: OSV Vulnerability Scan
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -22,81 +22,35 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.20.0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version-file: '.nvmrc'
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      # Snyk code analysis (SAST)
-      - name: Run Snyk Code Analysis
-        uses: snyk/actions/node@master
+      - name: Run OSV-Scanner
+        uses: google/osv-scanner-action@v1.9.1
         continue-on-error: true
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
-          command: code test
-          args: --sarif-file-output=snyk-code.sarif
+          scan-args: |-
+            --recursive
+            --skip-git
+            --format sarif
+            --output osv-results.sarif
+            ./
 
-      # Snyk dependency scanning (SCA)
-      - name: Run Snyk Dependency Scan
-        uses: snyk/actions/node@master
-        continue-on-error: true
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          command: test
-          args: --all-projects --severity-threshold=high --sarif-file-output=snyk-deps.sarif
-
-      # Snyk Docker image scanning
-      - name: Run Snyk Docker Scan - PostgreSQL
-        uses: snyk/actions/docker@master
-        continue-on-error: true
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          image: pgvector/pgvector:pg15
-          args: --severity-threshold=high --sarif-file-output=snyk-postgres.sarif
-
-      - name: Run Snyk Docker Scan - Redis
-        uses: snyk/actions/docker@master
-        continue-on-error: true
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          image: redis:7-alpine
-          args: --severity-threshold=high --sarif-file-output=snyk-redis.sarif
-
-      - name: Run Snyk Docker Scan - Qdrant
-        uses: snyk/actions/docker@master
-        continue-on-error: true
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          image: qdrant/qdrant:latest
-          args: --severity-threshold=high --sarif-file-output=snyk-qdrant.sarif
-
-      # Upload results to GitHub Security tab
-      - name: Upload Snyk results to GitHub Security
+      - name: Upload OSV results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
-          sarif_file: |
-            snyk-code.sarif
-            snyk-deps.sarif
-            snyk-postgres.sarif
-            snyk-redis.sarif
-            snyk-qdrant.sarif
+          sarif_file: osv-results.sarif
+          category: osv-scanner
 
-  # Socket.dev supply chain security (alternative to Snyk)
+      - name: Generate OSV Summary
+        if: always()
+        run: |
+          echo "# 🔍 OSV Vulnerability Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ OSV-Scanner checks vulnerabilities against Google's comprehensive database" >> $GITHUB_STEP_SUMMARY
+          echo "📊 Results uploaded to GitHub Security tab" >> $GITHUB_STEP_SUMMARY
+
+  # Socket.dev supply chain security (FREE for open source, PR-only)
+  # NOTE: This job intentionally only runs on pull requests (not direct pushes)
+  # to catch malicious dependencies before they're merged into main branch.
   socket:
     name: Socket.dev Supply Chain Scan
     runs-on: ubuntu-latest

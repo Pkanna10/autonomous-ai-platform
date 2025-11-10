@@ -28,17 +28,20 @@ else
 fi
 echo ""
 
-# 2. Snyk test (if Snyk is installed and token is set)
-echo "🔍 Step 2/4: Running Snyk scan..."
-if command -v snyk &> /dev/null && [ -n "$SNYK_TOKEN" ]; then
-  if snyk test --all-projects --severity-threshold=high; then
-    echo -e "${GREEN}✓ Snyk scan passed${NC}"
-  else
-    echo -e "${RED}✗ Snyk found vulnerabilities${NC}"
-    FAILURES=$((FAILURES + 1))
-  fi
+# 2. OSV-Scanner (Google's vulnerability database)
+echo "🔍 Step 2/4: Running OSV-Scanner..."
+if npx -y @google/osv-scanner -r . 2>/dev/null; then
+  echo -e "${GREEN}✓ OSV-Scanner found no vulnerabilities${NC}"
 else
-  echo -e "${YELLOW}⚠ Snyk not configured (install: npm install -g snyk, set SNYK_TOKEN)${NC}"
+  EXIT_CODE=$?
+  if [ $EXIT_CODE -eq 1 ]; then
+    echo -e "${RED}✗ OSV-Scanner found vulnerabilities${NC}"
+    FAILURES=$((FAILURES + 1))
+  elif [ $EXIT_CODE -eq 127 ]; then
+    echo -e "${YELLOW}⚠ OSV-Scanner failed to run (requires Node.js/npm)${NC}"
+  else
+    echo -e "${YELLOW}⚠ OSV-Scanner completed with warnings${NC}"
+  fi
 fi
 echo ""
 
