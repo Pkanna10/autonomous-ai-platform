@@ -11,6 +11,12 @@ coverage/
 # Documentation (frozen reference - don't lint)
 documentation_guide/
 
+# GitHub Actions and templates
+.github/
+
+# Security scan reports
+trivy-reports/
+
 # Legal files (plain text, not markdown)
 LICENSE
 LICENSE.*
