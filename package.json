@@ -58,7 +58,12 @@
     "security:docker": "bash scripts/docker-security-scan.sh",
     "security:trivy": "bash scripts/trivy-scan-full.sh",
     "security:osv": "npx -y @google/osv-scanner -r .",
-    "security:fix": "pnpm audit fix"
+    "security:fix": "pnpm audit fix",
+    "python:install": "cd services/python_agents && pip install -r requirements.txt",
+    "python:lint": "cd services/python_agents && ruff check .",
+    "python:format": "cd services/python_agents && black .",
+    "python:typecheck": "cd services/python_agents && mypy .",
+    "python:test": "cd services/python_agents && pytest"
   },
   "packageManager": "pnpm@10.20.0",
   "devDependencies": {
