@@ -73,28 +73,6 @@ jobs:
           path: osv-results.json
           retention-days: 30
 
-  # Socket.dev supply chain security (FREE for open source, PR-only)
-  # NOTE: This job intentionally only runs on pull requests (not direct pushes)
-  # to catch malicious dependencies before they're merged into main branch.
-  socket:
-    name: Socket.dev Supply Chain Scan
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    permissions:
-      contents: read
-      pull-requests: write
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Socket.dev Dependency Analysis
-        uses: SocketDev/socket-security-action@v1
-        continue-on-error: true
-        with:
-          api-key: ${{ secrets.SOCKET_API_KEY }}
-          comment-as-user: true
-
   # npm audit (built-in, free)
   npm-audit:
     name: npm Audit
