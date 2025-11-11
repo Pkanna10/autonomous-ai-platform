@@ -1,12 +1,19 @@
-import { defineConfig } from 'vitest/config';
-import path from 'path';
+import { mergeConfig } from 'vitest/config';
+import { sharedConfig } from './vitest.shared';
 
-export default defineConfig({
+/**
+ * Root Vitest configuration for the monorepo.
+ *
+ * Extends the shared configuration from vitest.shared.ts with root-specific settings:
+ * - Test file patterns (include/exclude)
+ * - CI-specific reporters (JUnit XML)
+ * - Output file locations
+ *
+ * For package-level configs, import and extend sharedConfig in the same way.
+ */
+export default mergeConfig(sharedConfig, {
   test: {
-    // Test environment
-    environment: 'node',
-
-    // Test file patterns
+    // Root-specific: Test file patterns across all packages
     include: [
       'packages/**/*.test.ts',
       'packages/**/*.spec.ts',
@@ -16,7 +23,7 @@ export default defineConfig({
       'services/**/*.spec.ts',
     ],
 
-    // Exclude patterns
+    // Root-specific: Exclude patterns for common directories
     exclude: [
       '**/node_modules/**',
       '**/dist/**',
@@ -24,71 +31,12 @@ export default defineConfig({
       '**/.{idea,git,cache,output,temp}/**',
     ],
 
-    // Coverage configuration (CLAUDE.md: 90%+ requirement)
-    coverage: {
-      provider: 'v8',
-      reporter: ['text', 'json', 'html', 'lcov'],
-
-      // 90%+ coverage thresholds (MANDATORY per CLAUDE.md)
-      thresholds: {
-        lines: 90,
-        functions: 90,
-        branches: 90,
-        statements: 90,
-      },
-
-      // Include all source files
-      include: [
-        'packages/*/src/**/*.ts',
-        'apps/*/src/**/*.ts',
-        'services/*/src/**/*.ts',
-      ],
-
-      // Exclude non-production code
-      exclude: [
-        '**/*.test.ts',
-        '**/*.spec.ts',
-        '**/*.d.ts',
-        '**/node_modules/**',
-        '**/dist/**',
-        '**/test/**',
-        '**/tests/**',
-        '**/*.config.ts',
-        '**/test-setup.ts',
-        '**/index.ts',
-      ],
-    },
-
-    // Global setup
-    globals: true,
-
-    // Test timeout (2 minutes as per CLAUDE.md)
-    testTimeout: 120000,
-
-    // Hook timeouts
-    hookTimeout: 60000,
-
-    // Reporters (add JUnit for CI environments)
-    reporters: process.env.CI ? ['default', 'verbose', 'junit'] : ['default', 'verbose'],
-
-    // Output files for reporters
-    outputFile: {
-      junit: './coverage/junit.xml',
-    },
-
-    // Watch mode
-    watch: false,
-
-    // Parallel execution
-    pool: 'threads',
-  },
-
-  // Resolve aliases for monorepo packages
-  resolve: {
-    alias: {
-      '@autonomous-ai/agent-core': path.resolve(__dirname, './packages/agent-core/src'),
-      '@autonomous-ai/research-engine': path.resolve(__dirname, './packages/research-engine/src'),
-      '@autonomous-ai/execution-engine': path.resolve(__dirname, './packages/execution-engine/src'),
-    },
+    // Root-specific: Reporters
+    // - CI: default + verbose + junit (for GitHub Actions test annotations)
+    // - Local: default + verbose (for detailed test output)
+    // Using inline format to keep reporter config together
+    reporters: process.env.CI
+      ? ['default', 'verbose', ['junit', { outputFile: './coverage/junit.xml' }]]
+      : ['default', 'verbose'],
   },
 });

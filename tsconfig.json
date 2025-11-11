@@ -8,6 +8,8 @@
     "declarationMap": true,
     "sourceMap": true,
     "outDir": "./dist",
+    "incremental": true,
+    "tsBuildInfoFile": "./.cache/tsconfig.tsbuildinfo",
     "removeComments": false,
     "noEmit": false,
     "esModuleInterop": true,
@@ -45,7 +47,9 @@
   "include": [
     "packages/*/src/**/*.ts",
     "apps/*/src/**/*.ts",
-    "services/*/src/**/*.ts"
+    "services/*/src/**/*.ts",
+    "*.config.ts",
+    "vitest.shared.ts"
   ],
   "exclude": [
     "node_modules",
