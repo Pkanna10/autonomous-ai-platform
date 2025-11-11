@@ -60,7 +60,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ./services/python-agents
+        working-directory: ./services/python_agents
 
     steps:
       - name: Checkout code
@@ -94,7 +94,7 @@ jobs:
 
       - name: Run tests
         run: pytest --cov --cov-report=xml --cov-report=term
-        if: hashFiles('services/python-agents/tests/**/*.py') != ''
+        if: hashFiles('services/python_agents/tests/**/*.py') != ''
 
   # Dependency security scan
   security:

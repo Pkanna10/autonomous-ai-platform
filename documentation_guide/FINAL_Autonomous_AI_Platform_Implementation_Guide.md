@@ -475,7 +475,7 @@ packages:
 EOF
 
 # Create directory structure
-mkdir -p apps/{web,cli} packages/{agent-core,research-engine,execution-engine} services/python-agents docker infrastructure/{schema,scripts}
+mkdir -p apps/{web,cli} packages/{agent-core,research-engine,execution-engine} services/python_agents docker infrastructure/{schema,scripts}
 ```
 
 **Day 3-4: Docker Development Environment**
@@ -649,7 +649,7 @@ export class ClaudeClient {
 
 **Day 1-2: LangGraph State Machine**
 ```python
-# services/python-agents/src/orchestrator.py
+# services/python_agents/src/orchestrator.py
 from langgraph.graph import StateGraph, END
 from langchain_anthropic import ChatAnthropic
 from typing import TypedDict, Annotated, List
@@ -765,7 +765,7 @@ Return JSON with:
 
 **Day 6-7: Error Recovery Patterns**
 ```python
-# services/python-agents/src/error_recovery.py
+# services/python_agents/src/error_recovery.py
 from typing import Dict, Any
 import asyncio
 
@@ -865,7 +865,7 @@ Return JSON array: [{name, version, relevanceScore}]`;
 
 **Day 4-5: PyPI Integration**
 ```python
-# services/python-agents/src/package_manager.py
+# services/python_agents/src/package_manager.py
 import httpx
 import subprocess
 from typing import List, Dict
@@ -986,7 +986,7 @@ export class AutoInstaller {
 
 **Day 1-3: arXiv Monitoring**
 ```python
-# services/python-agents/src/research_engine.py
+# services/python_agents/src/research_engine.py
 import arxiv
 from datetime import datetime, timedelta
 from typing import List, Dict
@@ -1025,7 +1025,7 @@ class ResearchEngine:
 
 **Day 4-5: PDF Processing & Algorithm Extraction**
 ```python
-# services/python-agents/src/paper_analyzer.py
+# services/python_agents/src/paper_analyzer.py
 import fitz  # PyMuPDF
 import re
 from typing import Dict, List
@@ -1069,7 +1069,7 @@ class PaperAnalyzer:
 
 **Day 6-7: Complexity Analysis & Scoring**
 ```python
-# services/python-agents/src/complexity_analyzer.py
+# services/python_agents/src/complexity_analyzer.py
 import re
 from anthropic import Anthropic
 
@@ -1191,7 +1191,7 @@ CREATE TABLE performance_metrics (
 
 **Day 3-4: State Persistence & Checkpointing**
 ```python
-# services/python-agents/src/state_manager.py
+# services/python_agents/src/state_manager.py
 from langgraph.checkpoint.sqlite import SqliteSaver
 import sqlite3
 

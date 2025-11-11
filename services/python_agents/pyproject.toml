@@ -1,5 +1,5 @@
 [project]
-name = "autonomous-ai-python-agents"
+name = "autonomous-ai-python_agents"
 version = "0.1.0"
 description = "Python agent services for autonomous AI platform"
 requires-python = ">=3.10"
