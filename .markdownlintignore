@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+.next/
+coverage/
+
+# Documentation (frozen reference - don't lint)
+documentation_guide/
+
+# Legal files (plain text, not markdown)
+LICENSE
+LICENSE.*
+COPYING
+NOTICE
+
+# Generated files
+pnpm-lock.yaml
+package-lock.json
+CHANGELOG.md
+
+# Logs
+*.log

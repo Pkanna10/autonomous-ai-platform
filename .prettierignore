@@ -37,6 +37,11 @@ commitlint.config.ts
 .npmrc
 .editorconfig
 
+# Legal files (plain text, not markdown)
+LICENSE
+LICENSE.*
+COPYING
+
 # Git hooks
 .husky/
 

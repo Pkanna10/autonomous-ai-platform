@@ -35,7 +35,7 @@ export default mergeConfig(sharedConfig, {
     // - CI: default + verbose + junit (for GitHub Actions test annotations)
     // - Local: default + verbose (for detailed test output)
     // Using inline format to keep reporter config together
-    reporters: process.env.CI
+    reporters: process.env['CI']
       ? ['default', 'verbose', ['junit', { outputFile: './coverage/junit.xml' }]]
       : ['default', 'verbose'],
   },
