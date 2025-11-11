@@ -44,11 +44,14 @@ commitlint.config.ts
 .eslintcache
 .vitest/
 .turbo/
+.mypy_cache/
+__pycache__/
 
 # IDE
 .vscode/
 *.code-workspace
 .idea/
+.claude/
 
 # OS files
 .DS_Store

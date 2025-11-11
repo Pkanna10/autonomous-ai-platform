@@ -8,9 +8,9 @@ export default [
   {
     ignores: [
       'node_modules/**',
-      'dist/**',
-      'build/**',
-      'coverage/**',
+      '**/dist/**',
+      '**/build/**',
+      '**/coverage/**',
       'documentation_guide/**',
       '**/*.d.ts',
       // Root-level config files (not part of TypeScript project)
