@@ -1583,6 +1583,41 @@ Before marking any task complete, verify:
 
 ## Project Changelog
 
+### 2025-11-12 (Week 2) - Python 3.11 Upgrade & Dependency Strategy
+
+**Python Version Upgrade**
+
+- ✅ Upgraded from Python 3.10 → 3.11 for 10-60% performance gains
+- ✅ Created `.python-version` file for pyenv/asdf version management
+- ✅ Updated pyproject.toml (Ruff, Black, mypy target-version: py311)
+- ✅ Updated CLAUDE.md Technology Stack section (Python 3.11+)
+- **Benefit:** Faster async performance for LangGraph agents, better error
+  messages, improved developer experience
+
+**Dependency Management Optimization**
+
+- ✅ Removed `.github/dependabot.yml` (redundant with Renovate)
+- ✅ Established two-tool strategy:
+  - Renovate: Regular updates with intelligent monorepo grouping
+  - Dependabot: Security alerts + security updates only (GitHub Settings)
+- ✅ Added "Dependency Management Strategy" section to CLAUDE.md
+- ✅ Documented GitHub Settings configuration for Dependabot security alerts
+- **Benefit:** Reduced PR noise, clearer security vs. regular update separation
+
+**Decisions Made:**
+
+1. **Python 3.11 chosen** - Optimal balance of performance (10-60% faster),
+   maturity (2+ years), and long support (Oct 2027)
+2. **Renovate over Dependabot** - Superior monorepo support with package
+   grouping
+3. **Keep Dependabot security alerts** - Native GitHub integration for fastest
+   CVE detection
+
+**Impact:** Infrastructure now optimized for performance and reduced maintenance
+overhead.
+
+---
+
 ### 2025-11-08 (Week 2) - Configuration Files Enhanced
 
 **Comprehensive Configuration Overhaul**
@@ -1755,7 +1790,7 @@ improving code quality, CI/CD integration, and developer onboarding experience.
   - Unified_Autonomous_Research_Platform_Architecture.md (4,591 lines)
 - ✅ 12-month roadmap planned (52 weeks, 6 phases)
 - ✅ Technology stack selected
-  - Backend: Node.js 20+ (TypeScript 5.9) + Python 3.10+ (LangGraph)
+  - Backend: Node.js 20+ (TypeScript 5.9) + Python 3.11+ (LangGraph)
   - Database: PostgreSQL 16 + pgvector, Redis 7.x, Qdrant
   - LLM: Claude Sonnet 4.5
   - Frontend: Next.js 14+ (planned)
@@ -2522,7 +2557,7 @@ export function Dashboard({ events }: DashboardProps) {
 - macOS (Darwin) or Linux
 - Docker Desktop
 - Node.js 20+
-- Python 3.10+
+- Python 3.11+
 - pnpm 10.20.0
 
 #### Initial Setup
@@ -2598,6 +2633,41 @@ Used for: Vector embeddings, semantic search
 3. **Run tests:** `pnpm test` (when available)
 4. **Build:** `pnpm build` (when available)
 5. **Lint:** `pnpm lint` (when available)
+
+### Dependency Management Strategy
+
+**Two-Tool Approach:**
+
+| Tool           | Purpose                    | Configuration                  |
+| -------------- | -------------------------- | ------------------------------ |
+| **Renovate**   | Regular dependency updates | renovate.json (112 lines)      |
+| **Dependabot** | Security alerts only       | GitHub Settings (no .yml file) |
+
+**Renovate** (renovate.json):
+
+- Weekly updates (Mondays, early morning)
+- Groups monorepo packages in single PR
+- Automerge: patch updates + dev minors
+- Lockfile maintenance: Monthly
+
+**Dependabot** (GitHub Settings only):
+
+- Security alerts: Enabled
+- Security updates: Enabled (auto-PR for CVEs)
+- Version updates: DISABLED (Renovate handles this)
+
+**GitHub Settings Configuration:**
+
+1. Navigate to: Repository Settings → Code security and analysis
+2. ✅ Enable: Dependency graph
+3. ✅ Enable: Dependabot alerts
+4. ✅ Enable: Dependabot security updates
+5. ❌ Disable: Dependabot version updates (Renovate handles regular updates)
+6. ✅ Enable: Grouped security updates (if available)
+
+**Rationale:** Renovate excels at monorepo dependency management with
+intelligent grouping, while Dependabot provides fastest security vulnerability
+detection via native GitHub integration.
 
 ### Testing Strategy
 
@@ -3027,6 +3097,7 @@ pnpm build                      # Build all packages (when ready)
 | [packages/agent-core/src/clients/claude.ts](packages/agent-core/src/clients/claude.ts)                                                               | Claude API client             |
 | [documentation_guide/FINAL_Autonomous_AI_Platform_Implementation_Guide.md](documentation_guide/FINAL_Autonomous_AI_Platform_Implementation_Guide.md) | Detailed implementation guide |
 | [documentation_guide/Unified_Autonomous_Research_Platform_Architecture.md](documentation_guide/Unified_Autonomous_Research_Platform_Architecture.md) | Architecture reference        |
+| [.python-version](.python-version)                                                                                                                   | Python version pinning (3.11) |
 
 ### External Resources
 
@@ -3038,9 +3109,9 @@ pnpm build                      # Build all packages (when ready)
 
 ---
 
-**Last Updated:** 2025-11-08 (Week 2 - Configuration files enhanced with best
-practices: line endings, CI reporters, dependency automation, code quality
-improvements)
+**Last Updated:** 2025-11-12 (Week 2 - Python 3.11 upgrade for performance
+gains, dependency management strategy optimized with Renovate + Dependabot
+security-only approach)
 
 **Status:** Foundation phase - Early development
 
