@@ -509,6 +509,21 @@ Addresses Phase 1, Week 3-4 milestone
 **Before Committing:** Always run `pnpm run pre-commit` to ensure all checks
 pass (typecheck, lint, test, coverage).
 
+**CRITICAL - Lockfile Regeneration:** If you updated any package versions in
+`package.json` files (e.g., `@types/node: ^24.9.2` → `^24.10.0`), you MUST
+regenerate the lockfile before committing:
+
+```bash
+# After updating package.json versions, run:
+pnpm install
+
+# This updates pnpm-lock.yaml with new versions
+# Then commit both package.json AND pnpm-lock.yaml together
+```
+
+**Why:** CI uses `--frozen-lockfile` which fails if lockfile doesn't match
+package.json. This prevents deployment failures and ensures reproducible builds.
+
 #### Commit Strategy: When and How to Commit
 
 **CRITICAL: Understanding when to commit and how to handle multiple file changes
