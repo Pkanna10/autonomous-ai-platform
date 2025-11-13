@@ -2,6 +2,8 @@ import typescriptEslint from '@typescript-eslint/eslint-plugin';
 import typescriptParser from '@typescript-eslint/parser';
 import prettier from 'eslint-plugin-prettier';
 import prettierConfig from 'eslint-config-prettier';
+import simpleImportSort from 'eslint-plugin-simple-import-sort';
+import eslintPluginImport from 'eslint-plugin-import';
 
 export default [
   // Ignore patterns
@@ -46,6 +48,8 @@ export default [
     plugins: {
       '@typescript-eslint': typescriptEslint,
       prettier: prettier,
+      'simple-import-sort': simpleImportSort,
+      import: eslintPluginImport,
     },
     rules: {
       // ========================================
@@ -152,6 +156,48 @@ export default [
       'prettier/prettier': 'error',
 
       ...prettierConfig.rules,
+
+      // ========================================
+      // Import Sorting (eslint-plugin-simple-import-sort)
+      // ========================================
+      'simple-import-sort/imports': [
+        'error',
+        {
+          groups: [
+            // Side effect imports (polyfills, global styles)
+            ['^\\u0000'],
+
+            // Node.js built-ins with node: prefix
+            ['^node:'],
+
+            // External packages (npm/pnpm)
+            ['^@?\\w'],
+
+            // Internal monorepo packages (@autonomous-ai/*)
+            ['^@autonomous-ai/'],
+
+            // Parent imports (../)
+            ['^\\.\\.(?!/?$)', '^\\.\\./?$'],
+
+            // Sibling imports (./)
+            ['^\\./(?=.*/)(?!/?$)', '^\\.(?!/?$)', '^\\./?$'],
+
+            // Style imports (CSS/SCSS)
+            ['^.+\\.s?css$'],
+          ],
+        },
+      ],
+      'simple-import-sort/exports': 'error',
+
+      // Disable conflicting rules
+      'sort-imports': 'off',
+
+      // ========================================
+      // Import Hygiene (eslint-plugin-import)
+      // ========================================
+      'import/first': 'error',
+      'import/newline-after-import': 'error',
+      'import/no-duplicates': 'error',
     },
   },
 ];

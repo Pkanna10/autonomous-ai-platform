@@ -26,6 +26,9 @@ dist/
 build/
 *.tsbuildinfo
 
+# ESLint cache
+.eslintcache
+
 # Logs
 *.log
 npm-debug.log*

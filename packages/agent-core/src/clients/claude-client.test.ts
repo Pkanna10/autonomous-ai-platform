@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/naming-convention */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
 import { ClaudeClient } from './claude-client';
 
 // Mock the Anthropic SDK

@@ -1,8 +1,10 @@
 /* eslint-disable no-console, @typescript-eslint/naming-convention */
 // packages/agent-core/src/test-setup.ts
 import 'dotenv/config';
+
 import Anthropic from '@anthropic-ai/sdk';
 import pg from 'pg';
+
 const { Client } = pg;
 
 async function testSetup(): Promise<void> {
