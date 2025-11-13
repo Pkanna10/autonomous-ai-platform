@@ -5,7 +5,7 @@
 
 # Dependencies
 node_modules
-pnpm-lock.yaml
+# pnpm-lock.yaml  ← KEEP THIS! Needed for Docker builds
 package-lock.json
 yarn.lock
 
@@ -26,6 +26,14 @@ env/
 .env.*
 !.env.example
 .env.vault
+*.key
+*.pem
+*.p12
+*.pfx
+secrets/
+credentials/
+.aws/
+.ssh/
 
 # Documentation (exclude from images, keep README for metadata)
 *.md
@@ -47,6 +55,8 @@ coverage/
 htmlcov/
 .pytest_cache/
 *.cover
+junit.xml
+test-results/
 
 # Development files
 .vscode/
@@ -130,6 +140,6 @@ pnpm-debug.log*
 *.sqlite3
 infrastructure/schema/
 
-# Lock files (install from package.json instead)
-pnpm-lock.yaml
+# Lock files for other package managers (we USE pnpm-lock.yaml!)
+# pnpm-lock.yaml  ← KEEP THIS! Critical for reproducible builds
 package-lock.json

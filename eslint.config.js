@@ -30,6 +30,8 @@ export default [
       '**/.tox/**',
       '**/.pytest_cache/**',
       '**/__pycache__/**',
+      // Infrastructure scripts (standalone utilities for Docker)
+      'infrastructure/docker/**/*.js',
     ],
   },
 
