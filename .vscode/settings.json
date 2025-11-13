@@ -1,0 +1,122 @@
+{
+  // ============================================
+  // Editor - General Settings
+  // ============================================
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit",
+    "source.organizeImports": "explicit"
+  },
+
+  // ============================================
+  // Language-Specific Settings
+  // ============================================
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.black-formatter",
+    "editor.rulers": [88],
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit",
+      "source.fixAll": "never"
+    }
+  },
+  "[typescript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.rulers": [100]
+  },
+  "[javascript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.rulers": [100]
+  },
+  "[json]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[markdown]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+
+  // ============================================
+  // TypeScript/JavaScript - Inlay Hints
+  // ============================================
+  "typescript.inlayHints.parameterNames.enabled": "literals",
+  "typescript.inlayHints.parameterTypes.enabled": false,
+  "typescript.inlayHints.variableTypes.enabled": false,
+  "typescript.inlayHints.propertyDeclarationTypes.enabled": true,
+  "typescript.inlayHints.functionLikeReturnTypes.enabled": true,
+  "typescript.inlayHints.enumMemberValues.enabled": true,
+  "javascript.inlayHints.parameterNames.enabled": "literals",
+  "javascript.inlayHints.parameterTypes.enabled": false,
+  "javascript.inlayHints.variableTypes.enabled": false,
+  "javascript.inlayHints.functionLikeReturnTypes.enabled": true,
+
+  // ============================================
+  // TypeScript/JavaScript - Import Preferences
+  // ============================================
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+  "typescript.preferences.importModuleSpecifier": "project-relative",
+  "javascript.preferences.importModuleSpecifier": "project-relative",
+
+  // ============================================
+  // Python - Analysis & Testing
+  // ============================================
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/packages/agent-core/src",
+    "${workspaceFolder}/packages/research-engine/src",
+    "${workspaceFolder}/packages/execution-engine/src",
+    "${workspaceFolder}/services/python_agents/src"
+  ],
+  "python.analysis.autoImportCompletions": true,
+  "python.analysis.indexing": true,
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestArgs": ["tests", "-v", "--tb=short", "--no-cov"],
+  "python.testing.autoTestDiscoverOnSaveEnabled": true,
+
+  // ============================================
+  // File Management - Exclusions
+  // ============================================
+  "files.exclude": {
+    "**/.git": true,
+    "**/.DS_Store": true,
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/build": true,
+    "**/.next": true,
+    "**/coverage": true
+  },
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/build": true,
+    "**/.next": true,
+    "**/coverage": true,
+    "pnpm-lock.yaml": true
+  },
+  // CRITICAL: Prevents VS Code from watching 79,000+ files in pnpm-store
+  // Reduces RAM usage by 67-80% (from ~400MB to ~80-130MB)
+  "files.watcherExclude": {
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true,
+    "**/node_modules/**": true,
+    "**/.pnpm-store/**": true,
+    "**/node_modules/.cache/**": true,
+    "**/dist/**": true,
+    "**/build/**": true,
+    "**/.next/**": true,
+    "**/coverage/**": true,
+    "**/.venv/**": true,
+    "**/__pycache__/**": true,
+    "**/.pytest_cache/**": true,
+    "**/.mypy_cache/**": true,
+    "**/.ruff_cache/**": true
+  },
+
+  // ============================================
+  // Security - Workspace Trust
+  // ============================================
+  "security.workspace.trust.enabled": true,
+  "security.workspace.trust.startupPrompt": "once",
+  "security.workspace.trust.banner": "untilDismissed",
+  "security.workspace.trust.emptyWindow": false
+}

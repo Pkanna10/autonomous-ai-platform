@@ -52,9 +52,12 @@ junit.xml
 .Trashes
 
 # IDE
-.vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
 *.code-workspace
 .idea/
+.claude/
 *.swp
 *.swo
 *~

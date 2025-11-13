@@ -1,0 +1,34 @@
+{
+  "recommendations": [
+    // Formatting & Linting
+    "esbenp.prettier-vscode",
+    "dbaeumer.vscode-eslint",
+
+    // Python Tooling
+    "ms-python.python",
+    "ms-python.black-formatter",
+    "ms-python.mypy-type-checker",
+    "charliermarsh.ruff",
+
+    // Testing
+    "vitest.explorer",
+
+    // Monorepo Support
+    "folkmann.pnpm-workspace",
+
+    // Runtime Support
+    "oven.bun"
+  ],
+  "unwantedRecommendations": [
+    // Deprecated Python linters (replaced by Ruff)
+    "ms-python.pylint",
+    "ms-python.flake8",
+    "ms-python.isort",
+
+    // Deprecated TypeScript linter (replaced by ESLint)
+    "eg2.tslint",
+
+    // Old test explorers (replaced by native Test Controller API)
+    "hbenl.vscode-test-explorer"
+  ]
+}
