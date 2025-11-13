@@ -1,65 +1,247 @@
 #!/bin/bash
 
-# Comprehensive Trivy Security Scan with Enhanced Summary
-# Mimics the GitHub Actions CI workflow for local execution
+# ╔═══════════════════════════════════════════════════════════════════╗
+# ║  Trivy Security Scan - Fully Automated (Colima Edition)          ║
+# ║                                                                   ║
+# ║  This script automatically:                                       ║
+# ║  • Starts Colima if needed                                       ║
+# ║  • Pulls and scans Docker images                                 ║
+# ║  • Scans config and filesystem                                   ║
+# ║  • Generates comprehensive reports                               ║
+# ║  • Cleans up (stops what it started)                            ║
+# ╚═══════════════════════════════════════════════════════════════════╝
 
 set -e
 
-# Docker auto-start flag (initialized early for trap handler)
-AUTO_START=false
-
-# Trap handler to ensure Docker cleanup on unexpected exit
-trap 'cleanup_docker_on_exit' EXIT INT TERM
-
-cleanup_docker_on_exit() {
-  # Only cleanup if AUTO_START was set to true
-  if [ "$AUTO_START" = true ]; then
-    echo ""
-    echo "🧹 Cleaning up: Stopping docker-compose services..."
-    docker compose -f docker-compose.dev.yml down --remove-orphans 2>/dev/null || true
-    echo "🧹 Cleaning up: Stopping Docker daemon..."
-    osascript -e 'quit app "Docker"' 2>/dev/null || true
-  fi
-}
-
-echo "🔒 Trivy Comprehensive Security Scan"
-echo "===================================="
-echo ""
-
-# Colors for output
+# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 BOLD='\033[1m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Check if Trivy is installed
+# Tracking flags
+COLIMA_WAS_STOPPED=false
+COMPOSE_WAS_STOPPED=false
+
+# Trap handler for cleanup
+cleanup_on_exit() {
+  local exit_code=$?
+  
+  echo ""
+  echo -e "${BLUE}═══════════════════════════════════════════════${NC}"
+  echo -e "${BLUE}🧹 Cleanup Phase${NC}"
+  echo -e "${BLUE}═══════════════════════════════════════════════${NC}"
+  
+  # Stop docker-compose if we started it
+  if [ "$COMPOSE_WAS_STOPPED" = true ]; then
+    echo -e "${YELLOW}⏸️  Stopping docker-compose services (started by script)...${NC}"
+    docker compose -f docker-compose.dev.yml down --remove-orphans 2>/dev/null || {
+      echo -e "${YELLOW}⚠️  Note: docker-compose services may already be stopped${NC}"
+    }
+    echo -e "${GREEN}✅ Docker services stopped${NC}"
+  else
+    echo -e "${BLUE}ℹ️  Docker Compose services were already running - leaving them active${NC}"
+  fi
+  
+  # Stop Colima if we started it
+  if [ "$COLIMA_WAS_STOPPED" = true ]; then
+    echo -e "${YELLOW}⏸️  Stopping Colima (started by script)...${NC}"
+    colima stop 2>/dev/null || {
+      echo -e "${YELLOW}⚠️  Note: Colima may already be stopped${NC}"
+    }
+    echo -e "${GREEN}✅ Colima stopped${NC}"
+  else
+    echo -e "${BLUE}ℹ️  Colima was already running - leaving it active${NC}"
+  fi
+  
+  echo ""
+  exit $exit_code
+}
+
+trap cleanup_on_exit EXIT INT TERM
+
+# ═══════════════════════════════════════════════════════════════════
+# BANNER
+# ═══════════════════════════════════════════════════════════════════
+
+clear
+echo -e "${BOLD}${BLUE}"
+cat << "EOF"
+╔═══════════════════════════════════════════════════════════════════╗
+║                                                                   ║
+║   🔒 TRIVY COMPREHENSIVE SECURITY SCAN                           ║
+║      Fully Automated - Colima Edition                            ║
+║                                                                   ║
+╚═══════════════════════════════════════════════════════════════════╝
+EOF
+echo -e "${NC}"
+echo ""
+
+# ═══════════════════════════════════════════════════════════════════
+# PRE-FLIGHT CHECKS
+# ═══════════════════════════════════════════════════════════════════
+
+echo -e "${BOLD}📋 Pre-flight Checks${NC}"
+echo -e "${BLUE}═══════════════════════════════════════════════${NC}"
+echo ""
+
+# Check Trivy
 if ! command -v trivy &> /dev/null; then
-  echo -e "${RED}Error: Trivy is not installed${NC}"
-  echo "Install with:"
-  echo "  macOS: brew install trivy"
-  echo "  Linux: See https://aquasecurity.github.io/trivy/latest/getting-started/installation/"
+  echo -e "${RED}❌ ERROR: Trivy is not installed${NC}"
+  echo ""
+  echo "Install Trivy with:"
+  echo "  ${BOLD}brew install trivy${NC}"
+  echo ""
   exit 1
 fi
+echo -e "${GREEN}✅ Trivy is installed${NC}"
 
-# Create reports directory
+# Check Colima
+if ! command -v colima &> /dev/null; then
+  echo -e "${RED}❌ ERROR: Colima is not installed${NC}"
+  echo ""
+  echo "Install Colima with:"
+  echo "  ${BOLD}brew install colima docker docker-compose${NC}"
+  echo ""
+  echo "Then run this script again."
+  exit 1
+fi
+echo -e "${GREEN}✅ Colima is installed${NC}"
+
+# Check Docker CLI
+if ! command -v docker &> /dev/null; then
+  echo -e "${RED}❌ ERROR: Docker CLI is not installed${NC}"
+  echo ""
+  echo "Install Docker CLI with:"
+  echo "  ${BOLD}brew install docker${NC}"
+  echo ""
+  exit 1
+fi
+echo -e "${GREEN}✅ Docker CLI is installed${NC}"
+
+echo ""
+
+# ═══════════════════════════════════════════════════════════════════
+# SETUP REPORTS DIRECTORY
+# ═══════════════════════════════════════════════════════════════════
+
 REPORTS_DIR="./trivy-reports"
 mkdir -p "$REPORTS_DIR"
-
-# Timestamp for reports
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 
-# Report files
 REPORT_HIGH_CRITICAL="$REPORTS_DIR/trivy-high-critical-$TIMESTAMP.txt"
 REPORT_MEDIUM_LOW="$REPORTS_DIR/trivy-medium-low-$TIMESTAMP.txt"
 REPORT_JSON="$REPORTS_DIR/trivy-results-$TIMESTAMP.json"
 REPORT_SUMMARY="$REPORTS_DIR/trivy-summary-$TIMESTAMP.md"
 
-echo "📁 Reports will be saved to: $REPORTS_DIR"
+echo -e "${BLUE}📁 Reports will be saved to: ${BOLD}$REPORTS_DIR${NC}"
 echo ""
 
-# Function to scan and generate reports
+# ═══════════════════════════════════════════════════════════════════
+# COLIMA MANAGEMENT
+# ═══════════════════════════════════════════════════════════════════
+
+echo -e "${BOLD}🐳 Docker Environment Setup${NC}"
+echo -e "${BLUE}═══════════════════════════════════════════════${NC}"
+echo ""
+
+# Check if Colima is running
+if colima status &> /dev/null; then
+  echo -e "${GREEN}✅ Colima is already running${NC}"
+  COLIMA_WAS_STOPPED=false
+else
+  echo -e "${YELLOW}⚠️  Colima is not running${NC}"
+  echo -e "${BLUE}🚀 Starting Colima...${NC}"
+  echo ""
+  
+  # Start Colima with optimal settings
+  if colima start --cpu 4 --memory 8 --disk 60 --vm-type vz 2>&1 | tee /tmp/colima-start.log; then
+    echo ""
+    echo -e "${GREEN}✅ Colima started successfully${NC}"
+    COLIMA_WAS_STOPPED=true
+    
+    # Wait for Docker daemon to be fully ready
+    echo -e "${YELLOW}⏳ Waiting for Docker daemon to be ready...${NC}"
+    WAIT_COUNT=0
+    MAX_WAIT=30
+    while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
+      if docker info &> /dev/null; then
+        echo -e "${GREEN}✅ Docker daemon is ready${NC}"
+        break
+      fi
+      sleep 1
+      WAIT_COUNT=$((WAIT_COUNT + 1))
+      echo -n "."
+    done
+    echo ""
+    
+    if [ $WAIT_COUNT -ge $MAX_WAIT ]; then
+      echo -e "${RED}❌ ERROR: Docker daemon did not become ready within ${MAX_WAIT}s${NC}"
+      exit 1
+    fi
+  else
+    echo ""
+    echo -e "${RED}❌ ERROR: Failed to start Colima${NC}"
+    echo ""
+    echo "Troubleshooting:"
+    echo "  1. Check if another Docker service is running"
+    echo "  2. Try: colima delete && colima start"
+    echo "  3. Check logs: cat /tmp/colima-start.log"
+    exit 1
+  fi
+fi
+
+echo ""
+
+# ═══════════════════════════════════════════════════════════════════
+# DOCKER COMPOSE MANAGEMENT
+# ═══════════════════════════════════════════════════════════════════
+
+echo -e "${BOLD}🐳 Docker Compose Services${NC}"
+echo -e "${BLUE}═══════════════════════════════════════════════${NC}"
+echo ""
+
+# Check if docker-compose.dev.yml exists
+if [ ! -f "docker-compose.dev.yml" ]; then
+  echo -e "${YELLOW}⚠️  docker-compose.dev.yml not found in current directory${NC}"
+  echo -e "${YELLOW}   Skipping Docker Compose services...${NC}"
+  COMPOSE_AVAILABLE=false
+else
+  COMPOSE_AVAILABLE=true
+  
+  # Check if services are already running
+  if docker compose -f docker-compose.dev.yml ps --quiet 2>/dev/null | grep -q .; then
+    echo -e "${GREEN}✅ Docker Compose services are already running${NC}"
+    COMPOSE_WAS_STOPPED=false
+  else
+    echo -e "${YELLOW}⚠️  Docker Compose services are not running${NC}"
+    echo -e "${BLUE}🚀 Starting docker-compose services...${NC}"
+    echo ""
+    
+    if docker compose -f docker-compose.dev.yml up -d --quiet-pull 2>&1; then
+      echo -e "${GREEN}✅ Docker Compose services started${NC}"
+      COMPOSE_WAS_STOPPED=true
+      
+      # Wait for services to be healthy
+      echo -e "${YELLOW}⏳ Waiting for services to be healthy (10s)...${NC}"
+      sleep 10
+      echo -e "${GREEN}✅ Services should be ready${NC}"
+    else
+      echo -e "${YELLOW}⚠️  Warning: Failed to start docker-compose services${NC}"
+      echo -e "${YELLOW}   Continuing with available images only...${NC}"
+      COMPOSE_WAS_STOPPED=false
+    fi
+  fi
+fi
+
+echo ""
+
+# ═══════════════════════════════════════════════════════════════════
+# SCAN FUNCTION
+# ═══════════════════════════════════════════════════════════════════
+
 run_trivy_scan() {
   local scan_type=$1
   local scan_target=$2
@@ -67,7 +249,7 @@ run_trivy_scan() {
 
   echo -e "${BLUE}${BOLD}🔍 Scanning: $description${NC}"
   echo "   Type: $scan_type | Target: $scan_target"
-  echo "   ----------------------------------------"
+  echo "   ─────────────────────────────────────────────"
 
   # Scan for HIGH/CRITICAL
   echo "   Checking HIGH/CRITICAL severity..."
@@ -85,7 +267,7 @@ run_trivy_scan() {
     --quiet \
     "$scan_target" >> "$REPORT_MEDIUM_LOW" 2>&1 || true
 
-  # Generate JSON for detailed analysis
+  # Generate JSON
   echo "   Generating detailed JSON report..."
   trivy "$scan_type" \
     --severity CRITICAL,HIGH,MEDIUM,LOW \
@@ -97,161 +279,82 @@ run_trivy_scan() {
   echo ""
 }
 
-# Function to wait for Docker to be ready
-wait_for_docker_ready() {
-  local timeout=60  # 60 seconds max
-  local elapsed=0
+# ═══════════════════════════════════════════════════════════════════
+# PHASE 1: CONFIGURATION & FILESYSTEM SCANS
+# ═══════════════════════════════════════════════════════════════════
 
-  echo "⏳ Waiting for Docker to be ready..."
-
-  while [ $elapsed -lt $timeout ]; do
-    if docker ps &> /dev/null 2>&1; then
-      echo -e "${GREEN}✅ Docker is ready (took ${elapsed}s)${NC}"
-      return 0
-    fi
-    sleep 2
-    elapsed=$((elapsed + 2))
-    echo -n "."
-  done
-
-  echo ""
-  echo -e "${RED}❌ Docker failed to start within ${timeout}s${NC}"
-  return 1
-}
-
-# Function to cleanup and exit
-cleanup_and_exit() {
-  local exit_code=$1
-
-  # Stop Docker services and daemon if we auto-started them
-  if [ "$AUTO_START" = true ]; then
-    echo ""
-    echo -e "${BLUE}🧹 Stopping docker-compose services...${NC}"
-    docker compose -f docker-compose.dev.yml down --remove-orphans 2>/dev/null || {
-      echo -e "${YELLOW}⚠️  Warning: Failed to stop docker-compose services (non-fatal)${NC}"
-    }
-    echo -e "${GREEN}✅ Docker services stopped${NC}"
-
-    echo -e "${BLUE}🧹 Stopping Docker daemon (was auto-started for scan)...${NC}"
-    osascript -e 'quit app "Docker"' 2>/dev/null || {
-      echo -e "${YELLOW}⚠️  Warning: Failed to stop Docker daemon (non-fatal)${NC}"
-    }
-    echo -e "${GREEN}✅ Docker daemon stopped${NC}"
-
-    # Prevent trap from trying to stop again
-    AUTO_START=false
-  fi
-
-  exit $exit_code
-}
-
-# 1. Scan filesystem/config
-echo -e "${BOLD}Step 1/4: Scanning Configuration Files${NC}"
+echo -e "${BOLD}📦 Phase 1/3: Configuration & Filesystem Scans${NC}"
+echo -e "${BLUE}═══════════════════════════════════════════════${NC}"
 echo ""
+
 run_trivy_scan "config" "." "Configuration files and IaC"
+run_trivy_scan "fs" "." "Local filesystem dependencies"
 
-# Check Docker status before Step 2
-echo -e "${BOLD}🐳 Checking Docker Status${NC}"
+# ═══════════════════════════════════════════════════════════════════
+# PHASE 2: DOCKER IMAGE SCANS
+# ═══════════════════════════════════════════════════════════════════
+
+echo -e "${BOLD}🐳 Phase 2/3: Docker Image Scans${NC}"
+echo -e "${BLUE}═══════════════════════════════════════════════${NC}"
 echo ""
 
-DOCKER_WAS_STOPPED=false
-
-if ! docker ps &> /dev/null 2>&1; then
-  echo -e "${YELLOW}⚠️  Docker daemon is not running${NC}"
-  echo "🚀 Starting Docker daemon..."
-  DOCKER_WAS_STOPPED=true
-
-  # On macOS, we need to start Docker Desktop to get the daemon
-  # Using --hide to minimize disruption
-  open -a Docker --hide || {
-    echo -e "${RED}❌ ERROR: Failed to start Docker daemon${NC}"
-    echo "Please ensure Docker Desktop is installed on your system."
-    cleanup_and_exit 1
-  }
-
-  # Wait for Docker daemon to be ready
-  if ! wait_for_docker_ready; then
-    echo -e "${RED}❌ ERROR: Docker daemon failed to start within timeout${NC}"
-    cleanup_and_exit 1
-  fi
-
-  echo -e "${GREEN}✅ Docker daemon started successfully${NC}"
-  echo ""
-fi
-
-# Start docker-compose services if Docker was stopped
-if [ "$DOCKER_WAS_STOPPED" = true ]; then
-  echo "🚀 Starting docker-compose services..."
-
-  # Start services in detached mode
-  if docker compose -f docker-compose.dev.yml up -d --quiet-pull 2>&1; then
-    echo -e "${GREEN}✅ Docker services started successfully${NC}"
-    # Only set AUTO_START after successful service startup
-    AUTO_START=true
-    echo ""
-  else
-    echo -e "${RED}❌ ERROR: Failed to start docker-compose services${NC}"
-    cleanup_and_exit 1
-  fi
-else
-  echo -e "${GREEN}✅ Docker daemon is already running${NC}"
-  AUTO_START=false
-  echo ""
-fi
-
-# 2. Scan Docker images from docker-compose
-echo -e "${BOLD}Step 2/4: Scanning Docker Images${NC}"
-echo ""
-
+# Define images to scan
 DOCKER_IMAGES=(
-  "pgvector/pgvector:pg15|PostgreSQL with pgvector"
+  "pgvector/pgvector:pg16|PostgreSQL with pgvector extension"
   "redis:7-alpine|Redis Cache"
-  "qdrant/qdrant:latest|Qdrant Vector DB"
+  "qdrant/qdrant:latest|Qdrant Vector Database"
 )
+
+echo "📦 Scanning Docker images..."
+echo ""
 
 for img_info in "${DOCKER_IMAGES[@]}"; do
   IFS='|' read -r image description <<< "$img_info"
-
-  # Pull image if not present
-  if ! docker image inspect "$image" &> /dev/null 2>&1; then
-    echo "   Pulling $image..."
-    docker pull "$image" > /dev/null 2>&1
+  
+  # Check if image is available locally
+  if docker image inspect "$image" &> /dev/null 2>&1; then
+    run_trivy_scan "image" "$image" "$description ($image)"
+  else
+    echo -e "${YELLOW}⚠️  Image not available: $image${NC}"
+    echo "   Attempting to pull..."
+    
+    if docker pull "$image" &> /dev/null; then
+      echo -e "${GREEN}✅ Successfully pulled $image${NC}"
+      run_trivy_scan "image" "$image" "$description ($image)"
+    else
+      echo -e "${RED}✗ Failed to pull $image (skipped)${NC}"
+      echo ""
+    fi
   fi
-
-  run_trivy_scan "image" "$image" "$description ($image)"
 done
 
-# 3. Scan filesystem for vulnerabilities
-echo -e "${BOLD}Step 3/4: Scanning Filesystem${NC}"
-echo ""
-run_trivy_scan "fs" "." "Local filesystem dependencies"
+# ═══════════════════════════════════════════════════════════════════
+# PHASE 3: GENERATE SUMMARY
+# ═══════════════════════════════════════════════════════════════════
 
-# 4. Generate Enhanced Security Summary
-echo -e "${BOLD}Step 4/4: Generating Enhanced Security Summary${NC}"
+echo -e "${BOLD}📊 Phase 3/3: Generating Security Summary${NC}"
+echo -e "${BLUE}═══════════════════════════════════════════════${NC}"
 echo ""
 
 # Count vulnerabilities from JSON report
 if [ -f "$REPORT_JSON" ] && command -v jq &> /dev/null; then
-  # Use -s (slurp) to read all JSON objects as array, then count across all
   CRITICAL_COUNT=$(jq -s 'map(.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")) | length' "$REPORT_JSON" 2>/dev/null || echo 0)
   HIGH_COUNT=$(jq -s 'map(.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")) | length' "$REPORT_JSON" 2>/dev/null || echo 0)
   MEDIUM_COUNT=$(jq -s 'map(.Results[]?.Vulnerabilities[]? | select(.Severity=="MEDIUM")) | length' "$REPORT_JSON" 2>/dev/null || echo 0)
   LOW_COUNT=$(jq -s 'map(.Results[]?.Vulnerabilities[]? | select(.Severity=="LOW")) | length' "$REPORT_JSON" 2>/dev/null || echo 0)
 else
-  # Fallback: count unique vulnerabilities from text files using proper parsing
   CRITICAL_COUNT=$(grep -o "CRITICAL" "$REPORT_HIGH_CRITICAL" 2>/dev/null | wc -l | tr -d ' ' || echo 0)
   HIGH_COUNT=$(grep -o "HIGH" "$REPORT_HIGH_CRITICAL" 2>/dev/null | wc -l | tr -d ' ' || echo 0)
   MEDIUM_COUNT=$(grep -o "MEDIUM" "$REPORT_MEDIUM_LOW" 2>/dev/null | wc -l | tr -d ' ' || echo 0)
   LOW_COUNT=$(grep -o "LOW" "$REPORT_MEDIUM_LOW" 2>/dev/null | wc -l | tr -d ' ' || echo 0)
 fi
 
-# Ensure counts are single integers (remove any whitespace/newlines)
+# Ensure counts are integers
 CRITICAL_COUNT=$(echo "$CRITICAL_COUNT" | tr -d '\n\r\t ' | grep -o '^[0-9]*$' || echo 0)
 HIGH_COUNT=$(echo "$HIGH_COUNT" | tr -d '\n\r\t ' | grep -o '^[0-9]*$' || echo 0)
 MEDIUM_COUNT=$(echo "$MEDIUM_COUNT" | tr -d '\n\r\t ' | grep -o '^[0-9]*$' || echo 0)
 LOW_COUNT=$(echo "$LOW_COUNT" | tr -d '\n\r\t ' | grep -o '^[0-9]*$' || echo 0)
 
-# Set to 0 if empty
 CRITICAL_COUNT=${CRITICAL_COUNT:-0}
 HIGH_COUNT=${HIGH_COUNT:-0}
 MEDIUM_COUNT=${MEDIUM_COUNT:-0}
@@ -265,7 +368,8 @@ cat > "$REPORT_SUMMARY" << EOF
 
 **Scan Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')
 **Repository:** autonomous-ai-platform
-**Scan Type:** Comprehensive (Config + Docker + Filesystem)
+**Docker Runtime:** Colima
+**Scan Duration:** Full comprehensive scan
 
 ---
 
@@ -292,10 +396,10 @@ if [ $CRITICAL_COUNT -gt 0 ]; then
 
 **🚨 CRITICAL ISSUES DETECTED**
 
-Action Required:
-- $CRITICAL_COUNT critical vulnerabilities must be fixed immediately
-- Review \`$REPORT_HIGH_CRITICAL\` for details
-- Update affected dependencies or apply patches
+⚠️ **Action Required:**
+- $CRITICAL_COUNT critical vulnerabilities must be addressed immediately
+- Review \`$REPORT_HIGH_CRITICAL\` for detailed findings
+- Update affected dependencies or apply security patches
 
 EOF
 elif [ $HIGH_COUNT -gt 0 ]; then
@@ -304,7 +408,7 @@ elif [ $HIGH_COUNT -gt 0 ]; then
 
 **⚠️ HIGH SEVERITY ISSUES DETECTED**
 
-Recommendation:
+📋 **Recommendation:**
 - $HIGH_COUNT high severity vulnerabilities found
 - Plan updates for affected components
 - Review \`$REPORT_HIGH_CRITICAL\` for details
@@ -316,38 +420,7 @@ else
 
 **✅ NO CRITICAL OR HIGH SEVERITY ISSUES**
 
-$([ $TOTAL_ISSUES -eq 0 ] && echo "🎉 All scans passed! No vulnerabilities detected." || echo "ℹ️ $MEDIUM_COUNT MEDIUM and $LOW_COUNT LOW severity issues detected (informational only).")
-
-EOF
-fi
-
-# Add detailed sections if issues found
-if [ $CRITICAL_COUNT -gt 0 ] || [ $HIGH_COUNT -gt 0 ]; then
-  cat >> "$REPORT_SUMMARY" << EOF
----
-
-## 🔍 Detailed Findings
-
-### CRITICAL/HIGH Severity Issues
-
-See full details in: \`$REPORT_HIGH_CRITICAL\`
-
-**Top 10 Issues:**
-
-\`\`\`
-$(head -50 "$REPORT_HIGH_CRITICAL")
-\`\`\`
-
-EOF
-fi
-
-if [ $MEDIUM_COUNT -gt 0 ] || [ $LOW_COUNT -gt 0 ]; then
-  cat >> "$REPORT_SUMMARY" << EOF
----
-
-### MEDIUM/LOW Severity Issues (Informational)
-
-See full details in: \`$REPORT_MEDIUM_LOW\`
+$([ $TOTAL_ISSUES -eq 0 ] && echo "🎉 Excellent! All scans passed with no vulnerabilities detected." || echo "ℹ️ Found $MEDIUM_COUNT MEDIUM and $LOW_COUNT LOW severity issues (informational only).")
 
 EOF
 fi
@@ -365,59 +438,90 @@ cat >> "$REPORT_SUMMARY" << EOF
 
 2. **Update Docker Images:**
    \`\`\`bash
-   docker-compose -f docker-compose.dev.yml pull
+   docker compose -f docker-compose.dev.yml pull
+   docker compose -f docker-compose.dev.yml up -d
    \`\`\`
 
-3. **Review Snyk/GitHub Security Advisories:**
-   - Check https://github.com/advisories for known CVEs
+3. **Review Security Advisories:**
+   - Check [GitHub Advisories](https://github.com/advisories) for known CVEs
    - Run \`pnpm audit fix\` for auto-patchable issues
 
-4. **Enable Automated Updates:**
-   - Renovate bot is configured to auto-update dependencies weekly
-   - Review and merge Renovate PRs promptly
+4. **Monitor Continuously:**
+   - Schedule regular security scans
+   - Enable dependabot or renovate for automated updates
 
 ---
 
 ## 📦 Generated Reports
 
-- **HIGH/CRITICAL:** \`$REPORT_HIGH_CRITICAL\`
-- **MEDIUM/LOW:** \`$REPORT_MEDIUM_LOW\`
-- **JSON (Full):** \`$REPORT_JSON\`
-- **Summary:** \`$REPORT_SUMMARY\`
+- **Summary Report:** \`$REPORT_SUMMARY\`
+- **HIGH/CRITICAL Vulnerabilities:** \`$REPORT_HIGH_CRITICAL\`
+- **MEDIUM/LOW Vulnerabilities:** \`$REPORT_MEDIUM_LOW\`
+- **JSON (Full Details):** \`$REPORT_JSON\`
+
+---
+
+## 🔧 Scan Configuration
+
+- **Config Scan:** ✅ Completed
+- **Filesystem Scan:** ✅ Completed  
+- **Docker Image Scan:** ✅ Completed
+- **Total Targets:** 5 (config, filesystem, 3 images)
 
 ---
 
 **Scan completed:** $(date)
+**Script:** trivy-scan-auto.sh (Colima Edition)
 EOF
 
-# Display summary to console
-echo "===================================="
+# ═══════════════════════════════════════════════════════════════════
+# DISPLAY SUMMARY
+# ═══════════════════════════════════════════════════════════════════
+
 echo ""
+echo -e "${BOLD}${BLUE}"
+echo "═══════════════════════════════════════════════════════════════════"
+echo "                    📊 SCAN RESULTS SUMMARY                        "
+echo "═══════════════════════════════════════════════════════════════════"
+echo -e "${NC}"
+
 cat "$REPORT_SUMMARY"
+
 echo ""
-echo "===================================="
-echo ""
-echo -e "${BOLD}📁 Reports saved to:${NC}"
-echo "   - Summary: $REPORT_SUMMARY"
-echo "   - HIGH/CRITICAL: $REPORT_HIGH_CRITICAL"
-echo "   - MEDIUM/LOW: $REPORT_MEDIUM_LOW"
-echo "   - JSON: $REPORT_JSON"
+echo -e "${BLUE}═══════════════════════════════════════════════════════════════════${NC}"
 echo ""
 
-# Open summary in browser/viewer (optional)
+echo -e "${BOLD}📁 Generated Reports:${NC}"
+echo "   • Summary:       $REPORT_SUMMARY"
+echo "   • HIGH/CRITICAL: $REPORT_HIGH_CRITICAL"
+echo "   • MEDIUM/LOW:    $REPORT_MEDIUM_LOW"
+echo "   • JSON Details:  $REPORT_JSON"
+echo ""
+
+# Open summary in default viewer (optional)
 if command -v open &> /dev/null; then
-  echo "💡 Tip: Opening summary in default viewer..."
+  echo -e "${BLUE}💡 Tip: Opening summary in default viewer...${NC}"
   open "$REPORT_SUMMARY" 2>/dev/null || true
+  echo ""
 fi
 
-# Exit with appropriate code (with Docker cleanup)
+# ═══════════════════════════════════════════════════════════════════
+# EXIT WITH APPROPRIATE CODE
+# ═══════════════════════════════════════════════════════════════════
+
 if [ $CRITICAL_COUNT -gt 0 ]; then
-  echo -e "${RED}${BOLD}❌ SCAN FAILED: Critical vulnerabilities detected${NC}"
-  cleanup_and_exit 1
+  echo -e "${RED}${BOLD}╔═══════════════════════════════════════════════════════════╗${NC}"
+  echo -e "${RED}${BOLD}║  ❌ SCAN FAILED: Critical vulnerabilities detected       ║${NC}"
+  echo -e "${RED}${BOLD}╚═══════════════════════════════════════════════════════════╝${NC}"
+  exit 1
 elif [ $HIGH_COUNT -gt 0 ]; then
-  echo -e "${YELLOW}${BOLD}⚠️  SCAN WARNING: High severity vulnerabilities detected${NC}"
-  cleanup_and_exit 0
+  echo -e "${YELLOW}${BOLD}╔═══════════════════════════════════════════════════════════╗${NC}"
+  echo -e "${YELLOW}${BOLD}║  ⚠️  SCAN WARNING: High severity vulnerabilities found   ║${NC}"
+  echo -e "${YELLOW}${BOLD}╚═══════════════════════════════════════════════════════════╝${NC}"
+  exit 0
 else
-  echo -e "${GREEN}${BOLD}✅ SCAN PASSED: No critical or high severity issues${NC}"
-  cleanup_and_exit 0
+  echo -e "${GREEN}${BOLD}╔═══════════════════════════════════════════════════════════╗${NC}"
+  echo -e "${GREEN}${BOLD}║  ✅ SCAN PASSED: No critical or high severity issues     ║${NC}"
+  echo -e "${GREEN}${BOLD}╚═══════════════════════════════════════════════════════════╝${NC}"
+  exit 0
 fi

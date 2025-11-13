@@ -10,111 +10,68 @@ on:
   workflow_dispatch: # Allow manual trigger
 
 jobs:
-  # Snyk vulnerability scanning
-  snyk:
-    name: Snyk Security Scan
-    runs-on: ubuntu-latest
+  # OSV-Scanner - Google's free vulnerability scanner (reusable workflow)
+  # Note: SARIF upload disabled for private repo (requires paid GHAS)
+  osv-scanner:
+    name: OSV Vulnerability Scan
     permissions:
       contents: read
       security-events: write
+      actions: read
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.2.4
+    with:
+      scan-args: |-
+        --recursive
+        --skip-git
+        ./
+      upload-sarif: false
+      fail-on-vuln: false
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.20.0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version-file: '.nvmrc'
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      # Snyk code analysis (SAST)
-      - name: Run Snyk Code Analysis
-        uses: snyk/actions/node@master
-        continue-on-error: true
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          command: code test
-          args: --sarif-file-output=snyk-code.sarif
-
-      # Snyk dependency scanning (SCA)
-      - name: Run Snyk Dependency Scan
-        uses: snyk/actions/node@master
-        continue-on-error: true
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          command: test
-          args: --all-projects --severity-threshold=high --sarif-file-output=snyk-deps.sarif
-
-      # Snyk Docker image scanning
-      - name: Run Snyk Docker Scan - PostgreSQL
-        uses: snyk/actions/docker@master
-        continue-on-error: true
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          image: pgvector/pgvector:pg15
-          args: --severity-threshold=high --sarif-file-output=snyk-postgres.sarif
-
-      - name: Run Snyk Docker Scan - Redis
-        uses: snyk/actions/docker@master
-        continue-on-error: true
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          image: redis:7-alpine
-          args: --severity-threshold=high --sarif-file-output=snyk-redis.sarif
-
-      - name: Run Snyk Docker Scan - Qdrant
-        uses: snyk/actions/docker@master
-        continue-on-error: true
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          image: qdrant/qdrant:latest
-          args: --severity-threshold=high --sarif-file-output=snyk-qdrant.sarif
-
-      # Upload results to GitHub Security tab
-      - name: Upload Snyk results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: |
-            snyk-code.sarif
-            snyk-deps.sarif
-            snyk-postgres.sarif
-            snyk-redis.sarif
-            snyk-qdrant.sarif
-
-  # Socket.dev supply chain security (alternative to Snyk)
-  socket:
-    name: Socket.dev Supply Chain Scan
+  # OSV-Scanner with custom reporting (enhanced visibility for private repos)
+  osv-scanner-summary:
+    name: OSV Scanner Report
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
     permissions:
       contents: read
-      pull-requests: write
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Socket.dev Dependency Analysis
-        uses: SocketDev/socket-security-action@v1
-        continue-on-error: true
+      - name: Install OSV-Scanner CLI
+        run: |
+          curl -L https://github.com/google/osv-scanner/releases/latest/download/osv-scanner-linux-amd64 -o osv-scanner
+          chmod +x osv-scanner
+          sudo mv osv-scanner /usr/local/bin/
+
+      - name: Run OSV-Scanner
+        run: osv-scanner scan --format json --recursive --skip-git ./ > osv-results.json || true
+
+      - name: Generate Job Summary
+        run: |
+          echo "# 🔍 OSV-Scanner Vulnerability Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          VULN_COUNT=$(jq '[.results[].packages[].vulnerabilities[]] | length' osv-results.json)
+
+          if [ "$VULN_COUNT" -eq 0 ]; then
+            echo "✅ **No vulnerabilities found!**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ **Found $VULN_COUNT vulnerabilities**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Package | Ecosystem | Vulnerability | Details |" >> $GITHUB_STEP_SUMMARY
+            echo "|---------|-----------|---------------|---------|" >> $GITHUB_STEP_SUMMARY
+
+            jq -r '.results[].packages[] | select(.vulnerabilities | length > 0) | .package.name as $pkg | .package.ecosystem as $eco | .vulnerabilities[] | "| \($pkg) | \($eco) | \(.id) | [Link](https://osv.dev/vulnerability/\(.id)) |"' osv-results.json >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload OSV results
+        uses: actions/upload-artifact@v4
+        if: always()
         with:
-          api-key: ${{ secrets.SOCKET_API_KEY }}
-          comment-as-user: true
+          name: osv-scanner-results
+          path: osv-results.json
+          retention-days: 30
 
   # npm audit (built-in, free)
   npm-audit:

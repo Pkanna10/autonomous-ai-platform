@@ -1,13 +1,26 @@
 {
-  "name": "execution-engine",
+  "name": "@autonomous-ai/execution-engine",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Code generation and execution engine with sandboxed Docker runtime",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest watch",
+    "test:coverage": "vitest run --coverage"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "code-generation",
+    "typescript",
+    "ts-morph",
+    "ast",
+    "sandbox",
+    "docker",
+    "execution",
+    "ai"
+  ],
+  "author": "Praveen Kanna",
   "license": "ISC",
   "packageManager": "pnpm@10.20.0"
 }

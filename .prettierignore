@@ -15,6 +15,7 @@ coverage/
 .nyc_output/
 *.lcov
 .coverage
+htmlcov/
 .pytest_cache/
 
 # Documentation (frozen reference)
@@ -25,6 +26,16 @@ documentation_guide/
 pnpm-lock.yaml
 package-lock.json
 yarn.lock
+
+# Minified files (should not be formatted)
+*.min.js
+*.min.css
+*.bundle.js
+
+# Python package metadata
+*.egg-info/
+*.egg
+*.whl
 
 # Config files
 .env
@@ -37,6 +48,11 @@ commitlint.config.ts
 .npmrc
 .editorconfig
 
+# Legal files (plain text, not markdown)
+LICENSE
+LICENSE.*
+COPYING
+
 # Git hooks
 .husky/
 
@@ -44,11 +60,16 @@ commitlint.config.ts
 .eslintcache
 .vitest/
 .turbo/
+.mypy_cache/
+.ruff_cache/
+.tox/
+__pycache__/
 
 # IDE
 .vscode/
 *.code-workspace
 .idea/
+.claude/
 
 # OS files
 .DS_Store

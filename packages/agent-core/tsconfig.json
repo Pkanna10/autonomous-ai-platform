@@ -1,19 +1,16 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    // Package-specific output
     "outDir": "./dist",
     "rootDir": "./src",
-
-    // Enable composite for project references
     "composite": true,
+    "incremental": true,
     "declaration": true,
     "declarationMap": true,
-
-    // Node.js environment
     "types": ["node", "vitest/globals"],
     "moduleResolution": "bundler"
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["node_modules", "dist"],
+  "references": []
 }

@@ -11,6 +11,18 @@
 # Dependencies
 node_modules/
 
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+.Python
+
+# Python package metadata
+*.egg-info/
+*.egg
+*.whl
+
 # Husky internal files (auto-generated)
 .husky/_
 
@@ -41,11 +53,19 @@ coverage/
 .nyc_output/
 *.lcov
 junit.xml
+.coverage
+htmlcov/
 
 # Cache directories
+.cache/
 .eslintcache
 .vitest/
 .pnpm-store/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+__pycache__/
+.tox/
 
 # macOS
 .DS_Store

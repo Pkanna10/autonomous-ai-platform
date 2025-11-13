@@ -17,6 +17,9 @@ __pycache__/
 venv/
 env/
 .venv/
+*.egg-info/
+*.egg
+*.whl
 
 # Environment & Secrets (CRITICAL: Never copy into images)
 .env
@@ -41,6 +44,7 @@ tests/
 __tests__/
 coverage/
 .coverage
+htmlcov/
 .pytest_cache/
 *.cover
 
@@ -76,6 +80,9 @@ packages/*/tsconfig.json
 .yarn/
 .turbo/
 .nyc_output/
+.mypy_cache/
+.ruff_cache/
+.tox/
 
 # Build artifacts
 dist/

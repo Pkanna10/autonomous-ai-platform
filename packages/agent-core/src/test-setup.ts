@@ -1,4 +1,4 @@
-/* eslint-disable no-console, @typescript-eslint/naming-convention */
+/* eslint-disable no-console, @typescript-eslint/naming-convention -- Development utility script for testing environment setup. Console output is intentional for user feedback. */
 // packages/agent-core/src/test-setup.ts
 import 'dotenv/config';
 

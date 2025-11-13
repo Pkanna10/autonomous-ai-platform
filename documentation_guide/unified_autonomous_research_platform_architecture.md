@@ -356,7 +356,7 @@ cd apps && npx create-next-app@latest web --typescript --tailwind --app
 cd ../packages && mkdir agent-core research-engine execution-engine
 
 # Setup Python environment
-cd ../services && mkdir python-agents
+cd ../services && mkdir python_agents
 python3 -m venv venv
 source venv/bin/activate
 pip install langchain-anthropic langgraph arxiv PyMuPDF sentence-transformers
@@ -378,7 +378,7 @@ docker compose init
    │   ├── research-engine/  # Research discovery
    │   └── execution-engine/ # Code generation
    ├── services/
-   │   └── python-agents/    # Python LangGraph agents
+   │   └── python_agents/    # Python LangGraph agents
    ├── docker/
    │   ├── Dockerfile.dev
    │   └── docker-compose.yml
@@ -435,7 +435,7 @@ docker compose init
 
 **Actions:**
 ```python
-# services/python-agents/src/orchestrator.py
+# services/python_agents/src/orchestrator.py
 from langgraph.graph import StateGraph, END
 from langchain_anthropic import ChatAnthropic
 from typing import TypedDict, Annotated
@@ -637,7 +637,7 @@ export class PackageManager {
 
 **Python Implementation:**
 ```python
-# services/python-agents/src/package_manager.py
+# services/python_agents/src/package_manager.py
 import asyncio
 import httpx
 from typing import List, Dict
@@ -711,7 +711,7 @@ class PyPIManager:
 
 **Implementation:**
 ```python
-# services/python-agents/src/research_engine.py
+# services/python_agents/src/research_engine.py
 import arxiv
 from PyPDF2 import PdfReader
 import re
@@ -803,7 +803,7 @@ class ResearchEngine:
 #!/bin/bash
 
 # Run daily at 6am
-0 6 * * * cd /app && python -m services.python-agents.src.research_monitor
+0 6 * * * cd /app && python -m services.python_agents.src.research_monitor
 
 # research_monitor.py
 import asyncio
@@ -1203,7 +1203,7 @@ interface ComponentSpec {
 
 **Python Code Generator:**
 ```python
-# services/python-agents/src/code_generator.py
+# services/python_agents/src/code_generator.py
 import ast
 import astor
 from typing import Dict, Any
@@ -1766,7 +1766,7 @@ describe('SandboxExecutor', () => {
 
 **PDF Processing:**
 ```python
-# services/python-agents/src/paper_analyzer.py
+# services/python_agents/src/paper_analyzer.py
 from PyPDF2 import PdfReader
 import fitz  # PyMuPDF for better extraction
 import re
@@ -1927,7 +1927,7 @@ Be specific and practical."""
 
 **Integration with Code Generator:**
 ```python
-# services/python-agents/src/research_code_generator.py
+# services/python_agents/src/research_code_generator.py
 from paper_analyzer import PaperAnalyzer
 from code_generator import PythonCodeGenerator
 
@@ -3465,7 +3465,7 @@ export class MCPSecurityManager {
 
 **Complete Agent System:**
 ```python
-# services/python-agents/src/multi_agent_system.py
+# services/python_agents/src/multi_agent_system.py
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.sqlite import SqliteSaver
 from typing import TypedDict, Annotated, List

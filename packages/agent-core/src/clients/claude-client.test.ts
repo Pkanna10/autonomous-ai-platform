@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/naming-convention */
+/* eslint-disable @typescript-eslint/naming-convention -- Required for test environment variable setup using bracket notation */
 import type Anthropic from '@anthropic-ai/sdk';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -132,8 +132,12 @@ describe('ClaudeClient', () => {
 
       // Mock async iterator
       const mockStream = {
-        // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
-        async *[Symbol.asyncIterator]() {
+        async *[Symbol.asyncIterator](): AsyncGenerator<{
+          type: string;
+          index?: number;
+          content_block?: { type: string; text: string };
+          delta?: { type: string; text: string };
+        }> {
           yield {
             type: 'content_block_start',
             index: 0,
@@ -186,8 +190,12 @@ describe('ClaudeClient', () => {
 
       // Mock async iterator with mixed event types
       const mockStream = {
-        // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
-        async *[Symbol.asyncIterator]() {
+        async *[Symbol.asyncIterator](): AsyncGenerator<{
+          type: string;
+          index?: number;
+          message?: Record<string, unknown>;
+          delta?: { type: string; text: string };
+        }> {
           yield { type: 'message_start', message: {} };
           yield {
             type: 'content_block_delta',

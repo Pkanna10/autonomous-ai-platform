@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/naming-convention */
+/* eslint-disable @typescript-eslint/naming-convention -- Required for Anthropic SDK environment variable access using bracket notation */
 import Anthropic from '@anthropic-ai/sdk';
 
 export class ClaudeClient {
