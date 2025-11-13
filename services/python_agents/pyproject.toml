@@ -1,21 +1,85 @@
+# ============================================
+# Build System Configuration
+# ============================================
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# ============================================
+# Project Metadata
+# ============================================
 [project]
-name = "autonomous-ai-python_agents"
+name = "autonomous-ai-agents"
 version = "0.1.0"
-description = "Python agent services for autonomous AI platform"
+description = "LangGraph orchestrator and research agents for autonomous AI platform"
+readme = "README.md"
 requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Autonomous AI Platform Team" }]
+keywords = [
+    "ai",
+    "agents",
+    "langgraph",
+    "research",
+    "autonomous",
+    "claude",
+    "llm",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
 dependencies = [
     "langgraph>=0.2.0",
     "langchain>=0.3.0",
     "anthropic>=0.68.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "pymupdf>=1.25.0", # PDF parsing for research papers
+    "arxiv>=2.1.0",    # arXiv API client
 ]
 
-[build-system]
-requires = ["setuptools>=68.0"]
-build-backend = "setuptools.build_meta"
+[project.optional-dependencies]
+dev = [
+    # Testing
+    "pytest>=8.0.0",
+    "pytest-cov>=6.0.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-mock>=3.14.0",
+    # Type checking
+    "mypy>=1.13.0",
+    "types-requests",
+    # Linting & formatting (already in root, but useful for isolated dev)
+    "ruff>=0.8.0",
+]
 
+[project.urls]
+Homepage = "https://github.com/Pkanna10/autonomous-ai-platform"
+Repository = "https://github.com/Pkanna10/autonomous-ai-platform"
+Issues = "https://github.com/Pkanna10/autonomous-ai-platform/issues"
+
+# ============================================
+# Package Discovery (Proposal 4)
+# ============================================
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["autonomous_ai_agents*"]
+exclude = ["*.tests", "*.tests.*", "tests.*", "tests"]
+namespaces = false # Require explicit __init__.py files
+
+# ============================================
+# Ruff Configuration (Linting & Formatting)
+# ============================================
 [tool.ruff]
 line-length = 88
 target-version = "py311"
+src = ["src"]
 
 [tool.ruff.lint]
 select = [
@@ -28,11 +92,14 @@ select = [
     "Q",  # flake8-quotes
     "UP", # pyupgrade
 ]
-ignore = ["E501"]  # Line too long (handled by black)
+ignore = ["E501"] # Line too long (handled by formatter)
 
 [tool.ruff.lint.isort]
-known-first-party = ["autonomous_ai"]
+known-first-party = ["autonomous_ai_agents"]
 
+# ============================================
+# Black Configuration (Formatting)
+# ============================================
 [tool.black]
 line-length = 88
 target-version = ['py311']
@@ -51,6 +118,9 @@ extend-exclude = '''
 )/
 '''
 
+# ============================================
+# mypy Configuration (Type Checking)
+# ============================================
 [tool.mypy]
 python_version = "3.11"
 warn_return_any = true
@@ -64,21 +134,61 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 warn_no_return = true
 strict_equality = true
+plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["langgraph.*", "langchain.*"]
+module = ["langgraph.*", "langchain.*", "arxiv.*"]
 ignore_missing_imports = true
 
+# ============================================
+# pytest Configuration (Proposal 3)
+# ============================================
 [tool.pytest.ini_options]
+pythonpath = ["src"]
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = [
+    "--import-mode=importlib", # Modern mode (no __init__.py in tests needed)
     "--strict-markers",
     "--strict-config",
-    "--cov=autonomous_ai",
+    "--cov=autonomous_ai_agents",
     "--cov-report=term-missing:skip-covered",
     "--cov-report=html",
     "--cov-report=xml",
+    "-ra",                      # Show all test summary info
+    "-q",                       # Quiet mode
+]
+markers = [
+    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "unit: marks tests as unit tests (fast, isolated)",
+]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+# Coverage configuration
+[tool.coverage.run]
+source = ["src"]
+branch = true
+omit = [
+    "*/tests/*",
+    "*/test_*.py",
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
 ]
