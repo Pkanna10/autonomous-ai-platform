@@ -81,13 +81,13 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Setup uv (fast Python package installer)
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
-          cache-dependency-glob: '**/requirements.txt'
+          cache-dependency-glob: '**/pyproject.toml'
 
       - name: Install dependencies with uv
         run: |

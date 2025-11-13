@@ -64,6 +64,7 @@ dev = [
     "types-requests",
     # Linting & formatting (already in root, but useful for isolated dev)
     "ruff>=0.8.0",
+    "black>=24.0.0",
 ]
 
 # All dependencies (orchestrator + research + dev)

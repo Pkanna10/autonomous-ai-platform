@@ -2037,7 +2037,7 @@ autonomous-ai-platform/
 │   └── python_agents/         # Python/LangGraph services (TODO)
 │       ├── orchestrator/      # Main LangGraph orchestrator
 │       ├── research/          # Research agent
-│       └── requirements.txt   # Python dependencies
+│       └── pyproject.toml     # Python package config & dependencies
 │
 ├── infrastructure/
 │   ├── schema/
