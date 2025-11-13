@@ -25,8 +25,8 @@ class Settings(BaseSettings):
     # ============================================
     # Anthropic API
     # ============================================
-    ANTHROPIC_API_KEY: str
-    """Anthropic API key for Claude access."""
+    ANTHROPIC_API_KEY: str = "test-key-placeholder"
+    """Anthropic API key for Claude access. Set via environment variable."""
 
     # ============================================
     # Database

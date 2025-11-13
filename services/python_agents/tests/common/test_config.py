@@ -32,21 +32,23 @@ def test_settings_loads_from_environment(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_settings_uses_defaults_when_not_provided(monkeypatch: pytest.MonkeyPatch) -> None:
     """Should use default values for optional fields.
 
-    GIVEN only required env vars set
+    GIVEN minimal env vars set (ANTHROPIC_API_KEY only)
     WHEN creating Settings instance
     THEN should use default values for optional fields
     """
-    # ARRANGE
+    # ARRANGE - Clear all test env vars and set only required ones
+    for key in ["ENVIRONMENT", "LOG_LEVEL", "DATABASE_URL"]:
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-456")
 
     # ACT
     settings = Settings()
 
-    # ASSERT - check defaults
+    # ASSERT - check defaults are used
     assert settings.REDIS_URL == "redis://localhost:6379"
     assert settings.QDRANT_URL == "http://localhost:6333"
-    assert settings.LOG_LEVEL == "INFO"
-    assert settings.ENVIRONMENT == "development"
+    assert settings.LOG_LEVEL == "INFO"  # Default value
+    assert settings.ENVIRONMENT == "development"  # Default value
     assert settings.MAX_RETRIES == 3
     assert settings.TIMEOUT_SECONDS == 30
 

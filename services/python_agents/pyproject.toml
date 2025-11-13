@@ -36,16 +36,23 @@ classifiers = [
 ]
 
 dependencies = [
+    # Core dependencies (Phase 1, Week 3-4: Orchestrator)
     "langgraph>=0.2.0",
     "langchain>=0.3.0",
     "anthropic>=0.68.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
-    "pymupdf>=1.25.0", # PDF parsing for research papers
-    "arxiv>=2.1.0",    # arXiv API client
 ]
 
 [project.optional-dependencies]
+# Research dependencies (Phase 1, Week 7-8)
+# Install with: pip install -e ".[research]"
+research = [
+    "pymupdf>=1.25.0",  # PDF parsing for research papers
+    "arxiv>=2.1.0",     # arXiv API client (has dependency issues, defer until needed)
+]
+
+# Development dependencies
 dev = [
     # Testing
     "pytest>=8.0.0",
@@ -57,6 +64,12 @@ dev = [
     "types-requests",
     # Linting & formatting (already in root, but useful for isolated dev)
     "ruff>=0.8.0",
+]
+
+# All dependencies (orchestrator + research + dev)
+# Install with: pip install -e ".[all]"
+all = [
+    "autonomous-ai-agents[research,dev]",
 ]
 
 [project.urls]
@@ -153,20 +166,20 @@ addopts = [
     "--import-mode=importlib", # Modern mode (no __init__.py in tests needed)
     "--strict-markers",
     "--strict-config",
-    "--cov=autonomous_ai_agents",
-    "--cov-report=term-missing:skip-covered",
-    "--cov-report=html",
-    "--cov-report=xml",
     "-ra",                      # Show all test summary info
     "-q",                       # Quiet mode
 ]
+# Coverage flags (uncomment after pytest-cov is installed)
+# "--cov=autonomous_ai_agents",
+# "--cov-report=term-missing:skip-covered",
+# "--cov-report=html",
+# "--cov-report=xml",
 markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "unit: marks tests as unit tests (fast, isolated)",
 ]
 asyncio_mode = "auto"
-asyncio_default_fixture_loop_scope = "function"
 
 # Coverage configuration
 [tool.coverage.run]
