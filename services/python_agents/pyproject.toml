@@ -14,25 +14,53 @@ version = "0.1.0"
 description = "LangGraph orchestrator and research agents for autonomous AI platform"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
-authors = [{ name = "Autonomous AI Platform Team" }]
+license = "MIT"
+authors = [{ name = "Praveen Kanna" }]
+maintainers = [{ name = "Praveen Kanna" }]
 keywords = [
     "ai",
     "agents",
     "langgraph",
+    "langchain",
+    "anthropic",
     "research",
     "autonomous",
     "claude",
     "llm",
+    "multi-agent",
+    "orchestration",
+    "arxiv",
+    "pdf-parsing",
+    "code-generation",
+    "self-improving",
 ]
 classifiers = [
+    # Development Status
     "Development Status :: 3 - Alpha",
+    # Intended Audience
     "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    # License
     "License :: OSI Approved :: MIT License",
+    # Natural Language
+    "Natural Language :: English",
+    # Operating System
+    "Operating System :: OS Independent",
+    # Programming Language
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    # Framework
+    "Framework :: LangChain",
+    # Topics
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Code Generators",
+    "Topic :: Text Processing :: Markup :: Markdown",
+    # Typing
+    "Typing :: Typed",
 ]
 
 dependencies = [
@@ -59,12 +87,17 @@ dev = [
     "pytest-cov>=6.0.0",
     "pytest-asyncio>=0.24.0",
     "pytest-mock>=3.14.0",
+    "pytest-xdist>=3.5.0",      # Parallel test execution
+    "pytest-timeout>=2.2.0",    # Test timeout enforcement
     # Type checking
     "mypy>=1.13.0",
     "types-requests",
-    # Linting & formatting (already in root, but useful for isolated dev)
+    # Linting & formatting
     "ruff>=0.8.0",
-    "black>=24.0.0",
+    # Security scanning
+    "pip-audit>=2.7.0",         # PyPA official vulnerability scanner
+    "bandit[toml]>=1.7.0",      # SAST security linter
+    "safety>=3.0.0",            # Dependency security checker
 ]
 
 # All dependencies (orchestrator + research + dev)
@@ -75,8 +108,17 @@ all = [
 
 [project.urls]
 Homepage = "https://github.com/Pkanna10/autonomous-ai-platform"
+Documentation = "https://github.com/Pkanna10/autonomous-ai-platform/blob/master/CLAUDE.md"
 Repository = "https://github.com/Pkanna10/autonomous-ai-platform"
 Issues = "https://github.com/Pkanna10/autonomous-ai-platform/issues"
+Changelog = "https://github.com/Pkanna10/autonomous-ai-platform/blob/master/CLAUDE.md#project-changelog"
+
+# ============================================
+# CLI Scripts (Proposal #16)
+# ============================================
+[project.scripts]
+research-agent = "autonomous_ai_agents.cli:research_main"
+orchestrator-agent = "autonomous_ai_agents.cli:orchestrator_main"
 
 # ============================================
 # Package Discovery (Proposal 4)
@@ -112,25 +154,15 @@ ignore = ["E501"] # Line too long (handled by formatter)
 known-first-party = ["autonomous_ai_agents"]
 
 # ============================================
-# Black Configuration (Formatting)
+# Ruff Formatter Configuration (Proposal #2)
+# Replaces Black - 30x faster, 100% compatible
 # ============================================
-[tool.black]
-line-length = 88
-target-version = ['py311']
-include = '\.pyi?$'
-extend-exclude = '''
-/(
-  # directories
-  \.eggs
-  | \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | build
-  | dist
-)/
-'''
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+docstring-code-format = true
 
 # ============================================
 # mypy Configuration (Type Checking)
@@ -169,12 +201,13 @@ addopts = [
     "--strict-config",
     "-ra",                      # Show all test summary info
     "-q",                       # Quiet mode
+    # Coverage flags (Proposal #10: Enforce 90% minimum)
+    "--cov=autonomous_ai_agents",
+    "--cov-report=term-missing:skip-covered",
+    "--cov-report=html",
+    "--cov-report=xml",
+    "--cov-fail-under=90",      # Fail if coverage below 90%
 ]
-# Coverage flags (uncomment after pytest-cov is installed)
-# "--cov=autonomous_ai_agents",
-# "--cov-report=term-missing:skip-covered",
-# "--cov-report=html",
-# "--cov-report=xml",
 markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
