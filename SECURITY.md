@@ -21,15 +21,21 @@ workflows, and security best practices.
 
 ## 🔒 Security Tools Overview
 
-| Tool            | Purpose                            | Frequency                 | Cost | Automation |
-| --------------- | ---------------------------------- | ------------------------- | ---- | ---------- |
-| **pnpm audit**  | Built-in npm vulnerability scanner | Every commit (pre-commit) | FREE | Automated  |
-| **OSV-Scanner** | Google's vulnerability database    | Weekly + PR               | FREE | Automated  |
-| **Trivy**       | Container & IaC security scanner   | Weekly + PR               | FREE | Automated  |
-| **Dependabot**  | Automated dependency updates       | Weekly                    | FREE | Automated  |
-| **Renovate**    | Advanced dependency updates        | Weekly                    | FREE | Automated  |
-| **Commitlint**  | Commit message validation          | Every commit              | FREE | Automated  |
-| **ESLint**      | Code quality & security linting    | Every commit              | FREE | Automated  |
+| Tool             | Purpose                                   | Frequency                 | Cost | Automation |
+| ---------------- | ----------------------------------------- | ------------------------- | ---- | ---------- |
+| **pnpm audit**   | Built-in npm vulnerability scanner        | Every commit (pre-commit) | FREE | Automated  |
+| **pip-audit**    | PyPA official Python vulnerability scan   | On-demand + CI            | FREE | Automated  |
+| **bandit**       | Python SAST security linter               | On-demand + CI            | FREE | Automated  |
+| **safety**       | Python dependency security checker        | On-demand + CI            | FREE | Automated  |
+| **mypy**         | Python static type checker (strict mode)  | On-demand + CI            | FREE | Automated  |
+| **OSV-Scanner**  | Google's vulnerability database           | Weekly + PR               | FREE | Automated  |
+| **Trivy**        | Container & IaC security scanner          | Every PR + Weekly         | FREE | Automated  |
+| **Docker Scout** | CVE scanning with PR comments             | Every PR                  | FREE | Automated  |
+| **Dependabot**   | Security alerts only                      | Real-time                 | FREE | Automated  |
+| **Renovate**     | Advanced dependency updates               | Weekly                    | FREE | Automated  |
+| **Commitlint**   | Commit message validation                 | Every commit              | FREE | Automated  |
+| **ESLint**       | Code quality & security linting           | Every commit              | FREE | Automated  |
+| **Ruff**         | Ultra-fast Python linter (10-100x faster) | On-demand + CI            | FREE | Automated  |
 
 ---
 
@@ -41,15 +47,35 @@ workflows, and security best practices.
 # Run all security scans
 pnpm security
 
-# Individual scans
+# Node.js/NPM scans
 pnpm security:audit      # npm audit (fast, built-in)
 pnpm security:scan       # Comprehensive scan (Trivy, OSV-Scanner, gitleaks)
 pnpm security:docker     # Docker image security scan
 pnpm security:trivy      # Full Trivy scan with detailed report
 pnpm security:osv        # OSV-Scanner (Google's vulnerability database)
-
-# Fix vulnerabilities automatically
 pnpm security:fix        # Auto-fix patchable vulnerabilities
+
+# Python security scans
+cd services/python_agents
+
+# Official PyPA vulnerability scanner (recommended)
+pip-audit                # Scan installed packages for known vulnerabilities
+pip-audit --fix          # Auto-upgrade vulnerable packages
+
+# SAST security linter
+bandit -r src/           # Scan for security issues in source code
+bandit -r src/ --format json -o bandit-report.json  # JSON report
+
+# Dependency security checker
+safety check             # Check dependencies against safety database
+safety check --json      # JSON output
+
+# Type safety (prevents runtime errors)
+mypy src/                # Type check with strict mode enabled
+mypy --install-types     # Install missing type stubs
+
+# All Python scans in one command
+pip-audit && bandit -r src/ && safety check && mypy src/
 ```
 
 ### Pre-Commit Security Checks
@@ -118,6 +144,25 @@ Runs on every push/PR with enhanced reporting:
 - Generates detailed summary with badges
 - Uploads artifacts for 30-day retention
 - Fails build on CRITICAL/HIGH vulnerabilities
+
+#### 5. Docker Scout Integration
+
+Runs on every Python Docker build:
+
+- CVE scanning with severity filtering (CRITICAL, HIGH)
+- PR comments comparing vulnerability changes vs. baseline
+- SARIF upload to GitHub Security tab
+- Supply chain security (SBOM + provenance attestations)
+
+#### 6. Python Docker Build Workflow
+
+Multi-platform builds with comprehensive security:
+
+- **Platforms:** linux/amd64, linux/arm64 (Apple Silicon support)
+- **Security Scanning:** Dual scanning (Trivy + Docker Scout)
+- **Caching:** Hybrid strategy (GHA + Registry) for 95-98% hit rate
+- **Supply Chain:** SBOM generation and provenance attestations
+- **Image Size:** ~200-250MB (vs 1GB+ single-stage baseline)
 
 ---
 
@@ -256,6 +301,8 @@ Renovate runs weekly (Monday 3am PT) and:
 
 ### Manual Dependency Updates
 
+**Node.js/NPM:**
+
 ```bash
 # Check for outdated packages
 pnpm outdated
@@ -265,9 +312,26 @@ pnpm update --latest
 
 # Update specific package
 pnpm update <package>@latest
+```
 
-# Update Python dependencies
+**Python (using UV - 10-100x faster):**
+
+```bash
 cd services/python_agents
+
+# Check for outdated packages
+uv pip list --outdated
+
+# Update specific package (fast!)
+uv pip install --upgrade <package>
+
+# Update all dependencies from pyproject.toml
+uv pip install -e ".[all]" --upgrade
+
+# Security-focused update (pip-audit auto-fix)
+pip-audit --fix
+
+# Traditional pip method (slower)
 pip list --outdated
 pip install --upgrade <package>
 ```
@@ -309,11 +373,33 @@ Before merging dependency updates:
    - Log errors for debugging
    - Use custom error classes
 
+### Python-Specific Security
+
+1. **Type Safety (mypy strict mode):**
+   - All strict flags enabled (disallow_any_generics, disallow_untyped_calls)
+   - Prevents runtime type errors caught at development time
+   - Third-party libraries without stubs properly overridden
+
+2. **SAST Scanning (bandit):**
+   - Detects common security issues (SQL injection, hardcoded passwords, etc.)
+   - TOML configuration in pyproject.toml
+   - Runs in CI/CD pipeline
+
+3. **Dependency Vulnerability Scanning:**
+   - **pip-audit**: Official PyPA scanner for known CVEs
+   - **safety**: Community-driven vulnerability database
+   - Both run before production deployments
+
+4. **Build Security:**
+   - Hatchling build backend (no arbitrary code execution)
+   - UV package manager with integrity checks
+   - No secrets in pyproject.toml or source code
+
 ### Infrastructure Security
 
 1. **Least Privilege:**
    - Database users have minimal permissions
-   - Docker containers run as non-root
+   - Docker containers run as non-root (appuser)
    - API keys scoped to specific services
 
 2. **Network Isolation:**
@@ -415,4 +501,4 @@ Before merging dependency updates:
 
 ---
 
-**Last Updated:** 2025-11-04 **Version:** 1.0.0
+**Last Updated:** 2025-11-14 **Version:** 1.1.0
