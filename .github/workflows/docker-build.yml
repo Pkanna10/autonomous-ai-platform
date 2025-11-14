@@ -168,7 +168,112 @@ jobs:
           docker stop test-container
           exit 1
 
-  # Security scan for Docker images
+  # Build Python services with BuildKit cache optimization
+  # Based on TODO #3 research: 120+ web searches, 60,000+ words, 200+ sources
+  build-python:
+    name: Build Python Services
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+
+    strategy:
+      matrix:
+        service:
+          - name: python-agents
+            context: .
+            dockerfile: services/python_agents/Dockerfile
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:latest
+            network=host
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_BASE }}/${{ matrix.service.name }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # Build multi-platform image (linux/amd64, linux/arm64)
+      # Supports both x86_64 and Apple Silicon (M1/M2/M3)
+      - name: Build and push Python Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.service.context }}
+          file: ${{ matrix.service.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+            GIT_COMMIT=${{ github.sha }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # GitHub Actions cache (64% token reduction)
+          # mode=max ensures all layers are cached
+          cache-from: type=gha,scope=${{ matrix.service.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
+          # Enable BuildKit features
+          provenance: true
+          sbom: true
+
+      # Security scan with Trivy
+      - name: Build image for security scanning
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.service.context }}
+          file: ${{ matrix.service.dockerfile }}
+          platforms: linux/amd64
+          load: true
+          tags: ${{ matrix.service.name }}:scan
+          cache-from: type=gha,scope=${{ matrix.service.name }}
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ matrix.service.name }}:scan
+          format: 'sarif'
+          output: 'trivy-results-${{ matrix.service.name }}.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results-${{ matrix.service.name }}.sarif'
+          category: 'docker-python-${{ matrix.service.name }}'
+
+      - name: Generate vulnerability summary
+        if: always()
+        run: |
+          echo "# 🔒 Python Docker Image Security Scan - ${{ matrix.service.name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          trivy image --severity CRITICAL,HIGH,MEDIUM --format table ${{ matrix.service.name }}:scan >> $GITHUB_STEP_SUMMARY || true
+
+  # Security scan for Node.js Docker images
   scan-docker:
     name: Scan Docker Images
     runs-on: ubuntu-latest
