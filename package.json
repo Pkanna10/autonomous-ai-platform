@@ -43,6 +43,7 @@
     "format": "prettier --write \"**/*.{ts,js,json,md}\"",
     "format:check": "prettier --check \"**/*.{ts,js,json,md}\"",
     "typecheck": "tsc --noEmit",
+    "typecheck:build": "tsc --build",
     "build": "pnpm --filter \"./packages/*\" build",
     "clean": "rm -rf node_modules dist build coverage && pnpm --filter \"./packages/*\" exec rm -rf node_modules dist build",
     "pre-commit": "pnpm lint --fix && pnpm typecheck && pnpm test && pnpm test:coverage",

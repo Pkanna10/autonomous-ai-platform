@@ -12,5 +12,8 @@
   },
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist"],
-  "references": []
+  "references": [
+    { "path": "../agent-core" },
+    { "path": "../research-engine" }
+  ]
 }

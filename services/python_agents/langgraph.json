@@ -4,11 +4,11 @@
     "orchestrator": "./src/autonomous_ai_agents/orchestrator/main.py:create_graph"
   },
   "env": {
-    "ANTHROPIC_API_KEY": "",
-    "DATABASE_URL": "",
-    "REDIS_URL": "",
-    "QDRANT_URL": "",
-    "LOG_LEVEL": "INFO"
+    "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",
+    "DATABASE_URL": "${DATABASE_URL}",
+    "REDIS_URL": "${REDIS_URL}",
+    "QDRANT_URL": "${QDRANT_URL}",
+    "LOG_LEVEL": "${LOG_LEVEL:-INFO}"
   },
   "python_version": "3.11",
   "pip_config_file": null,
