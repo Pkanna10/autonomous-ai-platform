@@ -29,7 +29,9 @@ def test_settings_loads_from_environment(monkeypatch: pytest.MonkeyPatch) -> Non
     assert settings.LOG_LEVEL == "DEBUG"
 
 
-def test_settings_uses_defaults_when_not_provided(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_settings_uses_defaults_when_not_provided(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Should use default values for optional fields.
 
     GIVEN minimal env vars set (ANTHROPIC_API_KEY only)

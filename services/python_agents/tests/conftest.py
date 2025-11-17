@@ -74,7 +74,9 @@ def mock_anthropic_client(mocker: Any) -> Any:
     Returns:
         Mocked ClaudeClient instance
     """
-    mock_client = mocker.patch("autonomous_ai_agents.clients.claude_client.ClaudeClient")
+    mock_client = mocker.patch(
+        "autonomous_ai_agents.clients.claude_client.ClaudeClient"
+    )
     mock_client.return_value.chat.return_value = {
         "content": [{"type": "text", "text": "Mocked response"}]
     }

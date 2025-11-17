@@ -4,9 +4,10 @@
  * Tests: Signal handling, timeouts, cleanup, error recovery
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { Server } from 'http';
-import { setupGracefulShutdown, cleanupHelpers } from './shutdown';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { cleanupHelpers, setupGracefulShutdown } from './shutdown';
 
 describe('setupGracefulShutdown', () => {
   let mockServer: Server;
@@ -71,9 +72,7 @@ describe('setupGracefulShutdown', () => {
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         expect.stringContaining('Graceful shutdown registered')
       );
-      expect(consoleErrorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('SIGTERM, SIGINT')
-      );
+      expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('SIGTERM, SIGINT'));
     });
 
     it('should not log when logging disabled', () => {
@@ -89,9 +88,10 @@ describe('setupGracefulShutdown', () => {
     it('should close server and exit with code 0 on SIGTERM', async () => {
       // ARRANGE
       setupGracefulShutdown(mockServer);
-      const signalHandler = (processOnSpy.mock.calls.find(
+      const signalHandler = processOnSpy.mock.calls.find(
         (call) => call[0] === 'SIGTERM'
-      )?.[1] as () => void) || (() => {});
+      )![1] as () => void;
+      (): void => {};
 
       // ACT
       signalHandler();
@@ -106,9 +106,10 @@ describe('setupGracefulShutdown', () => {
       // ARRANGE
       const cleanup = vi.fn().mockResolvedValue(undefined);
       setupGracefulShutdown(mockServer, cleanup);
-      const signalHandler = (processOnSpy.mock.calls.find(
+      const signalHandler = processOnSpy.mock.calls.find(
         (call) => call[0] === 'SIGTERM'
-      )?.[1] as () => void) || (() => {});
+      )![1] as () => void;
+      (): void => {};
 
       // ACT
       signalHandler();
@@ -124,21 +125,18 @@ describe('setupGracefulShutdown', () => {
       // ARRANGE
       const cleanup = vi.fn().mockResolvedValue(undefined);
       setupGracefulShutdown(mockServer, cleanup, { logging: true });
-      const signalHandler = (processOnSpy.mock.calls.find(
+      const signalHandler = processOnSpy.mock.calls.find(
         (call) => call[0] === 'SIGTERM'
-      )?.[1] as () => void) || (() => {});
+      )![1] as () => void;
+      (): void => {};
 
       // ACT
       signalHandler();
       await new Promise((resolve) => setTimeout(resolve, 50));
 
       // ASSERT
-      expect(consoleErrorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Received SIGTERM')
-      );
-      expect(consoleErrorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Closing HTTP server')
-      );
+      expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Received SIGTERM'));
+      expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Closing HTTP server'));
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         expect.stringContaining('Running custom cleanup')
       );
@@ -151,9 +149,10 @@ describe('setupGracefulShutdown', () => {
       // ARRANGE
       const cleanup = vi.fn().mockResolvedValue(undefined);
       setupGracefulShutdown(mockServer, cleanup, { logging: true });
-      const signalHandler = (processOnSpy.mock.calls.find(
+      const signalHandler = processOnSpy.mock.calls.find(
         (call) => call[0] === 'SIGTERM'
-      )?.[1] as () => void) || (() => {});
+      )![1] as () => void;
+      (): void => {};
 
       // ACT - Trigger shutdown twice rapidly
       signalHandler();
@@ -172,16 +171,15 @@ describe('setupGracefulShutdown', () => {
   describe('Timeout Handling', () => {
     it('should force exit if shutdown exceeds timeout', async () => {
       // ARRANGE - Cleanup takes 2 seconds, timeout is 100ms
-      const slowCleanup = vi.fn(
-        () => new Promise((resolve) => setTimeout(resolve, 2000))
-      );
+      const slowCleanup = vi.fn(async () => new Promise((resolve) => setTimeout(resolve, 2000)));
       setupGracefulShutdown(mockServer, slowCleanup, {
         timeout: 100,
         logging: true,
       });
-      const signalHandler = (processOnSpy.mock.calls.find(
+      const signalHandler = processOnSpy.mock.calls.find(
         (call) => call[0] === 'SIGTERM'
-      )?.[1] as () => void) || (() => {});
+      )![1] as () => void;
+      (): void => {};
 
       // ACT
       signalHandler();
@@ -199,13 +197,12 @@ describe('setupGracefulShutdown', () => {
 
     it('should complete gracefully if within timeout', async () => {
       // ARRANGE - Cleanup takes 10ms, timeout is 1000ms
-      const fastCleanup = vi.fn(
-        () => new Promise((resolve) => setTimeout(resolve, 10))
-      );
+      const fastCleanup = vi.fn(async () => new Promise((resolve) => setTimeout(resolve, 10)));
       setupGracefulShutdown(mockServer, fastCleanup, { timeout: 1000 });
-      const signalHandler = (processOnSpy.mock.calls.find(
+      const signalHandler = processOnSpy.mock.calls.find(
         (call) => call[0] === 'SIGTERM'
-      )?.[1] as () => void) || (() => {});
+      )![1] as () => void;
+      (): void => {};
 
       // ACT
       signalHandler();
@@ -229,9 +226,10 @@ describe('setupGracefulShutdown', () => {
       } as unknown as Server;
 
       setupGracefulShutdown(errorServer, undefined, { logging: true });
-      const signalHandler = (processOnSpy.mock.calls.find(
+      const signalHandler = processOnSpy.mock.calls.find(
         (call) => call[0] === 'SIGTERM'
-      )?.[1] as () => void) || (() => {});
+      )![1] as () => void;
+      (): void => {};
 
       // ACT
       signalHandler();
@@ -248,9 +246,10 @@ describe('setupGracefulShutdown', () => {
       // ARRANGE - Cleanup throws error
       const failingCleanup = vi.fn().mockRejectedValue(new Error('Cleanup failed'));
       setupGracefulShutdown(mockServer, failingCleanup, { logging: true });
-      const signalHandler = (processOnSpy.mock.calls.find(
+      const signalHandler = processOnSpy.mock.calls.find(
         (call) => call[0] === 'SIGTERM'
-      )?.[1] as () => void) || (() => {});
+      )![1] as () => void;
+      (): void => {};
 
       // ACT
       signalHandler();
@@ -267,9 +266,10 @@ describe('setupGracefulShutdown', () => {
       // ARRANGE - Cleanup throws non-Error object
       const failingCleanup = vi.fn().mockRejectedValue('String error');
       setupGracefulShutdown(mockServer, failingCleanup, { logging: true });
-      const signalHandler = (processOnSpy.mock.calls.find(
+      const signalHandler = processOnSpy.mock.calls.find(
         (call) => call[0] === 'SIGTERM'
-      )?.[1] as () => void) || (() => {});
+      )![1] as () => void;
+      (): void => {};
 
       // ACT
       signalHandler();
@@ -277,9 +277,7 @@ describe('setupGracefulShutdown', () => {
 
       // ASSERT
       expect(processExitSpy).toHaveBeenCalledWith(1);
-      expect(consoleErrorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Unknown error')
-      );
+      expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Unknown error'));
     });
   });
 
@@ -288,9 +286,10 @@ describe('setupGracefulShutdown', () => {
       // ARRANGE - Synchronous cleanup (no promise)
       const syncCleanup = vi.fn();
       setupGracefulShutdown(mockServer, syncCleanup);
-      const signalHandler = (processOnSpy.mock.calls.find(
+      const signalHandler = processOnSpy.mock.calls.find(
         (call) => call[0] === 'SIGTERM'
-      )?.[1] as () => void) || (() => {});
+      )![1] as () => void;
+      (): void => {};
 
       // ACT
       signalHandler();
@@ -304,9 +303,10 @@ describe('setupGracefulShutdown', () => {
     it('should work without cleanup function', async () => {
       // ARRANGE - No cleanup provided
       setupGracefulShutdown(mockServer);
-      const signalHandler = (processOnSpy.mock.calls.find(
+      const signalHandler = processOnSpy.mock.calls.find(
         (call) => call[0] === 'SIGTERM'
-      )?.[1] as () => void) || (() => {});
+      )![1] as () => void;
+      (): void => {};
 
       // ACT
       signalHandler();
@@ -472,12 +472,8 @@ describe('cleanupHelpers', () => {
       // ASSERT
       expect(mockPgClient.end).toHaveBeenCalledOnce();
       expect(mockRedisClient.quit).toHaveBeenCalledOnce();
-      expect(consoleErrorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('PostgreSQL')
-      );
-      expect(consoleErrorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Redis')
-      );
+      expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('PostgreSQL'));
+      expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Redis'));
     });
   });
 });

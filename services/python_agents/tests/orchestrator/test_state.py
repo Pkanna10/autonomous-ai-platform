@@ -3,8 +3,6 @@
 Phase 1, Week 3-4: AgentState validation tests.
 """
 
-import pytest
-
 from autonomous_ai_agents.orchestrator.state import AgentState
 
 

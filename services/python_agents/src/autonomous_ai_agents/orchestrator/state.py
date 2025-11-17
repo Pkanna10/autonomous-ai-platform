@@ -3,9 +3,8 @@
 Defines the shared state that flows through the agent graph.
 """
 
-from typing import Annotated, TypedDict
-
 from operator import add
+from typing import Annotated, TypedDict
 
 
 class AgentState(TypedDict):

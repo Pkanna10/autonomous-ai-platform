@@ -115,13 +115,13 @@ ruff check --fix src/ tests/
 
 ### Phase 1: Foundation (Weeks 1-9) - IN PROGRESS
 
-| Week | Component | Status |
-|------|-----------|--------|
-| 1-2 | Project setup, Docker, Database | ✅ Complete |
-| 3-4 | **LangGraph orchestrator** | 🚧 Structure ready |
-| 5-6 | Package Manager | ⏳ Upcoming |
-| 7-8 | Research Engine | 📁 Placeholders created |
-| 9 | State persistence | ⏳ Upcoming |
+| Week | Component                       | Status                  |
+| ---- | ------------------------------- | ----------------------- |
+| 1-2  | Project setup, Docker, Database | ✅ Complete             |
+| 3-4  | **LangGraph orchestrator**      | 🚧 Structure ready      |
+| 5-6  | Package Manager                 | ⏳ Upcoming             |
+| 7-8  | Research Engine                 | 📁 Placeholders created |
+| 9    | State persistence               | ⏳ Upcoming             |
 
 ## 🏗️ Architecture
 
@@ -174,11 +174,13 @@ class AgentState(TypedDict):
 
 - [CLAUDE.md](../../CLAUDE.md) - Complete project documentation
 - [STATUS.md](../../STATUS.md) - Current sprint status
-- [Implementation Timeline](../../CLAUDE.md#implementation-timeline) - 12-month roadmap
+- [Implementation Timeline](../../CLAUDE.md#implementation-timeline) - 12-month
+  roadmap
 
 ## 🤝 Contributing
 
 This is a solo developer project. See [CLAUDE.md](../../CLAUDE.md) for:
+
 - TDD workflow (Red-Green-Refactor)
 - Code style guidelines
 - Commit message format

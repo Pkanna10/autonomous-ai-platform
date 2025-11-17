@@ -56,7 +56,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Proposal #10: Copy dependencies before code (changes: weekly vs daily)
 # This layer caching strategy ensures code changes don't rebuild dependencies
 # Expected cache hit rate: 90% for code-only changes
-COPY pyproject.toml README.md ./
+COPY services/python_agents/pyproject.toml services/python_agents/README.md ./
 
 # Proposal #3: Install Python dependencies with cache mount
 # Note: Using -e (editable install) for development, switch to pip install . for production
@@ -66,8 +66,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 # Proposal #10: Copy application code LAST (changes: daily)
 # Maximizes layer cache hits - code changes don't invalidate dependency layers
-COPY src/ ./src/
-COPY tests/ ./tests/
+COPY services/python_agents/src/ ./src/
+COPY services/python_agents/tests/ ./tests/
 
 # Proposal #7: Pre-compile Python bytecode (15-30% faster startup)
 # Compiles .py → .pyc with optimization (-O flag)
