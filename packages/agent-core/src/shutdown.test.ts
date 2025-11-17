@@ -16,6 +16,9 @@ describe('setupGracefulShutdown', () => {
   let processOnSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
+    // Use fake timers to control setTimeout in shutdown flow
+    vi.useFakeTimers();
+
     // Create mock server
     mockServer = {
       close: vi.fn((callback?: (err?: Error) => void) => {
@@ -39,6 +42,7 @@ describe('setupGracefulShutdown', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.clearAllTimers();
+    vi.useRealTimers(); // Restore real timers after each test
   });
 
   describe('Signal Handler Registration', () => {
@@ -95,7 +99,8 @@ describe('setupGracefulShutdown', () => {
 
       // ACT
       signalHandler();
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Advance time through all setTimeout calls (server.close 10ms + in-flight wait 1000ms)
+      await vi.runAllTimersAsync();
 
       // ASSERT
       expect(mockServer.close).toHaveBeenCalledOnce();
@@ -113,7 +118,8 @@ describe('setupGracefulShutdown', () => {
 
       // ACT
       signalHandler();
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Advance time through all setTimeout calls (server.close 10ms + in-flight wait 1000ms)
+      await vi.runAllTimersAsync();
 
       // ASSERT
       expect(cleanup).toHaveBeenCalledOnce();
@@ -132,7 +138,8 @@ describe('setupGracefulShutdown', () => {
 
       // ACT
       signalHandler();
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Advance time through all setTimeout calls (server.close 10ms + in-flight wait 1000ms)
+      await vi.runAllTimersAsync();
 
       // ASSERT
       expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Received SIGTERM'));
@@ -157,7 +164,8 @@ describe('setupGracefulShutdown', () => {
       // ACT - Trigger shutdown twice rapidly
       signalHandler();
       signalHandler(); // Second call should be ignored
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Advance time through all setTimeout calls (server.close 10ms + in-flight wait 1000ms)
+      await vi.runAllTimersAsync();
 
       // ASSERT
       expect(mockServer.close).toHaveBeenCalledOnce(); // Not twice
@@ -183,7 +191,8 @@ describe('setupGracefulShutdown', () => {
 
       // ACT
       signalHandler();
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      // Advance timers: server.close (10ms) + timeout (100ms) should trigger timeout
+      await vi.advanceTimersByTimeAsync(150);
 
       // ASSERT
       expect(processExitSpy).toHaveBeenCalledWith(1); // Force exit with error code
@@ -196,9 +205,9 @@ describe('setupGracefulShutdown', () => {
     });
 
     it('should complete gracefully if within timeout', async () => {
-      // ARRANGE - Cleanup takes 10ms, timeout is 1000ms
+      // ARRANGE - Cleanup takes 10ms, timeout is 2000ms (enough for all operations)
       const fastCleanup = vi.fn(async () => new Promise((resolve) => setTimeout(resolve, 10)));
-      setupGracefulShutdown(mockServer, fastCleanup, { timeout: 1000 });
+      setupGracefulShutdown(mockServer, fastCleanup, { timeout: 2000 });
       const signalHandler = processOnSpy.mock.calls.find(
         (call) => call[0] === 'SIGTERM'
       )![1] as () => void;
@@ -206,7 +215,8 @@ describe('setupGracefulShutdown', () => {
 
       // ACT
       signalHandler();
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // Advance timers through all shutdown operations: server.close (10ms) + cleanup (10ms) + in-flight wait (1000ms)
+      await vi.runAllTimersAsync();
 
       // ASSERT
       expect(processExitSpy).toHaveBeenCalledWith(0); // Graceful exit
@@ -233,7 +243,8 @@ describe('setupGracefulShutdown', () => {
 
       // ACT
       signalHandler();
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Advance time through all setTimeout calls (server.close 10ms + in-flight wait 1000ms)
+      await vi.runAllTimersAsync();
 
       // ASSERT
       expect(processExitSpy).toHaveBeenCalledWith(1);
@@ -253,7 +264,8 @@ describe('setupGracefulShutdown', () => {
 
       // ACT
       signalHandler();
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Advance time through all setTimeout calls (server.close 10ms + in-flight wait 1000ms)
+      await vi.runAllTimersAsync();
 
       // ASSERT
       expect(processExitSpy).toHaveBeenCalledWith(1);
@@ -273,7 +285,8 @@ describe('setupGracefulShutdown', () => {
 
       // ACT
       signalHandler();
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Advance time through all setTimeout calls (server.close 10ms + in-flight wait 1000ms)
+      await vi.runAllTimersAsync();
 
       // ASSERT
       expect(processExitSpy).toHaveBeenCalledWith(1);
@@ -293,7 +306,8 @@ describe('setupGracefulShutdown', () => {
 
       // ACT
       signalHandler();
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Advance time through all setTimeout calls (server.close 10ms + in-flight wait 1000ms)
+      await vi.runAllTimersAsync();
 
       // ASSERT
       expect(syncCleanup).toHaveBeenCalledOnce();
@@ -310,7 +324,8 @@ describe('setupGracefulShutdown', () => {
 
       // ACT
       signalHandler();
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Advance time through all setTimeout calls (server.close 10ms + in-flight wait 1000ms)
+      await vi.runAllTimersAsync();
 
       // ASSERT
       expect(mockServer.close).toHaveBeenCalledOnce();
