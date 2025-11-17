@@ -30,6 +30,7 @@ export default [
       '**/.tox/**',
       '**/.pytest_cache/**',
       '**/__pycache__/**',
+      '**/.cache/**', // UV package manager cache
       // Infrastructure scripts (standalone utilities for Docker)
       'infrastructure/docker/**/*.js',
     ],

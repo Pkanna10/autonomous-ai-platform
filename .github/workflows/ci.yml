@@ -92,6 +92,7 @@ jobs:
       - name: Install dependencies with uv
         run: |
           uv pip install --system ruff black mypy pytest pytest-cov
+          uv pip install --system -e ".[dev]"
 
       - name: Lint with Ruff
         run: ruff check .

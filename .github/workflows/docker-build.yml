@@ -64,7 +64,7 @@ jobs:
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix={{branch}}-
+            type=sha,format=short
             type=raw,value=latest,enable={{is_default_branch}}
 
       # Proposal #9: GitHub Actions cache with mode=max
@@ -224,7 +224,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=sha,prefix={{branch}}-,format=short
+            type=sha,format=short
             type=sha,format=long
             type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value={{date 'YYYYMMDD-HHmmss'}}
@@ -266,8 +266,10 @@ jobs:
           outputs: type=image,name=${{ env.IMAGE_BASE }}/${{ matrix.service.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
 
       # Security scanning job (separate for clarity)
+      # Only scan pushed images (not PR builds, since they're not pushed to registry)
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
+        if: github.event_name != 'pull_request'
         with:
           image-ref: ${{ env.IMAGE_BASE }}/${{ matrix.service.name }}@${{ steps.build.outputs.digest }}
           format: 'sarif'
@@ -279,7 +281,7 @@ jobs:
 
       - name: Upload Trivy results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        if: github.event_name != 'pull_request'
         with:
           sarif_file: 'trivy-results-${{ matrix.service.name }}.sarif'
           category: 'trivy-python-${{ matrix.service.name }}'
