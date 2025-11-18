@@ -93,7 +93,8 @@ COPY --from=pruner /app/out/full/ .
 # RUN pnpm tsc --noEmit
 
 # Build with Turborepo (uses cache for unchanged packages)
-RUN pnpm turbo build --filter=${PACKAGE_SCOPE}...
+# Note: No "..." suffix needed since packages have no interdependencies yet
+RUN pnpm turbo build --filter="${PACKAGE_SCOPE}"
 
 # Bundle with esbuild for smaller output (optional, if not already done in build script)
 # Uncomment if you want additional bundling:

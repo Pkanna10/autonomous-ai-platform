@@ -214,4 +214,43 @@ export default [
       'import/no-duplicates': 'error',
     },
   },
+
+  // Override for test files - disable type-aware rules
+  // Test files are excluded from tsconfig to prevent compilation but still need linting
+  {
+    files: ['**/*.test.ts', '**/*.spec.ts'],
+    languageOptions: {
+      parser: typescriptParser,
+      parserOptions: {
+        // Explicitly disable projectService for test files
+        projectService: false,
+        project: null,
+        ecmaVersion: 2022,
+        sourceType: 'module',
+      },
+    },
+    rules: {
+      // Disable ALL type-aware rules for test files (require type information)
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
+      '@typescript-eslint/no-unsafe-return': 'off',
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/strict-boolean-expressions': 'off',
+      '@typescript-eslint/no-unnecessary-condition': 'off',
+      '@typescript-eslint/no-unnecessary-type-assertion': 'off',
+      '@typescript-eslint/prefer-nullish-coalescing': 'off',
+      '@typescript-eslint/prefer-optional-chain': 'off',
+      '@typescript-eslint/no-floating-promises': 'off',
+      '@typescript-eslint/await-thenable': 'off',
+      '@typescript-eslint/no-misused-promises': 'off',
+      '@typescript-eslint/promise-function-async': 'off',
+      '@typescript-eslint/prefer-readonly': 'off',
+      '@typescript-eslint/naming-convention': 'off',
+      // Keep basic syntax rules enabled (don't require type info)
+      '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/explicit-function-return-type': 'off', // Too strict for tests
+      '@typescript-eslint/explicit-module-boundary-types': 'off', // Too strict for tests
+    },
+  },
 ];
