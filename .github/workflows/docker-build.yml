@@ -25,14 +25,17 @@ jobs:
         service:
           - name: agent-core
             scope: '@autonomous-ai/agent-core'
+            type: library # Will become 'service' when HTTP server is added in future
             context: .
             dockerfile: infrastructure/docker/Dockerfile.node
           - name: research-engine
             scope: '@autonomous-ai/research-engine'
+            type: library # Library package (no HTTP server)
             context: .
             dockerfile: infrastructure/docker/Dockerfile.node
           - name: execution-engine
             scope: '@autonomous-ai/execution-engine'
+            type: library # Library package (no HTTP server)
             context: .
             dockerfile: infrastructure/docker/Dockerfile.node
 
@@ -118,7 +121,13 @@ jobs:
 
     strategy:
       matrix:
-        service: [agent-core, research-engine, execution-engine]
+        service:
+          - name: agent-core
+            type: library # Will become 'service' when HTTP server is added
+          - name: research-engine
+            type: library # Library package (no HTTP server)
+          - name: execution-engine
+            type: library # Library package (no HTTP server)
 
     steps:
       - name: Checkout code
@@ -134,10 +143,10 @@ jobs:
           file: infrastructure/docker/Dockerfile.node
           target: testing
           build-args: |
-            PACKAGE_SCOPE=@autonomous-ai/${{ matrix.service }}
+            PACKAGE_SCOPE=@autonomous-ai/${{ matrix.service.name }}
           load: true
-          tags: ${{ matrix.service }}:test
-          cache-from: type=gha,scope=${{ matrix.service }}
+          tags: ${{ matrix.service.name }}:test
+          cache-from: type=gha,scope=${{ matrix.service.name }}
 
       # Tests already ran during the build (in RUN instructions)
       # The testing stage runs: lint, typecheck, and test
@@ -159,21 +168,25 @@ jobs:
           file: infrastructure/docker/Dockerfile.node
           target: production
           build-args: |
-            PACKAGE_SCOPE=@autonomous-ai/${{ matrix.service }}
+            PACKAGE_SCOPE=@autonomous-ai/${{ matrix.service.name }}
           load: true
-          tags: ${{ matrix.service }}:prod
-          cache-from: type=gha,scope=${{ matrix.service }}
+          tags: ${{ matrix.service.name }}:prod
+          cache-from: type=gha,scope=${{ matrix.service.name }}
 
-      - name: Test healthcheck endpoint
+      # Conditional healthcheck test for services (packages with HTTP servers)
+      - name: Test healthcheck endpoint (services only)
+        if: matrix.service.type == 'service'
         run: |
+          echo "## 🏥 Service Healthcheck Test - ${{ matrix.service.name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
           # Start container with production image
           docker run -d --name test-container \
             -e NODE_ENV=production \
             -e PORT=3000 \
-            ${{ matrix.service }}:prod
+            ${{ matrix.service.name }}:prod
 
           # Wait for healthcheck to pass (max 90 seconds)
-          # Production images need more time for startup
           timeout=90
           elapsed=0
           while [ $elapsed -lt $timeout ]; do
@@ -181,14 +194,18 @@ jobs:
 
             case "$status" in
               "healthy")
-                echo "✅ Healthcheck passed for ${{ matrix.service }}!"
+                echo "✅ Healthcheck passed for ${{ matrix.service.name }}!"
+                echo "✅ Healthcheck passed!" >> $GITHUB_STEP_SUMMARY
                 docker logs test-container
                 docker stop test-container
                 exit 0
                 ;;
               "unhealthy")
-                echo "❌ Healthcheck failed for ${{ matrix.service }}"
-                docker logs test-container
+                echo "❌ Healthcheck failed for ${{ matrix.service.name }}"
+                echo "❌ Healthcheck failed" >> $GITHUB_STEP_SUMMARY
+                echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+                docker logs test-container >> $GITHUB_STEP_SUMMARY 2>&1
+                echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
                 docker stop test-container
                 exit 1
                 ;;
@@ -201,10 +218,68 @@ jobs:
           done
 
           echo "❌ Healthcheck timeout after ${timeout} seconds"
+          echo "❌ Healthcheck timeout" >> $GITHUB_STEP_SUMMARY
           docker logs test-container
           docker inspect test-container
           docker stop test-container
           exit 1
+
+      # Alternative validation for library packages (no HTTP server)
+      - name: Validate library package (libraries only)
+        if: matrix.service.type == 'library'
+        run: |
+          echo "## 📦 Library Package Validation - ${{ matrix.service.name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### ✅ Build-Time Tests (Already Passed)" >> $GITHUB_STEP_SUMMARY
+          echo "- Linting (\`pnpm run lint\`)" >> $GITHUB_STEP_SUMMARY
+          echo "- Type checking (\`pnpm run typecheck\`)" >> $GITHUB_STEP_SUMMARY
+          echo "- Unit tests (\`pnpm run test\`)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### 📊 Image Metadata" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+          docker inspect ${{ matrix.service.name }}:prod --format='{{json .Config.Labels}}' | jq . >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### 💾 Image Size" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          docker images ${{ matrix.service.name }}:prod --format "{{.Repository}}\t{{.Tag}}\t{{.Size}}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### 🧪 Smoke Test: Package Import & Healthcheck" >> $GITHUB_STEP_SUMMARY
+
+          # Start container to test healthcheck script
+          echo "Starting container to verify healthcheck logic..."
+          docker run -d --name test-container \
+            -e NODE_ENV=production \
+            -e PORT=3000 \
+            ${{ matrix.service.name }}:prod
+
+          # Wait a moment for healthcheck to run
+          sleep 10
+
+          # Check healthcheck status
+          status=$(docker inspect test-container --format='{{.State.Health.Status}}' 2>/dev/null || echo "none")
+
+          echo "Healthcheck status: $status"
+          echo "Container logs:"
+          docker logs test-container
+
+          if [ "$status" = "healthy" ]; then
+            echo "✅ Healthcheck passed (library package detected correctly)" >> $GITHUB_STEP_SUMMARY
+            docker stop test-container
+            exit 0
+          else
+            echo "❌ Healthcheck failed for library package" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            docker logs test-container >> $GITHUB_STEP_SUMMARY 2>&1
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            docker stop test-container
+            exit 1
+          fi
 
   # Build Python services with BuildKit cache optimization
   # Based on TODO #3 research: 120+ web searches, 60,000+ words, 200+ sources
