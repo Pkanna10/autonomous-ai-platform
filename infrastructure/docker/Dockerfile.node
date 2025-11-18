@@ -152,9 +152,10 @@ COPY --from=pruner /app/out/pnpm-workspace.yaml ./pnpm-workspace.yaml
 COPY --from=pruner /app/out/json/ .
 
 # Removed --offline flag to allow downloading packages not in cache
+# Added --ignore-scripts to skip prepare/postinstall scripts (e.g., husky install)
 # Cache mount still provides significant speedup for cached packages
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile --prod
+    pnpm install --frozen-lockfile --prod --ignore-scripts
 
 # Copy built artifacts from builder stage
 # Adjust path based on your package structure
