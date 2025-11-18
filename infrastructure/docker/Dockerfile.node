@@ -208,9 +208,21 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
   CMD node healthcheck.js
 
-# Proposal #11: Use exec form for proper signal handling (graceful shutdown)
-# Proposal #13: Enable source maps for production debugging
-CMD ["node", "--enable-source-maps", "dist/index.js"]
+# Proposal #11: Conditional CMD based on package type
+# Library packages: Keep container alive for healthcheck (tail -f /dev/null)
+# Service packages: Run application with source maps enabled
+# Detection: Check if package.json has "start" script (services) or HTTP dependencies
+CMD ["sh", "-c", "\
+  if grep -q '\"start\"' package.json 2>/dev/null || \
+     grep -qE '\"(express|fastify|koa|hapi)\"' package.json 2>/dev/null; then \
+    echo '[CMD] Service package detected - starting application'; \
+    exec node --enable-source-maps dist/index.js; \
+  else \
+    echo '[CMD] Library package detected - running keep-alive for healthcheck'; \
+    echo '[CMD] Package: '$(grep '\"name\"' package.json | head -1); \
+    echo '[CMD] Healthcheck will validate this container every 30s'; \
+    exec tail -f /dev/null; \
+  fi"]
 
 # ==================================================================================
 # Stage 7: Production Prep (Prepare artifacts for distroless)
