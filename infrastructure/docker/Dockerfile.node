@@ -13,11 +13,10 @@
 ARG NODE_VERSION=20.13.1
 FROM node:${NODE_VERSION}-bookworm-slim AS base
 
-# Enable Corepack for pnpm (built-in to Node 20+)
+# Install pnpm directly via npm to bypass corepack signature verification issues
 # Pin to pnpm@10.20.0 (matches packageManager in package.json)
-# Disable signature verification to avoid corepack keyid mismatch errors
-ENV COREPACK_ENABLE_STRICT=0
-RUN corepack enable && corepack prepare pnpm@10.20.0 --activate
+# Using npm install avoids corepack keyid mismatch errors that fail CI builds
+RUN npm install -g pnpm@10.20.0
 
 # Set working directory
 WORKDIR /app

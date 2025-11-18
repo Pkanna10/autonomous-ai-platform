@@ -58,16 +58,16 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Expected cache hit rate: 90% for code-only changes
 COPY services/python_agents/pyproject.toml services/python_agents/README.md ./
 
-# Proposal #3: Install Python dependencies with cache mount
-# Note: Using -e (editable install) for development, switch to pip install . for production
-# pyproject.toml (PEP 621) includes: langgraph>=0.2.0, anthropic>=0.68.0, pydantic>=2.0.0
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -e ".[dev]"
-
-# Proposal #10: Copy application code LAST (changes: daily)
-# Maximizes layer cache hits - code changes don't invalidate dependency layers
+# Copy source code before pip install (required for package installation)
+# For production builds, use regular install (not editable -e)
 COPY services/python_agents/src/ ./src/
 COPY services/python_agents/tests/ ./tests/
+
+# Proposal #3: Install Python dependencies and package with cache mount
+# Production build: pip install . (not -e editable) installs to site-packages
+# pyproject.toml (PEP 621) includes: langgraph>=0.2.0, anthropic>=0.68.0, pydantic>=2.0.0
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install ".[dev]"
 
 # Proposal #7: Pre-compile Python bytecode (15-30% faster startup)
 # Compiles .py → .pyc with optimization (-O flag)

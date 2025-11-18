@@ -8,7 +8,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_BASE: ghcr.io/${{ github.repository }}
+  # Use repository_owner (already lowercase) to avoid Docker registry case-sensitivity issues
+  IMAGE_BASE: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
 
 jobs:
   # Build Node.js services with BuildKit cache optimization
