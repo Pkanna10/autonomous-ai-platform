@@ -14,7 +14,8 @@ ARG NODE_VERSION=20.13.1
 FROM node:${NODE_VERSION}-bookworm-slim AS base
 
 # Enable Corepack for pnpm (built-in to Node 20+)
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# Pin to pnpm@10.20.0 (matches packageManager in package.json) to avoid signature verification issues
+RUN corepack enable && corepack prepare pnpm@10.20.0 --activate
 
 # Set working directory
 WORKDIR /app
