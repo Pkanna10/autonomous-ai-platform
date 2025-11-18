@@ -92,6 +92,9 @@ COPY --from=pruner /app/out/full/ .
 # For production: type checking happens in GitHub Actions before Docker build
 # RUN pnpm tsc --noEmit
 
+# Re-declare ARG for this stage (ARGs don't persist across stages)
+ARG PACKAGE_SCOPE=@autonomous-ai/agent-core
+
 # Build with Turborepo (uses cache for unchanged packages)
 # Note: No "..." suffix needed since packages have no interdependencies yet
 RUN pnpm turbo build --filter="${PACKAGE_SCOPE}"
@@ -149,6 +152,9 @@ FROM base AS production
 RUN groupadd --system --gid 1001 nodejs && \
     useradd --system --uid 1001 --gid nodejs nodejs
 
+# Re-declare ARG for this stage (ARGs don't persist across stages)
+ARG PACKAGE_SCOPE=@autonomous-ai/agent-core
+
 # Install only production dependencies (no devDependencies)
 COPY --from=pruner /app/out/pnpm-lock.yaml ./pnpm-lock.yaml
 COPY --from=pruner /app/out/pnpm-workspace.yaml ./pnpm-workspace.yaml
@@ -161,9 +167,12 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm install --frozen-lockfile --prod --ignore-scripts
 
 # Copy built artifacts from builder stage
-# Adjust path based on your package structure
-COPY --chown=nodejs:nodejs --from=builder /app/packages/agent-core/dist ./dist
-COPY --chown=nodejs:nodejs --from=builder /app/packages/agent-core/package.json ./package.json
+# Extract package name from scope (e.g., @autonomous-ai/agent-core → agent-core)
+RUN --mount=type=bind,from=builder,source=/app,target=/builder \
+    PACKAGE_NAME=$(echo "${PACKAGE_SCOPE}" | sed 's|^@[^/]*/||') && \
+    cp -r /builder/packages/${PACKAGE_NAME}/dist ./dist && \
+    cp /builder/packages/${PACKAGE_NAME}/package.json ./package.json && \
+    chown -R nodejs:nodejs ./dist ./package.json
 
 # Proposal #7: Copy healthcheck script
 COPY --chown=nodejs:nodejs infrastructure/docker/healthcheck.js ./healthcheck.js
@@ -191,7 +200,25 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
 CMD ["node", "--enable-source-maps", "dist/index.js"]
 
 # ==================================================================================
-# Stage 7: Production Distroless (Maximum Security)
+# Stage 7: Production Prep (Prepare artifacts for distroless)
+# ==================================================================================
+# Intermediate stage to prepare files for distroless (which has no shell)
+FROM base AS production-prep
+
+# Re-declare ARG for this stage
+ARG PACKAGE_SCOPE=@autonomous-ai/agent-core
+
+WORKDIR /output
+
+# Extract package name and copy artifacts
+RUN --mount=type=bind,from=builder,source=/app,target=/builder \
+    PACKAGE_NAME=$(echo "${PACKAGE_SCOPE}" | sed 's|^@[^/]*/||') && \
+    mkdir -p ./dist && \
+    cp -r /builder/packages/${PACKAGE_NAME}/dist/* ./dist/ && \
+    cp /builder/packages/${PACKAGE_NAME}/package.json ./package.json
+
+# ==================================================================================
+# Stage 8: Production Distroless (Maximum Security)
 # ==================================================================================
 # Proposal #10: Distroless for 93% fewer CVEs (0-2 CVEs vs 28-37 CVEs)
 # Uncomment to use distroless (no shell, maximum security)
@@ -199,10 +226,10 @@ FROM gcr.io/distroless/nodejs20-debian12 AS production-distroless
 
 WORKDIR /app
 
-# Copy production dependencies and built code
-COPY --from=builder --chown=nonroot:nonroot /app/packages/agent-core/dist ./dist
+# Copy production dependencies and built code from prep stage
+COPY --from=production-prep --chown=nonroot:nonroot /output/dist ./dist
 COPY --from=installer --chown=nonroot:nonroot /app/node_modules ./node_modules
-COPY --from=builder --chown=nonroot:nonroot /app/packages/agent-core/package.json ./package.json
+COPY --from=production-prep --chown=nonroot:nonroot /output/package.json ./package.json
 COPY --chown=nonroot:nonroot infrastructure/docker/healthcheck.js ./healthcheck.js
 
 # Environment variables
