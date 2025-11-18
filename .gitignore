@@ -54,6 +54,7 @@ coverage/
 *.lcov
 junit.xml
 .coverage
+coverage.xml
 htmlcov/
 
 # Cache directories
