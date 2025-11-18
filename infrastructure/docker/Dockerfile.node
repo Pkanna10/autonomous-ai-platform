@@ -118,6 +118,9 @@ RUN pnpm turbo build --filter="${PACKAGE_SCOPE}"
 # Proposal #8: Separate CI/CD target with all dev dependencies
 FROM installer AS development
 
+# Re-declare ARG for this stage
+ARG PACKAGE_SCOPE=@autonomous-ai/agent-core
+
 # Copy source code
 COPY --from=pruner /app/out/full/ .
 
@@ -126,7 +129,8 @@ ARG PORT=3000
 EXPOSE ${PORT}
 
 # Development command (with hot reload)
-CMD ["pnpm", "run", "dev"]
+# Dynamically filter for the correct package based on PACKAGE_SCOPE
+CMD sh -c "pnpm --filter \"${PACKAGE_SCOPE}\" dev"
 
 # ==================================================================================
 # Stage 5: Testing (CI/CD Target with Linting + Tests)
