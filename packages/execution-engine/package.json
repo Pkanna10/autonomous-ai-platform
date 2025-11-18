@@ -5,7 +5,9 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc --project tsconfig.build.json",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage"
