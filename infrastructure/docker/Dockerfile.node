@@ -72,9 +72,10 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 # Copy package.json files (LAYER 2 - from pruned output)
 COPY --from=pruner /app/out/json/ .
 
-# Install dependencies from cached store (LAYER 3 - offline, instant)
+# Install dependencies from cached store (LAYER 3)
+# Removed --offline to ensure packages can be downloaded if cache misses
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile --offline
+    pnpm install --frozen-lockfile
 
 # ==================================================================================
 # Stage 3: Builder (TypeScript Compilation with Type Safety + Speed)
@@ -150,8 +151,10 @@ COPY --from=pruner /app/out/pnpm-lock.yaml ./pnpm-lock.yaml
 COPY --from=pruner /app/out/pnpm-workspace.yaml ./pnpm-workspace.yaml
 COPY --from=pruner /app/out/json/ .
 
+# Removed --offline flag to allow downloading packages not in cache
+# Cache mount still provides significant speedup for cached packages
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile --prod --offline
+    pnpm install --frozen-lockfile --prod
 
 # Copy built artifacts from builder stage
 # Adjust path based on your package structure

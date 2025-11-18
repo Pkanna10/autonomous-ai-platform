@@ -287,9 +287,10 @@ jobs:
           category: 'trivy-python-${{ matrix.service.name }}'
 
       # Docker Scout integration for CVE scanning and PR comments
+      # Disabled: requires Docker Scout entitlement (paid plan)
       - name: Docker Scout CVE scan
         uses: docker/scout-action@v1
-        if: github.event_name != 'pull_request'
+        if: false # Disabled - requires Docker Scout entitlement
         with:
           command: cves
           image: ${{ env.IMAGE_BASE }}/${{ matrix.service.name }}@${{ steps.build.outputs.digest }}
@@ -299,7 +300,7 @@ jobs:
 
       - name: Docker Scout compare (PR only)
         uses: docker/scout-action@v1
-        if: github.event_name == 'pull_request'
+        if: false # Disabled - requires Docker Scout entitlement
         with:
           command: compare
           image: ${{ env.IMAGE_BASE }}/${{ matrix.service.name }}:pr-${{ github.event.pull_request.number }}
@@ -309,7 +310,7 @@ jobs:
 
       - name: Upload Scout results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
-        if: always() && github.event_name != 'pull_request'
+        if: false # Disabled - Docker Scout steps are disabled
         with:
           sarif_file: 'scout-results-${{ matrix.service.name }}.sarif'
           category: 'docker-scout-python-${{ matrix.service.name }}'
