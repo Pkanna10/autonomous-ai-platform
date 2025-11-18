@@ -120,16 +120,23 @@ FROM installer AS development
 
 # Re-declare ARG for this stage
 ARG PACKAGE_SCOPE=@autonomous-ai/agent-core
+ARG PORT=3000
+
+# Convert ARG to ENV for runtime availability (critical for CMD)
+# ARG variables are only available at build-time (during RUN instructions)
+# ENV variables persist in the image and are available at runtime (in CMD)
+ENV PACKAGE_SCOPE=${PACKAGE_SCOPE} \
+    PORT=${PORT}
 
 # Copy source code
 COPY --from=pruner /app/out/full/ .
 
-# Expose port (configurable via environment)
-ARG PORT=3000
+# Expose port (now uses ENV variable)
 EXPOSE ${PORT}
 
 # Development command (with hot reload)
 # Dynamically filter for the correct package based on PACKAGE_SCOPE
+# Shell form required for environment variable expansion
 CMD sh -c "pnpm --filter \"${PACKAGE_SCOPE}\" dev"
 
 # ==================================================================================
@@ -185,7 +192,9 @@ COPY --chown=nodejs:nodejs infrastructure/docker/healthcheck.js ./healthcheck.js
 # (Already included in dist/ from build step)
 
 # Set production environment
-ENV NODE_ENV=production \
+# Convert ARG to ENV for runtime logging/debugging (best practice)
+ENV PACKAGE_SCOPE=${PACKAGE_SCOPE} \
+    NODE_ENV=production \
     PORT=3000
 
 # Proposal #6: Switch to non-root user (security hardening)
@@ -228,6 +237,9 @@ RUN --mount=type=bind,from=builder,source=/app,target=/builder \
 # Uncomment to use distroless (no shell, maximum security)
 FROM gcr.io/distroless/nodejs20-debian12 AS production-distroless
 
+# Re-declare ARG for this stage
+ARG PACKAGE_SCOPE=@autonomous-ai/agent-core
+
 WORKDIR /app
 
 # Copy production dependencies and built code from prep stage
@@ -237,7 +249,9 @@ COPY --from=production-prep --chown=nonroot:nonroot /output/package.json ./packa
 COPY --chown=nonroot:nonroot infrastructure/docker/healthcheck.js ./healthcheck.js
 
 # Environment variables
-ENV NODE_ENV=production \
+# Convert ARG to ENV for runtime logging/debugging (best practice)
+ENV PACKAGE_SCOPE=${PACKAGE_SCOPE} \
+    NODE_ENV=production \
     PORT=3000
 
 # Distroless images run as non-root by default (user: nonroot)
