@@ -2,6 +2,8 @@ import typescriptEslint from '@typescript-eslint/eslint-plugin';
 import typescriptParser from '@typescript-eslint/parser';
 import prettier from 'eslint-plugin-prettier';
 import prettierConfig from 'eslint-config-prettier';
+import simpleImportSort from 'eslint-plugin-simple-import-sort';
+import eslintPluginImport from 'eslint-plugin-import';
 
 export default [
   // Ignore patterns
@@ -28,6 +30,10 @@ export default [
       '**/.tox/**',
       '**/.pytest_cache/**',
       '**/__pycache__/**',
+      '**/.cache/**', // UV package manager cache
+      '**/htmlcov/**', // Python coverage HTML reports
+      // Infrastructure scripts (standalone utilities for Docker)
+      'infrastructure/docker/**/*.js',
     ],
   },
 
@@ -39,7 +45,7 @@ export default [
       sourceType: 'module',
       parser: typescriptParser,
       parserOptions: {
-        project: ['./tsconfig.json', './packages/*/tsconfig.json'],
+        projectService: true,
         tsconfigRootDir: import.meta.dirname,
       },
       globals: {
@@ -56,6 +62,8 @@ export default [
     plugins: {
       '@typescript-eslint': typescriptEslint,
       prettier: prettier,
+      'simple-import-sort': simpleImportSort,
+      import: eslintPluginImport,
     },
     rules: {
       // ========================================
@@ -162,6 +170,87 @@ export default [
       'prettier/prettier': 'error',
 
       ...prettierConfig.rules,
+
+      // ========================================
+      // Import Sorting (eslint-plugin-simple-import-sort)
+      // ========================================
+      'simple-import-sort/imports': [
+        'error',
+        {
+          groups: [
+            // Side effect imports (polyfills, global styles)
+            ['^\\u0000'],
+
+            // Node.js built-ins with node: prefix
+            ['^node:'],
+
+            // External packages (npm/pnpm)
+            ['^@?\\w'],
+
+            // Internal monorepo packages (@autonomous-ai/*)
+            ['^@autonomous-ai/'],
+
+            // Parent imports (../)
+            ['^\\.\\.(?!/?$)', '^\\.\\./?$'],
+
+            // Sibling imports (./)
+            ['^\\./(?=.*/)(?!/?$)', '^\\.(?!/?$)', '^\\./?$'],
+
+            // Style imports (CSS/SCSS)
+            ['^.+\\.s?css$'],
+          ],
+        },
+      ],
+      'simple-import-sort/exports': 'error',
+
+      // Disable conflicting rules
+      'sort-imports': 'off',
+
+      // ========================================
+      // Import Hygiene (eslint-plugin-import)
+      // ========================================
+      'import/first': 'error',
+      'import/newline-after-import': 'error',
+      'import/no-duplicates': 'error',
+    },
+  },
+
+  // Override for test files - disable type-aware rules
+  // Test files are excluded from tsconfig to prevent compilation but still need linting
+  {
+    files: ['**/*.test.ts', '**/*.spec.ts'],
+    languageOptions: {
+      parser: typescriptParser,
+      parserOptions: {
+        // Explicitly disable projectService for test files
+        projectService: false,
+        project: null,
+        ecmaVersion: 2022,
+        sourceType: 'module',
+      },
+    },
+    rules: {
+      // Disable ALL type-aware rules for test files (require type information)
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
+      '@typescript-eslint/no-unsafe-return': 'off',
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/strict-boolean-expressions': 'off',
+      '@typescript-eslint/no-unnecessary-condition': 'off',
+      '@typescript-eslint/no-unnecessary-type-assertion': 'off',
+      '@typescript-eslint/prefer-nullish-coalescing': 'off',
+      '@typescript-eslint/prefer-optional-chain': 'off',
+      '@typescript-eslint/no-floating-promises': 'off',
+      '@typescript-eslint/await-thenable': 'off',
+      '@typescript-eslint/no-misused-promises': 'off',
+      '@typescript-eslint/promise-function-async': 'off',
+      '@typescript-eslint/prefer-readonly': 'off',
+      '@typescript-eslint/naming-convention': 'off',
+      // Keep basic syntax rules enabled (don't require type info)
+      '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/explicit-function-return-type': 'off', // Too strict for tests
+      '@typescript-eslint/explicit-module-boundary-types': 'off', // Too strict for tests
     },
   },
 ];

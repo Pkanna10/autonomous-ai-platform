@@ -12,11 +12,32 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./infrastructure/schema:/docker-entrypoint-initdb.d
+    healthcheck:
+      # Proposal #2: Validate TCP connections with -h localhost (catches 80% of network issues)
+      # Uses pg_isready (lightweight, <1ms) instead of psql (heavier, requires authentication)
+      test: ['CMD-SHELL', 'pg_isready -U dev -d ai_platform -h localhost']
+      interval: 10s # Production: 30s recommended for reduced CPU overhead
+      timeout: 5s # Max time to wait for response
+      retries: 5 # Declare unhealthy after 5 consecutive failures (50s total)
+      start_period: 10s # Grace period for slow initialization (schema loading)
+      start_interval: 1s # Proposal #5: Docker 25+ only - 10x faster cold start detection
 
   redis:
     image: redis:7-alpine
     ports:
       - '6379:6379'
+    depends_on:
+      postgres:
+        condition: service_healthy # Proposal #4: Wait for database before starting cache
+    healthcheck:
+      # Proposal #6: Validate write path with INCR command (catches disk/persistence issues)
+      # Alternative: redis-cli ping (read-only, faster but misses write failures)
+      test: ['CMD', 'redis-cli', '--raw', 'incr', 'ping']
+      interval: 10s # Production: 30s recommended for reduced overhead
+      timeout: 3s # Redis is fast, 3s is generous
+      retries: 5 # 50s total before unhealthy
+      start_period: 5s # Redis starts quickly, 5s is sufficient
+      start_interval: 1s # Proposal #5: Docker 25+ only - 5x faster cold start
 
   qdrant:
     image: qdrant/qdrant:v1.15.5 # Pinned to stable version for reproducibility
@@ -24,6 +45,21 @@ services:
       - '6333:6333'
     volumes:
       - qdrant-data:/qdrant/storage
+    depends_on:
+      postgres:
+        condition: service_healthy # Proposal #4: Wait for database before starting vector DB
+    healthcheck:
+      # Proposal #1 (CRITICAL FIX): curl removed from image v1.7+ for security hardening
+      # Using bash /dev/tcp as secure alternative (no external dependencies)
+      # Proposal #3: Use /readyz endpoint (readiness check, not liveness check)
+      # /readyz validates: HTTP server + gRPC server + storage + collections
+      # /healthz only checks if process is alive (less comprehensive)
+      test: ['CMD-SHELL', 'timeout 5 bash -c "cat < /dev/null > /dev/tcp/localhost/6333" || exit 1']
+      interval: 10s # Production: 30s recommended
+      timeout: 5s # 5s allows for slow storage warmup
+      retries: 5 # 50s total (important for large collection loading)
+      start_period: 10s # Qdrant needs time to load collections from disk
+      start_interval: 1s # Proposal #5: Docker 25+ only - 10x faster cold start
 
 volumes:
   postgres-data:

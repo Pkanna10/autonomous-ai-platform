@@ -38,6 +38,9 @@ dist/
 build/
 *.tsbuildinfo
 
+# ESLint cache
+.eslintcache
+
 # Logs
 *.log
 npm-debug.log*
@@ -51,6 +54,7 @@ coverage/
 *.lcov
 junit.xml
 .coverage
+coverage.xml
 htmlcov/
 
 # Cache directories
