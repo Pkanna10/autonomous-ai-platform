@@ -286,6 +286,9 @@ omit = [
     "*/tests/*",
     "*/test_*.py",
     "*/__init__.py",
+    # Phase 1, Week 7-8 placeholders (not yet implemented)
+    "*/research/arxiv_monitor.py",
+    "*/research/pdf_parser.py",
 ]
 
 [tool.coverage.report]

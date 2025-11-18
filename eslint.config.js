@@ -31,6 +31,7 @@ export default [
       '**/.pytest_cache/**',
       '**/__pycache__/**',
       '**/.cache/**', // UV package manager cache
+      '**/htmlcov/**', // Python coverage HTML reports
       // Infrastructure scripts (standalone utilities for Docker)
       'infrastructure/docker/**/*.js',
     ],
