@@ -279,12 +279,15 @@ jobs:
           ignore-unfixed: true
           timeout: 10m
 
-      - name: Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        if: github.event_name != 'pull_request'
-        with:
-          sarif_file: 'trivy-results-${{ matrix.service.name }}.sarif'
-          category: 'trivy-python-${{ matrix.service.name }}'
+      # Upload Trivy results to GitHub Security
+      # Disabled: Requires security-events write permission which causes integration errors
+      # Trivy scan results are still available in the job summary and logs
+      # - name: Upload Trivy results to GitHub Security
+      #   uses: github/codeql-action/upload-sarif@v3
+      #   if: github.event_name != 'pull_request'
+      #   with:
+      #     sarif_file: 'trivy-results-${{ matrix.service.name }}.sarif'
+      #     category: 'trivy-python-${{ matrix.service.name }}'
 
       # Docker Scout integration for CVE scanning and PR comments
       # Disabled: requires Docker Scout entitlement (paid plan)
@@ -373,12 +376,15 @@ jobs:
           output: 'trivy-results-${{ matrix.service }}.sarif'
           severity: 'CRITICAL,HIGH'
 
-      - name: Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: 'trivy-results-${{ matrix.service }}.sarif'
-          category: 'docker-${{ matrix.service }}'
+      # Upload Trivy results to GitHub Security
+      # Disabled: Requires security-events write permission which causes integration errors
+      # Trivy scan results are still available in the job summary and logs
+      # - name: Upload Trivy results to GitHub Security
+      #   uses: github/codeql-action/upload-sarif@v3
+      #   if: always()
+      #   with:
+      #     sarif_file: 'trivy-results-${{ matrix.service }}.sarif'
+      #     category: 'docker-${{ matrix.service }}'
 
       - name: Generate vulnerability summary
         if: always()
