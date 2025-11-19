@@ -264,6 +264,8 @@ addopts = [
     "--strict-config",
     "-ra",                      # Show all test summary info
     "-q",                       # Quiet mode
+    # Parallel execution (CI optimization: use all cores)
+    "-n=auto",                  # Automatically detect CPU count and parallelize
     # Coverage flags (Proposal #10: Enforce 90% minimum)
     "--cov=autonomous_ai_agents",
     "--cov-report=term-missing:skip-covered",

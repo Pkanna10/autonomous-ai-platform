@@ -62,6 +62,16 @@ export const sharedConfig = defineConfig({
     // Parallel execution for faster test runs
     pool: 'threads',
 
+    // Thread pool optimization (CI: use all cores, Local: half cores)
+    poolOptions: {
+      threads: {
+        // CI: Use all available cores for maximum parallelization
+        // Local: Use half cores to avoid system slowdown
+        maxThreads: process.env.CI ? undefined : Math.max(1, Math.floor(require('os').cpus().length / 2)),
+        minThreads: process.env.CI ? 1 : Math.max(1, Math.floor(require('os').cpus().length / 4)),
+      },
+    },
+
     // Disable watch mode by default (enable manually with --watch)
     watch: false,
 
