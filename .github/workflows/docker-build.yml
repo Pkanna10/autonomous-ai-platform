@@ -13,8 +13,8 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  # Use repository_owner (already lowercase) to avoid Docker registry case-sensitivity issues
-  IMAGE_BASE: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
+  # Docker registry references MUST be lowercase - using hardcoded lowercase owner
+  IMAGE_BASE: ghcr.io/pkanna10/autonomous-ai-platform
 
 jobs:
   # Build Node.js services with BuildKit cache optimization

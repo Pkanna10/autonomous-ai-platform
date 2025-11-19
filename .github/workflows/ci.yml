@@ -15,6 +15,9 @@ jobs:
   detect-changes:
     name: Detect Changes
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      pull-requests: read  # Required for paths-filter to access PR information
     outputs:
       typescript: ${{ steps.filter.outputs.typescript }}
       python: ${{ steps.filter.outputs.python }}
