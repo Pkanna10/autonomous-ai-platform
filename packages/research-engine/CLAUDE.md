@@ -1,8 +1,27 @@
 # Research Engine Package - Claude Code Configuration
 
-**Package:** `@autonomous-ai/research-engine` **Primary Language:** Python 3.11+
-**Testing:** pytest **Key Libraries:** PyMuPDF, requests, SQLAlchemy,
-sentence-transformers
+**Package:** `@autonomous-ai/research-engine` **Version:** 3.0.0 **Primary
+Language:** Python 3.11+ **Testing:** pytest **Key Libraries:** PyMuPDF,
+requests, SQLAlchemy, sentence-transformers
+
+---
+
+## 📚 Advanced Prompting Techniques
+
+**IMPORTANT:** This file contains package-specific patterns. For advanced
+prompting techniques, see root `CLAUDE.md`:
+
+- **Meta-Cognitive Thinking** - Use `<thinking>` tags before complex tasks
+- **Meta-Prompting** - Decompose complex tasks (+30% improvement)
+- **Graph of Thoughts** - Non-linear reasoning for complex problems (+62%)
+- **26 Principled Instructions** - Evidence-based quality patterns (+57.7%)
+- **Constitutional AI** - Multi-round critique for code quality (95%+
+  vulnerability block)
+- **XML-Structured Prompting** - Use standard tags for clarity (40%+
+  performance)
+- **Chain of Density** - **Especially useful for summarizing research papers!**
+
+**Apply these patterns when working in this package.**
 
 ---
 
@@ -420,4 +439,12 @@ scheduler.add_job(daily_arxiv_monitor, 'cron', hour=6)
 
 ---
 
-**Last Updated:** 2025-11-19
+**Version:** 3.0.0 **Last Updated:** 2025-11-19
+
+**Changelog:**
+
+- **3.0.0 (2025-11-19):** Added advanced prompting technique references
+  (Meta-Cognitive, Meta-Prompting, GoT, Constitutional AI, XML structuring,
+  Chain of Density - especially useful for research paper summarization)
+- **2.0.0 (2025-11-19):** Initial hierarchical structure implementation with
+  Python/pytest/PyMuPDF/arXiv patterns

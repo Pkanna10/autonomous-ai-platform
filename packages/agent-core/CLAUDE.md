@@ -1,7 +1,26 @@
 # Agent Core Package - Claude Code Configuration
 
-**Package:** `@autonomous-ai/agent-core` **Primary Language:** TypeScript 5.9+
-**Runtime:** Node.js 20+ **Testing:** Vitest
+**Package:** `@autonomous-ai/agent-core` **Version:** 3.0.0 **Primary
+Language:** TypeScript 5.9+ **Runtime:** Node.js 20+ **Testing:** Vitest
+
+---
+
+## 📚 Advanced Prompting Techniques
+
+**IMPORTANT:** This file contains package-specific patterns. For advanced
+prompting techniques, see root `CLAUDE.md`:
+
+- **Meta-Cognitive Thinking** - Use `<thinking>` tags before complex tasks
+- **Meta-Prompting** - Decompose complex tasks (+30% improvement)
+- **Graph of Thoughts** - Non-linear reasoning for complex problems (+62%)
+- **26 Principled Instructions** - Evidence-based quality patterns (+57.7%)
+- **Constitutional AI** - Multi-round critique for code quality (95%+
+  vulnerability block)
+- **XML-Structured Prompting** - Use standard tags for clarity (40%+
+  performance)
+- **Chain of Density** - Optimal summarization technique
+
+**Apply these patterns when working in this package.**
 
 ---
 
@@ -377,4 +396,12 @@ for (const pkg of packages) {
 
 ---
 
-**Last Updated:** 2025-11-19
+**Version:** 3.0.0 **Last Updated:** 2025-11-19
+
+**Changelog:**
+
+- **3.0.0 (2025-11-19):** Added advanced prompting technique references
+  (Meta-Cognitive, Meta-Prompting, GoT, Constitutional AI, XML structuring,
+  Chain of Density)
+- **2.0.0 (2025-11-19):** Initial hierarchical structure implementation with
+  TypeScript/Vitest/LangGraph patterns

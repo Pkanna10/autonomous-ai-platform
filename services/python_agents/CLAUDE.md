@@ -1,8 +1,30 @@
 # Python Agents Service - Claude Code Configuration
 
-**Service:** `python_agents` **Primary Language:** Python 3.11+ **Framework:**
-LangGraph 0.2.x **Testing:** pytest **Key Libraries:** langgraph, langchain,
-anthropic
+**Service:** `python_agents` **Version:** 3.0.0 **Primary Language:** Python
+3.11+ **Framework:** LangGraph 0.2.x **Testing:** pytest **Key Libraries:**
+langgraph, langchain, anthropic
+
+---
+
+## 📚 Advanced Prompting Techniques
+
+**IMPORTANT:** This file contains service-specific patterns. For advanced
+prompting techniques, see root `CLAUDE.md`:
+
+- **Meta-Cognitive Thinking** - Use `<thinking>` tags before complex tasks
+- **Meta-Prompting** - Decompose complex tasks (+30% improvement) - **Perfect
+  for agent orchestration!**
+- **Graph of Thoughts** - Non-linear reasoning for complex problems (+62%) -
+  **Ideal for LangGraph state machines!**
+- **26 Principled Instructions** - Evidence-based quality patterns (+57.7%)
+- **Constitutional AI** - Multi-round critique for code quality (95%+
+  vulnerability block)
+- **XML-Structured Prompting** - Use standard tags for clarity (40%+
+  performance)
+- **Chain of Density** - Optimal summarization technique
+
+**Apply these patterns when designing agent workflows and LangGraph state
+machines.**
 
 ---
 
@@ -516,4 +538,12 @@ graph.add_edge("fetch_papers", "combine_results")
 
 ---
 
-**Last Updated:** 2025-11-19
+**Version:** 3.0.0 **Last Updated:** 2025-11-19
+
+**Changelog:**
+
+- **3.0.0 (2025-11-19):** Added advanced prompting technique references
+  (Meta-Cognitive, Meta-Prompting for agent orchestration, GoT for LangGraph
+  state machines, Constitutional AI, XML structuring, Chain of Density)
+- **2.0.0 (2025-11-19):** Initial hierarchical structure implementation with
+  Python/LangGraph/pytest/async patterns
