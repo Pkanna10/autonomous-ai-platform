@@ -68,6 +68,7 @@ describe('ClaudeClient', () => {
         maxTokens: 2048,
         temperature: 0.7,
         systemPrompt: 'You are a helpful assistant.',
+        enablePromptCaching: false, // Disable caching for simpler test assertions
       };
       const mockResponse = {
         id: 'msg_456',

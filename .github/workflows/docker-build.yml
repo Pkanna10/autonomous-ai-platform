@@ -94,13 +94,11 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Hybrid cache: GHA + Registry for better hit rates
+          # Cache strategy: GHA only for PRs, GHA + Registry for pushes (avoids 403 auth errors in PRs)
           cache-from: |
             type=gha,scope=node-${{ matrix.service.name }}
-            type=registry,ref=${{ env.IMAGE_BASE }}/${{ matrix.service.name }}:buildcache
-          cache-to: |
-            type=gha,mode=max,scope=node-${{ matrix.service.name }}
-            type=registry,ref=${{ env.IMAGE_BASE }}/${{ matrix.service.name }}:buildcache,mode=max,image-manifest=true
+            ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}/{1}:buildcache', env.IMAGE_BASE, matrix.service.name) || '' }}
+          cache-to: type=gha,mode=max,scope=node-${{ matrix.service.name }}
           provenance: true
           sbom: true
 
@@ -129,12 +127,11 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}-distroless
           labels: ${{ steps.meta.outputs.labels }}
+          # Cache strategy: GHA only for PRs, GHA + Registry for pushes (avoids 403 auth errors in PRs)
           cache-from: |
             type=gha,scope=node-distroless-${{ matrix.service.name }}
-            type=registry,ref=${{ env.IMAGE_BASE }}/${{ matrix.service.name }}:buildcache-distroless
-          cache-to: |
-            type=gha,mode=max,scope=node-distroless-${{ matrix.service.name }}
-            type=registry,ref=${{ env.IMAGE_BASE }}/${{ matrix.service.name }}:buildcache-distroless,mode=max,image-manifest=true
+            ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}/{1}:buildcache-distroless', env.IMAGE_BASE, matrix.service.name) || '' }}
+          cache-to: type=gha,mode=max,scope=node-distroless-${{ matrix.service.name }}
 
   # Test Docker images (run healthchecks and basic smoke tests)
   test-docker:
@@ -302,13 +299,11 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Hybrid cache strategy for 95-98% hit rate
+          # Cache strategy: GHA only for PRs, GHA + Registry for pushes (avoids 403 auth errors in PRs)
           cache-from: |
             type=gha,scope=${{ github.workflow }}-${{ matrix.service.name }}
-            type=registry,ref=${{ env.IMAGE_BASE }}/${{ matrix.service.name }}:buildcache
-          cache-to: |
-            type=gha,mode=max,scope=${{ github.workflow }}-${{ matrix.service.name }}
-            type=registry,ref=${{ env.IMAGE_BASE }}/${{ matrix.service.name }}:buildcache,mode=max,image-manifest=true
+            ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}/{1}:buildcache', env.IMAGE_BASE, matrix.service.name) || '' }}
+          cache-to: type=gha,mode=max,scope=${{ github.workflow }}-${{ matrix.service.name }}
           provenance: mode=max
           sbom: true
 

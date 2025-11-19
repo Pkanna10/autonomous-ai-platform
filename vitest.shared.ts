@@ -1,3 +1,4 @@
+import os from 'node:os';
 import path from 'path';
 import { defineConfig } from 'vitest/config';
 
@@ -60,15 +61,15 @@ export const sharedConfig = defineConfig({
     },
 
     // Parallel execution for faster test runs
+    // CI: Use all available cores for maximum parallelization
+    // Local: Use half cores to avoid system slowdown
     pool: 'threads',
-
-    // Thread pool optimization (CI: use all cores, Local: half cores)
     poolOptions: {
       threads: {
-        // CI: Use all available cores for maximum parallelization
-        // Local: Use half cores to avoid system slowdown
-        maxThreads: process.env.CI ? undefined : Math.max(1, Math.floor(require('os').cpus().length / 2)),
-        minThreads: process.env.CI ? 1 : Math.max(1, Math.floor(require('os').cpus().length / 4)),
+        maxThreads:
+          process.env['CI'] != null ? undefined : Math.max(1, Math.floor(os.cpus().length / 2)),
+        minThreads:
+          process.env['CI'] != null ? 1 : Math.max(1, Math.floor(os.cpus().length / 4)),
       },
     },
 
