@@ -104,9 +104,9 @@ research = [
 # ============================================
 # Phase 2, Week 10-14: Code Generation (ts-morph integration)
 # ============================================
+# Note: Black removed, Ruff format is used instead (30x faster, 100% compatible)
 codegen = [
-    "black>=24.0.0",                    # Python code formatter
-    "isort>=5.13.0",                    # Import sorting
+    "isort>=5.13.0",                    # Import sorting (may be deprecated for Ruff in future)
 ]
 
 # ============================================
@@ -264,6 +264,8 @@ addopts = [
     "--strict-config",
     "-ra",                      # Show all test summary info
     "-q",                       # Quiet mode
+    # Parallel execution (CI optimization: use all cores)
+    "-n=auto",                  # Automatically detect CPU count and parallelize
     # Coverage flags (Proposal #10: Enforce 90% minimum)
     "--cov=autonomous_ai_agents",
     "--cov-report=term-missing:skip-covered",

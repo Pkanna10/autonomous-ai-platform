@@ -9,9 +9,13 @@ on:
     - cron: '0 9 * * 1'
   workflow_dispatch: # Allow manual trigger
 
+# Concurrency: Cancel in-progress runs for PR branches, keep all runs for main
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
+
 jobs:
   # OSV-Scanner - Google's free vulnerability scanner (reusable workflow)
-  # Note: SARIF upload disabled for private repo (requires paid GHAS)
   osv-scanner:
     name: OSV Vulnerability Scan
     permissions:
@@ -30,7 +34,7 @@ jobs:
   # OSV-Scanner with custom reporting (enhanced visibility for private repos)
   osv-scanner-summary:
     name: OSV Scanner Report
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     permissions:
       contents: read
 
@@ -71,12 +75,13 @@ jobs:
         with:
           name: osv-scanner-results
           path: osv-results.json
-          retention-days: 30
+          retention-days: 14
+          compression-level: 6
 
-  # npm audit (built-in, free)
+  # npm audit with optimized configuration
   npm-audit:
     name: npm Audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout code
@@ -131,12 +136,13 @@ jobs:
         with:
           name: npm-audit-results
           path: npm-audit.json
-          retention-days: 30
+          retention-days: 14
+          compression-level: 6
 
   # License compliance check
   license-check:
     name: License Compliance
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout code
@@ -166,4 +172,5 @@ jobs:
         with:
           name: license-report
           path: licenses.json
-          retention-days: 90
+          retention-days: 30
+          compression-level: 6

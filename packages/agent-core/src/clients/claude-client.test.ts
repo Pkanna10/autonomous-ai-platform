@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/naming-convention -- Required for test environment variable setup using bracket notation */
 import type Anthropic from '@anthropic-ai/sdk';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -68,6 +67,7 @@ describe('ClaudeClient', () => {
         maxTokens: 2048,
         temperature: 0.7,
         systemPrompt: 'You are a helpful assistant.',
+        enablePromptCaching: false, // Disable caching for simpler test assertions
       };
       const mockResponse = {
         id: 'msg_456',

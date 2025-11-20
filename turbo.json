@@ -3,22 +3,50 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
+      "inputs": [
+        "src/**",
+        "tsconfig*.json",
+        "package.json",
+        "vitest.config.ts"
+      ],
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**", ".swc-buildinfo"],
+      "cache": true,
+      "env": ["NODE_ENV"]
     },
     "test": {
       "dependsOn": ["build"],
+      "inputs": ["src/**", "tests/**", "vitest.config.ts", "tsconfig*.json"],
+      "outputs": ["coverage/**"],
+      "cache": false,
+      "env": ["CI", "NODE_ENV"]
+    },
+    "test:coverage": {
+      "dependsOn": ["build"],
+      "inputs": ["src/**", "tests/**", "vitest.config.ts", "tsconfig*.json"],
       "outputs": ["coverage/**"],
       "cache": false
     },
     "lint": {
-      "outputs": []
+      "inputs": ["src/**", "tests/**", ".eslintrc.cjs", "package.json"],
+      "outputs": [],
+      "cache": true
     },
     "typecheck": {
-      "outputs": []
+      "inputs": ["src/**", "tests/**", "tsconfig*.json", "package.json"],
+      "outputs": [],
+      "cache": true
+    },
+    "format:check": {
+      "inputs": ["src/**", "tests/**", ".prettierrc", "package.json"],
+      "outputs": [],
+      "cache": true
     },
     "dev": {
       "cache": false,
       "persistent": true
     }
-  }
+  },
+  "globalEnv": ["ANTHROPIC_API_KEY", "DATABASE_URL", "REDIS_URL", "QDRANT_URL"],
+  "globalDependencies": [".env", ".env.local"],
+  "globalPassThroughEnv": ["NODE_ENV", "CI"]
 }
