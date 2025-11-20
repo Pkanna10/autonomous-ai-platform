@@ -3,7 +3,12 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "inputs": ["src/**", "tsconfig*.json", "package.json", "vitest.config.ts"],
+      "inputs": [
+        "src/**",
+        "tsconfig*.json",
+        "package.json",
+        "vitest.config.ts"
+      ],
       "outputs": ["dist/**", ".next/**", "!.next/cache/**", ".swc-buildinfo"],
       "cache": true,
       "env": ["NODE_ENV"]

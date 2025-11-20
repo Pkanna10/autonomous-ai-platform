@@ -161,8 +161,28 @@ jobs:
       - name: Lint
         run: pnpm lint
 
-      - name: Format check
-        run: pnpm format:check
+      - name: Format check (with auto-fix attempt)
+        id: format-check
+        run: |
+          # Step 1: Check formatting
+          if pnpm format:check; then
+            echo "✅ All files properly formatted"
+            exit 0
+          fi
+
+          # Step 2: Formatting issues found, attempt auto-fix
+          echo "⚠️ Formatting issues found, attempting auto-fix..."
+          pnpm format
+
+          # Step 3: Re-check after auto-fix
+          if pnpm format:check; then
+            echo "✅ Auto-fix successful, but changes were made"
+            echo "⚠️ This indicates formatting issues in committed code"
+            exit 1
+          else
+            echo "❌ Auto-fix failed, manual intervention required"
+            exit 1
+          fi
 
   test:
     name: Run Tests
@@ -247,7 +267,7 @@ jobs:
 
       - name: Install dependencies with uv sync
         run: |
-          uv sync --frozen
+          uv sync --frozen --extra dev
 
       - name: Lint with Ruff
         run: uv run ruff check .
