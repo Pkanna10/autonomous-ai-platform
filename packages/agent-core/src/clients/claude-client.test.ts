@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/naming-convention -- Required for test environment variable setup using bracket notation */
 import type Anthropic from '@anthropic-ai/sdk';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 

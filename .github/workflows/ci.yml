@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: read
-      pull-requests: read  # Required for paths-filter to access PR information
+      pull-requests: read # Required for paths-filter to access PR information
     outputs:
       typescript: ${{ steps.filter.outputs.typescript }}
       python: ${{ steps.filter.outputs.python }}
@@ -250,22 +250,22 @@ jobs:
           uv sync --frozen
 
       - name: Lint with Ruff
-        run: ruff check .
+        run: uv run ruff check .
 
-      - name: Format check with Black
-        run: black --check .
+      - name: Format check with Ruff
+        run: uv run ruff format --check .
 
       - name: Type check with Mypy
         run: |
           if find . -name "*.py" -type f | grep -q .; then
-            mypy .
+            uv run mypy .
           else
             echo "No Python files found, skipping mypy"
           fi
         continue-on-error: true
 
       - name: Run tests with parallelization
-        run: pytest -n auto --cov --cov-report=xml --cov-report=term
+        run: uv run pytest -n auto --cov --cov-report=xml --cov-report=term
         if: hashFiles('services/python_agents/tests/**/*.py') != ''
 
   # Dependency security scan (optimized)
