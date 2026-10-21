@@ -108,7 +108,10 @@ graph without a checkpointer cannot resume.
   `BaselineRunner` and `Repository` protocols with stub and in-memory
   implementations.
 - `infrastructure/schema/003_engine.sql`: 8 new tables, 3 extended, idempotent;
-  verified by the new `schema-apply` CI job.
+  verified by two CI jobs: `schema-apply` (psql, idempotence diff) and
+  `compose-init`, which runs `docker compose up postgres` on an empty volume
+  exactly as a developer does and asserts a clean init log and 14 tables, so the
+  manual Docker check is no longer needed.
 - Tests: 560 passing, 100% coverage of 1,431 statements; mypy strict on `src`
   and `tests`; the stage gate now type-checks tests too.
 

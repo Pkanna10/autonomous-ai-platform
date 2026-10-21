@@ -267,6 +267,8 @@ docker compose -f docker-compose.dev.yml up -d postgres
 docker compose -f docker-compose.dev.yml logs postgres | grep -i error
 ```
 
+CI runs this same init on every push (`Compose Init (Postgres)` job).
+
 **Port conflicts** (5432, 6379, 6333): `lsof -i :5432`, then stop the
 conflicting service or change the port in `docker-compose.dev.yml`.
 
