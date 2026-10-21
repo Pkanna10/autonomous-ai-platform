@@ -45,6 +45,12 @@ def test_settings_uses_defaults_when_not_provided(
         "DATABASE_URL",
         "ENGINE_MODEL",
         "TRIAGE_MODEL",
+        "MIN_RUNS",
+        "NOISE_MULTIPLIER",
+        "MIN_RELATIVE_GAIN",
+        "MAX_TRIAL_ROUNDS",
+        "MAX_COST_USD",
+        "TRIAL_BRANCH_PREFIX",
     ]:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-456")
@@ -61,6 +67,59 @@ def test_settings_uses_defaults_when_not_provided(
     assert settings.TIMEOUT_SECONDS == 30
     assert settings.ENGINE_MODEL == "claude-opus-5-5"
     assert settings.TRIAGE_MODEL == "claude-haiku-5-5"
+
+
+def test_settings_engine_knobs_have_safe_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Should expose the engine's measurement and budget knobs with defaults.
+
+    GIVEN no engine knob env vars
+    WHEN creating Settings instance
+    THEN the anti-cheating and budget defaults from the Step 1 design apply
+    """
+    # ARRANGE
+    for key in [
+        "MIN_RUNS",
+        "NOISE_MULTIPLIER",
+        "MIN_RELATIVE_GAIN",
+        "MAX_TRIAL_ROUNDS",
+        "MAX_COST_USD",
+        "TRIAL_BRANCH_PREFIX",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+    # ACT
+    settings = Settings()
+
+    # ASSERT
+    assert settings.MIN_RUNS == 5
+    assert settings.NOISE_MULTIPLIER == 2.0
+    assert settings.MIN_RELATIVE_GAIN == 0.02
+    assert settings.MAX_TRIAL_ROUNDS == 3
+    assert settings.MAX_COST_USD == 5.0
+    assert settings.TRIAL_BRANCH_PREFIX == "engine/"
+
+
+def test_settings_engine_knobs_can_be_overridden(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Should read engine knobs from the environment.
+
+    GIVEN MIN_RUNS and MAX_COST_USD set in the environment
+    WHEN creating Settings instance
+    THEN the environment values win
+    """
+    # ARRANGE
+    monkeypatch.setenv("MIN_RUNS", "7")
+    monkeypatch.setenv("MAX_COST_USD", "12.5")
+
+    # ACT
+    settings = Settings()
+
+    # ASSERT
+    assert settings.MIN_RUNS == 7
+    assert settings.MAX_COST_USD == 12.5
 
 
 def test_settings_model_ids_can_be_overridden(

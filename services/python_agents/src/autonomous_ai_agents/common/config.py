@@ -38,6 +38,27 @@ class Settings(BaseSettings):
     """Cheap model for high-volume work such as daily paper triage."""
 
     # ============================================
+    # Engine: measurement rigour and budget
+    # ============================================
+    MIN_RUNS: int = 5
+    """Minimum timed runs per measurement (baseline and every trial)."""
+
+    NOISE_MULTIPLIER: float = 2.0
+    """A gain must exceed this many standard deviations of the noisier side."""
+
+    MIN_RELATIVE_GAIN: float = 0.02
+    """Smallest relative gain worth keeping, as a fraction of the baseline."""
+
+    MAX_TRIAL_ROUNDS: int = 3
+    """Hypothesis -> trial rounds before the engine gives up on a workload."""
+
+    MAX_COST_USD: float = 5.0
+    """Hard cap on Claude API spend per engine run."""
+
+    TRIAL_BRANCH_PREFIX: str = "engine/"
+    """Prefix for trial and delivery branches; the default branch is never touched."""
+
+    # ============================================
     # Database
     # ============================================
     DATABASE_URL: str = "postgresql://dev:devpass@localhost:5432/ai_platform"
