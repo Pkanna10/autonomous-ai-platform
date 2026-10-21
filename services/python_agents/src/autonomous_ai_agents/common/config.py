@@ -3,12 +3,10 @@
 Loads configuration from environment variables using pydantic-settings.
 """
 
-import re
-
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_BRANCH_PREFIX_CHARS = re.compile(r"[A-Za-z0-9._/-]+")
+from autonomous_ai_agents.common.refnames import branch_prefix_problem
 
 
 class Settings(BaseSettings):
@@ -66,17 +64,10 @@ class Settings(BaseSettings):
     @field_validator("TRIAL_BRANCH_PREFIX")
     @classmethod
     def _safe_branch_prefix(cls, value: str) -> str:
-        """Non-empty, ends with ``/``, refname characters only, no ``..``."""
-        if (
-            not value.endswith("/")
-            or _BRANCH_PREFIX_CHARS.fullmatch(value) is None
-            or ".." in value
-        ):
-            raise ValueError(
-                f"TRIAL_BRANCH_PREFIX {value!r} must be non-empty, end with '/', "
-                "use only letters, digits, '.', '_', '-' and '/', "
-                "and must not contain '..'"
-            )
+        """Non-empty, ends with ``/`` and starts a valid git refname."""
+        problem = branch_prefix_problem(value)
+        if problem is not None:
+            raise ValueError(f"TRIAL_BRANCH_PREFIX {value!r}: {problem}")
         return value
 
     # ============================================

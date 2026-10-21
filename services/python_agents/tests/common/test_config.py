@@ -155,6 +155,13 @@ def test_settings_model_ids_can_be_overridden(
         pytest.param("engine~1/", id="tilde"),
         pytest.param("engine@{/", id="reflog syntax"),
         pytest.param("engine:x/", id="colon"),
+        pytest.param("/", id="root slash"),
+        pytest.param("//", id="double slash"),
+        pytest.param(".engine/", id="dot segment"),
+        pytest.param("engine//", id="empty segment"),
+        pytest.param("-x/", id="dash start"),
+        pytest.param("a.lock/", id="lock suffix"),
+        pytest.param("engine/.x/", id="dot inner segment"),
     ],
 )
 def test_settings_reject_an_unsafe_trial_branch_prefix(

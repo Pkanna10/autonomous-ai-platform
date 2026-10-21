@@ -56,6 +56,7 @@ from autonomous_ai_agents.common.models import (
     Direction,
     EngineEvent,
     EventLevel,
+    Guardrail,
     Hotspot,
     Hypothesis,
     HypothesisStatus,
@@ -74,6 +75,7 @@ from autonomous_ai_agents.common.models import (
     Violation,
     ViolationRule,
 )
+from autonomous_ai_agents.common.refnames import refname_problem
 from autonomous_ai_agents.execution.runner import BaselineRunner, TrialRunner
 from autonomous_ai_agents.learning.lessons import lessons_from_verdicts
 from autonomous_ai_agents.optimization.anticheat import (
@@ -241,6 +243,11 @@ def _objective_metrics(objectives: Iterable[Objective]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(objective.metric for objective in objectives))
 
 
+def _guardrail_metrics(guardrails: Iterable[Guardrail]) -> tuple[str, ...]:
+    """Metrics bounded by a guardrail, in guardrail order, each once."""
+    return tuple(dict.fromkeys(g.metric for g in guardrails if g.metric is not None))
+
+
 def _with_statuses(
     hypotheses: Iterable[Hypothesis], status_for: Mapping[str, HypothesisStatus]
 ) -> list[Hypothesis]:
@@ -255,20 +262,24 @@ def measurement_violations(
     workload_ids: Iterable[str],
     objective_metrics: Iterable[str],
     min_runs: int,
+    guardrail_metrics: Iterable[str] = (),
 ) -> tuple[Violation, ...]:
-    """Require exactly one measurement per (workload, objective metric) pair.
+    """Require exactly one measurement per (workload, metric) pair.
 
-    For every pair, in workload then metric order: none ->
-    ``missing_measurement`` (a trial cannot dodge a regression check by not
-    reporting the metric); more than one -> ``duplicate_measurement`` (the
-    judges read one of them, so a runner could report a fast copy first);
-    the single one built from fewer than ``min_runs`` runs -> ``too_few_runs``.
+    For every objective or guardrail metric, in workload then metric order:
+    none -> ``missing_measurement`` (a trial cannot dodge a regression or a
+    bound check by not reporting the metric); more than one ->
+    ``duplicate_measurement`` (the judges read one of them, so a runner could
+    report a fast or healthy copy first); an objective metric built from
+    fewer than ``min_runs`` runs -> ``too_few_runs``. Guardrail metrics are
+    bounded, not proven, so they need no minimum run count.
 
-    Metrics that are not objectives are exempt: ``tests_passed`` is a single
-    flag by design and guardrail metrics are bounded, not proven. So are
-    measurements of workloads outside ``workload_ids``: no judge reads them.
+    ``tests_passed`` is a single flag by design and is not a metric here;
+    measurements of workloads outside ``workload_ids`` are ignored because no
+    judge reads them.
     """
-    metrics = tuple(dict.fromkeys(objective_metrics))
+    objectives = tuple(dict.fromkeys(objective_metrics))
+    metrics = tuple(dict.fromkeys((*objectives, *guardrail_metrics)))
     found: dict[tuple[str, str], list[Measurement]] = {}
     for measurement in measurements:
         key = (measurement.workload_id, measurement.metric)
@@ -293,7 +304,7 @@ def measurement_violations(
                         f"workload {workload_id}; exactly one measurement is required",
                     )
                 )
-            else:
+            elif metric in objectives:
                 too_few = check_run_count(rows[0].stats, min_runs)
                 if too_few is not None:
                     violations.append(
@@ -345,11 +356,12 @@ class _PrimarySummary:
     workloads: int
 
     def line(self) -> str:
+        """One readable line; metric and unit are sanitised (they end up in reports)."""
         if self.mean is None:
-            return f"Baseline: no measurement of {self.metric}"
+            return f"Baseline: no measurement of {_cell(str(self.metric))}"
         return (
-            f"Baseline: {self.metric} mean {self.mean:.3f} {self.unit} "
-            f"over {self.n} run(s) on {self.workloads} workload(s)"
+            f"Baseline: {_cell(str(self.metric))} mean {self.mean:.3f} "
+            f"{_cell(self.unit)} over {self.n} run(s) on {self.workloads} workload(s)"
         )
 
 
@@ -367,6 +379,11 @@ def _summarize_primary(
         unit=rows[0].stats.unit,
         workloads=len(rows),
     )
+
+
+def _undecided(summary: str) -> str:
+    """Drop the ``needs_approval: `` lead-in a decision has just overtaken."""
+    return summary.removeprefix(f"{VerdictOutcome.needs_approval.value}: ")
 
 
 def decided_verdicts(
@@ -395,7 +412,8 @@ def decided_verdicts(
                         "outcome": VerdictOutcome.keep,
                         "approved_by": approval.approver,
                         "approval_note": approval.note,
-                        "summary": f"approved by {approval.approver}: {verdict.summary}",
+                        "summary": f"approved by {approval.approver}: "
+                        f"{_undecided(verdict.summary)}",
                     }
                 )
             )
@@ -405,37 +423,14 @@ def decided_verdicts(
                     update={
                         "outcome": VerdictOutcome.reject,
                         "approval_note": approval.note,
-                        "summary": f"rejected by {approval.approver}: {verdict.summary}",
+                        "summary": f"rejected by {approval.approver}: "
+                        f"{_undecided(verdict.summary)}",
                     }
                 )
             )
         else:
             decided.append(verdict)
     return decided
-
-
-_REFNAME_SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
-
-
-def _refname_problem(branch: str) -> str | None:
-    """Why ``branch`` is not a git refname the engine may create, or None."""
-    if "@{" in branch:
-        return "contains '@{'"
-    if branch.endswith("."):
-        return "ends with '.'"
-    for segment in branch.split("/"):
-        if not segment:
-            return "has an empty segment"
-        if ".." in segment:
-            return f"segment {segment!r} contains '..'"
-        if segment.endswith(".lock"):
-            return f"segment {segment!r} ends with '.lock'"
-        if _REFNAME_SEGMENT.fullmatch(segment) is None:
-            return (
-                f"segment {segment!r} must start with a letter or digit and use "
-                "only letters, digits, '.', '_' and '-'"
-            )
-    return None
 
 
 def assert_safe_branch(branch: str, project: Project, prefix: str) -> None:
@@ -460,7 +455,7 @@ def assert_safe_branch(branch: str, project: Project, prefix: str) -> None:
         raise DeliveryError(
             f"branch {branch!r} is outside the engine prefix {prefix!r}"
         )
-    problem = _refname_problem(branch)
+    problem = refname_problem(branch)
     if problem is not None:
         raise DeliveryError(f"branch {branch!r} is not a safe git refname: {problem}")
 
@@ -468,7 +463,10 @@ def assert_safe_branch(branch: str, project: Project, prefix: str) -> None:
 _CELL_LIMIT = 200
 """Longest report cell, in characters, ellipsis included."""
 
-_LINE_BREAKS = re.compile(r"[\r\n]+")
+_LINE_BREAKS = re.compile(r"[\r\n\v\f\x85\u2028\u2029]+")
+"""Everything ``str.splitlines`` or a terminal treats as a line break."""
+
+_WWW_AUTOLINK = re.compile(r"(?i)\bwww\.")
 
 _CELL_ESCAPES = str.maketrans(
     {
@@ -477,6 +475,8 @@ _CELL_ESCAPES = str.maketrans(
         "`": "\\`",
         "[": "\\[",
         "]": "\\]",
+        ":": "\\:",
+        "@": "\\@",
         "&": "&amp;",
         "<": "&lt;",
         ">": "&gt;",
@@ -489,15 +489,16 @@ def _cell(text: str) -> str:
 
     Line breaks collapse to one space (no new rows, headings or blocks), the
     text is cut to ``_CELL_LIMIT`` characters with an ellipsis, then
-    backslashes, pipes, backticks and brackets get markdown escapes and
-    ``&``, ``<`` and ``>`` become HTML entities (no cell breaks, code spans,
-    links or raw HTML). The backslash is escaped first so an input ``\\|``
-    cannot turn the pipe escape into a literal backslash plus a cell break.
+    backslashes, pipes, backticks, brackets, colons and ``@`` get markdown
+    escapes, ``www.`` becomes ``www\\.`` and ``&``, ``<`` and ``>`` become
+    HTML entities (no cell breaks, code spans, links, GFM autolinks or raw
+    HTML). The backslash is escaped first so an input ``\\|`` cannot turn the
+    pipe escape into a literal backslash plus a cell break.
     """
     flat = _LINE_BREAKS.sub(" ", text)
     if len(flat) > _CELL_LIMIT:
         flat = flat[: _CELL_LIMIT - 1] + "…"
-    return flat.translate(_CELL_ESCAPES)
+    return _WWW_AUTOLINK.sub("www\\.", flat.translate(_CELL_ESCAPES))
 
 
 def _report(state: EngineState) -> str:
@@ -513,7 +514,7 @@ def _report(state: EngineState) -> str:
         else _summarize_primary(baseline.measurements, baseline.objectives).line()
     )
     lines = [
-        f"# Engine run {state['run_id'][:8]}: {project.name}",
+        f"# Engine run {state['run_id'][:8]}: {_cell(project.name)}",
         "",
         baseline_line,
         "",
@@ -538,20 +539,30 @@ def _report(state: EngineState) -> str:
 def _await_decision(request: ApprovalRequest) -> ApprovalDecision:
     """Interrupt until the human sends a valid ``ApprovalDecision``.
 
-    An invalid payload never raises: the gate interrupts again with the same
-    request carrying the validation error, so the thread is never poisoned by
-    a bad resume (LangGraph replays earlier resume values to earlier
-    ``interrupt()`` calls, and the next one waits for a fresh value).
+    An invalid payload, or one naming verdicts the request never offered,
+    never raises: the gate interrupts again with the same request carrying
+    the error, so the thread is never poisoned by a bad resume (LangGraph
+    replays earlier resume values to earlier ``interrupt()`` calls, and the
+    next one waits for a fresh value) and a typo cannot end the run with
+    nothing decided.
     """
+    offered = {item.verdict_id for item in request.items}
     payload = request.model_dump(mode="json")
     while True:
         raw = interrupt(payload)
         try:
-            return ApprovalDecision.model_validate(raw)
+            decision = ApprovalDecision.model_validate(raw)
         except ValidationError as exc:
-            payload = request.model_copy(
-                update={"error": f"invalid approval decision: {exc}"}
-            ).model_dump(mode="json")
+            error = f"invalid approval decision: {exc}"
+        else:
+            unknown = sorted(
+                {*decision.approved_verdict_ids, *decision.rejected_verdict_ids}
+                - offered
+            )
+            if not unknown:
+                return decision
+            error = "unknown verdict ids: " + ", ".join(unknown)
+        payload = request.model_copy(update={"error": error}).model_dump(mode="json")
 
 
 # ---------------------------------------------------------------------------
@@ -610,6 +621,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             [workload.id for workload in state["workloads"]],
             _objective_metrics(objectives),
             ctx.min_runs,
+            guardrail_metrics=_guardrail_metrics(state["guardrails"]),
         )
         if violations:
             raise EngineError(
@@ -801,7 +813,11 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                 ()
                 if trial.status is TrialStatus.failed
                 else measurement_violations(
-                    trial.measurements, workload_ids, objective_metrics, ctx.min_runs
+                    trial.measurements,
+                    workload_ids,
+                    objective_metrics,
+                    ctx.min_runs,
+                    guardrail_metrics=_guardrail_metrics(measured.guardrails),
                 )
             )
             violations = (

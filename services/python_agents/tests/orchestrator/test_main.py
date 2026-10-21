@@ -181,9 +181,6 @@ class TestBuildCheckpointer:
              foreign model is refused (it comes back as plain data)
         """
 
-        class Foreign(BaseModel):
-            payload: str = "not an engine type"
-
         assert Foreign not in ENGINE_SERDE_ALLOWLIST
         serde = build_checkpointer().serde
 
@@ -199,6 +196,17 @@ class TestBuildCheckpointer:
         assert phase is RunPhase.baseline
         assert not isinstance(foreign, Foreign)
         assert foreign == {"payload": "not an engine type"}
+        # Control: without the allowlist the same model is revived, so the
+        # refusal above is the allowlist's doing, not an artefact of the test.
+        permissive = JsonPlusSerializer()
+        revived = permissive.loads_typed(permissive.dumps_typed(Foreign()))
+        assert isinstance(revived, Foreign)
+
+
+class Foreign(BaseModel):
+    """A module-level pydantic model that is deliberately not an engine type."""
+
+    payload: str = "not an engine type"
 
 
 class TestDefaultContext:
@@ -521,7 +529,13 @@ class TestOrchestrator:
             )
         )
 
-        assert [e.phase for e in events] == [*LOOP_PHASES, *DELIVERY_PHASES]
+        assert [e.phase for e in events] == [
+            *LOOP_PHASES,
+            *DELIVERY_PHASES,
+            RunPhase.done,
+        ]
+        assert events[-1].message == "done: 1 change(s) kept"
+        assert events[-1].data == {"kept": 1}
         assert all(e.run_id == "run-stream" for e in events)
         assert events[0].message == "connected bridge"
         saved = orchestrator.context.repository.get_run("run-stream")
@@ -529,6 +543,43 @@ class TestOrchestrator:
         assert saved["phase"] is RunPhase.done
         delivery = saved["delivery"]
         assert delivery is not None and delivery.branch == "engine/run-run-stream"
+
+    def test_stream_saves_the_run_before_its_last_event(
+        self,
+        make_context: ContextFactory,
+        sample_project: Project,
+        sample_workload: Workload,
+        sample_objective: Objective,
+        sample_guardrails: tuple[Guardrail, ...],
+        h1_cache: Hypothesis,
+        h4_behaviour: Hypothesis,
+    ) -> None:
+        """
+        GIVEN a consumer that stops reading at the last event
+        WHEN a run finishes, and when another pauses at the gate
+        THEN both runs are already in the repository at that moment
+        """
+        for run_id, candidate, last_phase in (
+            ("run-break-done", h1_cache, RunPhase.done),
+            ("run-break-paused", h4_behaviour, RunPhase.approval),
+        ):
+            ctx = make_context([candidate])
+            orchestrator = Orchestrator(context=ctx)
+            seen: list[RunPhase] = []
+
+            for event in orchestrator.stream(
+                sample_project,
+                [sample_workload],
+                [sample_objective],
+                sample_guardrails,
+                run_id=run_id,
+            ):
+                seen.append(event.phase)
+                if event.phase is last_phase:
+                    break
+
+            assert seen[-1] is last_phase, run_id
+            assert ctx.repository.get_run(run_id) is not None, run_id
 
     def test_stream_stops_at_the_gate_and_resume_continues(
         self,
@@ -770,6 +821,14 @@ class TestOrchestratorGuards:
         assert retry.approval_request.error is not None
         assert "approver" in retry.approval_request.error
         assert retry.approval_request.items == paused.approval_request.items
+
+        second = orchestrator.resume(
+            "run-bogus",
+            ApprovalDecision(approved_verdict_ids=("no-such-id",), approver="pk"),
+        )
+        assert second.status == "needs_approval"
+        assert second.approval_request is not None
+        assert second.approval_request.error == "unknown verdict ids: no-such-id"
 
         done = orchestrator.resume(
             "run-bogus",

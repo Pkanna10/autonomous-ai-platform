@@ -292,6 +292,34 @@ class _CherryPickingRunner:
         return trial.model_copy(update={"measurements": (*fast, *trial.measurements)})
 
 
+class _GuardrailDodgingRunner:
+    """Reports a healthy copy of every val_loss measurement ahead of the real one."""
+
+    def __init__(self, inner: StubTrialRunner) -> None:
+        self._inner = inner
+
+    def run(
+        self,
+        hypothesis: Hypothesis,
+        workloads: Sequence[Workload],
+        baseline: Baseline,
+        *,
+        round: int,
+        branch: str,
+    ) -> Trial:
+        trial = self._inner.run(
+            hypothesis, workloads, baseline, round=round, branch=branch
+        )
+        healthy = tuple(
+            _measurement(m.workload_id, m.metric, (0.5,) * 5, unit="")
+            for m in trial.measurements
+            if m.metric == VAL_LOSS
+        )
+        return trial.model_copy(
+            update={"measurements": (*healthy, *trial.measurements)}
+        )
+
+
 class _DoublingBaselineRunner:
     """A baseline runner that reports every measurement twice."""
 
@@ -675,8 +703,31 @@ class TestBaseline:
 
         assert str(raised.value) == (
             "baseline is not trustworthy: missing_measurement: metric "
-            f"{METRIC_WALL_TIME_S} was not measured on workload {sample_workload.id}"
+            f"{METRIC_WALL_TIME_S} was not measured on workload {sample_workload.id}; "
+            f"missing_measurement: metric {VAL_LOSS} was not measured on workload "
+            f"{sample_workload.id}"
         )
+
+    def test_raises_when_a_guardrail_metric_is_not_measured(
+        self, make_context: ContextFactory, base_state: EngineState
+    ) -> None:
+        """
+        GIVEN a baseline runner that never measures val_loss while a guardrail
+              bounds it
+        WHEN the baseline node runs
+        THEN it raises EngineError naming the missing guardrail metric: a bound
+             against nothing is no bound
+        """
+        no_val_loss = ScriptedOutcome(
+            samples={METRIC_WALL_TIME_S: (1.8,) * 5}, tests_passed=True
+        )
+        nodes = make_nodes(
+            make_context(baseline_runner=StubBaselineRunner(no_val_loss))
+        )
+        state = _advance(nodes, base_state, _before("baseline"))
+
+        with pytest.raises(EngineError, match=f"missing_measurement.*{VAL_LOSS}"):
+            nodes["baseline"](state)
 
     def test_raises_when_a_workload_reports_an_objective_metric_twice(
         self, make_context: ContextFactory, base_state: EngineState
@@ -706,6 +757,7 @@ class TestBaseline:
         THEN nothing is required, the baseline is empty and the event says so
         """
         base_state["objectives"] = []
+        base_state["guardrails"] = []
         ctx = make_context(baseline_runner=StubBaselineRunner(ScriptedOutcome()))
 
         delta = make_nodes(ctx)["baseline"](base_state)
@@ -743,6 +795,32 @@ class TestMeasurementViolations:
             )
             == ()
         )
+
+    def test_guardrail_metrics_must_be_measured_exactly_once_too(self) -> None:
+        """
+        GIVEN a guardrail metric that is missing on w1, doubled on w2 and
+              measured from a single run on w3
+        WHEN measurement_violations checks them with the guardrail metric
+        THEN w1 is missing, w2 is a duplicate and w3 is fine (guardrails are
+             bounded, not proven, so they need no minimum run count)
+        """
+        rows = [
+            *self._complete("w1", "w2", "w3"),
+            _measurement("w2", "val_loss", (0.5,) * 5),
+            _measurement("w2", "val_loss", (0.9,) * 5),
+            _measurement("w3", "val_loss", (0.5,)),
+        ]
+
+        violations = measurement_violations(
+            rows, ("w1", "w2", "w3"), self.METRICS, 5, guardrail_metrics=("val_loss",)
+        )
+
+        assert [v.rule for v in violations] == [
+            ViolationRule.missing_measurement,
+            ViolationRule.duplicate_measurement,
+        ]
+        assert "val_loss" in violations[0].message and "w1" in violations[0].message
+        assert "val_loss" in violations[1].message and "w2" in violations[1].message
 
     def test_a_missing_pair_is_reported_per_workload_and_metric(self) -> None:
         """
@@ -1578,6 +1656,39 @@ class TestVerdicts:
             ViolationRule.duplicate_measurement
         ]
 
+    def test_a_duplicate_guardrail_measurement_rejects(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        baseline_script: ScriptedOutcome,
+        h1_cache: Hypothesis,
+    ) -> None:
+        """
+        GIVEN a 42 % faster trial whose val_loss really rose from 0.5 to 0.9
+              (far past the 1 % guardrail) but which reports a healthy copy of
+              the val_loss measurement first
+        WHEN verdicts runs
+        THEN the verdict is reject with a duplicate_measurement violation,
+             never an automatic keep
+        """
+        worse = ScriptedOutcome(
+            touched_paths=("src/x.py",),
+            samples={METRIC_WALL_TIME_S: (1.05,) * 5, VAL_LOSS: (0.9,) * 5},
+            tests_passed=True,
+            output_fingerprint=baseline_script.output_fingerprint,
+        )
+        runner = _GuardrailDodgingRunner(StubTrialRunner({h1_cache.id: worse}))
+        nodes = make_nodes(make_context([h1_cache], runner=runner))
+        state = _advance(nodes, base_state, _before("verdicts"))
+
+        (verdict,) = _items(nodes["verdicts"](state), "verdicts", Verdict)
+
+        assert verdict.outcome is VerdictOutcome.reject
+        assert [v.rule for v in verdict.violations] == [
+            ViolationRule.duplicate_measurement
+        ]
+        assert VAL_LOSS in verdict.violations[0].message
+
     def test_a_failed_trial_is_rejected_for_failing(
         self,
         make_context: ContextFactory,
@@ -1856,7 +1967,8 @@ class TestApprovalGate:
     ) -> None:
         """
         GIVEN an interrupted gate
-        WHEN the graph resumes with a decision that names no pending verdict
+        WHEN the graph resumes with a decision that names no verdict at all
+             (the human deferred)
         THEN the repository verdict still needs approval and the hypothesis
              keeps its trialled status
         """
@@ -1865,7 +1977,7 @@ class TestApprovalGate:
         cfg = run_config(RUN_ID, 3)
         graph.invoke(state, cfg, version="v2")
         before = ctx.repository.list_verdicts(RUN_ID)
-        decision = ApprovalDecision(approved_verdict_ids=("unknown",), approver="pk")
+        decision = ApprovalDecision(approver="pk", note="deferred")
 
         output = graph.invoke(
             Command(resume=decision.model_dump(mode="json")), cfg, version="v2"
@@ -1921,6 +2033,42 @@ class TestApprovalGate:
         (stored,) = ctx.repository.list_verdicts(RUN_ID)
         assert stored.outcome is VerdictOutcome.keep
         assert graph.get_state(cfg).next == ()
+
+    def test_a_decision_naming_unknown_verdicts_asks_again(
+        self, pending_state: tuple[NodeContext, dict[str, NodeFn], EngineState]
+    ) -> None:
+        """
+        GIVEN an interrupted gate with one pending verdict
+        WHEN the graph resumes with a well-formed decision that approves a
+             verdict id the gate never offered (a typo), then with the right id
+        THEN the first resume interrupts again naming the unknown id instead of
+             finishing the run with nothing approved, and the second resume
+             records the approval
+        """
+        ctx, nodes, state = pending_state
+        graph = _single_node_graph(nodes["approval_gate"], "approval_gate")
+        cfg = run_config(RUN_ID, 3)
+        graph.invoke(state, cfg, version="v2")
+        verdict_id = state["pending_approval_ids"][0]
+
+        typo = ApprovalDecision(approved_verdict_ids=("typo",), approver="pk")
+        retry = graph.invoke(
+            Command(resume=typo.model_dump(mode="json")), cfg, version="v2"
+        )
+
+        (asked_again,) = retry.interrupts
+        request = ApprovalRequest.model_validate(asked_again.value)
+        assert request.error == "unknown verdict ids: typo"
+        assert graph.get_state(cfg).next == ("approval_gate",)
+
+        decision = ApprovalDecision(approved_verdict_ids=(verdict_id,), approver="pk")
+        done = graph.invoke(
+            Command(resume=decision.model_dump(mode="json")), cfg, version="v2"
+        )
+
+        assert done.interrupts == ()
+        (stored,) = ctx.repository.list_verdicts(RUN_ID)
+        assert stored.outcome is VerdictOutcome.keep
 
 
 # ---------------------------------------------------------------------------
@@ -2181,12 +2329,97 @@ class TestDeliver:
         assert [line for line in lines if line.startswith("#")] == [lines[0]]
         assert "<img" not in report
         assert re.search(r"(?<!\\)\]\(", report) is None  # no unescaped link
+        # GFM autolinks: no bare scheme, www. or e-mail survives in a cell
+        rows = [line for line in lines if line.startswith("| ")]
+        assert rows and all(re.search(r"(?<!\\):", row) is None for row in rows)
+        assert re.search(r"(?i)www(?!\\)\.", report) is None
         (row,) = [line for line in lines if line.startswith(f"| {h1_cache.title} |")]
         assert row.endswith(
-            "| reject | n/a | reject: trial failed: boom \\| ## Approved by security "
-            "team &lt;img src=https://attacker.example/x?k=1&gt; \\[merge now\\]"
-            "(https://attacker.example) \\`rm -rf\\` &amp; \\\\\\| done |"
+            "| reject | n/a | reject\\: trial failed\\: boom \\| ## Approved by "
+            "security team &lt;img src=https\\://attacker.example/x?k=1&gt; "
+            "\\[merge now\\](https\\://attacker.example) \\`rm -rf\\` &amp; "
+            "\\\\\\| done |"
         )
+
+    def test_report_neutralises_autolinks_and_unicode_line_breaks(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+    ) -> None:
+        """
+        GIVEN a trial error carrying a www address, an e-mail address and
+              Unicode line separators in front of a heading
+        WHEN deliver writes the report
+        THEN the address and the e-mail cannot autolink and the heading never
+             starts a line, whatever splits lines (markdown, terminals, Python)
+        """
+        payload = (
+            "see www.attacker.example or security@attacker.example"
+            "\u2028## Approved\x85## by\v## security\f## team"
+        )
+        scripts = {h1_cache.title: ScriptedOutcome(error=payload)}
+        nodes = make_nodes(make_context([h1_cache], scripts))
+        state = _advance(nodes, base_state, _before("deliver"))
+
+        delivery = nodes["deliver"](state)["delivery"]
+
+        assert isinstance(delivery, Delivery)
+        report = delivery.report_markdown
+        assert [ln for ln in report.splitlines() if ln.startswith("#")] == [
+            report.splitlines()[0]
+        ]
+        assert "www\\.attacker.example" in report
+        assert "security\\@attacker.example" in report
+        assert "Approved ## by ## security ## team" in report
+
+    def test_report_heading_and_baseline_line_are_sanitised(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+    ) -> None:
+        """
+        GIVEN a project name and a measurement unit that try to add a heading,
+              raw HTML and a link outside the table
+        WHEN deliver writes the report
+        THEN the report has exactly one heading, no raw HTML and no link
+        """
+        project = base_state["project"].model_copy(
+            update={"name": "bridge\n\n## Approved by security <img src=x>"}
+        )
+        unit_attack = "s\n\n[merge now](https://attacker.example)"
+        baseline_script = ScriptedOutcome(
+            samples={METRIC_WALL_TIME_S: (1.8,) * 5, VAL_LOSS: (0.5,) * 5},
+            tests_passed=True,
+        )
+
+        class _UnitRunner(StubBaselineRunner):
+            def measure(self, workloads: Sequence[Workload]) -> tuple[Measurement, ...]:
+                return tuple(
+                    m.model_copy(
+                        update={
+                            "stats": m.stats.model_copy(update={"unit": unit_attack})
+                        }
+                    )
+                    for m in super().measure(workloads)
+                )
+
+        nodes = make_nodes(
+            make_context([h1_cache], baseline_runner=_UnitRunner(baseline_script))
+        )
+        state = cast(EngineState, {**base_state, "project": project})
+        state = _advance(nodes, state, _before("deliver"))
+
+        delivery = nodes["deliver"](state)["delivery"]
+
+        assert isinstance(delivery, Delivery)
+        report = delivery.report_markdown
+        lines = report.splitlines()
+        assert [ln for ln in lines if ln.startswith("#")] == [lines[0]]
+        assert "<img" not in report
+        assert re.search(r"(?<!\\)\]\(", report) is None
+        assert lines[0].startswith("# Engine run ")
 
     def test_report_cells_and_kept_titles_are_flattened_and_truncated(
         self,
@@ -2277,7 +2510,7 @@ class TestDecidedVerdicts:
             hypothesis_id=f"hypothesis-{verdict_id}",
             outcome=outcome,
             change_class=ChangeClass.behaviour,
-            summary=str(outcome),
+            summary=f"{outcome}: judged",
         )
 
     def test_without_a_decision_the_verdicts_are_unchanged(self) -> None:
@@ -2322,8 +2555,9 @@ class TestDecidedVerdicts:
         assert (decided[2].approved_by, decided[2].approval_note) == ("pk", "reviewed")
         assert decided[3].outcome is VerdictOutcome.reject
         assert (decided[3].approved_by, decided[3].approval_note) == (None, "reviewed")
-        assert decided[2].summary == "approved by pk: " + yes.summary
-        assert decided[3].summary == "rejected by pk: " + no.summary
+        assert yes.summary == "needs_approval: judged"
+        assert decided[2].summary == "approved by pk: judged"
+        assert decided[3].summary == "rejected by pk: judged"
 
 
 # ---------------------------------------------------------------------------

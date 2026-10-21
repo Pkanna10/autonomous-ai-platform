@@ -246,12 +246,13 @@ class Orchestrator:
     ) -> Iterator[EngineEvent]:
         """Start a run and yield its live events as they happen.
 
-        The stream ends when the run completes, pauses at the approval gate
-        (the last event is then a ``paused: N change(s) need approval``
-        approval-phase event) or fails (one error-level event; the run is
-        marked failed). ``resume`` continues a paused run. The final state is
-        saved to the repository in every case, before the last event is
-        yielded, so a consumer that stops at that event loses nothing.
+        The stream ends with one event of its own after the nodes' events: a
+        ``done: N change(s) kept`` event when the run completes, a
+        ``paused: N change(s) need approval`` approval-phase event when it
+        waits at the gate, or an error-level event when it fails (the run is
+        then marked failed). ``resume`` continues a paused run. The final
+        state is saved to the repository before that last event is yielded,
+        so a consumer that stops at it loses nothing.
         """
         state = initial_state(
             project,
@@ -285,8 +286,13 @@ class Orchestrator:
                 f"paused: {pending} change(s) need approval",
                 data={"pending": pending},
             )
-            emit(event)
-            yield event
+        else:
+            kept = len(final["kept_verdict_ids"])
+            event = make_event(
+                run, RunPhase.done, f"done: {kept} change(s) kept", data={"kept": kept}
+            )
+        emit(event)
+        yield event
 
     def _refuse_existing(self, run_id: str) -> None:
         """Raise ``ValueError`` when ``run_id`` already has a checkpoint thread."""
