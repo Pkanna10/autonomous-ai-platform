@@ -109,7 +109,7 @@ graph without a checkpointer cannot resume.
   implementations.
 - `infrastructure/schema/003_engine.sql`: 8 new tables, 3 extended, idempotent;
   verified by the new `schema-apply` CI job.
-- Tests: 546 passing, 100% coverage of 1,407 statements; mypy strict on `src`
+- Tests: 560 passing, 100% coverage of 1,431 statements; mypy strict on `src`
   and `tests`; the stage gate now type-checks tests too.
 
 Reviewed by the Reviewer role (Opus 5.5) in three passes (wave 1, wave 2, a
@@ -215,11 +215,12 @@ passed (2 warnings: outdated majors left to Renovate).
   round. A plain `round_trials` key (replaced each round) now carries the
   round's trials from `trials` through `judges` to `verdicts`, and the
   repository is an audit sink.
-- **Every objective metric must be measured exactly once per workload**: the
-  run-count rule only checked measurements that existed, so a trial could be
-  kept by omitting a secondary metric or listing a fast duplicate first. Missing
-  and duplicate measurements are violations; an incomplete baseline fails the
-  run.
+- **Every objective and guardrail metric must be measured exactly once per
+  workload**: the run-count rule only checked measurements that existed, so a
+  trial could be kept by omitting a secondary metric or listing a fast (or
+  healthy) duplicate first. Missing and duplicate measurements are violations;
+  an incomplete baseline fails the run. The minimum run count applies to
+  objective metrics only, because guardrails are bounded, not proven.
 - **The approval gate never raises after `interrupt()`**: LangGraph replays the
   first resume value, so an exception after the interrupt wedges the thread for
   good. A malformed decision re-interrupts with the error on the request.
@@ -305,8 +306,8 @@ and the review of the runner's isolation).
 
 | Metric                         | Value                                                      |
 | ------------------------------ | ---------------------------------------------------------- |
-| Python tests                   | 546 passed                                                 |
-| Python coverage                | 100% of 1,407 statements (placeholders excluded)           |
+| Python tests                   | 560 passed                                                 |
+| Python coverage                | 100% of 1,431 statements (placeholders excluded)           |
 | TypeScript tests               | 33 passed                                                  |
 | Product code (non-placeholder) | ~3,200 lines Python + 450 lines SQL; ~8,000 lines of tests |
 | Engine features shipped        | Walking skeleton of the full loop (stub runners)           |
@@ -318,7 +319,7 @@ and the review of the runner's isolation).
 | Step | Lead time | CI-red pushes                | Rework commits        | Reverts |
 | ---- | --------- | ---------------------------- | --------------------- | ------- |
 | 0    | ~2 h      | 0                            | 0                     | 0       |
-| 1    | ~4 h      | 2 (GHA cache; README format) | 5 (regroup, 4 review) | 0       |
+| 1    | ~4.5 h    | 2 (GHA cache; README format) | 6 (regroup, 5 review) | 0       |
 
 ## Lessons (retro per step)
 

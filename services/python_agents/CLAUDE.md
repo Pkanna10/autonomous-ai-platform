@@ -123,10 +123,11 @@ test fails when a new model is not added.
   `noise_floor = max(2·σ_baseline, 2·σ_trial, min_relative_gain·|mean_baseline|)`
   and `exceeds_noise` requires the gain to exceed it strictly, on every
   workload. `check_run_count` enforces `MIN_RUNS` on objective metrics.
-- Completeness: every objective metric must be measured exactly once per
-  workload, in the baseline (else the run fails) and in every trial (else
-  `missing_measurement` / `duplicate_measurement` violations reject it). A trial
-  cannot pass by leaving a metric out or by listing a fast duplicate first.
+- Completeness: every objective and guardrail metric must be measured exactly
+  once per workload, in the baseline (else the run fails) and in every trial
+  (else `missing_measurement` / `duplicate_measurement` violations reject it). A
+  trial cannot pass by leaving a metric out or by listing a fast or healthy
+  duplicate first.
 - `fingerprint` is sha256 of the workload output; `compare_fingerprints` pairs
   baseline and trial by workload and flags mismatches.
 
@@ -244,9 +245,9 @@ engine until the step that needs them; the vision documents in
   `project.default_branch`. Run ids and candidate ids are validated
   (`[A-Za-z0-9][A-Za-z0-9._-]{0,63}`, no `..`, no `.lock`); the prefix must be
   non-empty and end with `/`.
-- Report cells (`Delivery.report_markdown`) are sanitised: newlines collapsed,
-  `| < > & [ ]` and backticks escaped, 200 characters max, because trial error
-  text and paper titles end up in a PR body.
+- Report text (`Delivery.report_markdown`) is sanitised: line breaks collapsed,
+  `| < > & [ ] : @` and backticks escaped, `www.` neutralised, 200 characters
+  per cell, because trial error text and paper titles end up in a PR body.
 - Protected patterns cover CI files, `pyproject.toml`, lockfiles and interpreter
   hooks, so a trial cannot change what judges it.
 - The checkpoint store must never be writable by trial code:
@@ -287,6 +288,7 @@ Paths are relative to `src/autonomous_ai_agents/` unless they start with
 | `common/config.py`                     | real        | pydantic-settings: models, DB, engine knobs      |
 | `common/models.py`                     | real        | Data model, enums, serde allowlist               |
 | `common/paths.py`                      | real        | `normalize_path`, `PathTraversalError`           |
+| `common/refnames.py`                   | real        | Git refname rules for branches and the prefix    |
 | `orchestrator/state.py`                | real        | `EngineState`, `initial_state`, `REDUCER_KEYS`   |
 | `orchestrator/nodes.py`                | skeleton    | One function per loop node, `after_verdicts`     |
 | `orchestrator/main.py`                 | skeleton    | `create_graph`, `Orchestrator.run/resume/stream` |
