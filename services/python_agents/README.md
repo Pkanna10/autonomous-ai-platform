@@ -38,11 +38,21 @@ profiler and research arrive in Steps 2 to 4 behind the same interfaces.
 
 ```python
 from autonomous_ai_agents.common.models import (
-    ChangeClass, Direction, Guardrail, GuardrailKind, Hypothesis, HypothesisSource,
-    Objective, ObjectiveKind, Project, Workload,
+    ChangeClass,
+    Direction,
+    Guardrail,
+    GuardrailKind,
+    Hypothesis,
+    HypothesisSource,
+    Objective,
+    ObjectiveKind,
+    Project,
+    Workload,
 )
 from autonomous_ai_agents.execution.runner import (
-    ScriptedOutcome, StubBaselineRunner, StubTrialRunner,
+    ScriptedOutcome,
+    StubBaselineRunner,
+    StubTrialRunner,
 )
 from autonomous_ai_agents.optimization.judges import default_judges
 from autonomous_ai_agents.orchestrator.main import Orchestrator
@@ -51,28 +61,43 @@ from autonomous_ai_agents.persistence.repository import InMemoryRepository
 
 project = Project(name="demo", root_path="/abs/path/to/repo")
 workload = Workload(
-    project_id=project.id, name="train",
-    command=("python", "train.py", "--steps", "200"), working_dir=".",
+    project_id=project.id,
+    name="train",
+    command=("python", "train.py", "--steps", "200"),
+    working_dir=".",
 )
-objective = Objective(kind=ObjectiveKind.runtime, metric="wall_time_s",
-                      direction=Direction.minimize)
+objective = Objective(
+    kind=ObjectiveKind.runtime, metric="wall_time_s", direction=Direction.minimize
+)
 guardrails = [Guardrail(kind=GuardrailKind.tests_pass)]
 
 # Until Step 2 the research node takes its candidates from the context and
 # the runners replay scripted measurements instead of executing anything.
 h1 = Hypothesis(
-    project_id=project.id, title="Cache frozen-encoder embeddings",
-    source=HypothesisSource.playbook, change_class=ChangeClass.efficiency,
-    expected_gain=0.4, provability=0.9, risk=0.1,
+    project_id=project.id,
+    title="Cache frozen-encoder embeddings",
+    source=HypothesisSource.playbook,
+    change_class=ChangeClass.efficiency,
+    expected_gain=0.4,
+    provability=0.9,
+    risk=0.1,
 )
 context = NodeContext(
-    runner=StubTrialRunner({h1.title: ScriptedOutcome(
-        touched_paths=("src/encoder.py",),
-        samples={"wall_time_s": (1.05, 1.02, 1.08, 1.05, 1.05)}, tests_passed=True,
-    )}),
-    baseline_runner=StubBaselineRunner(ScriptedOutcome(
-        samples={"wall_time_s": (1.80, 1.75, 1.85, 1.80, 1.80)}, tests_passed=True,
-    )),
+    runner=StubTrialRunner(
+        {
+            h1.title: ScriptedOutcome(
+                touched_paths=("src/encoder.py",),
+                samples={"wall_time_s": (1.05, 1.02, 1.08, 1.05, 1.05)},
+                tests_passed=True,
+            )
+        }
+    ),
+    baseline_runner=StubBaselineRunner(
+        ScriptedOutcome(
+            samples={"wall_time_s": (1.80, 1.75, 1.85, 1.80, 1.80)},
+            tests_passed=True,
+        )
+    ),
     judges=default_judges(),
     repository=InMemoryRepository(),
     candidates=(h1,),
@@ -80,12 +105,12 @@ context = NodeContext(
 
 engine = Orchestrator(context=context)
 result = engine.run(project, [workload], [objective], guardrails)
-print(result.status)                       # done | needs_approval | failed
+print(result.status)  # done | needs_approval | failed
 for verdict in result.state["verdicts"]:
     print(verdict.outcome, verdict.summary)  # keep  "... 41.7% faster ..."
 
-if result.status == "needs_approval":       # a behaviour-changing hypothesis
-    request = result.approval_request       # show it to the human
+if result.status == "needs_approval":  # a behaviour-changing hypothesis
+    request = result.approval_request  # show it to the human
     result = engine.resume(result.run_id, decision_from_human)
 ```
 

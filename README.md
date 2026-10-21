@@ -182,7 +182,7 @@ pnpm format:check         # Prettier
 
 # Python (from services/python_agents)
 uv run ruff check . && uv run ruff format --check .
-uv run mypy src
+uv run mypy src tests
 uv run pytest             # coverage >= 90% enforced
 
 # Security

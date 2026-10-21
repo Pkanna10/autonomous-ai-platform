@@ -83,7 +83,7 @@ run_check "pnpm format:check" must pnpm format:check
 run_check "pnpm test (coverage)" must pnpm test:coverage
 run_check "ruff check" must bash -c "cd '$PY_DIR' && uv run ruff check ."
 run_check "ruff format" must bash -c "cd '$PY_DIR' && uv run ruff format --check ."
-run_check "mypy" must bash -c "cd '$PY_DIR' && uv run mypy src"
+run_check "mypy" must bash -c "cd '$PY_DIR' && uv run mypy src tests"
 run_check "pytest (coverage >= 90%)" must bash -c "cd '$PY_DIR' && uv run pytest"
 
 # ---------------------------------------------------------------------------

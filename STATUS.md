@@ -18,14 +18,14 @@ or build something new and then improve it (see `CLAUDE.md`).
 One row per build step. "Gate" is the result of `pnpm stage-gate` at the end of
 the step.
 
-| Step | Deliverable                                                     | Planned    | Started    | Completed  | PR                                                                | Gate    |
-| ---- | --------------------------------------------------------------- | ---------- | ---------- | ---------- | ----------------------------------------------------------------- | ------- |
-| 0    | Repair & upgrade (DB init, deps, models, docs, stage gate)      | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed  |
-| 1    | Engine design (typed state, data model, judges, migration 003)  | 2026-10-21 | 2026-10-21 |            | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | pending |
-| 2    | Core loop end to end on CPU Python workloads + E2E fixture test |            |            |            |                                                                   |         |
-| 3    | Research: arXiv, PDF, playbook, claim extraction, matcher       |            |            |            |                                                                   |         |
-| 4    | Interfaces + runner: live CLI, hardware detection, `--goal`     |            |            |            |                                                                   |         |
-| 5    | Dogfood: fixtures, OSS repos, real ML training pipeline         |            |            |            |                                                                   |         |
+| Step | Deliverable                                                     | Planned    | Started    | Completed  | PR                                                                | Gate   |
+| ---- | --------------------------------------------------------------- | ---------- | ---------- | ---------- | ----------------------------------------------------------------- | ------ |
+| 0    | Repair & upgrade (DB init, deps, models, docs, stage gate)      | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed |
+| 1    | Engine design (typed state, data model, judges, migration 003)  | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed |
+| 2    | Core loop end to end on CPU Python workloads + E2E fixture test |            |            |            |                                                                   |        |
+| 3    | Research: arXiv, PDF, playbook, claim extraction, matcher       |            |            |            |                                                                   |        |
+| 4    | Interfaces + runner: live CLI, hardware detection, `--goal`     |            |            |            |                                                                   |        |
+| 5    | Dogfood: fixtures, OSS repos, real ML training pipeline         |            |            |            |                                                                   |        |
 
 Recommended Claude Code model and effort per step: 0 Opus 5.5 High; 1 Fable 5.1
 Extra; 2-4 Opus 5.5 Ultracode (Fable 5.1 for the paper matcher); 5 Opus 5.5
@@ -63,22 +63,75 @@ High, Fable 5.1 Max only when stuck.
   `~` in config files and had created a literal `services/python_agents/~/`
   directory inside the repo.
 
+### Step 1 summary (2026-10-21)
+
+The engine loop exists as a walking skeleton: every node from `connect` to
+`watch` is wired in LangGraph and runs end to end on deterministic stub data,
+with no LLM call, subprocess or git involved. What is final: the data model, the
+anti-cheating rules, the five judges and the verdict order, hypothesis ranking
+with lessons, the approval interrupt and durable resume, the delivery guard and
+the lessons store. What is stubbed behind stable interfaces: `understand`,
+`profile`, `research`, both runners and `watch`.
+
+```
+START -> connect -> understand -> define -> baseline -> profile -> research
+      -> hypotheses -> trials -> judges -> verdicts --(after_verdicts)--+
+             ^                                                         |
+             +---- another round (nothing kept, round < max_rounds) ---+
+                                                                       |
+     END <- watch <- learn <- deliver <- combine <- approval_gate <----+
+                                                    (interrupt -> human)
+```
+
+The seven end-to-end scenarios from the briefing pass on the compiled graph: H1
+(efficiency, 41.7% faster) is kept and delivered on an `engine/` branch; H2 is
+rejected for touching `tests/test_cache.py` although every judge passed; two
+below-noise candidates take two rounds and `max_rounds=1` stops early; H4
+(behaviour change) pauses the run with an `ApprovalRequest`, resumes with the
+human's decision, and is delivered when approved or reported only when rejected;
+a second graph instance over the same checkpointer resumes the same thread; a
+graph without a checkpointer cannot resume.
+
+- `common/models.py`: 27 frozen pydantic models and 13 `StrEnum`s (values mirror
+  the SQL `CHECK` lists); `ENGINE_SERDE_ALLOWLIST` for the checkpointer.
+- `optimization/anticheat.py`: protected paths (tests, benchmarks, CI,
+  manifests, lockfiles, interpreter hooks), traversal rejection, the noise
+  floor, run-count rule and sha256 output fingerprints.
+- `optimization/judges.py`: speed, memory, equivalence, guardrail-metric and
+  test-suite judges plus `derive_verdict`.
+- `optimization/ranking.py`, `learning/lessons.py`: score with lesson boost;
+  verdict to lesson.
+- `orchestrator/`: `EngineState` (24 keys, 4 append-only channels), 15 node
+  closures over a frozen `NodeContext`, the router,
+  `Orchestrator.run / resume / stream`, live `EngineEvent`s.
+- `execution/runner.py`, `persistence/repository.py`: `TrialRunner`,
+  `BaselineRunner` and `Repository` protocols with stub and in-memory
+  implementations.
+- `infrastructure/schema/003_engine.sql`: 8 new tables, 3 extended, idempotent;
+  verified by the new `schema-apply` CI job.
+- Tests: 432 passing, 100% coverage of 1,276 statements; mypy strict on `src`
+  and `tests`; the stage gate now type-checks tests too.
+
+Reviewed by the Reviewer role (Opus 5.5) in two passes; every blocking finding
+was fixed test-first in a follow-up commit before the gate.
+
 ---
 
 ## What Exists Today
 
-| Component                                                                            | State                                   |
-| ------------------------------------------------------------------------------------ | --------------------------------------- |
-| Docker Compose: Postgres 16 + pgvector, Redis, Qdrant                                | Working                                 |
-| Schema `001_initial.sql` + `002_fix_critical_issues.sql`                             | Working after Step 0 fix                |
-| CI: lint, typecheck, tests, coverage, Python CI                                      | Working                                 |
-| Security: OSV, Trivy, Docker Scout, pip-audit, bandit, safety, secret scan, Renovate | Working                                 |
-| `packages/agent-core` Claude client + shutdown                                       | Working (33 Vitest tests)               |
-| `services/python_agents` settings                                                    | Working                                 |
-| LangGraph orchestrator                                                               | Graph compiles; three placeholder nodes |
-| `research/arxiv_monitor.py`, `pdf_parser.py`                                         | Placeholders                            |
-| `packages/research-engine`, `execution-engine`                                       | TypeScript placeholders                 |
-| Optimization, judges, learning, CLI, web console                                     | Not started                             |
+| Component                                                                            | State                              |
+| ------------------------------------------------------------------------------------ | ---------------------------------- |
+| Docker Compose: Postgres 16 + pgvector, Redis, Qdrant                                | Working                            |
+| Schema `001_initial.sql` + `002_fix_critical_issues.sql` + `003_engine.sql`          | Working; applied in CI on every PR |
+| CI: lint, typecheck, tests, coverage, Python CI                                      | Working                            |
+| Security: OSV, Trivy, Docker Scout, pip-audit, bandit, safety, secret scan, Renovate | Working                            |
+| `packages/agent-core` Claude client + shutdown                                       | Working (33 Vitest tests)          |
+| `services/python_agents` settings                                                    | Working                            |
+| LangGraph orchestrator (`EngineState`, 15 nodes, router, `Orchestrator`)             | Walking skeleton on stub data      |
+| `research/arxiv_monitor.py`, `pdf_parser.py`                                         | Placeholders                       |
+| `packages/research-engine`, `execution-engine`                                       | TypeScript placeholders            |
+| Data model, anti-cheating, judges, ranking, lessons, repository protocol             | Working (Step 1)                   |
+| Real runners, profiler, research matcher, Postgres repository, CLI, web console      | Not started                        |
 
 ---
 
@@ -130,6 +183,33 @@ High, Fable 5.1 Max only when stuck.
   hooks. All fixed with tests first (`f1c1003`, `da6e30a`).
 - **GHA cache export made non-fatal** (`ignore-error=true`) after a build failed
   on `error writing layer blob: not_found` with a fully built image.
+- **Nodes are closures over a frozen `NodeContext`** (`make_nodes(ctx)`), not
+  module-level functions reading globals: the runner, judges, repository,
+  protected patterns and rigour knobs are injected once, so tests script every
+  external effect and nothing in the checkpointed state can replace a judge.
+- **The round loop is bounded by `max_rounds` and by the candidate pool**: the
+  router goes back to `hypotheses` only when nothing was kept, the round cap is
+  not reached and untrialled candidates remain; otherwise it proceeds to
+  `combine` even with nothing to deliver, so a run always ends with a report.
+- **`hypotheses` is a plain key that carries earlier rounds forward**: the
+  report and the lessons need every idea the run tried, so each round keeps the
+  decided hypotheses and appends the newly ranked ones; `trials` runs only the
+  `proposed` ones.
+- **Judge results travel through the repository, not the `trials` channel**: the
+  channel is append-only, so `judges` saves the judged copy and `verdicts` reads
+  it back. The Step 2 Postgres repository makes that path durable; the verdict
+  itself carries the judge results, so the state stays self-describing.
+- **A failed run is a result, not an exception**: `EngineError` (untrustworthy
+  baseline, unknown hypothesis, malformed approval payload) becomes
+  `EngineRunResult(status="failed")` with the last checkpointed state and the
+  error text; `stream` ends with one error-level event. Any other exception
+  propagates, because it is a bug.
+- **`mypy` runs on `tests` as well as `src` in the stage gate**: typed tests
+  caught two real signature drifts in Step 1; the cost is zero once tests are
+  written typed from the start.
+- **Dependency majors wait for their own PRs** (TypeScript 7, ESLint 10, Vitest
+  5, Vite 8, redis 8, PyMuPDF 2): none is needed by Step 1 and each changes
+  tooling behaviour; Renovate opens them weekly.
 
 ### 2026-10-21
 
@@ -166,41 +246,75 @@ High, Fable 5.1 Max only when stuck.
 
 ---
 
-## Next: Step 1 (Engine design)
+## Next: Step 2 (Core loop on CPU Python workloads)
 
-Recommended session setting: **Fable 5.1, Extra**.
+Recommended session setting: **Opus 5.5, Ultracode** (Fable 5.1 for the briefing
+and the review of the runner's isolation).
 
-- [ ] Typed engine state (`AgentState` evolves into the engine state) and
-      pydantic data models: Project, Workload, Objective, Guardrail,
-      Measurement, Hotspot, Technique, Paper, Claim, Precondition, Hypothesis,
-      Trial, Verdict, Delivery, Lesson.
-- [ ] Judge and node interfaces (Protocols) with test skeletons.
-- [ ] Anti-cheating rules: frozen evaluators, diff touching tests/benchmarks is
-      rejected, N >= 5 runs, noise threshold, output fingerprinting.
-- [ ] Migration `003_engine.sql` extending the existing tables.
-- [ ] "Engine design" section in `services/python_agents/CLAUDE.md`.
-- [ ] Stage gate, development log row, PR.
+- [ ] Real `BaselineRunner` and `TrialRunner`: git worktree per trial,
+      subprocess runs of `Workload.command` (argv, no shell) with warm-up and
+      N >= 5 timed runs, peak RSS, output fingerprints, timeouts, network off.
+- [ ] `understand` node on `ENGINE_MODEL` with the `--max-cost` cap and token
+      accounting into `cost_usd` / `tokens_used`.
+- [ ] Trial edits by Claude inside the worktree; diff capture into `Trial.diff`
+      and `touched_paths` (the anti-cheating input).
+- [ ] `combine` re-tests the combined diff; `deliver` creates the real
+      `engine/<run>` branch (never the default branch).
+- [ ] Postgres `Repository` with `psycopg` and parameterised SQL
+      (`task_executions.user_intent` is `NOT NULL`; fill it from the goal).
+- [ ] E2E fixture: a small CPU Python repo with a known win, run through the
+      whole loop in CI.
+- [ ] Decide whether judged trials get their own state key (see Decisions).
+- [ ] Stage gate, development log row, PR, report.
 
 ---
 
 ## Metrics Snapshot (2026-10-21)
 
-| Metric                         | Value                                                       |
-| ------------------------------ | ----------------------------------------------------------- |
-| Python tests                   | 47 passed, 3 expected failures                              |
-| Python coverage                | 100% of 64 statements (placeholders excluded from coverage) |
-| TypeScript tests               | 33 passed                                                   |
-| Product code (non-placeholder) | ~600 lines                                                  |
-| Engine features shipped        | 0 (Step 0 is groundwork)                                    |
+| Metric                         | Value                                                      |
+| ------------------------------ | ---------------------------------------------------------- |
+| Python tests                   | 432 passed                                                 |
+| Python coverage                | 100% of 1,276 statements (placeholders excluded)           |
+| TypeScript tests               | 33 passed                                                  |
+| Product code (non-placeholder) | ~2,900 lines Python + 450 lines SQL; ~6,500 lines of tests |
+| Engine features shipped        | Walking skeleton of the full loop (stub runners)           |
 
 ---
 
 ## Delivery Metrics (DORA-style, per step)
 
-| Step | Lead time   | CI-red pushes           | Rework commits        | Reverts |
-| ---- | ----------- | ----------------------- | --------------------- | ------- |
-| 0    | ~2 h        | 0                       | 0                     | 0       |
-| 1    | in progress | 1 (GHA cache, not code) | 1 (commit regrouping) | 0       |
+| Step | Lead time | CI-red pushes           | Rework commits        | Reverts |
+| ---- | --------- | ----------------------- | --------------------- | ------- |
+| 0    | ~2 h      | 0                       | 0                     | 0       |
+| 1    | ~3 h      | 1 (GHA cache, not code) | 3 (regroup, 2 review) | 0       |
+
+## Lessons (retro per step)
+
+### Step 1
+
+- **A Reviewer on a different model earns its cost.** Two passes found seven
+  real defects (enum types lost on resume, a judge passing inside its noise
+  floor, order-sensitive fingerprint pairing, missing path validation, open
+  protected-path gaps, and more) that the authors and the Lead had missed. Keep
+  it mandatory for every unit that touches judges, state or security.
+- **Split units by source size, not by topic.** U7+U8 (nodes plus graph) grew to
+  ~1,100 source lines and ~2,700 test lines in one Builder; it worked but took
+  the longest of any unit. Cap a Builder at ~400 source lines and give parallel
+  Builders a shared fixture contract (`conftest.py`) up front.
+- **Parallel Bash calls share a working directory.** A `cd` inside one call
+  moved another Builder's files into the repo root. Lead and Builders now use
+  absolute paths only.
+- **Guard the commit header length and the pipeline exit code.** Commitlint
+  rejected 72+ character headers three times, and `cmd | tail && git commit` let
+  a mypy failure through once. The Lead checks `wc -c` on the header and uses
+  `set -o pipefail` before every commit.
+- **Ruff formats fenced Python in Markdown.** README examples must pass
+  `ruff format --check` like code; the gate caught it.
+- **Record decisions as they are made.** Writing the "why" into this file while
+  the unit was fresh made the Step 1 report a copy job instead of an archaeology
+  job.
+
+---
 
 ## Technical Debt
 
@@ -208,7 +322,10 @@ Recommended session setting: **Fable 5.1, Extra**.
   modules that do not exist yet (`cli`, `codegen`, `tools`, `integrations`).
   Implement or remove in Step 4.
 - `packages/research-engine` (TypeScript) duplicates the Python research
-  module's purpose. Decide in Step 1 whether it stays.
+  module's purpose. Decision (Step 1): it stays a placeholder until TypeScript
+  workloads exist; research is built in Python.
+- `StubTrialRunner._unit_for` labels `throughput_per_s` as seconds; fix when the
+  real runner lands.
 - Both pgvector and Qdrant are configured. Pick one when embeddings land (Step
   3).
 - `services/python_agents/Dockerfile` installs with pip while CI uses uv.

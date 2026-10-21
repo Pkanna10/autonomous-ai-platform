@@ -184,7 +184,7 @@ REFACTOR improve without changing behaviour
 ```
 
 Pre-commit: `pnpm run pre-commit` (typecheck, lint, test, coverage) and, for
-Python, `uv run ruff check . && uv run mypy src && uv run pytest`.
+Python, `uv run ruff check . && uv run mypy src tests && uv run pytest`.
 
 ### 2. Explicit types
 
@@ -315,7 +315,7 @@ cp .env.example .env                              # add ANTHROPIC_API_KEY
 cd services/python_agents
 uv sync --extra dev
 uv run ruff check . && uv run ruff format --check .
-uv run mypy src
+uv run mypy src tests
 uv run pytest
 
 # TypeScript
