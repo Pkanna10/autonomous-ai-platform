@@ -8,6 +8,7 @@ that nodes feed with deltas.
 
 from __future__ import annotations
 
+import math
 import operator
 import re
 import uuid
@@ -69,7 +70,12 @@ def _guardrail(project: Project) -> Guardrail:
     )
 
 
-def _state(*, run_id: str | None = None, max_rounds: int | None = None) -> EngineState:
+def _state(
+    *,
+    run_id: str | None = None,
+    max_rounds: int | None = None,
+    max_cost_usd: float | None = None,
+) -> EngineState:
     project = _project()
     return initial_state(
         project,
@@ -78,6 +84,7 @@ def _state(*, run_id: str | None = None, max_rounds: int | None = None) -> Engin
         [_guardrail(project)],
         run_id=run_id,
         max_rounds=max_rounds,
+        max_cost_usd=max_cost_usd,
     )
 
 
@@ -95,7 +102,7 @@ def test_initial_state_sets_every_annotated_key() -> None:
     state = _state()
 
     assert set(EngineState.__annotations__) == set(state)
-    assert len(state) == 25
+    assert len(state) == 31
     assert "round_trials" in state
 
 
@@ -269,6 +276,62 @@ def test_fresh_states_get_distinct_run_ids() -> None:
     THEN they differ
     """
     assert _state()["run_id"] != _state()["run_id"]
+
+
+def test_initial_state_sets_the_step2_keys() -> None:
+    """
+    GIVEN no overrides
+    WHEN initial_state builds a state
+    THEN the Step 2 keys start empty: no pinned commit, no understanding, no
+         combination, the budget not exhausted, no extra protected paths, and
+         the cost cap from settings
+    """
+    state = _state()
+
+    assert state["base_commit"] is None
+    assert state["understanding"] is None
+    assert state["combination"] is None
+    assert state["budget_exhausted"] is False
+    assert state["extra_protected"] == []
+    assert state["max_cost_usd"] == settings.MAX_COST_USD
+    assert isinstance(state["max_cost_usd"], float)
+
+
+@pytest.mark.parametrize("cap", [0.0, 0.5, 12.5, 3])
+def test_initial_state_honours_a_cost_cap(cap: float) -> None:
+    """
+    GIVEN an explicit non-negative cost cap (0 means no paid calls at all)
+    WHEN initial_state builds a state
+    THEN the cap is stored as a float
+    """
+    state = _state(max_cost_usd=cap)
+
+    assert state["max_cost_usd"] == cap
+    assert isinstance(state["max_cost_usd"], float)
+
+
+@pytest.mark.parametrize("cap", [-0.01, -5.0, math.inf, -math.inf, math.nan])
+def test_initial_state_rejects_a_bad_cost_cap(cap: float) -> None:
+    """
+    GIVEN a negative or non-finite cost cap
+    WHEN initial_state builds a state
+    THEN a ValueError names max_cost_usd, so no Budget is ever built from it
+    """
+    with pytest.raises(ValueError, match="max_cost_usd"):
+        _state(max_cost_usd=cap)
+
+
+def test_extra_protected_is_a_fresh_list_per_state() -> None:
+    """
+    GIVEN two states built separately
+    WHEN one state's extra_protected list is mutated
+    THEN the other is unaffected (no shared default list)
+    """
+    first, second = _state(), _state()
+
+    first["extra_protected"].append("run.sh")
+
+    assert second["extra_protected"] == []
 
 
 # ---------------------------------------------------------------------------

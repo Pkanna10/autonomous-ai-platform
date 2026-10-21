@@ -12,7 +12,6 @@ from __future__ import annotations
 import hashlib
 import math
 from collections.abc import Iterable, Sequence
-from fnmatch import fnmatchcase
 
 from autonomous_ai_agents.common.models import (
     MIN_RUNS,
@@ -24,6 +23,7 @@ from autonomous_ai_agents.common.models import (
     ViolationRule,
 )
 from autonomous_ai_agents.common.paths import PathTraversalError as PathTraversalError
+from autonomous_ai_agents.common.paths import matches_pattern
 from autonomous_ai_agents.common.paths import normalize_path as normalize_path
 
 DEFAULT_PROTECTED_PATTERNS: tuple[str, ...] = (
@@ -74,21 +74,6 @@ DEFAULT_PROTECTED_PATTERNS: tuple[str, ...] = (
 """Paths a trial must never modify. Matched case-insensitively on POSIX relative paths."""
 
 
-def _matches(path: str, pattern: str) -> bool:
-    """fnmatch on case-folded text, with ``**/x`` also matching a root-level ``x``.
-
-    Case is folded on both sides because the user's checkout may sit on a
-    case-insensitive filesystem (macOS, Windows): there ``src/Conftest.py`` is
-    the file pytest loads as ``conftest.py``, so it must be protected too.
-    """
-    folded_path, folded_pattern = path.casefold(), pattern.casefold()
-    if fnmatchcase(folded_path, folded_pattern):
-        return True
-    return folded_pattern.startswith("**/") and fnmatchcase(
-        folded_path, folded_pattern[3:]
-    )
-
-
 def check_path(
     path: str, patterns: Sequence[str] = DEFAULT_PROTECTED_PATTERNS
 ) -> Violation | None:
@@ -98,7 +83,7 @@ def check_path(
     except PathTraversalError as exc:
         return Violation(rule=ViolationRule.path_traversal, path=path, message=str(exc))
     for pattern in patterns:
-        if _matches(normalized, pattern):
+        if matches_pattern(normalized, pattern):
             return Violation(
                 rule=ViolationRule.protected_path,
                 path=normalized,

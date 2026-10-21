@@ -45,6 +45,8 @@ from langgraph.types import interrupt
 from pydantic import ValidationError
 
 from autonomous_ai_agents.common.config import settings
+from autonomous_ai_agents.common.errors import DeliveryError as DeliveryError
+from autonomous_ai_agents.common.errors import EngineError as EngineError
 from autonomous_ai_agents.common.models import (
     METRIC_WALL_TIME_S,
     ApprovalDecision,
@@ -134,14 +136,6 @@ NODE_NAMES: tuple[str, ...] = (*LOOP_NODES, *TAIL_NODES)
 
 ROUTES: tuple[Route, ...] = ("approval_gate", "combine", "hypotheses")
 """The router's targets, each a node name."""
-
-
-class EngineError(Exception):
-    """A run cannot continue: the state or the measurements are not trustworthy."""
-
-
-class DeliveryError(EngineError):
-    """A branch would be unsafe (the default branch, outside the prefix, bad refname)."""
 
 
 @dataclass(frozen=True)
