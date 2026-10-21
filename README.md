@@ -5,7 +5,7 @@
 > and then improve it.
 
 [![Status](https://img.shields.io/badge/status-engine_rebuild-yellow)](<>)
-[![Step](https://img.shields.io/badge/build_step-0_of_5-blue)](<>)
+[![Step](https://img.shields.io/badge/build_step-1_of_5-blue)](<>)
 [![License](https://img.shields.io/badge/license-ISC-lightgrey)](<>)
 
 ---
@@ -80,23 +80,24 @@ CONNECT → UNDERSTAND → DEFINE "BETTER" → BASELINE → PROFILE → RESEARCH
 
 ## Current State (honest)
 
-| Area                                                        | State                           |
-| ----------------------------------------------------------- | ------------------------------- |
-| Docker Compose (Postgres + pgvector, Redis, Qdrant), schema | Working                         |
-| CI (lint, typecheck, tests, coverage), security scanning    | Working                         |
-| TypeScript Claude client (`packages/agent-core`)            | Working, 33 tests               |
-| Python settings (`common/config.py`)                        | Working                         |
-| LangGraph orchestrator                                      | Graph compiles; nodes are stubs |
-| Research engine (`arxiv_monitor.py`, `pdf_parser.py`)       | Placeholders                    |
-| Optimization, judges, learning, CLI                         | Not started                     |
+| Area                                                        | State                                                     |
+| ----------------------------------------------------------- | --------------------------------------------------------- |
+| Docker Compose (Postgres + pgvector, Redis, Qdrant), schema | Working                                                   |
+| CI (lint, typecheck, tests, coverage), security scanning    | Working                                                   |
+| TypeScript Claude client (`packages/agent-core`)            | Working, 33 tests                                         |
+| Python settings (`common/config.py`)                        | Working                                                   |
+| LangGraph orchestrator                                      | Walking skeleton: every node of the loop wired, stub data |
+| Research engine (`arxiv_monitor.py`, `pdf_parser.py`)       | Placeholders                                              |
+| Data model, anti-cheating, judges, ranking, lessons         | Working (Step 1), stub runner                             |
+| Research matcher, real runner, profiler, CLI                | Not started                                               |
 
 ### Build order
 
 | Step | Deliverable                                                                    | Status      |
 | ---- | ------------------------------------------------------------------------------ | ----------- |
-| 0    | Repair & upgrade: DB init fix, dependency bumps, current models, truthful docs | in progress |
-| 1    | Engine design: typed state and data models, judge and node interfaces          | next        |
-| 2    | Core loop end to end on CPU Python workloads, with an end-to-end fixture test  |             |
+| 0    | Repair & upgrade: DB init fix, dependency bumps, current models, truthful docs | done        |
+| 1    | Engine design: typed state and data models, judge and node interfaces          | in progress |
+| 2    | Core loop end to end on CPU Python workloads, with an end-to-end fixture test  | next        |
 | 3    | Research: arXiv monitor, PDF parser, playbook, claim extraction, matcher       |             |
 | 4    | Interfaces and runner: live CLI log, hardware detection, English goals         |             |
 | 5    | Dogfood on fixtures, open-source repos, then a real ML training pipeline       |             |
@@ -139,7 +140,7 @@ docker compose -f docker-compose.dev.yml up -d
 
 ```bash
 docker ps                                                     # postgres, redis, qdrant
-psql postgresql://dev:devpass@localhost:5432/ai_platform -c '\dt'   # 6 tables
+psql postgresql://dev:devpass@localhost:5432/ai_platform -c '\dt'   # 14 tables
 
 pnpm typecheck && pnpm lint && pnpm test
 cd services/python_agents && uv run pytest

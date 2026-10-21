@@ -1,191 +1,130 @@
-# Autonomous AI Agents - Python Services
+# Autonomous AI Agents - Python Service
 
-LangGraph-based orchestrator and research agents for the autonomous AI platform.
+The improvement engine: a LangGraph orchestrator that measures a baseline, runs
+hypotheses as trials, judges them against frozen evaluators and delivers only
+proven wins. See the root [README](../../README.md) for the vision and
+[CLAUDE.md](./CLAUDE.md) for the engine design.
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 services/python_agents/
-├── src/
-│   └── autonomous_ai_agents/          # Main package (import name)
-│       ├── orchestrator/               # LangGraph orchestrator (Phase 1, Week 3-4)
-│       │   ├── __init__.py
-│       │   ├── main.py                # Graph construction
-│       │   ├── nodes.py               # Agent nodes
-│       │   └── state.py               # AgentState definition
-│       ├── research/                   # Research discovery (Phase 1, Week 7-8)
-│       │   ├── __init__.py
-│       │   ├── arxiv_monitor.py       # arXiv monitoring
-│       │   └── pdf_parser.py          # PDF parsing
-│       ├── common/                     # Shared utilities
-│       │   ├── __init__.py
-│       │   └── config.py              # Environment config
-│       └── clients/                    # API clients
-│           └── __init__.py
-├── tests/                              # Test suite
-│   ├── conftest.py                    # Shared fixtures
-│   ├── orchestrator/
-│   ├── research/
-│   ├── common/
-│   └── clients/
-├── pyproject.toml                     # Package configuration
-├── langgraph.json                     # LangGraph deployment config
-├── .env.example                       # Environment template
-└── README.md                          # This file
+├── src/autonomous_ai_agents/
+│   ├── common/          # config.py (settings), models.py (data model), paths.py
+│   ├── orchestrator/    # state.py, nodes.py, main.py (graph + Orchestrator), events.py
+│   ├── optimization/    # anticheat.py, judges.py, ranking.py
+│   ├── execution/       # TrialRunner protocol, StubTrialRunner
+│   ├── learning/        # lessons.py
+│   ├── persistence/     # Repository protocol, InMemoryRepository
+│   └── research/        # arXiv monitor, PDF parser (placeholders until Step 3)
+├── tests/               # mirrors src/; conftest.py holds shared fixtures
+├── pyproject.toml       # uv, Hatchling, ruff, mypy strict, pytest, coverage
+└── langgraph.json       # LangGraph entry point (create_graph)
 ```
 
-## 🚀 Quick Start
-
-### Installation
+## Quick Start
 
 ```bash
-# From services/python_agents/ directory
-
-# 1. Create virtual environment (optional but recommended)
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# 2. Install package in editable mode with dev dependencies
-python -m pip install -e ".[dev]"
+cd services/python_agents
+uv sync --extra dev
+cp ../../.env.example ../../.env      # add ANTHROPIC_API_KEY (not needed for tests)
+uv run pytest
 ```
 
-### Configuration
+## Usage (Step 1: scripted run)
 
-```bash
-# Copy environment template
-cp .env.example .env
-
-# Edit .env with your actual credentials
-nano .env  # or vim, code, etc.
-```
-
-### Usage
+The skeleton runs the whole loop on deterministic stub data. A real runner,
+profiler and research arrive in Steps 2 to 4 behind the same interfaces.
 
 ```python
-from autonomous_ai_agents.orchestrator import Orchestrator
+from autonomous_ai_agents.common.models import (
+    ChangeClass, Direction, Guardrail, GuardrailKind, Hypothesis, HypothesisSource,
+    Objective, ObjectiveKind, Project, Workload,
+)
+from autonomous_ai_agents.execution.runner import (
+    ScriptedOutcome, StubBaselineRunner, StubTrialRunner,
+)
+from autonomous_ai_agents.optimization.judges import default_judges
+from autonomous_ai_agents.orchestrator.main import Orchestrator
+from autonomous_ai_agents.orchestrator.nodes import NodeContext
+from autonomous_ai_agents.persistence.repository import InMemoryRepository
 
-# Create orchestrator instance
-orchestrator = Orchestrator()
+project = Project(name="demo", root_path="/abs/path/to/repo")
+workload = Workload(
+    project_id=project.id, name="train",
+    command=("python", "train.py", "--steps", "200"), working_dir=".",
+)
+objective = Objective(kind=ObjectiveKind.runtime, metric="wall_time_s",
+                      direction=Direction.minimize)
+guardrails = [Guardrail(kind=GuardrailKind.tests_pass)]
 
-# Execute a task
-result = orchestrator.run("Install lodash package")
-print(result)
+# Until Step 2 the research node takes its candidates from the context and
+# the runners replay scripted measurements instead of executing anything.
+h1 = Hypothesis(
+    project_id=project.id, title="Cache frozen-encoder embeddings",
+    source=HypothesisSource.playbook, change_class=ChangeClass.efficiency,
+    expected_gain=0.4, provability=0.9, risk=0.1,
+)
+context = NodeContext(
+    runner=StubTrialRunner({h1.title: ScriptedOutcome(
+        touched_paths=("src/encoder.py",),
+        samples={"wall_time_s": (1.05, 1.02, 1.08, 1.05, 1.05)}, tests_passed=True,
+    )}),
+    baseline_runner=StubBaselineRunner(ScriptedOutcome(
+        samples={"wall_time_s": (1.80, 1.75, 1.85, 1.80, 1.80)}, tests_passed=True,
+    )),
+    judges=default_judges(),
+    repository=InMemoryRepository(),
+    candidates=(h1,),
+)
+
+engine = Orchestrator(context=context)
+result = engine.run(project, [workload], [objective], guardrails)
+print(result.status)                       # done | needs_approval | failed
+for verdict in result.state["verdicts"]:
+    print(verdict.outcome, verdict.summary)  # keep  "... 41.7% faster ..."
+
+if result.status == "needs_approval":       # a behaviour-changing hypothesis
+    request = result.approval_request       # show it to the human
+    result = engine.resume(result.run_id, decision_from_human)
 ```
 
-## 🧪 Testing
+Every node emits `EngineEvent`s; `engine.stream(...)` yields them live together
+with state updates, which is what the Step 4 CLI log renders.
+
+## Testing and Quality
 
 ```bash
-# Run all tests
-pytest
-
-# Run with coverage report
-pytest --cov=autonomous_ai_agents --cov-report=html
-
-# Run only unit tests (fast)
-pytest -m unit
-
-# Run specific test file
-pytest tests/orchestrator/test_nodes.py
-
-# Run in watch mode (requires pytest-watch)
-ptw
+uv run ruff check . && uv run ruff format --check .
+uv run mypy src tests
+uv run pytest                                   # coverage >= 90% enforced
+uv run pytest tests/orchestrator/test_graph_e2e.py -v
+uv run pip-audit && uv run bandit -q -r src -c pyproject.toml
 ```
 
-## 🔍 Type Checking
+Tests run in parallel with pytest-xdist; use `uv run pytest -o addopts=""` for a
+serial run.
 
-```bash
-# Run mypy type checker
-mypy src/autonomous_ai_agents
-```
+## Dependencies
 
-## 🎨 Code Formatting
+| Package        | Version          | Purpose                             |
+| -------------- | ---------------- | ----------------------------------- |
+| langgraph      | >=1.2,<2         | Orchestrator graph, checkpointing   |
+| langchain      | >=1.4,<2         | LangChain core used by LangGraph    |
+| anthropic      | >=1.17,<2        | Claude Messages API (Steps 2 and 3) |
+| pydantic       | 2.x              | Frozen data model, settings         |
+| structlog      | >=23             | Event logging outside a graph       |
+| pymupdf, arxiv | `research` extra | Research (Step 3)                   |
+| psycopg        | `database` extra | PostgreSQL repository (Step 2)      |
 
-```bash
-# Format with black
-black src/ tests/
+Dev: pytest, pytest-cov, pytest-xdist, mypy, ruff, pip-audit, bandit.
 
-# Lint with ruff
-ruff check src/ tests/
+## Documentation
 
-# Auto-fix ruff issues
-ruff check --fix src/ tests/
-```
+- [CLAUDE.md](./CLAUDE.md): engine design and conventions for this service
+- [Root CLAUDE.md](../../CLAUDE.md): vision, build order, stage gate
+- [STATUS.md](../../STATUS.md): development log and decisions
 
-## 📊 Development Status
+## License
 
-### Phase 1: Foundation (Weeks 1-9) - IN PROGRESS
-
-| Week | Component                       | Status                  |
-| ---- | ------------------------------- | ----------------------- |
-| 1-2  | Project setup, Docker, Database | ✅ Complete             |
-| 3-4  | **LangGraph orchestrator**      | 🚧 Structure ready      |
-| 5-6  | Package Manager                 | ⏳ Upcoming             |
-| 7-8  | Research Engine                 | 📁 Placeholders created |
-| 9    | State persistence               | ⏳ Upcoming             |
-
-## 🏗️ Architecture
-
-### LangGraph Orchestrator
-
-The orchestrator uses LangGraph's state machine to coordinate tasks:
-
-```
-User Input → Intent Parser → Task Planner → Execution → Results
-                                    ↓
-                            Error Recovery (Reflexion)
-```
-
-### State Schema
-
-```python
-class AgentState(TypedDict):
-    user_input: str  # Original request
-    intent: str | None  # Detected intent
-    context: dict  # Execution context
-    messages: list[str]  # Message history
-    error: str | None  # Error tracking
-    result: dict | None  # Execution results
-```
-
-## 📚 Dependencies
-
-### Core
-
-- **langgraph** (>=0.2.0) - Agent orchestration framework
-- **anthropic** (>=0.68.0) - Claude API client
-- **pydantic** (>=2.0.0) - Data validation
-- **pymupdf** (>=1.25.0) - PDF parsing
-- **arxiv** (>=2.1.0) - arXiv API client
-
-### Development
-
-- **pytest** (>=8.0.0) - Testing framework
-- **pytest-cov** - Coverage reporting
-- **mypy** (>=1.13.0) - Type checking
-- **ruff** (>=0.8.0) - Fast linting
-
-## 🔗 Related Packages
-
-- `packages/agent-core/` - TypeScript agent core
-- `packages/research-engine/` - Research paper processing
-- `packages/execution-engine/` - Code generation
-
-## 📖 Documentation
-
-- [CLAUDE.md](../../CLAUDE.md) - Complete project documentation
-- [STATUS.md](../../STATUS.md) - Current sprint status
-- [Implementation Timeline](../../CLAUDE.md#implementation-timeline) - 12-month
-  roadmap
-
-## 🤝 Contributing
-
-This is a solo developer project. See [CLAUDE.md](../../CLAUDE.md) for:
-
-- TDD workflow (Red-Green-Refactor)
-- Code style guidelines
-- Commit message format
-- Testing requirements (90%+ coverage)
-
-## 📄 License
-
-MIT
+ISC. See the root [LICENSE](../../LICENSE).
