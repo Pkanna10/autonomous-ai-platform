@@ -1,7 +1,7 @@
 # Autonomous AI Platform - Claude Code Configuration
 
 **Version:** 4.0.0 **Last Updated:** 2026-10-21 **Status:** Engine rebuild, Step
-0 (repair & upgrade) in progress
+1 (engine design) in progress
 
 ---
 
@@ -228,36 +228,67 @@ documentation_guide/       Original 2025 vision documents
 
 ---
 
-## Development Workflow: Stage Gate After Every Step
+## Development Workflow
 
-Every step in the build order starts with a briefing, ends with the same gate,
-and closes with a report. A step is not done until all of it passes and the
-result is recorded in `STATUS.md`.
+### Team and reporting line
 
-0. **Briefing before the step.** Before touching code, explain what the step
-   adds and why, with a diagram of where it sits in the engine loop, a concrete
-   example of the behaviour it enables, and the ordered list of changes. The
-   user confirms before implementation starts.
+```
+User (product owner): vision, priorities, approvals, merges
+└─ Lead (main session): design, briefings and reports, integration,
+   review routing, commits, PRs, CI
+   ├─ Builders: one unit each (<= ~400 lines, disjoint files), tests
+   │  first, report with evidence
+   ├─ Reviewer: fresh context, read-only, a different model from the
+   │  author; reports correctness, spec, security and weakened-test
+   │  findings only
+   ├─ Verifier: tries to break integrated increments (E2E, edge cases,
+   │  the stage gate)
+   └─ Researcher: read-only investigation when a decision needs evidence
+```
+
+Rules: spawn a role only when it adds separable value; the author never reviews
+their own work; parallel Builders only on disjoint files; reports carry commands
+and outputs, not claims; the Lead is the only writer to the branch. Every design
+decision gets a first-principles "why" in `STATUS.md`.
+
+### Process
+
+Shape Up for bets, Kanban for flow, XP for engineering, DORA for measurement.
+
+- A step is a sprint. **Briefing before** (what, why, one diagram, one example,
+  ordered changes); the user objects or redirects, otherwise work proceeds.
+  **Report after** (what was built, evidence, before/after, what the next step
+  needs). Both crisp.
+- One wave of work in progress at a time; the task list is the board.
+- **Definition of done:** tests first with 90%+ coverage; no test weakened or
+  skipped; Reviewer has no blocking findings; stage gate green; docs updated
+  (README, STATUS development log, CLAUDE.md); draft PR with CI green;
+  revertable in one commit.
+- Trunk-based: short-lived branch, one commit per unit (commitlint header <= 72
+  chars), PR, CI; `/security-review` before a PR is marked ready.
+- Retro at the end of each step: a "Lessons" entry in `STATUS.md` that changes
+  this file or the hooks when needed.
+- DORA-style tracking per step in `STATUS.md`: lead time, CI-red pushes, rework
+  commits, reverts.
+
+### Stage gate (end of every step)
+
 1. **Upgrades.** Review `pnpm outdated -r` and `uv tree --outdated --depth 1`
    (the gate reports both). Upgrade inside the step unless a major bump needs
    its own PR. Renovate opens weekly PRs for anything missed.
 2. **Audits.** `pnpm audit --audit-level=moderate`, `pip-audit` and `bandit`
    must be clean. `security.yml` (OSV, Trivy, secret scanning) runs on every
    push and every Monday. Fix or justify each finding in the PR.
-3. **Security review of the new code.** Walk the OWASP list above for what the
-   step added and add the protections it needs (worktree isolation for trials,
-   URL validation for paper fetching, approval gates for package installs).
-4. **Docs.** Update `README.md` (what the feature does, how to use it),
-   `STATUS.md` (a Development log row: planned, started, completed, PR, summary,
-   gate result) and the relevant `CLAUDE.md` if conventions changed.
+3. **Security review of the new code** against the OWASP list above; add the
+   protections the step needs (worktree isolation, URL validation, approval
+   gates for package installs).
+4. **Docs.** `README.md` (what and how), `STATUS.md` (development-log row:
+   planned, started, completed, PR, gate; decisions; lessons), the relevant
+   `CLAUDE.md` if conventions changed.
 5. **Quality.** `pnpm stage-gate` runs typecheck, lint, format, tests and
-   coverage for both ecosystems and fails on any red check
-   (`pnpm stage-gate:quick` skips the slower audit and outdated checks).
-6. **PR.** Open as draft, let CI run, fix until green, then mark ready.
-7. **Report after the step.** Same pattern as the briefing: what was
-   accomplished (diagram, example, before/after), what was verified and how,
-   what was found and fixed on the way, and what the next step needs from the
-   user.
+   coverage for both ecosystems (`pnpm stage-gate:quick` skips the slower audit
+   and outdated checks).
+6. **PR.** Draft, CI green, then ready for review.
 
 ---
 
