@@ -190,6 +190,33 @@ blockers and 12 should-fixes were closed before building.
   `projects.test_command`): one source of truth per run, and the state
   round-trips through a typed serializer that also works on Python 3.11.
 
+- **The measurement report cannot be forged** (wave 2 security review): inside
+  `unshare -r` the workload is root in its own user namespace and could write a
+  fake report into the launcher's pipe through `/proc/<pid>/fd`, which Landlock
+  does not cover. Reproduced, then closed with three measures verified together
+  on this host: a namespace-private `/proc` (`--mount-proc`, which also hides
+  the `unshare` process), a non-dumpable launcher, and a workload that drops
+  every capability before exec. A fresh `/proc` alone still let the forgery
+  through. The process runner also cross-checks the report against the kernel's
+  accounting of the whole process tree.
+- **A trial cannot replace the test runner**: `python -m unittest` and pytest
+  put the working directory first on `sys.path`, so an added `unittest.py` would
+  make a failing suite pass. Adding a top-level module named after the standard
+  library or the test runner is refused by the editor and rejected by the
+  capture rules, and every config file pytest reads (including `.pytest.ini` and
+  `pytest.toml`) is protected.
+- **Threads are allowed, processes are not** (when CPU or memory is judged):
+  threads cannot fake per-process CPU or memory accounting and are a legitimate
+  optimisation; process pools can.
+- **One fallback model and 8,000-token editor turns by default**: the cost cap
+  is a hard bound, so each request must fit its worst case (every model in the
+  chain billing a full response). With two fallbacks and 16,000 tokens a single
+  request was estimated at about $3 with a typical prompt, leaving a $5 run one
+  or two requests; now an empty-prompt request is $0.40.
+- **`/dev/shm` is not writable inside the sandbox**: it survives between timed
+  runs, so a workload could carry results from one run to the next. Workloads
+  that need shared memory get a per-run tmpfs in Step 5.
+
 ### 2026-10-21 (Step 1)
 
 - **Team and process adopted** (see `CLAUDE.md` "Development Workflow"): Lead,
