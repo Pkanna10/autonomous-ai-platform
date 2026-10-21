@@ -219,6 +219,9 @@ docstring-code-format = true
 # May require code fixes (2-4 hours), but prevents runtime type errors
 [tool.mypy]
 python_version = "3.11"
+# E2E fixture project and its edit sets: a second `tests` package and several
+# copies of `dedupe/core.py`. They are type-checked on their own instead.
+exclude = ['(^|/)tests/fixtures/']
 
 # Strict mode flags (Tier 3)
 strict = true                           # Enable all strict flags
