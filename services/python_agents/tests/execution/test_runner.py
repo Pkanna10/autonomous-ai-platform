@@ -26,7 +26,9 @@ from autonomous_ai_agents.common.models import (
     Workload,
 )
 from autonomous_ai_agents.execution.runner import (
+    BaselineRunner,
     ScriptedOutcome,
+    StubBaselineRunner,
     StubTrialRunner,
     TrialRunner,
 )
@@ -422,3 +424,70 @@ def test_scripted_outcome_defaults_are_empty_and_frozen() -> None:
     assert outcome.tokens_used == 0
     with pytest.raises(AttributeError):
         outcome.error = "nope"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Baseline runner
+# ---------------------------------------------------------------------------
+
+
+def test_stub_baseline_runner_satisfies_the_baseline_runner_protocol() -> None:
+    """
+    GIVEN a StubBaselineRunner
+    WHEN checked against the runtime-checkable BaselineRunner protocol
+    THEN it conforms
+    """
+    assert isinstance(StubBaselineRunner(FAST), BaselineRunner)
+
+
+def test_stub_baseline_runner_measures_every_workload_times_every_metric() -> None:
+    """
+    GIVEN two workloads and a script with two metrics plus tests_passed
+    WHEN the stub baseline runner measures them
+    THEN each workload gets one measurement per metric with no trial id
+    """
+    workloads = _workloads(_project())
+    runner = StubBaselineRunner(FAST)
+
+    measurements = runner.measure(workloads)
+
+    assert len(measurements) == 2 * 3
+    assert all(m.trial_id is None for m in measurements)
+    for workload in workloads:
+        by_metric = _by_metric(measurements, workload)
+        assert set(by_metric) == {
+            METRIC_WALL_TIME_S,
+            METRIC_PEAK_RSS_BYTES,
+            METRIC_TESTS_PASSED,
+        }
+        wall = by_metric[METRIC_WALL_TIME_S]
+        assert wall.samples == WALL_SAMPLES
+        assert wall.stats == RunStats.from_samples(WALL_SAMPLES, unit="s")
+        assert wall.output_fingerprint == FINGERPRINT
+        assert by_metric[METRIC_TESTS_PASSED].samples == (1.0,)
+
+
+def test_stub_baseline_runner_records_every_call() -> None:
+    """
+    GIVEN a stub baseline runner measured twice with different workloads
+    WHEN the calls are inspected
+    THEN they list the workload ids of each call in order
+    """
+    train, evaluate = _workloads(_project())
+    runner = StubBaselineRunner(FAST)
+
+    runner.measure((train, evaluate))
+    runner.measure((evaluate,))
+
+    assert runner.calls == [(train.id, evaluate.id), (evaluate.id,)]
+
+
+def test_stub_baseline_runner_with_an_empty_script_measures_nothing() -> None:
+    """
+    GIVEN a stub baseline runner scripted with no samples and no test flag
+    WHEN it measures a workload
+    THEN no measurements come back
+    """
+    workloads = _workloads(_project())
+
+    assert StubBaselineRunner(ScriptedOutcome()).measure(workloads) == ()

@@ -5,6 +5,11 @@ runner (Step 2) creates a git worktree, lets Claude edit the code, runs each
 workload N times and measures it. ``StubTrialRunner`` replays scripted
 outcomes instead, so the whole loop is testable with no subprocess, git or
 LLM involved and the judges see exactly the measurements the test scripted.
+
+``BaselineRunner`` is the same seam for the baseline node: it measures the
+untouched code once per workload (``trial_id`` is ``None``). The real one
+shares the runner's measurement code in Step 2; ``StubBaselineRunner`` replays
+one ``ScriptedOutcome`` for every workload.
 """
 
 from __future__ import annotations
@@ -137,7 +142,7 @@ class StubTrialRunner:
 
 
 def _measurements(
-    trial_id: str, workloads: Sequence[Workload], script: ScriptedOutcome
+    trial_id: str | None, workloads: Sequence[Workload], script: ScriptedOutcome
 ) -> tuple[Measurement, ...]:
     measurements: list[Measurement] = []
     for workload in workloads:
@@ -165,3 +170,30 @@ def _measurements(
                 )
             )
     return tuple(measurements)
+
+
+@runtime_checkable
+class BaselineRunner(Protocol):
+    """Measures the untouched code on every workload (``trial_id`` is ``None``)."""
+
+    def measure(self, workloads: Sequence[Workload]) -> tuple[Measurement, ...]: ...
+
+
+class StubBaselineRunner:
+    """A ``BaselineRunner`` that replays one ``ScriptedOutcome`` per workload.
+
+    Measurements are built exactly as ``StubTrialRunner`` builds them for a
+    trial (one per workload and metric, plus ``tests_passed`` when scripted)
+    but with no trial id. The script's ``touched_paths``, ``error``, cost and
+    token fields are ignored: a baseline has no diff and costs no tokens.
+    Every call is appended to ``calls`` as the tuple of workload ids measured.
+    """
+
+    def __init__(self, script: ScriptedOutcome) -> None:
+        self._script = script
+        self.calls: list[tuple[str, ...]] = []
+
+    def measure(self, workloads: Sequence[Workload]) -> tuple[Measurement, ...]:
+        """Return the scripted baseline measurements for ``workloads``."""
+        self.calls.append(tuple(workload.id for workload in workloads))
+        return _measurements(None, workloads, self._script)
