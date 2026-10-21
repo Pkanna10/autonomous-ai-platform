@@ -207,6 +207,31 @@ was fixed test-first in a follow-up commit before the gate.
 - **`mypy` runs on `tests` as well as `src` in the stage gate**: typed tests
   caught two real signature drifts in Step 1; the cost is zero once tests are
   written typed from the start.
+- **The state is the only source of truth inside a run** (review wave 2): judge
+  results first travelled through the repository because the `trials` channel is
+  append-only; a resume on a fresh repository then lost every verdict of the
+  round. A plain `round_trials` key (replaced each round) now carries the
+  round's trials from `trials` through `judges` to `verdicts`, and the
+  repository is an audit sink.
+- **Every objective metric must be measured exactly once per workload**: the
+  run-count rule only checked measurements that existed, so a trial could be
+  kept by omitting a secondary metric or listing a fast duplicate first. Missing
+  and duplicate measurements are violations; an incomplete baseline fails the
+  run.
+- **The approval gate never raises after `interrupt()`**: LangGraph replays the
+  first resume value, so an exception after the interrupt wedges the thread for
+  good. A malformed decision re-interrupts with the error on the request.
+- **Branch names use full ids and are never nested** (`engine/run-<run_id>`,
+  `engine/trial-<run_id>-<hypothesis_id>`): 8-character prefixes collided and
+  `engine/<run>` cannot coexist with `engine/<run>/<trial>` in git. Run ids,
+  candidate ids, the prefix and every branch are validated as git refnames.
+- **One representation of a human decision**: the gate, `combine`, the report
+  and the lessons all derive from `decided_verdicts(verdicts, approval)`, and
+  the gate saves the decided copies, so the repository, the state and the report
+  agree.
+- **Trial branches are not idempotent yet**: lesson ids are `uuid5(verdict id)`
+  so a re-executed `learn` replaces rather than duplicates rows; trial ids come
+  from the runner and get an idempotency key with the real runner in Step 2.
 - **Dependency majors wait for their own PRs** (TypeScript 7, ESLint 10, Vitest
   5, Vite 8, redis 8, PyMuPDF 2): none is needed by Step 1 and each changes
   tooling behaviour; Renovate opens them weekly.
@@ -283,10 +308,10 @@ and the review of the runner's isolation).
 
 ## Delivery Metrics (DORA-style, per step)
 
-| Step | Lead time | CI-red pushes           | Rework commits        | Reverts |
-| ---- | --------- | ----------------------- | --------------------- | ------- |
-| 0    | ~2 h      | 0                       | 0                     | 0       |
-| 1    | ~3 h      | 1 (GHA cache, not code) | 3 (regroup, 2 review) | 0       |
+| Step | Lead time | CI-red pushes                | Rework commits        | Reverts |
+| ---- | --------- | ---------------------------- | --------------------- | ------- |
+| 0    | ~2 h      | 0                            | 0                     | 0       |
+| 1    | ~4 h      | 2 (GHA cache; README format) | 4 (regroup, 3 review) | 0       |
 
 ## Lessons (retro per step)
 

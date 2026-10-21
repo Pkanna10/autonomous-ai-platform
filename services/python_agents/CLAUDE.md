@@ -53,8 +53,9 @@ Frozen, outside the state (trial code cannot touch them):
 
 `after_verdicts` routes to `approval_gate` when any verdict `needs_approval`, to
 `combine` when at least one verdict is `keep` (and nothing is pending), and back
-to `hypotheses` for another round when nothing was kept and
-`round < max_rounds`. The round loop is bounded by `max_rounds` only.
+to `hypotheses` for another round when nothing was kept, `round < max_rounds`
+and an untrialled candidate remains. A gate decision always proceeds to
+`combine`, so a run ends with a report even when nothing is kept.
 
 ### Package map
 
@@ -80,6 +81,11 @@ every node follows:
 2. **Every key is always present.** LangGraph omits keys that were never set, so
    `initial_state(project, workloads, objectives, guardrails)` sets all of them
    and nodes index the state directly instead of using `.get`.
+3. **The state is the only source of truth inside a run.** `round_trials` holds
+   the current round's trials (replaced each round): `trials` writes them
+   unjudged, `judges` writes the judged copies there and appends them to the
+   `trials` channel, `verdicts` reads them. The `Repository` is an audit sink;
+   the only node that reads from it is `hypotheses` (lessons).
 
 ### Data model (`common/models.py`)
 
@@ -117,6 +123,10 @@ test fails when a new model is not added.
   `noise_floor = max(2·σ_baseline, 2·σ_trial, min_relative_gain·|mean_baseline|)`
   and `exceeds_noise` requires the gain to exceed it strictly, on every
   workload. `check_run_count` enforces `MIN_RUNS` on objective metrics.
+- Completeness: every objective metric must be measured exactly once per
+  workload, in the baseline (else the run fails) and in every trial (else
+  `missing_measurement` / `duplicate_measurement` violations reject it). A trial
+  cannot pass by leaving a metric out or by listing a fast duplicate first.
 - `fingerprint` is sha256 of the workload output; `compare_fingerprints` pairs
   baseline and trial by workload and flags mismatches.
 
@@ -179,7 +189,11 @@ outcomes, so every external effect is scripted:
 `run(project, workloads, objectives, guardrails, *, run_id=None, max_rounds=None) -> EngineRunResult`
 (`run_id`, `status` of `done | needs_approval | failed`, final `state`,
 `approval_request`), `resume(run_id, decision)` and `stream(...)`, which yields
-each `EngineEvent` as the node emits it.
+each `EngineEvent` as the node emits it and ends with a `paused` event when the
+run waits at the gate. `run` refuses a `run_id` that already has a thread,
+`resume` refuses a run that is not waiting at the gate, and every result is
+saved to the repository. An invalid approval payload re-interrupts with the
+error on the request instead of failing the run.
 
 ### Live log (`orchestrator/events.py`)
 
@@ -224,8 +238,15 @@ engine until the step that needs them; the vision documents in
 - `Workload.command` is argv, never a shell string, and `working_dir` is
   validated by `normalize_path`.
 - `Paper.pdf_url` must be https; every fetched URL is validated before use.
-- `deliver_node` refuses `project.default_branch`; trial branches use
-  `TRIAL_BRANCH_PREFIX`.
+- Branches are `engine/run-<run_id>` (delivery) and
+  `engine/trial-<run_id>-<hypothesis_id>` (trials): full ids, never nested,
+  validated as git refnames by `assert_safe_branch`, which also refuses
+  `project.default_branch`. Run ids and candidate ids are validated
+  (`[A-Za-z0-9][A-Za-z0-9._-]{0,63}`, no `..`, no `.lock`); the prefix must be
+  non-empty and end with `/`.
+- Report cells (`Delivery.report_markdown`) are sanitised: newlines collapsed,
+  `| < > & [ ]` and backticks escaped, 200 characters max, because trial error
+  text and paper titles end up in a PR body.
 - Protected patterns cover CI files, `pyproject.toml`, lockfiles and interpreter
   hooks, so a trial cannot change what judges it.
 - The checkpoint store must never be writable by trial code:
