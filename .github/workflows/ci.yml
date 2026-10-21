@@ -22,6 +22,7 @@ jobs:
       typescript: ${{ steps.filter.outputs.typescript }}
       python: ${{ steps.filter.outputs.python }}
       workflows: ${{ steps.filter.outputs.workflows }}
+      infrastructure: ${{ steps.filter.outputs.infrastructure }}
     steps:
       - uses: actions/checkout@v4
 
@@ -40,6 +41,9 @@ jobs:
               - 'services/python_agents/pyproject.toml'
             workflows:
               - '.github/workflows/**'
+            infrastructure:
+              - 'infrastructure/schema/**'
+              - 'docker-compose.dev.yml'
 
   # Shared setup for TypeScript jobs
   setup-typescript:
@@ -287,6 +291,77 @@ jobs:
       - name: Run tests with parallelization
         run: uv run pytest -n auto --cov --cov-report=xml --cov-report=term
         if: hashFiles('services/python_agents/tests/**/*.py') != ''
+
+  # Database schema: apply every migration to a real Postgres, then re-apply the
+  # newest one to prove it is idempotent (same image as docker-compose.dev.yml)
+  schema-apply:
+    name: Schema Apply (Postgres)
+    runs-on: ubuntu-22.04
+    needs: detect-changes
+    if: |
+      needs.detect-changes.outputs.infrastructure == 'true' ||
+      needs.detect-changes.outputs.workflows == 'true' ||
+      github.event_name == 'push'
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: ai_platform
+          POSTGRES_USER: dev
+          POSTGRES_PASSWORD: devpass
+        ports:
+          - '5432:5432'
+        options: >-
+          --health-cmd "pg_isready -U dev -d ai_platform"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Ensure psql is available
+        run: which psql || (sudo apt-get update && sudo apt-get install -y postgresql-client)
+
+      # Same order as docker-entrypoint-initdb.d on a fresh volume (file name order)
+      - name: Apply migrations in order (001 -> 002 -> 003)
+        run: |
+          for file in infrastructure/schema/*.sql; do
+            echo "::group::${file}"
+            PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -v ON_ERROR_STOP=1 -f "${file}"
+            echo "::endgroup::"
+          done
+
+      - name: Re-apply 003 (idempotence proof)
+        run: |
+          PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -v ON_ERROR_STOP=1 -f infrastructure/schema/003_engine.sql
+
+      - name: Verify engine tables and columns
+        run: |
+          query() {
+            PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -v ON_ERROR_STOP=1 -tAc "$1"
+          }
+          status=0
+          for table in projects workloads objectives guardrails techniques hotspots hypotheses lessons; do
+            if [ "$(query "SELECT to_regclass('public.${table}') IS NOT NULL")" = "t" ]; then
+              echo "table ${table}: present"
+            else
+              echo "::error::table ${table} is missing"
+              status=1
+            fi
+          done
+          for column in claims citation_count; do
+            if [ "$(query "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'research_papers' AND column_name = '${column}')")" = "t" ]; then
+              echo "column research_papers.${column}: present"
+            else
+              echo "::error::column research_papers.${column} is missing"
+              status=1
+            fi
+          done
+          exit "${status}"
 
   # Dependency security scan (optimized)
   security:
