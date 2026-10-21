@@ -116,6 +116,10 @@ def test_normalize_path_rejects_traversal_and_absolute_paths(raw: str) -> None:
         "engine.toml",
         "tests\\test_win.py",
         "./tests/test_dot.py",
+        "src/Conftest.py",
+        "PYPROJECT.TOML",
+        "Tests/Test_Case.py",
+        ".GitHub/workflows/CI.yml",
     ],
 )
 def test_protected_paths_are_detected(path: str) -> None:

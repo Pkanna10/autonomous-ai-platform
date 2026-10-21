@@ -71,14 +71,22 @@ DEFAULT_PROTECTED_PATTERNS: tuple[str, ...] = (
     "**/engine.toml",
     "**/engine.yaml",
 )
-"""Paths a trial must never modify. Matched with fnmatch on POSIX relative paths."""
+"""Paths a trial must never modify. Matched case-insensitively on POSIX relative paths."""
 
 
 def _matches(path: str, pattern: str) -> bool:
-    """fnmatch, with ``**/x`` also matching a root-level ``x``."""
-    if fnmatchcase(path, pattern):
+    """fnmatch on case-folded text, with ``**/x`` also matching a root-level ``x``.
+
+    Case is folded on both sides because the user's checkout may sit on a
+    case-insensitive filesystem (macOS, Windows): there ``src/Conftest.py`` is
+    the file pytest loads as ``conftest.py``, so it must be protected too.
+    """
+    folded_path, folded_pattern = path.casefold(), pattern.casefold()
+    if fnmatchcase(folded_path, folded_pattern):
         return True
-    return pattern.startswith("**/") and fnmatchcase(path, pattern[3:])
+    return folded_pattern.startswith("**/") and fnmatchcase(
+        folded_path, folded_pattern[3:]
+    )
 
 
 def check_path(
