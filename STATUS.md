@@ -18,14 +18,14 @@ or build something new and then improve it (see `CLAUDE.md`).
 One row per build step. "Gate" is the result of `pnpm stage-gate` at the end of
 the step.
 
-| Step | Deliverable                                                     | Planned    | Started    | Completed  | PR  | Gate   |
-| ---- | --------------------------------------------------------------- | ---------- | ---------- | ---------- | --- | ------ |
-| 0    | Repair & upgrade (DB init, deps, models, docs, stage gate)      | 2026-10-21 | 2026-10-21 | 2026-10-21 |     | passed |
-| 1    | Engine design (typed state, data model, judges, migration 003)  | next       |            |            |     |        |
-| 2    | Core loop end to end on CPU Python workloads + E2E fixture test |            |            |            |     |        |
-| 3    | Research: arXiv, PDF, playbook, claim extraction, matcher       |            |            |            |     |        |
-| 4    | Interfaces + runner: live CLI, hardware detection, `--goal`     |            |            |            |     |        |
-| 5    | Dogfood: fixtures, OSS repos, real ML training pipeline         |            |            |            |     |        |
+| Step | Deliverable                                                     | Planned    | Started    | Completed  | PR                                                                | Gate   |
+| ---- | --------------------------------------------------------------- | ---------- | ---------- | ---------- | ----------------------------------------------------------------- | ------ |
+| 0    | Repair & upgrade (DB init, deps, models, docs, stage gate)      | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed |
+| 1    | Engine design (typed state, data model, judges, migration 003)  | next       |            |            |                                                                   |        |
+| 2    | Core loop end to end on CPU Python workloads + E2E fixture test |            |            |            |                                                                   |        |
+| 3    | Research: arXiv, PDF, playbook, claim extraction, matcher       |            |            |            |                                                                   |        |
+| 4    | Interfaces + runner: live CLI, hardware detection, `--goal`     |            |            |            |                                                                   |        |
+| 5    | Dogfood: fixtures, OSS repos, real ML training pipeline         |            |            |            |                                                                   |        |
 
 Recommended Claude Code model and effort per step: 0 Opus 5.5 High; 1 Fable 5.1
 Extra; 2-4 Opus 5.5 Ultracode (Fable 5.1 for the paper matcher); 5 Opus 5.5
