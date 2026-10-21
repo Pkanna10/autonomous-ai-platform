@@ -190,8 +190,8 @@ COMMENT ON INDEX idx_papers_preconditions IS 'Enables queries on precondition ch
 ALTER TABLE performance_metrics
   ADD COLUMN IF NOT EXISTS run_stats JSONB,
   ADD COLUMN IF NOT EXISTS hardware JSONB,
-  ADD COLUMN IF NOT EXISTS workload_id UUID REFERENCES workloads(id),
-  ADD COLUMN IF NOT EXISTS task_id UUID REFERENCES task_executions(id),
+  ADD COLUMN IF NOT EXISTS workload_id UUID REFERENCES workloads(id) ON DELETE CASCADE,
+  ADD COLUMN IF NOT EXISTS task_id UUID REFERENCES task_executions(id) ON DELETE CASCADE,
   ADD COLUMN IF NOT EXISTS trial_id UUID,
   ADD COLUMN IF NOT EXISTS output_fingerprint VARCHAR(64);
 
@@ -233,14 +233,17 @@ COMMENT ON INDEX idx_metrics_run_stats IS 'Enables queries like: run_stats @> {"
 -- Estimated time: <1 second
 
 ALTER TABLE task_executions
-  ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id),
+  ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
   ADD COLUMN IF NOT EXISTS thread_id VARCHAR(255),
   ADD COLUMN IF NOT EXISTS phase VARCHAR(32),
   ADD COLUMN IF NOT EXISTS objective_ids UUID[],
   ADD COLUMN IF NOT EXISTS trials JSONB NOT NULL DEFAULT '[]'::jsonb,
   ADD COLUMN IF NOT EXISTS verdicts JSONB NOT NULL DEFAULT '[]'::jsonb,
   ADD COLUMN IF NOT EXISTS delivery JSONB,
-  ADD COLUMN IF NOT EXISTS baseline JSONB;
+  ADD COLUMN IF NOT EXISTS baseline JSONB,
+  ADD COLUMN IF NOT EXISTS state JSONB;
+
+COMMENT ON COLUMN task_executions.state IS 'Full EngineState snapshot (JSON) for resume, audit and repository round-trips';
 
 DO $$
 BEGIN
@@ -327,7 +330,7 @@ CREATE TABLE IF NOT EXISTS hotspots (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   workload_id UUID NOT NULL REFERENCES workloads(id) ON DELETE CASCADE,
-  task_id UUID REFERENCES task_executions(id),
+  task_id UUID REFERENCES task_executions(id) ON DELETE CASCADE,
   file_path TEXT NOT NULL,
   symbol TEXT NOT NULL,
   line_start INTEGER,
@@ -362,9 +365,11 @@ COMMENT ON COLUMN hotspots.task_id IS 'Engine run that profiled it, when known';
 CREATE TABLE IF NOT EXISTS hypotheses (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  task_id UUID REFERENCES task_executions(id),
+  task_id UUID REFERENCES task_executions(id) ON DELETE CASCADE,
   technique_id UUID REFERENCES techniques(id),
   paper_id UUID REFERENCES research_papers(id),
+  claim_id UUID,
+  lesson_ids UUID[] NOT NULL DEFAULT '{}',
   source VARCHAR(16) NOT NULL,
   hotspot_ids UUID[] NOT NULL DEFAULT '{}',
   title TEXT NOT NULL,
@@ -407,10 +412,10 @@ COMMENT ON INDEX idx_hypotheses_score IS 'Optimizes queries: ORDER BY score DESC
 
 CREATE TABLE IF NOT EXISTS lessons (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  project_id UUID REFERENCES projects(id) ON DELETE SET NULL,
-  task_id UUID REFERENCES task_executions(id),
-  hypothesis_id UUID REFERENCES hypotheses(id) ON DELETE SET NULL,
-  technique_id UUID REFERENCES techniques(id),
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  task_id UUID REFERENCES task_executions(id) ON DELETE CASCADE,
+  hypothesis_id UUID,
+  technique_id UUID,
   verdict_id UUID,
   context TEXT[] NOT NULL DEFAULT '{}',
   outcome VARCHAR(16) NOT NULL,

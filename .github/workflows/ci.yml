@@ -335,9 +335,28 @@ jobs:
             echo "::endgroup::"
           done
 
+      - name: Snapshot schema catalog before the second run
+        run: |
+          snapshot() {
+            PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -tAc "SELECT conrelid::regclass, conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE connamespace = 'public'::regnamespace ORDER BY 1, 2" > "$1"
+            PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -tAc "SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' ORDER BY 1, 2" >> "$1"
+            PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -tAc "SELECT table_name, column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = 'public' ORDER BY 1, 2" >> "$1"
+          }
+          snapshot /tmp/schema-before.txt
+
       - name: Re-apply 003 (idempotence proof)
         run: |
           PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -v ON_ERROR_STOP=1 -f infrastructure/schema/003_engine.sql
+
+      - name: Second run changed nothing (no duplicated constraints or indexes)
+        run: |
+          snapshot() {
+            PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -tAc "SELECT conrelid::regclass, conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE connamespace = 'public'::regnamespace ORDER BY 1, 2" > "$1"
+            PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -tAc "SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' ORDER BY 1, 2" >> "$1"
+            PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -tAc "SELECT table_name, column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = 'public' ORDER BY 1, 2" >> "$1"
+          }
+          snapshot /tmp/schema-after.txt
+          diff -u /tmp/schema-before.txt /tmp/schema-after.txt
 
       - name: Verify engine tables and columns
         run: |
