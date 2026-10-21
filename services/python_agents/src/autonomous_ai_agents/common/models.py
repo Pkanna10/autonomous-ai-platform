@@ -103,7 +103,7 @@ class Direction(StrEnum):
 
 class GuardrailKind(StrEnum):
     output_equivalence = "output_equivalence"
-    tests_pass = "tests_pass"
+    tests_pass = "tests_pass"  # nosec B105: an enum value, not a password
     metric_bound = "metric_bound"
 
 
