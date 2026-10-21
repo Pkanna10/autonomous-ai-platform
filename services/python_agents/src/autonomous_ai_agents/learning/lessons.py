@@ -8,9 +8,13 @@ back when ranking the next round's hypotheses.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Mapping, Sequence
 
 from autonomous_ai_agents.common.models import Hypothesis, Lesson, Verdict
+
+LESSON_NAMESPACE = uuid.UUID("6f1d3c2a-8e4b-5a7c-9d0e-1f2a3b4c5d6e")
+"""uuid5 namespace for lesson ids: one verdict always teaches the same lesson id."""
 
 
 def lesson_from_verdict(
@@ -24,7 +28,9 @@ def lesson_from_verdict(
 
     ``project_id`` of ``None`` makes the lesson global. The text reads
     ``"<context tags or 'general'> -> <title>: <outcome> (<gain>)"``, the gain
-    suffix present only when the verdict measured one.
+    suffix present only when the verdict measured one. The id is the uuid5 of
+    the verdict id, so learning the same verdict twice (a re-executed learn
+    node) replaces the stored lesson instead of adding a second one.
 
     Raises ``ValueError`` when the verdict belongs to a different hypothesis,
     so an outcome is never attributed to the wrong idea.
@@ -41,6 +47,7 @@ def lesson_from_verdict(
     if verdict.gain is not None:
         text += f" ({verdict.gain:+.1%})"
     return Lesson(
+        id=str(uuid.uuid5(LESSON_NAMESPACE, verdict.id)),
         project_id=project_id,
         verdict_id=verdict.id,
         hypothesis_id=hypothesis.id,

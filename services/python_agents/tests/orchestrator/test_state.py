@@ -9,9 +9,11 @@ that nodes feed with deltas.
 from __future__ import annotations
 
 import operator
+import re
 import uuid
 from typing import get_type_hints
 
+import pytest
 from langgraph.graph import END, START, StateGraph
 
 from autonomous_ai_agents.common.config import settings
@@ -29,9 +31,11 @@ from autonomous_ai_agents.common.models import (
 )
 from autonomous_ai_agents.orchestrator.state import (
     REDUCER_KEYS,
+    RUN_ID_PATTERN,
     AgentState,
     EngineState,
     initial_state,
+    validate_run_id,
 )
 
 # ---------------------------------------------------------------------------
@@ -91,6 +95,8 @@ def test_initial_state_sets_every_annotated_key() -> None:
     state = _state()
 
     assert set(EngineState.__annotations__) == set(state)
+    assert len(state) == 25
+    assert "round_trials" in state
 
 
 def test_initial_state_defaults() -> None:
@@ -117,6 +123,7 @@ def test_initial_state_defaults() -> None:
         "papers",
         "hypotheses",
         "trials",
+        "round_trials",
         "verdicts",
         "pending_approval_ids",
         "kept_verdict_ids",
@@ -179,6 +186,80 @@ def test_initial_state_honours_run_id_and_max_rounds_overrides() -> None:
 
     assert state["run_id"] == "run-42"
     assert state["max_rounds"] == 7
+
+
+@pytest.mark.parametrize("max_rounds", [0, -1])
+def test_initial_state_rejects_fewer_than_one_round(max_rounds: int) -> None:
+    """
+    GIVEN max_rounds below 1
+    WHEN initial_state builds a state
+    THEN a ValueError says a run needs at least one round
+    """
+    with pytest.raises(ValueError, match="max_rounds"):
+        _state(max_rounds=max_rounds)
+
+
+def test_initial_state_validates_the_run_id() -> None:
+    """
+    GIVEN a run id that cannot name a git branch or thread safely
+    WHEN initial_state builds a state
+    THEN a ValueError names the run id; a generated uuid4 always passes
+    """
+    with pytest.raises(ValueError, match="run_id"):
+        _state(run_id="../../main")
+
+    generated = _state()["run_id"]
+    assert validate_run_id(generated) == generated
+
+
+@pytest.mark.parametrize(
+    "run_id",
+    [
+        "a",
+        "run-42",
+        "bridge.nightly_2026-10-21",
+        "A" * 64,
+        "0b9d4c1e-7f3a-4e2b-9c5d-6a8f1e2d3c4b",
+    ],
+)
+def test_validate_run_id_accepts_refname_safe_ids(run_id: str) -> None:
+    """
+    GIVEN a run id of 1-64 letters, digits, dots, dashes or underscores that
+          starts with a letter or digit
+    WHEN validate_run_id checks it
+    THEN it is returned unchanged and matches RUN_ID_PATTERN
+    """
+    assert validate_run_id(run_id) == run_id
+    assert re.fullmatch(RUN_ID_PATTERN, run_id)
+
+
+@pytest.mark.parametrize(
+    "run_id",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("A" * 65, id="too long"),
+        pytest.param("-run", id="leading dash"),
+        pytest.param(".run", id="leading dot"),
+        pytest.param("run/1", id="slash"),
+        pytest.param("run 1", id="space"),
+        pytest.param("run~1", id="tilde"),
+        pytest.param("run@{1}", id="reflog"),
+        pytest.param("run..1", id="double dot"),
+        pytest.param("..", id="parent"),
+        pytest.param("run.lock", id="lock suffix"),
+        pytest.param("run.", id="trailing dot"),
+        pytest.param("run\n1", id="newline"),
+        pytest.param("run\n", id="trailing newline"),
+    ],
+)
+def test_validate_run_id_rejects_unsafe_ids(run_id: str) -> None:
+    """
+    GIVEN a run id that is empty, too long, or not a safe git refname piece
+    WHEN validate_run_id checks it
+    THEN a ValueError names the offending id
+    """
+    with pytest.raises(ValueError, match="run_id"):
+        validate_run_id(run_id)
 
 
 def test_fresh_states_get_distinct_run_ids() -> None:

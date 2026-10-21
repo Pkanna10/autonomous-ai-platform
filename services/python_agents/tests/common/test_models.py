@@ -450,6 +450,44 @@ def test_verdict_outcome_values_match_sql_check_list() -> None:
     assert VerdictOutcome("keep") is VerdictOutcome.keep
 
 
+def test_violation_rules_cover_measurement_completeness() -> None:
+    """
+    GIVEN the ViolationRule enum
+    WHEN the measurement-completeness rules are looked up by value
+    THEN missing_measurement and duplicate_measurement exist next to the others
+    """
+    assert ViolationRule("missing_measurement") is ViolationRule.missing_measurement
+    assert ViolationRule("duplicate_measurement") is ViolationRule.duplicate_measurement
+    assert {rule.value for rule in ViolationRule} == {
+        "protected_path",
+        "path_traversal",
+        "too_few_runs",
+        "fingerprint_mismatch",
+        "missing_fingerprint",
+        "missing_measurement",
+        "duplicate_measurement",
+    }
+
+
+def test_approval_request_error_defaults_to_none_and_round_trips() -> None:
+    """
+    GIVEN an ApprovalRequest without and with an error (a rejected resume payload)
+    WHEN each is dumped to JSON and validated back
+    THEN the error defaults to None and survives the round trip unchanged
+    """
+    plain = ApprovalRequest(run_id="run-1", message="1 change needs approval")
+    flagged = plain.model_copy(
+        update={"error": "invalid approval decision: approver is required"}
+    )
+
+    assert plain.error is None
+    assert ApprovalRequest.model_validate_json(plain.model_dump_json()) == plain
+    restored = ApprovalRequest.model_validate_json(flagged.model_dump_json())
+    assert restored == flagged
+    assert restored.error == "invalid approval decision: approver is required"
+    assert ApprovalRequest.model_validate(flagged.model_dump(mode="json")) == flagged
+
+
 # ---------------------------------------------------------------------------
 # Validators and bounds
 # ---------------------------------------------------------------------------

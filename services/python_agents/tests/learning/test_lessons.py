@@ -7,6 +7,8 @@ and skips verdicts whose hypothesis it cannot find.
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from autonomous_ai_agents.common.models import (
@@ -20,10 +22,12 @@ from autonomous_ai_agents.common.models import (
 )
 from autonomous_ai_agents.learning import lessons as lessons_pkg
 from autonomous_ai_agents.learning.lessons import (
+    LESSON_NAMESPACE,
     lesson_from_verdict,
     lessons_from_verdicts,
 )
 from autonomous_ai_agents.optimization.ranking import lesson_boost
+from autonomous_ai_agents.persistence.repository import InMemoryRepository
 
 PROJECT_ID = new_id()
 TECHNIQUE_ID = new_id()
@@ -229,6 +233,31 @@ def test_lesson_from_verdict_keeps_every_outcome(outcome: VerdictOutcome) -> Non
 
     assert lesson.outcome is outcome
     assert lesson.text.endswith(f": {outcome.value}")
+
+
+def test_lesson_id_is_derived_from_the_verdict_so_relearning_is_idempotent() -> None:
+    """
+    GIVEN one verdict learned twice (a re-executed learn node) and another verdict
+    WHEN lessons are derived and both copies are saved to a repository
+    THEN both copies share the uuid5 id of the verdict, the other verdict's
+         lesson differs, and the repository holds a single row for the first
+    """
+    hypothesis = _hypothesis()
+    verdict = _verdict(hypothesis)
+
+    first = lesson_from_verdict(verdict, hypothesis, project_id=PROJECT_ID)
+    again = lesson_from_verdict(
+        verdict, hypothesis, project_id=PROJECT_ID, context=("python",)
+    )
+    other = lesson_from_verdict(_verdict(hypothesis), hypothesis, project_id=PROJECT_ID)
+
+    assert first.id == again.id == str(uuid.uuid5(LESSON_NAMESPACE, verdict.id))
+    assert uuid.UUID(first.id).version == 5
+    assert other.id != first.id
+    repository = InMemoryRepository()
+    repository.save_lesson(first)
+    repository.save_lesson(again)
+    assert repository.list_lessons() == (again,)
 
 
 def test_lesson_round_trips_through_json() -> None:

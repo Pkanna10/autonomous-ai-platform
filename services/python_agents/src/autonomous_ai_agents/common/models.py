@@ -158,6 +158,8 @@ class ViolationRule(StrEnum):
     too_few_runs = "too_few_runs"
     fingerprint_mismatch = "fingerprint_mismatch"
     missing_fingerprint = "missing_fingerprint"
+    missing_measurement = "missing_measurement"
+    duplicate_measurement = "duplicate_measurement"
 
 
 class DeliveryKind(StrEnum):
@@ -560,11 +562,16 @@ class ApprovalItem(EngineModel):
 
 
 class ApprovalRequest(EngineModel):
-    """Carried by the LangGraph interrupt: what the human must decide."""
+    """Carried by the LangGraph interrupt: what the human must decide.
+
+    ``error`` is set when the gate asks again because the previous resume
+    payload was not a valid ``ApprovalDecision``.
+    """
 
     run_id: str
     items: tuple[ApprovalItem, ...] = ()
     message: str
+    error: str | None = None
 
 
 class ApprovalDecision(EngineModel):

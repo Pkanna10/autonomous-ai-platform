@@ -10,8 +10,9 @@ reducers, so no graph is involved except for ``approval_gate``, whose
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from typing import Any, TypeVar, cast
 
 import pytest
@@ -21,6 +22,7 @@ from langgraph.types import Command
 
 from autonomous_ai_agents.common.config import settings
 from autonomous_ai_agents.common.models import (
+    METRIC_PEAK_RSS_BYTES,
     METRIC_WALL_TIME_S,
     ApprovalDecision,
     ApprovalRequest,
@@ -35,19 +37,28 @@ from autonomous_ai_agents.common.models import (
     Hotspot,
     Hypothesis,
     HypothesisStatus,
+    JudgeOutcome,
+    JudgeResult,
     Lesson,
+    Measurement,
     Objective,
     ObjectiveKind,
     Project,
     RunPhase,
+    RunStats,
     Technique,
     Trial,
+    TrialStatus,
     Verdict,
     VerdictOutcome,
     ViolationRule,
     Workload,
 )
-from autonomous_ai_agents.execution.runner import ScriptedOutcome, StubBaselineRunner
+from autonomous_ai_agents.execution.runner import (
+    ScriptedOutcome,
+    StubBaselineRunner,
+    StubTrialRunner,
+)
 from autonomous_ai_agents.optimization.anticheat import DEFAULT_PROTECTED_PATTERNS
 from autonomous_ai_agents.orchestrator.main import build_checkpointer, run_config
 from autonomous_ai_agents.orchestrator.nodes import (
@@ -59,8 +70,10 @@ from autonomous_ai_agents.orchestrator.nodes import (
     NodeDelta,
     NodeFn,
     assert_safe_branch,
+    decided_verdicts,
     make_nodes,
     make_router,
+    measurement_violations,
 )
 from autonomous_ai_agents.orchestrator.state import (
     REDUCER_KEYS,
@@ -111,9 +124,9 @@ EXPECTED_KEYS: dict[str, frozenset[str]] = {
     "research": frozenset({"phase", "techniques", "papers", "events"}),
     "hypotheses": frozenset({"phase", "round", "hypotheses", "events"}),
     "trials": frozenset(
-        {"phase", "trials", "hypotheses", "cost_usd", "tokens_used", "events"}
+        {"phase", "round_trials", "hypotheses", "cost_usd", "tokens_used", "events"}
     ),
-    "judges": frozenset({"phase", "events"}),
+    "judges": frozenset({"phase", "trials", "round_trials", "events"}),
     "verdicts": frozenset(
         {"phase", "verdicts", "hypotheses", "pending_approval_ids", "events"}
     ),
@@ -182,6 +195,112 @@ def _hotspot(project: Project, workload: Workload, *tags: str) -> Hotspot:
         share=0.42,
         tags=tags,
     )
+
+
+SEED_TRIAL = Trial(
+    id="seed-trial",
+    hypothesis_id="seed-hypothesis",
+    round=1,
+    status=TrialStatus.measured,
+)
+SEED_VERDICT = Verdict(
+    id="seed-verdict",
+    trial_id=SEED_TRIAL.id,
+    hypothesis_id=SEED_TRIAL.hypothesis_id,
+    outcome=VerdictOutcome.inconclusive,
+    change_class=ChangeClass.efficiency,
+    summary="seeded verdict from an earlier round",
+)
+SEED_LESSON = Lesson(
+    id="seed-lesson", outcome=VerdictOutcome.inconclusive, text="seeded lesson"
+)
+SEED_EVENT = EngineEvent(run_id=RUN_ID, phase=RunPhase.connect, message="seeded")
+
+
+def _seeded(state: EngineState) -> EngineState:
+    """``state`` with one earlier item already on every reducer channel."""
+    seeds: dict[str, object] = {
+        "trials": SEED_TRIAL,
+        "verdicts": SEED_VERDICT,
+        "lessons": SEED_LESSON,
+        "events": SEED_EVENT,
+    }
+    assert set(seeds) == REDUCER_KEYS
+    merged: dict[str, Any] = dict(state)
+    for key, seed in seeds.items():
+        merged[key] = [*merged[key], seed]
+    return cast(EngineState, merged)
+
+
+def _measurement(
+    workload_id: str, metric: str, samples: Sequence[float], unit: str = "s"
+) -> Measurement:
+    values = tuple(samples)
+    return Measurement(
+        workload_id=workload_id,
+        metric=metric,
+        stats=RunStats.from_samples(values, unit=unit),
+        samples=values,
+    )
+
+
+class _TamperingRunner:
+    """A trial runner that rewrites the stub's Trial before returning it."""
+
+    def __init__(self, inner: StubTrialRunner, update: Mapping[str, object]) -> None:
+        self._inner = inner
+        self._update = dict(update)
+
+    def run(
+        self,
+        hypothesis: Hypothesis,
+        workloads: Sequence[Workload],
+        baseline: Baseline,
+        *,
+        round: int,
+        branch: str,
+    ) -> Trial:
+        trial = self._inner.run(
+            hypothesis, workloads, baseline, round=round, branch=branch
+        )
+        return trial.model_copy(update=self._update)
+
+
+class _CherryPickingRunner:
+    """Reports a fast copy of every wall-time measurement ahead of the real one."""
+
+    def __init__(self, inner: StubTrialRunner) -> None:
+        self._inner = inner
+
+    def run(
+        self,
+        hypothesis: Hypothesis,
+        workloads: Sequence[Workload],
+        baseline: Baseline,
+        *,
+        round: int,
+        branch: str,
+    ) -> Trial:
+        trial = self._inner.run(
+            hypothesis, workloads, baseline, round=round, branch=branch
+        )
+        fast = tuple(
+            _measurement(m.workload_id, m.metric, (1.0,) * 5)
+            for m in trial.measurements
+            if m.metric == METRIC_WALL_TIME_S
+        )
+        return trial.model_copy(update={"measurements": (*fast, *trial.measurements)})
+
+
+class _DoublingBaselineRunner:
+    """A baseline runner that reports every measurement twice."""
+
+    def __init__(self, inner: StubBaselineRunner) -> None:
+        self._inner = inner
+
+    def measure(self, workloads: Sequence[Workload]) -> tuple[Measurement, ...]:
+        measured = self._inner.measure(workloads)
+        return (*measured, *measured)
 
 
 def _single_node_graph(
@@ -253,12 +372,50 @@ class TestMakeNodes:
 
         assert ctx.protected_patterns == DEFAULT_PROTECTED_PATTERNS
         assert ctx.min_runs == settings.MIN_RUNS
-        assert ctx.noise_multiplier == settings.NOISE_MULTIPLIER
+        assert not hasattr(ctx, "noise_multiplier")  # the judges own the noise rule
         assert ctx.branch_prefix == settings.TRIAL_BRANCH_PREFIX
         assert ctx.max_hypotheses_per_round == 3
         assert ctx.candidates == () and ctx.hotspots == () and ctx.techniques == ()
         with pytest.raises(FrozenInstanceError):
             ctx.min_runs = 1  # type: ignore[misc]
+
+    def test_duplicate_candidate_ids_are_refused(
+        self, make_context: ContextFactory, h1_cache: Hypothesis
+    ) -> None:
+        """
+        GIVEN two candidates sharing one id
+        WHEN a node context is built over them
+        THEN a ValueError names the repeated id (each would be trialled twice)
+        """
+        with pytest.raises(ValueError, match=h1_cache.id):
+            make_context([h1_cache, h1_cache.model_copy(update={"title": "again"})])
+
+    @pytest.mark.parametrize("bad_id", ["", "../main", "a b", "x.lock", "-x"])
+    def test_candidate_ids_must_be_refname_safe(
+        self, make_context: ContextFactory, h1_cache: Hypothesis, bad_id: str
+    ) -> None:
+        """
+        GIVEN a candidate whose id cannot be part of a git branch name
+        WHEN a node context is built over it
+        THEN a ValueError names the candidate id
+        """
+        with pytest.raises(ValueError, match="candidate id"):
+            make_context([h1_cache.model_copy(update={"id": bad_id})])
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [("max_hypotheses_per_round", 0), ("min_runs", 0), ("min_runs", -1)],
+    )
+    def test_rigour_knobs_must_be_at_least_one(
+        self, make_context: ContextFactory, field: str, value: int
+    ) -> None:
+        """
+        GIVEN max_hypotheses_per_round or min_runs below 1
+        WHEN a node context is built
+        THEN a ValueError names the knob
+        """
+        with pytest.raises(ValueError, match=field):
+            make_context(**{field: value})
 
     def test_delivery_error_is_an_engine_error(self) -> None:
         """
@@ -329,21 +486,24 @@ class TestNodeContract:
         self, name: str, nodes: dict[str, NodeFn], base_state: EngineState
     ) -> None:
         """
-        GIVEN a state that already holds items on every reducer channel
+        GIVEN a state seeded with one earlier trial, verdict, lesson and event
+              on top of whatever the run produced so far
         WHEN a node runs
-        THEN the delta for a reducer channel contains none of the existing items
+        THEN no reducer delta repeats a seeded or an existing item
         """
-        state = _advance(nodes, base_state, _before(name))
-        before = dict(state)
+        state = _seeded(_advance(nodes, base_state, _before(name)))
+        channels: dict[str, Any] = dict(state)
+        before = {key: list(channels[key]) for key in REDUCER_KEYS}
+        seeds = (SEED_TRIAL, SEED_VERDICT, SEED_LESSON, SEED_EVENT)
 
         delta = nodes[name](state)
 
+        assert delta["events"]
         for key in REDUCER_KEYS & set(delta):
-            existing = before[key]
-            assert isinstance(existing, list)
             new_items = delta[key]
             assert isinstance(new_items, list)
-            assert not any(item in existing for item in new_items), key
+            assert not any(item in before[key] for item in new_items), key
+            assert not any(item in seeds for item in new_items), key
 
 
 # ---------------------------------------------------------------------------
@@ -397,18 +557,25 @@ class TestDefine:
 
         assert _items(delta, "objectives", Objective) == [sample_objective]
         event = _only_event(delta)
-        assert event.data["objectives"] == METRIC_WALL_TIME_S
-        assert event.data["guardrails"] == "tests_pass, metric_bound"
-        assert event.data["min_runs"] == settings.MIN_RUNS
+        assert event.data == {
+            "objectives": METRIC_WALL_TIME_S,
+            "guardrails": "tests_pass, metric_bound",
+            "min_runs": settings.MIN_RUNS,
+        }
 
     def test_defaults_to_minimizing_wall_time(
-        self, make_context: ContextFactory, base_state: EngineState
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """
-        GIVEN a state with no objectives
+        GIVEN a state with no objectives and MIN_RELATIVE_GAIN set to 5 %
         WHEN define runs
-        THEN one runtime objective minimizing wall time is created for the project
+        THEN one runtime objective minimizing wall time is created for the
+             project, with the configured minimum relative gain
         """
+        monkeypatch.setattr(settings, "MIN_RELATIVE_GAIN", 0.05)
         base_state["objectives"] = []
 
         delta = make_nodes(make_context())["define"](base_state)
@@ -417,6 +584,7 @@ class TestDefine:
         assert objective.kind is ObjectiveKind.runtime
         assert objective.metric == METRIC_WALL_TIME_S
         assert objective.direction is Direction.minimize
+        assert objective.min_relative_gain == 0.05
         assert objective.project_id == base_state["project"].id
         assert objective.description == "minimize wall time"
 
@@ -489,14 +657,55 @@ class TestBaseline:
 
         assert isinstance(delta["baseline"], Baseline)
 
-    def test_reports_a_missing_primary_measurement(
-        self, make_context: ContextFactory, base_state: EngineState
+    def test_raises_when_an_objective_metric_is_not_measured(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_workload: Workload,
     ) -> None:
         """
         GIVEN a baseline runner that measures nothing
         WHEN baseline runs
-        THEN the baseline is empty and the event says so with n 0
+        THEN an EngineError lists the missing (workload, metric) measurement
         """
+        ctx = make_context(baseline_runner=StubBaselineRunner(ScriptedOutcome()))
+
+        with pytest.raises(EngineError) as raised:
+            make_nodes(ctx)["baseline"](base_state)
+
+        assert str(raised.value) == (
+            "baseline is not trustworthy: missing_measurement: metric "
+            f"{METRIC_WALL_TIME_S} was not measured on workload {sample_workload.id}"
+        )
+
+    def test_raises_when_a_workload_reports_an_objective_metric_twice(
+        self, make_context: ContextFactory, base_state: EngineState
+    ) -> None:
+        """
+        GIVEN a baseline runner that reports every measurement twice
+        WHEN baseline runs
+        THEN an EngineError names the duplicate measurement
+        """
+        ctx = make_context(
+            baseline_runner=_DoublingBaselineRunner(
+                StubBaselineRunner(
+                    ScriptedOutcome(samples={METRIC_WALL_TIME_S: (1.8,) * 5})
+                )
+            )
+        )
+
+        with pytest.raises(EngineError, match="duplicate_measurement: .* 2 times"):
+            make_nodes(ctx)["baseline"](base_state)
+
+    def test_without_objectives_the_event_reports_no_measurement(
+        self, make_context: ContextFactory, base_state: EngineState
+    ) -> None:
+        """
+        GIVEN a state with no objectives (define has not run) and nothing measured
+        WHEN baseline runs
+        THEN nothing is required, the baseline is empty and the event says so
+        """
+        base_state["objectives"] = []
         ctx = make_context(baseline_runner=StubBaselineRunner(ScriptedOutcome()))
 
         delta = make_nodes(ctx)["baseline"](base_state)
@@ -505,6 +714,126 @@ class TestBaseline:
         assert event.data["n"] == 0
         assert event.data["mean"] is None
         assert "no measurement" in event.message
+
+
+# ---------------------------------------------------------------------------
+# measurement_violations
+# ---------------------------------------------------------------------------
+
+
+class TestMeasurementViolations:
+    METRICS = (METRIC_WALL_TIME_S, METRIC_PEAK_RSS_BYTES)
+
+    def _complete(self, *workload_ids: str) -> list[Measurement]:
+        return [
+            _measurement(workload_id, metric, (1.0,) * 5)
+            for workload_id in workload_ids
+            for metric in self.METRICS
+        ]
+
+    def test_one_measurement_per_workload_and_objective_metric_passes(self) -> None:
+        """
+        GIVEN exactly one five-run measurement per (workload, objective metric)
+        WHEN measurement_violations checks them
+        THEN there is no violation
+        """
+        assert (
+            measurement_violations(
+                self._complete("w1", "w2"), ("w1", "w2"), self.METRICS, 5
+            )
+            == ()
+        )
+
+    def test_a_missing_pair_is_reported_per_workload_and_metric(self) -> None:
+        """
+        GIVEN peak memory measured on w1 but not on w2
+        WHEN measurement_violations checks them
+        THEN one missing_measurement names the metric and w2
+        """
+        rows = [
+            m
+            for m in self._complete("w1", "w2")
+            if not (m.workload_id == "w2" and m.metric == METRIC_PEAK_RSS_BYTES)
+        ]
+
+        (violation,) = measurement_violations(rows, ("w1", "w2"), self.METRICS, 5)
+
+        assert violation.rule is ViolationRule.missing_measurement
+        assert violation.message == (
+            f"metric {METRIC_PEAK_RSS_BYTES} was not measured on workload w2"
+        )
+
+    def test_a_duplicate_pair_is_reported(self) -> None:
+        """
+        GIVEN wall time reported twice for w1 (a fast copy first)
+        WHEN measurement_violations checks them
+        THEN one duplicate_measurement names the metric, the workload and the count
+        """
+        rows = [
+            _measurement("w1", METRIC_WALL_TIME_S, (0.1,) * 5),
+            *self._complete("w1"),
+        ]
+
+        (violation,) = measurement_violations(rows, ("w1",), self.METRICS, 5)
+
+        assert violation.rule is ViolationRule.duplicate_measurement
+        assert f"metric {METRIC_WALL_TIME_S} was measured 2 times on workload w1" in (
+            violation.message
+        )
+
+    def test_a_single_measurement_with_too_few_runs_is_reported(self) -> None:
+        """
+        GIVEN one wall-time measurement over three runs
+        WHEN measurement_violations checks it with min_runs 5
+        THEN one too_few_runs violation names the metric and workload
+        """
+        rows = [
+            _measurement("w1", METRIC_WALL_TIME_S, (1.0,) * 3),
+            _measurement("w1", METRIC_PEAK_RSS_BYTES, (1.0,) * 5),
+        ]
+
+        (violation,) = measurement_violations(rows, ("w1",), self.METRICS, 5)
+
+        assert violation.rule is ViolationRule.too_few_runs
+        assert violation.message == (
+            f"metric {METRIC_WALL_TIME_S} on workload w1: "
+            "3 runs measured; at least 5 required"
+        )
+
+    def test_non_objective_metrics_and_unknown_workloads_are_exempt(self) -> None:
+        """
+        GIVEN val_loss missing on w2 and duplicated on w1 with two runs,
+              and an objective measurement on a workload nobody asked about
+        WHEN measurement_violations checks wall time only
+        THEN there is no violation
+        """
+        rows = [
+            _measurement("w1", METRIC_WALL_TIME_S, (1.0,) * 5),
+            _measurement("w2", METRIC_WALL_TIME_S, (1.0,) * 5),
+            _measurement("w1", VAL_LOSS, (0.5, 0.5), unit=""),
+            _measurement("w1", VAL_LOSS, (0.5, 0.5), unit=""),
+            _measurement("elsewhere", METRIC_WALL_TIME_S, (1.0,)),
+        ]
+
+        assert (
+            measurement_violations(rows, ("w1", "w2"), (METRIC_WALL_TIME_S,), 5) == ()
+        )
+
+    def test_violations_follow_workload_then_metric_order(self) -> None:
+        """
+        GIVEN nothing measured on two workloads for two metrics
+        WHEN measurement_violations checks them (metrics repeated in the input)
+        THEN four missing_measurement violations come in workload, metric order
+        """
+        metrics = (*self.METRICS, METRIC_WALL_TIME_S)
+
+        violations = measurement_violations((), ("w1", "w2", "w1"), metrics, 5)
+
+        assert [v.message for v in violations] == [
+            f"metric {metric} was not measured on workload {workload}"
+            for workload in ("w1", "w2")
+            for metric in self.METRICS
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -625,6 +954,47 @@ class TestHypotheses:
         assert hypotheses[1].status is HypothesisStatus.proposed
         assert _only_event(delta).message == "round 2: ranked 1 of 1 candidates"
 
+    def test_ranked_copies_are_proposed_whatever_the_candidate_status(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+    ) -> None:
+        """
+        GIVEN a candidate that arrives with status inconclusive (re-proposed
+              from a lesson, say)
+        WHEN hypotheses runs
+        THEN its ranked copy is proposed, so the trials node will run it
+        """
+        stale = h1_cache.model_copy(update={"status": HypothesisStatus.inconclusive})
+
+        delta = make_nodes(make_context([stale]))["hypotheses"](base_state)
+
+        (ranked,) = _items(delta, "hypotheses", Hypothesis)
+        assert ranked.id == stale.id
+        assert ranked.status is HypothesisStatus.proposed
+
+    def test_candidates_already_in_state_are_not_ranked_again(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+        h3_noise: Hypothesis,
+    ) -> None:
+        """
+        GIVEN H1 already in the state's hypotheses but never trialled
+        WHEN hypotheses runs
+        THEN H1 is carried once, unchanged, and only H3 is ranked
+        """
+        base_state["hypotheses"] = [h1_cache]
+
+        delta = make_nodes(make_context([h1_cache, h3_noise]))["hypotheses"](base_state)
+
+        hypotheses = _items(delta, "hypotheses", Hypothesis)
+        assert [h.id for h in hypotheses] == [h1_cache.id, h3_noise.id]
+        assert hypotheses[0] is h1_cache
+        assert _only_event(delta).data["candidates"] == 1
+
     def test_lessons_in_the_repository_change_the_order(
         self,
         make_context: ContextFactory,
@@ -672,8 +1042,9 @@ class TestTrials:
         """
         GIVEN two proposed hypotheses after round 1 ranking
         WHEN trials runs
-        THEN each gets a trial on engine/<run>/<hypothesis>, saved in the
-             repository, costs are summed and the hypotheses become trialled
+        THEN each gets an unjudged trial on engine/trial-<run id>-<hypothesis id>
+             in round_trials (not on the judged trials channel), saved in the
+             repository; costs are summed and the hypotheses become trialled
         """
         ctx = make_context([h1_cache, h4_behaviour])
         nodes = make_nodes(ctx)
@@ -681,13 +1052,15 @@ class TestTrials:
 
         delta = nodes["trials"](state)
 
-        trials = _items(delta, "trials", Trial)
+        assert "trials" not in delta
+        trials = _items(delta, "round_trials", Trial)
         assert [t.hypothesis_id for t in trials] == [h1_cache.id, h4_behaviour.id]
         assert [t.branch for t in trials] == [
-            f"engine/{RUN_ID[:8]}/{h1_cache.id[:8]}",
-            f"engine/{RUN_ID[:8]}/{h4_behaviour.id[:8]}",
+            f"engine/trial-{RUN_ID}-{h1_cache.id}",
+            f"engine/trial-{RUN_ID}-{h4_behaviour.id}",
         ]
         assert all(t.round == 1 for t in trials)
+        assert all(t.judge_results == () for t in trials)
         assert ctx.repository.list_trials(RUN_ID) == tuple(trials)
         assert delta["cost_usd"] == pytest.approx(0.12 + 0.10)
         assert delta["tokens_used"] == 3400 + 2800
@@ -721,7 +1094,7 @@ class TestTrials:
 
         delta = nodes["trials"](state)
 
-        trials = _items(delta, "trials", Trial)
+        trials = _items(delta, "round_trials", Trial)
         assert [t.hypothesis_id for t in trials] == [h3_noise.id]
         assert trials[0].round == 2
         assert delta["cost_usd"] == pytest.approx(0.12 + 0.05)
@@ -745,8 +1118,110 @@ class TestTrials:
 
         delta = nodes["trials"](state)
 
-        assert _items(delta, "trials", Trial)[0].error == "SyntaxError"
+        assert _items(delta, "round_trials", Trial)[0].error == "SyntaxError"
         assert _only_event(delta).data["failed"] == 1
+
+    def test_trial_branches_carry_full_ids_so_they_never_collide(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+        h3_noise: Hypothesis,
+    ) -> None:
+        """
+        GIVEN two hypotheses whose ids share their first eight characters
+        WHEN trials runs both
+        THEN their branches differ, each naming the full run and hypothesis ids
+        """
+        first = h1_cache.model_copy(update={"id": "playbook-cache-a"})
+        second = h3_noise.model_copy(update={"id": "playbook-cache-b"})
+        nodes = make_nodes(make_context([first, second]))
+        state = _advance(nodes, base_state, _before("trials"))
+
+        trials = _items(nodes["trials"](state), "round_trials", Trial)
+
+        assert [t.branch for t in trials] == [
+            f"engine/trial-{RUN_ID}-playbook-cache-a",
+            f"engine/trial-{RUN_ID}-playbook-cache-b",
+        ]
+
+    @pytest.mark.parametrize("prefix", ["", "engine", "engine/../"])
+    def test_refuses_an_unsafe_branch_prefix_before_running_anything(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+        prefix: str,
+    ) -> None:
+        """
+        GIVEN a context whose branch prefix is empty, slash-less or traversing
+        WHEN trials runs
+        THEN a DeliveryError refuses the trial branch and the runner is never called
+        """
+        runner = StubTrialRunner({h1_cache.id: ScriptedOutcome()})
+        nodes = make_nodes(
+            make_context([h1_cache], runner=runner, branch_prefix=prefix)
+        )
+        state = _advance(nodes, base_state, _before("trials"))
+
+        with pytest.raises(DeliveryError):
+            nodes["trials"](state)
+        assert runner.calls == []
+
+    @pytest.mark.parametrize(
+        ("update", "problem"),
+        [
+            pytest.param(
+                {"hypothesis_id": "someone-else"}, "hypothesis_id", id="hypothesis"
+            ),
+            pytest.param({"round": 2}, "round is 2, expected 1", id="round"),
+            pytest.param(
+                {"status": TrialStatus.pending}, "status is pending", id="pending"
+            ),
+            pytest.param(
+                {"status": TrialStatus.running}, "status is running", id="running"
+            ),
+            pytest.param(
+                {"status": TrialStatus.rejected}, "status is rejected", id="rejected"
+            ),
+            pytest.param(
+                {
+                    "judge_results": (
+                        JudgeResult(
+                            judge="speed",
+                            outcome=JudgeOutcome.passed,
+                            reason="judged by the runner itself",
+                        ),
+                    )
+                },
+                "judge_results",
+                id="pre-judged",
+            ),
+        ],
+    )
+    def test_refuses_a_trial_the_runner_reports_inconsistently(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+        design_scripts: dict[str, ScriptedOutcome],
+        update: dict[str, object],
+        problem: str,
+    ) -> None:
+        """
+        GIVEN a runner whose Trial names another hypothesis or round, is not
+              measured or failed, or arrives already judged
+        WHEN trials runs
+        THEN an EngineError names the problem and nothing is saved
+        """
+        runner = _TamperingRunner(StubTrialRunner(design_scripts), update)
+        ctx = make_context([h1_cache], runner=runner)
+        nodes = make_nodes(ctx)
+        state = _advance(nodes, base_state, _before("trials"))
+
+        with pytest.raises(EngineError, match=problem):
+            nodes["trials"](state)
+        assert ctx.repository.list_trials(RUN_ID) == ()
 
     def test_requires_a_baseline(
         self,
@@ -779,26 +1254,30 @@ class TestJudges:
         h1_cache: Hypothesis,
     ) -> None:
         """
-        GIVEN a measured trial for a runtime objective
+        GIVEN a measured round-1 trial for a runtime objective
         WHEN judges runs
-        THEN the repository copy carries results from the judges that apply
-             (no memory judge) while the state channel is left alone
+        THEN the judged copy (results from the judges that apply, no memory
+             judge) is appended to the trials channel, replaces round_trials
+             and replaces the repository row
         """
         ctx = make_context([h1_cache])
         nodes = make_nodes(ctx)
         state = _advance(nodes, base_state, _before("judges"))
+        (unjudged,) = state["round_trials"]
+        assert state["trials"] == []
 
         delta = nodes["judges"](state)
 
-        assert "trials" not in delta
-        (stored,) = ctx.repository.list_trials(RUN_ID)
-        assert [r.judge for r in stored.judge_results] == [
+        (judged,) = _items(delta, "trials", Trial)
+        assert _items(delta, "round_trials", Trial) == [judged]
+        assert judged.id == unjudged.id
+        assert [r.judge for r in judged.judge_results] == [
             "speed",
             "equivalence",
             "guardrail",
             "tests",
         ]
-        assert state["trials"][0].judge_results == ()
+        assert ctx.repository.list_trials(RUN_ID) == (judged,)
         event = _only_event(delta)
         assert event.data == {
             "round": 1,
@@ -816,20 +1295,23 @@ class TestJudges:
         """
         GIVEN round 2 with a judged round-1 trial and one fresh trial
         WHEN judges runs
-        THEN only the round-2 trial is judged
+        THEN only the round-2 trial is judged and appended
         """
         ctx = make_context([h3_noise, h1_cache], max_hypotheses_per_round=1)
         nodes = make_nodes(ctx)
         state = _advance(
             nodes, base_state, (*_before("combine"), "hypotheses", "trials")
         )
-        round_one = ctx.repository.list_trials(RUN_ID)[0]
+        (round_one,) = state["trials"]
+        assert round_one.round == 1 and len(round_one.judge_results) == 4
 
-        nodes["judges"](state)
+        delta = nodes["judges"](state)
 
+        (judged,) = _items(delta, "trials", Trial)
+        assert judged.round == 2 and len(judged.judge_results) == 4
         first, second = ctx.repository.list_trials(RUN_ID)
         assert first == round_one
-        assert second.round == 2 and len(second.judge_results) == 4
+        assert second == judged
 
     def test_requires_a_baseline(
         self, make_context: ContextFactory, base_state: EngineState
@@ -981,6 +1463,143 @@ class TestVerdicts:
         assert verdict.hypothesis_id == h3_noise.id
         assert len(ctx.repository.list_verdicts(RUN_ID)) == 2
 
+    def test_reads_the_judged_trials_from_state_not_the_repository(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+    ) -> None:
+        """
+        GIVEN H1 judged in round 1, and a verdicts node whose repository is
+              fresh (a resume in another process)
+        WHEN verdicts runs
+        THEN H1 is still kept: the judge results come from round_trials
+        """
+        ctx = make_context([h1_cache])
+        state = _advance(make_nodes(ctx), base_state, _before("verdicts"))
+        fresh = replace(ctx, repository=InMemoryRepository())
+
+        (verdict,) = _items(make_nodes(fresh)["verdicts"](state), "verdicts", Verdict)
+
+        assert verdict.outcome is VerdictOutcome.keep
+        assert verdict.trial_id == state["round_trials"][0].id
+        assert fresh.repository.list_verdicts(RUN_ID) == (verdict,)
+
+    def test_ignores_trials_that_are_not_in_round_trials(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+    ) -> None:
+        """
+        GIVEN an orphan round-1 trial in the repository (left by a trials node
+              that failed part-way and was re-executed)
+        WHEN verdicts runs
+        THEN only the trial in round_trials gets a verdict
+        """
+        ctx = make_context([h1_cache])
+        nodes = make_nodes(ctx)
+        state = _advance(nodes, base_state, _before("verdicts"))
+        ctx.repository.save_trial(RUN_ID, Trial(hypothesis_id=h1_cache.id, round=1))
+
+        (verdict,) = _items(nodes["verdicts"](state), "verdicts", Verdict)
+
+        assert verdict.trial_id == state["round_trials"][0].id
+
+    def test_an_omitted_secondary_objective_metric_rejects(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_project: Project,
+        sample_objective: Objective,
+        baseline_script: ScriptedOutcome,
+        h1_cache: Hypothesis,
+        design_scripts: dict[str, ScriptedOutcome],
+    ) -> None:
+        """
+        GIVEN runtime and peak-memory objectives, both measured at baseline,
+              and H1's trial that reports wall time but omits peak memory
+        WHEN verdicts runs
+        THEN the verdict is reject with a missing_measurement violation, not keep
+        """
+        memory = Objective(
+            project_id=sample_project.id,
+            kind=ObjectiveKind.peak_memory,
+            metric=METRIC_PEAK_RSS_BYTES,
+            direction=Direction.minimize,
+            weight=0.5,
+            description="memory must not regress",
+        )
+        base_state["objectives"] = [sample_objective, memory]
+        with_memory = replace(
+            baseline_script,
+            samples={**baseline_script.samples, METRIC_PEAK_RSS_BYTES: (1e9,) * 5},
+        )
+        ctx = make_context([h1_cache], baseline_runner=StubBaselineRunner(with_memory))
+        nodes = make_nodes(ctx)
+        state = _advance(nodes, base_state, _before("verdicts"))
+        assert METRIC_PEAK_RSS_BYTES not in design_scripts[h1_cache.title].samples
+
+        (verdict,) = _items(nodes["verdicts"](state), "verdicts", Verdict)
+
+        assert verdict.outcome is VerdictOutcome.reject
+        assert [v.rule for v in verdict.violations] == [
+            ViolationRule.missing_measurement
+        ]
+        assert METRIC_PEAK_RSS_BYTES in verdict.violations[0].message
+
+    def test_a_duplicate_objective_measurement_rejects(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        baseline_script: ScriptedOutcome,
+        h1_cache: Hypothesis,
+    ) -> None:
+        """
+        GIVEN a trial that really runs 39 % slower but reports a fast copy of
+              its wall-time measurement first
+        WHEN verdicts runs
+        THEN the verdict is reject with a duplicate_measurement violation
+        """
+        slow = ScriptedOutcome(
+            touched_paths=("src/x.py",),
+            samples={METRIC_WALL_TIME_S: (2.5,) * 5, VAL_LOSS: (0.5,) * 5},
+            tests_passed=True,
+            output_fingerprint=baseline_script.output_fingerprint,
+        )
+        runner = _CherryPickingRunner(StubTrialRunner({h1_cache.id: slow}))
+        nodes = make_nodes(make_context([h1_cache], runner=runner))
+        state = _advance(nodes, base_state, _before("verdicts"))
+
+        (verdict,) = _items(nodes["verdicts"](state), "verdicts", Verdict)
+
+        assert verdict.outcome is VerdictOutcome.reject
+        assert [v.rule for v in verdict.violations] == [
+            ViolationRule.duplicate_measurement
+        ]
+
+    def test_a_failed_trial_is_rejected_for_failing(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+    ) -> None:
+        """
+        GIVEN a trial that failed before measuring anything
+        WHEN verdicts runs
+        THEN it is rejected because it failed (its missing measurements are a
+             consequence, not a violation)
+        """
+        scripts = {h1_cache.title: ScriptedOutcome(error="SyntaxError")}
+        nodes = make_nodes(make_context([h1_cache], scripts))
+        state = _advance(nodes, base_state, _before("verdicts"))
+
+        (verdict,) = _items(nodes["verdicts"](state), "verdicts", Verdict)
+
+        assert verdict.outcome is VerdictOutcome.reject
+        assert verdict.violations == ()
+        assert verdict.summary == "reject: trial failed: SyntaxError"
+
     def test_unknown_hypothesis_is_an_engine_error(
         self,
         make_context: ContextFactory,
@@ -1031,6 +1650,15 @@ class TestAfterVerdicts:
                 True,
                 "approval_gate",
                 id="pending wins",
+            ),
+            pytest.param(
+                True,
+                VerdictOutcome.inconclusive,
+                1,
+                3,
+                False,
+                "approval_gate",
+                id="pending beats untrialled candidates and spare rounds",
             ),
             pytest.param(False, VerdictOutcome.keep, 1, 3, False, "combine", id="keep"),
             pytest.param(
@@ -1134,7 +1762,7 @@ class TestApprovalGate:
         """
         _, nodes, state = pending_state
         graph = _single_node_graph(nodes["approval_gate"], "approval_gate")
-        cfg = run_config(RUN_ID)
+        cfg = run_config(RUN_ID, 3)
 
         output = graph.invoke(state, cfg, version="v2")
 
@@ -1148,6 +1776,7 @@ class TestApprovalGate:
         assert item.gain == pytest.approx(0.1667, abs=1e-3)
         assert "needs_approval" in item.summary
         assert "1 change" in request.message
+        assert request.error is None
         assert graph.get_state(cfg).next == ("approval_gate",)
 
     def test_resume_records_the_decision_and_approves_verdicts(
@@ -1156,12 +1785,13 @@ class TestApprovalGate:
         """
         GIVEN an interrupted gate
         WHEN the graph resumes with an approval decision
-        THEN the state holds the decision, pending ids are cleared and the
-             repository verdict records approver and note
+        THEN the state holds the decision, pending ids are cleared, the
+             hypothesis is kept and the repository verdict is the decided copy:
+             outcome keep with approver and note
         """
         ctx, nodes, state = pending_state
         graph = _single_node_graph(nodes["approval_gate"], "approval_gate")
-        cfg = run_config(RUN_ID)
+        cfg = run_config(RUN_ID, 3)
         graph.invoke(state, cfg, version="v2")
         verdict_id = state["pending_approval_ids"][0]
         decision = ApprovalDecision(
@@ -1180,27 +1810,32 @@ class TestApprovalGate:
         assert output.value["pending_approval_ids"] == []
         assert output.value["phase"] is RunPhase.approval
         (stored,) = ctx.repository.list_verdicts(RUN_ID)
+        assert stored.id == verdict_id
+        assert stored.outcome is VerdictOutcome.keep
         assert stored.approved_by == "praveen"
         assert stored.approval_note == "ship it"
+        assert [h.status for h in output.value["hypotheses"]] == [HypothesisStatus.kept]
         event = output.value["events"][-1]
         assert event.phase is RunPhase.approval
         assert event.data == {"approver": "praveen", "approved": 1, "rejected": 0}
 
-    def test_rejection_leaves_the_repository_verdict_unapproved(
+    def test_rejection_is_recorded_on_the_verdict_and_the_hypothesis(
         self, pending_state: tuple[NodeContext, dict[str, NodeFn], EngineState]
     ) -> None:
         """
         GIVEN an interrupted gate
-        WHEN the graph resumes with a rejection
-        THEN the repository verdict stays unapproved and the event counts it
+        WHEN the graph resumes with a rejection and a note
+        THEN the repository verdict becomes reject with the note (no approver),
+             the hypothesis is rejected and the event counts it
         """
         ctx, nodes, state = pending_state
         graph = _single_node_graph(nodes["approval_gate"], "approval_gate")
-        cfg = run_config(RUN_ID)
+        cfg = run_config(RUN_ID, 3)
         graph.invoke(state, cfg, version="v2")
         decision = ApprovalDecision(
             rejected_verdict_ids=(state["pending_approval_ids"][0],),
             approver="praveen",
+            note="bf16 drifts too much",
         )
 
         output = graph.invoke(
@@ -1208,24 +1843,84 @@ class TestApprovalGate:
         )
 
         (stored,) = ctx.repository.list_verdicts(RUN_ID)
+        assert stored.outcome is VerdictOutcome.reject
         assert stored.approved_by is None
+        assert stored.approval_note == "bf16 drifts too much"
+        assert [h.status for h in output.value["hypotheses"]] == [
+            HypothesisStatus.rejected
+        ]
         assert output.value["events"][-1].data["rejected"] == 1
 
-    def test_malformed_resume_payload_is_an_engine_error(
+    def test_an_undecided_verdict_is_left_as_it_was(
         self, pending_state: tuple[NodeContext, dict[str, NodeFn], EngineState]
     ) -> None:
         """
         GIVEN an interrupted gate
-        WHEN the graph resumes with a payload that is not an ApprovalDecision
-        THEN an EngineError is raised instead of a raw validation error
+        WHEN the graph resumes with a decision that names no pending verdict
+        THEN the repository verdict still needs approval and the hypothesis
+             keeps its trialled status
         """
-        _, nodes, state = pending_state
+        ctx, nodes, state = pending_state
         graph = _single_node_graph(nodes["approval_gate"], "approval_gate")
-        cfg = run_config(RUN_ID)
+        cfg = run_config(RUN_ID, 3)
         graph.invoke(state, cfg, version="v2")
+        before = ctx.repository.list_verdicts(RUN_ID)
+        decision = ApprovalDecision(approved_verdict_ids=("unknown",), approver="pk")
 
-        with pytest.raises(EngineError, match="approval decision"):
-            graph.invoke(Command(resume={"bogus": 1}), cfg, version="v2")
+        output = graph.invoke(
+            Command(resume=decision.model_dump(mode="json")), cfg, version="v2"
+        )
+
+        assert ctx.repository.list_verdicts(RUN_ID) == before
+        assert before[0].outcome is VerdictOutcome.needs_approval
+        assert [h.status for h in output.value["hypotheses"]] == [
+            HypothesisStatus.trialled
+        ]
+        assert output.value["events"][-1].data == {
+            "approver": "pk",
+            "approved": 0,
+            "rejected": 0,
+        }
+
+    def test_an_invalid_decision_asks_again_with_the_error(
+        self, pending_state: tuple[NodeContext, dict[str, NodeFn], EngineState]
+    ) -> None:
+        """
+        GIVEN an interrupted gate
+        WHEN the graph resumes with a payload that is not an ApprovalDecision,
+             then with a valid one
+        THEN the first resume interrupts again with the same request plus the
+             validation error, and the second resume records the decision
+        """
+        ctx, nodes, state = pending_state
+        graph = _single_node_graph(nodes["approval_gate"], "approval_gate")
+        cfg = run_config(RUN_ID, 3)
+        first = graph.invoke(state, cfg, version="v2")
+        verdict_id = state["pending_approval_ids"][0]
+
+        retry = graph.invoke(Command(resume={"approver": None}), cfg, version="v2")
+
+        (asked_again,) = retry.interrupts
+        request = ApprovalRequest.model_validate(asked_again.value)
+        assert request.error is not None
+        assert request.error.startswith("invalid approval decision: ")
+        assert "approver" in request.error
+        original = ApprovalRequest.model_validate(first.interrupts[0].value)
+        assert request.model_copy(update={"error": None}) == original
+        assert graph.get_state(cfg).next == ("approval_gate",)
+        assert ctx.repository.list_verdicts(RUN_ID)[0].approved_by is None
+
+        decision = ApprovalDecision(approved_verdict_ids=(verdict_id,), approver="pk")
+        done = graph.invoke(
+            Command(resume=decision.model_dump(mode="json")), cfg, version="v2"
+        )
+
+        assert done.interrupts == ()
+        approval = done.value["approval"]
+        assert approval is not None and approval.approver == "pk"
+        (stored,) = ctx.repository.list_verdicts(RUN_ID)
+        assert stored.outcome is VerdictOutcome.keep
+        assert graph.get_state(cfg).next == ()
 
 
 # ---------------------------------------------------------------------------
@@ -1288,6 +1983,29 @@ class TestCombine:
 
         assert nodes["combine"](state)["kept_verdict_ids"] == [keep.id]
 
+    def test_a_rejected_verdict_is_not_kept(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+        h4_behaviour: Hypothesis,
+    ) -> None:
+        """
+        GIVEN a keep verdict and a needs_approval verdict the human rejected
+        WHEN combine runs
+        THEN only the keep verdict is kept
+        """
+        nodes = make_nodes(make_context([h1_cache, h4_behaviour]))
+        state = _advance(nodes, base_state, _before("combine"))
+        by_hypothesis = {v.hypothesis_id: v for v in state["verdicts"]}
+        state["approval"] = ApprovalDecision(
+            rejected_verdict_ids=(by_hypothesis[h4_behaviour.id].id,), approver="pk"
+        )
+
+        assert nodes["combine"](state)["kept_verdict_ids"] == [
+            by_hypothesis[h1_cache.id].id
+        ]
+
 
 # ---------------------------------------------------------------------------
 # deliver
@@ -1333,7 +2051,8 @@ class TestDeliver:
         """
         GIVEN a kept verdict whose trial carries a diff
         WHEN deliver runs
-        THEN the delivery targets engine/<run id> with that diff and verdict id
+        THEN the delivery targets engine/run-<full run id> with that diff and
+             verdict id
         """
         nodes = make_nodes(make_context([h1_cache]))
         state = _advance(nodes, base_state, _before("deliver"))
@@ -1347,8 +2066,7 @@ class TestDeliver:
         delivery = delta["delivery"]
         assert isinstance(delivery, Delivery)
         assert delivery.kind is DeliveryKind.branch
-        assert delivery.branch == f"engine/{RUN_ID[:8]}"
-        assert delivery.branch != state["project"].default_branch
+        assert delivery.branch == f"engine/run-{RUN_ID}"
         assert delivery.verdict_ids == tuple(state["kept_verdict_ids"])
         assert delivery.combined_diff == "--- a/encoder.py\n+++ b/encoder.py"
         assert delivery.project_id == state["project"].id
@@ -1371,36 +2089,161 @@ class TestDeliver:
         nodes = make_nodes(make_context([h1_cache]))
         state = _advance(nodes, base_state, _before("deliver"))
         state["project"] = state["project"].model_copy(
-            update={"default_branch": f"engine/{RUN_ID[:8]}"}
+            update={"default_branch": f"engine/run-{RUN_ID}"}
         )
 
         with pytest.raises(DeliveryError, match="default branch"):
             nodes["deliver"](state)
 
     @pytest.mark.parametrize(
-        ("branch", "message"),
-        [("main", "default branch"), ("feature/x", "prefix")],
+        ("branch", "prefix", "message"),
+        [
+            pytest.param("main", "engine/", "default branch", id="default"),
+            pytest.param(
+                "feature/x", "engine/", "outside the engine prefix", id="outside"
+            ),
+            pytest.param("release", "", "prefix '' must", id="empty prefix"),
+            pytest.param(
+                "engine-x", "engine", "prefix 'engine' must", id="slashless prefix"
+            ),
+            pytest.param("engine/../main", "engine/", "contains '..'", id="parent"),
+            pytest.param("engine/a..b", "engine/", "contains '..'", id="double dot"),
+            pytest.param("engine/x.lock", "engine/", "ends with '.lock'", id="lock"),
+            pytest.param("engine/@{-1}", "engine/", "'@{'", id="reflog"),
+            pytest.param("engine//x", "engine/", "empty segment", id="empty segment"),
+            pytest.param("engine/x/", "engine/", "empty segment", id="trailing slash"),
+            pytest.param("engine/x.", "engine/", "ends with '.'", id="trailing dot"),
+            pytest.param(
+                "engine/.hidden", "engine/", "segment '.hidden'", id="dot first"
+            ),
+            pytest.param(
+                "engine/x y~^:z", "engine/", "segment 'x y~^:z'", id="charset"
+            ),
+        ],
     )
     def test_assert_safe_branch_rejects_unsafe_names(
-        self, sample_project: Project, branch: str, message: str
+        self, sample_project: Project, branch: str, prefix: str, message: str
     ) -> None:
         """
-        GIVEN a branch equal to the default branch or outside the prefix
+        GIVEN a branch that is the default branch, outside a valid prefix, or
+              not a valid git refname
         WHEN assert_safe_branch checks it
         THEN a DeliveryError explains which rule it broke
         """
-        with pytest.raises(DeliveryError, match=message):
-            assert_safe_branch(branch, sample_project, "engine/")
+        with pytest.raises(DeliveryError, match=re.escape(message)):
+            assert_safe_branch(branch, sample_project, prefix)
 
-    def test_assert_safe_branch_accepts_prefixed_branches(
-        self, sample_project: Project
+    @pytest.mark.parametrize(
+        ("branch", "prefix"),
+        [
+            ("engine/run-abc", "engine/"),
+            (f"engine/trial-{RUN_ID}-h1.v2_x", "engine/"),
+            ("bots/engine/run-x", "bots/engine/"),
+        ],
+    )
+    def test_assert_safe_branch_accepts_prefixed_refnames(
+        self, sample_project: Project, branch: str, prefix: str
     ) -> None:
         """
-        GIVEN a branch under the engine prefix
+        GIVEN a valid refname under a valid engine prefix
         WHEN assert_safe_branch checks it
         THEN it returns normally
         """
-        assert_safe_branch("engine/abc", sample_project, "engine/")
+        assert_safe_branch(branch, sample_project, prefix)
+
+    def test_report_escapes_trial_controlled_text(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+    ) -> None:
+        """
+        GIVEN a trial whose error text (copied into the verdict summary) tries
+              to break out of the table with a heading, an image and a link
+        WHEN deliver writes the report
+        THEN the summary stays inside its one table row: no new heading, no
+             raw HTML, no link syntax
+        """
+        payload = (
+            "boom |\n\n## Approved by security team\r\n"
+            "<img src=https://attacker.example/x?k=1>\n"
+            "[merge now](https://attacker.example) `rm -rf` & \\| done"
+        )
+        scripts = {h1_cache.title: ScriptedOutcome(error=payload)}
+        nodes = make_nodes(make_context([h1_cache], scripts))
+        state = _advance(nodes, base_state, _before("deliver"))
+
+        delivery = nodes["deliver"](state)["delivery"]
+
+        assert isinstance(delivery, Delivery)
+        report = delivery.report_markdown
+        lines = report.splitlines()
+        assert [line for line in lines if line.startswith("#")] == [lines[0]]
+        assert "<img" not in report
+        assert re.search(r"(?<!\\)\]\(", report) is None  # no unescaped link
+        (row,) = [line for line in lines if line.startswith(f"| {h1_cache.title} |")]
+        assert row.endswith(
+            "| reject | n/a | reject: trial failed: boom \\| ## Approved by security "
+            "team &lt;img src=https://attacker.example/x?k=1&gt; \\[merge now\\]"
+            "(https://attacker.example) \\`rm -rf\\` &amp; \\\\\\| done |"
+        )
+
+    def test_report_cells_and_kept_titles_are_flattened_and_truncated(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+        design_scripts: dict[str, ScriptedOutcome],
+    ) -> None:
+        """
+        GIVEN a kept hypothesis whose title spans lines and runs to 500 chars
+        WHEN deliver writes the report
+        THEN the title is one line in both the table and the kept list,
+             cut to 200 characters ending with an ellipsis
+        """
+        title = "Cache\n# injected heading\n" + "x" * 500
+        long_title = h1_cache.model_copy(update={"title": title})
+        scripts = {long_title.id: design_scripts[h1_cache.title]}
+        nodes = make_nodes(make_context([long_title], scripts))
+        state = _advance(nodes, base_state, _before("deliver"))
+
+        delivery = nodes["deliver"](state)["delivery"]
+
+        assert isinstance(delivery, Delivery)
+        flat = ("Cache # injected heading " + "x" * 500)[:199] + "…"
+        assert len(flat) == 200
+        report = delivery.report_markdown
+        assert f"| {flat} | keep |" in report
+        assert f"Kept: {flat}" in report
+        assert not any(line.startswith("# injected") for line in report.splitlines())
+
+    def test_report_shows_the_decided_outcomes(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+        h4_behaviour: Hypothesis,
+    ) -> None:
+        """
+        GIVEN H4 approved at the gate next to the automatic keep H1
+        WHEN deliver writes the report
+        THEN H4's row reads keep, not needs_approval, and both are listed as kept
+        """
+        nodes = make_nodes(make_context([h1_cache, h4_behaviour]))
+        state = _advance(nodes, base_state, _before("combine"))
+        by_hypothesis = {v.hypothesis_id: v for v in state["verdicts"]}
+        state["approval"] = ApprovalDecision(
+            approved_verdict_ids=(by_hypothesis[h4_behaviour.id].id,), approver="pk"
+        )
+        state = _apply(state, nodes["combine"](state))
+
+        delivery = nodes["deliver"](state)["delivery"]
+
+        assert isinstance(delivery, Delivery)
+        report = delivery.report_markdown
+        assert f"| {h4_behaviour.title} | keep | +16.7% |" in report
+        assert f"| {h4_behaviour.title} | needs_approval |" not in report
+        assert f"Kept: {h1_cache.title}, {h4_behaviour.title}" in report
 
     def test_report_without_a_baseline_or_verdicts(
         self, make_context: ContextFactory, base_state: EngineState
@@ -1418,6 +2261,69 @@ class TestDeliver:
         report = delivery.report_markdown
         assert "Baseline: not measured" in report
         assert "| --- | --- | --- | --- |\n\nKept: nothing" in report
+
+
+# ---------------------------------------------------------------------------
+# decided_verdicts
+# ---------------------------------------------------------------------------
+
+
+class TestDecidedVerdicts:
+    @staticmethod
+    def _verdict(verdict_id: str, outcome: VerdictOutcome) -> Verdict:
+        return Verdict(
+            id=verdict_id,
+            trial_id=f"trial-{verdict_id}",
+            hypothesis_id=f"hypothesis-{verdict_id}",
+            outcome=outcome,
+            change_class=ChangeClass.behaviour,
+            summary=str(outcome),
+        )
+
+    def test_without_a_decision_the_verdicts_are_unchanged(self) -> None:
+        """
+        GIVEN verdicts and no approval decision
+        WHEN decided_verdicts applies it
+        THEN the same verdicts come back in order
+        """
+        verdicts = [
+            self._verdict("a", VerdictOutcome.keep),
+            self._verdict("b", VerdictOutcome.needs_approval),
+        ]
+
+        assert decided_verdicts(verdicts, None) == verdicts
+
+    def test_the_decision_rewrites_only_needs_approval_verdicts(self) -> None:
+        """
+        GIVEN a keep, an inconclusive and three needs_approval verdicts, and a
+              decision approving one, rejecting one and naming the keep and
+              inconclusive ones too
+        WHEN decided_verdicts applies it
+        THEN approved -> keep with approver and note, rejected -> reject with
+             the note, undecided and non-pending verdicts untouched, order kept
+        """
+        keep = self._verdict("keep", VerdictOutcome.keep)
+        unsure = self._verdict("unsure", VerdictOutcome.inconclusive)
+        yes = self._verdict("yes", VerdictOutcome.needs_approval)
+        no = self._verdict("no", VerdictOutcome.needs_approval)
+        later = self._verdict("later", VerdictOutcome.needs_approval)
+        decision = ApprovalDecision(
+            approved_verdict_ids=("yes", "keep"),
+            rejected_verdict_ids=("no", "unsure"),
+            approver="pk",
+            note="reviewed",
+        )
+
+        decided = decided_verdicts([keep, unsure, yes, no, later], decision)
+
+        assert [v.id for v in decided] == ["keep", "unsure", "yes", "no", "later"]
+        assert decided[0] is keep and decided[1] is unsure and decided[4] is later
+        assert decided[2].outcome is VerdictOutcome.keep
+        assert (decided[2].approved_by, decided[2].approval_note) == ("pk", "reviewed")
+        assert decided[3].outcome is VerdictOutcome.reject
+        assert (decided[3].approved_by, decided[3].approval_note) == (None, "reviewed")
+        assert decided[2].summary == "approved by pk: " + yes.summary
+        assert decided[3].summary == "rejected by pk: " + no.summary
 
 
 # ---------------------------------------------------------------------------

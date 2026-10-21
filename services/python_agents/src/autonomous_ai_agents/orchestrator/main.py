@@ -17,6 +17,11 @@ models and enums (``ENGINE_SERDE_ALLOWLIST``), so a resume gets model
 instances back, not plain dicts or strings. The checkpoint store is
 code-execution-capable on deserialisation and must never be writable by
 trial code.
+
+The checkpoint thread is the source of truth for a run: ``run`` and
+``stream`` refuse a run id whose thread already exists, ``resume`` only
+continues a thread parked at the approval gate, and a failed result is built
+from the last checkpoint, never invented.
 """
 
 from __future__ import annotations
@@ -34,6 +39,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
+from autonomous_ai_agents.common.config import settings
 from autonomous_ai_agents.common.models import (
     ENGINE_SERDE_ALLOWLIST,
     ApprovalDecision,
@@ -69,13 +75,35 @@ EngineGraph = CompiledStateGraph[EngineState, None, EngineState, EngineState]
 
 RunStatus = Literal["done", "needs_approval", "failed"]
 
-RECURSION_LIMIT = 200
-"""Node visits allowed per run: ~15 per round, so this covers every bounded loop."""
+_ROUND_NODES: tuple[str, ...] = LOOP_NODES[LOOP_NODES.index("hypotheses") :]
+"""The nodes one round visits: hypotheses, trials, judges, verdicts."""
+
+_FIXED_STEPS = len(LOOP_NODES) - len(_ROUND_NODES) + len(TAIL_NODES)
+"""Node visits outside the rounds: six setup nodes and the five tail nodes."""
+
+_SPARE_STEPS = 5
+"""Headroom on top of the longest path."""
+
+_PAUSED_AT_GATE: tuple[str, ...] = ("approval_gate",)
+"""``StateSnapshot.next`` of a run waiting for the human."""
 
 
-def run_config(run_id: str) -> RunnableConfig:
-    """The config that binds a run to its checkpoint thread."""
-    return {"configurable": {"thread_id": run_id}, "recursion_limit": RECURSION_LIMIT}
+def run_config(run_id: str, max_rounds: int) -> RunnableConfig:
+    """The config that binds a run to its checkpoint thread.
+
+    The recursion limit is the longest path a run with ``max_rounds`` rounds
+    can take (``11 + 4 * max_rounds`` node visits) plus five spare steps, so
+    a bounded loop never trips LangGraph's recursion guard.
+    """
+    return {
+        "configurable": {"thread_id": run_id},
+        "recursion_limit": _FIXED_STEPS + len(_ROUND_NODES) * max_rounds + _SPARE_STEPS,
+    }
+
+
+def _thread(run_id: str) -> RunnableConfig:
+    """The config that only names a run's thread (enough for ``get_state``)."""
+    return {"configurable": {"thread_id": run_id}}
 
 
 def build_checkpointer() -> InMemorySaver:
@@ -86,11 +114,16 @@ def build_checkpointer() -> InMemorySaver:
 
 
 def default_context() -> NodeContext:
-    """Stub runners, the frozen judges and an in-memory repository, no candidates."""
+    """Stub runners, the frozen judges and an in-memory repository, no candidates.
+
+    The judges' noise rule uses ``settings.NOISE_MULTIPLIER``. The stub
+    baseline measures nothing, so a run on this context stops at the
+    baseline until Step 2 provides a real runner.
+    """
     return NodeContext(
         runner=StubTrialRunner({}, default=ScriptedOutcome()),
         baseline_runner=StubBaselineRunner(ScriptedOutcome()),
-        judges=default_judges(),
+        judges=default_judges(settings.NOISE_MULTIPLIER),
         repository=InMemoryRepository(),
     )
 
@@ -142,8 +175,13 @@ class Orchestrator:
     result is ``needs_approval``, ``resume`` continues the same thread with
     the human's ``ApprovalDecision``. ``stream`` yields the live log instead.
     An ``EngineError`` raised by a node becomes a ``failed`` result whose
-    state carries the error; any other exception propagates. Every result's
-    state is saved to the context's repository.
+    state is the last checkpoint marked failed; any other exception
+    propagates. Every result's state (and every streamed run's final state)
+    is saved to the context's repository.
+
+    ``run`` and ``stream`` raise ``ValueError`` for a run id whose thread
+    already exists; ``resume`` raises ``ValueError`` unless the run is
+    paused at the approval gate.
     """
 
     def __init__(
@@ -176,12 +214,24 @@ class Orchestrator:
             run_id=run_id,
             max_rounds=max_rounds,
         )
-        return self._invoke(state["run_id"], state, fallback=state)
+        cfg = run_config(state["run_id"], state["max_rounds"])
+        self._refuse_existing(state["run_id"])
+        return self._invoke(state["run_id"], cfg, state)
 
     def resume(self, run_id: str, decision: ApprovalDecision) -> EngineRunResult:
-        """Continue a run paused at the approval gate with the human's decision."""
+        """Continue a run paused at the approval gate with the human's decision.
+
+        An invalid decision does not fail the run: the result is
+        ``needs_approval`` again and its request carries the error.
+        """
+        snapshot = self.graph.get_state(_thread(run_id))
+        if not snapshot.values:
+            raise ValueError(f"run {run_id!r} is unknown")
+        if snapshot.next != _PAUSED_AT_GATE:
+            raise ValueError(f"run {run_id!r} is not waiting for approval")
+        cfg = run_config(run_id, snapshot.values["max_rounds"])
         return self._invoke(
-            run_id, Command(resume=decision.model_dump(mode="json")), fallback=None
+            run_id, cfg, Command(resume=decision.model_dump(mode="json"))
         )
 
     def stream(
@@ -196,10 +246,12 @@ class Orchestrator:
     ) -> Iterator[EngineEvent]:
         """Start a run and yield its live events as they happen.
 
-        The stream ends when the run completes or pauses at the approval
-        gate; ``graph.get_state(run_config(run_id))`` tells which, and
-        ``resume`` continues a paused one. An ``EngineError`` ends the stream
-        with one error-level event and marks the run failed.
+        The stream ends when the run completes, pauses at the approval gate
+        (the last event is then a ``paused: N change(s) need approval``
+        approval-phase event) or fails (one error-level event; the run is
+        marked failed). ``resume`` continues a paused run. The final state is
+        saved to the repository in every case, before the last event is
+        yielded, so a consumer that stops at that event loses nothing.
         """
         state = initial_state(
             project,
@@ -209,52 +261,67 @@ class Orchestrator:
             run_id=run_id,
             max_rounds=max_rounds,
         )
-        cfg = run_config(state["run_id"])
+        run = state["run_id"]
+        cfg = run_config(run, state["max_rounds"])
+        self._refuse_existing(run)
         try:
             for chunk in self.graph.stream(state, cfg, stream_mode="custom"):
                 yield EngineEvent.model_validate(chunk)
         except EngineError as exc:
-            failed = self._failed_state(cfg, exc, fallback=state)
+            failed = self._failed_state(cfg, exc)
             self.context.repository.save_run(failed)
+            event = make_event(run, RunPhase.failed, str(exc), level=EventLevel.error)
+            emit(event)
+            yield event
+            return
+        snapshot = self.graph.get_state(cfg)
+        final = cast(EngineState, dict(snapshot.values))
+        self.context.repository.save_run(final)
+        if snapshot.next == _PAUSED_AT_GATE:
+            pending = len(final["pending_approval_ids"])
             event = make_event(
-                failed["run_id"], RunPhase.failed, str(exc), level=EventLevel.error
+                run,
+                RunPhase.approval,
+                f"paused: {pending} change(s) need approval",
+                data={"pending": pending},
             )
             emit(event)
             yield event
 
+    def _refuse_existing(self, run_id: str) -> None:
+        """Raise ``ValueError`` when ``run_id`` already has a checkpoint thread."""
+        if self.graph.get_state(_thread(run_id)).values:
+            raise ValueError(f"run {run_id!r} already exists")
+
     def _invoke(
         self,
         run_id: str,
+        cfg: RunnableConfig,
         payload: EngineState | Command[str],
-        *,
-        fallback: EngineState | None,
     ) -> EngineRunResult:
-        cfg = run_config(run_id)
         try:
             output = self.graph.invoke(payload, cfg, version="v2")
         except EngineError as exc:
             result = EngineRunResult(
-                run_id, "failed", self._failed_state(cfg, exc, fallback=fallback), None
+                run_id, "failed", self._failed_state(cfg, exc), None
             )
         else:
-            state = output.value
             if output.interrupts:
                 request = ApprovalRequest.model_validate(output.interrupts[0].value)
-                result = EngineRunResult(run_id, "needs_approval", state, request)
-            elif state["phase"] is RunPhase.failed or state["error"] is not None:
-                result = EngineRunResult(run_id, "failed", state, None)
+                result = EngineRunResult(
+                    run_id, "needs_approval", output.value, request
+                )
             else:
-                result = EngineRunResult(run_id, "done", state, None)
+                result = EngineRunResult(run_id, "done", output.value, None)
         self.context.repository.save_run(result.state)
         return result
 
-    def _failed_state(
-        self, cfg: RunnableConfig, exc: EngineError, *, fallback: EngineState | None
-    ) -> EngineState:
-        """The last checkpointed state (or ``fallback``), marked failed."""
+    def _failed_state(self, cfg: RunnableConfig, exc: EngineError) -> EngineState:
+        """The last checkpointed state, marked failed; re-raises without one."""
         values = self.graph.get_state(cfg).values
-        source = fallback if not values and fallback is not None else values
-        state = cast(EngineState, dict(source))
+        if not values:
+            raise exc
+        state = cast(EngineState, dict(values))
         state["phase"] = RunPhase.failed
         state["error"] = str(exc)
         return state

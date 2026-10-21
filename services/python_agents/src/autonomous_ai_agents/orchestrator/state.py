@@ -12,11 +12,20 @@ Two rules every node must follow:
   from the dict a node receives, so ``initial_state`` sets all of them and
   nodes index the state directly instead of using ``.get``.
 
+``trials`` accumulates every *judged* trial of the run; ``round_trials`` is a
+plain key holding the current round's trials (unjudged after ``trials``,
+judged after ``judges``), so ``verdicts`` reads the judge results from the
+checkpointed state and never from the repository.
+
+``run_id`` names the checkpoint thread and the engine's git branches, so
+``validate_run_id`` keeps it to a safe refname piece (``RUN_ID_PATTERN``).
+
 ``AgentState`` is a transitional alias for the placeholder nodes and tests
 that still import the old name; it goes away with the node rewrite.
 """
 
 import operator
+import re
 from collections.abc import Sequence
 from typing import Annotated, TypedDict
 
@@ -44,6 +53,29 @@ from autonomous_ai_agents.common.models import (
 REDUCER_KEYS: frozenset[str] = frozenset({"trials", "verdicts", "lessons", "events"})
 """State keys with an ``operator.add`` reducer: nodes return deltas for these."""
 
+RUN_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+"""A run id (and a hypothesis id): 1-64 refname-safe characters, alphanumeric first."""
+
+
+def validate_run_id(run_id: str) -> str:
+    """Return ``run_id`` when it can safely name a thread and a git branch piece.
+
+    Beyond ``RUN_ID_PATTERN`` it must not contain ``..`` (git refuses it and
+    it reads as traversal), end with ``.lock`` (git's lock files) or end with
+    ``.`` (git refuses a refname ending in a dot). Raises ``ValueError``.
+    """
+    if (
+        re.fullmatch(RUN_ID_PATTERN, run_id) is None
+        or ".." in run_id
+        or run_id.endswith((".lock", "."))
+    ):
+        raise ValueError(
+            f"run_id {run_id!r} must be 1-64 letters, digits, '.', '_' or '-', "
+            "start with a letter or digit, and contain no '..', '.lock' or "
+            "trailing '.'"
+        )
+    return run_id
+
 
 class EngineState(TypedDict):
     """Everything one engine run knows, checkpointed after every node."""
@@ -62,6 +94,7 @@ class EngineState(TypedDict):
     papers: list[Paper]
     hypotheses: list[Hypothesis]
     trials: Annotated[list[Trial], operator.add]
+    round_trials: list[Trial]
     verdicts: Annotated[list[Verdict], operator.add]
     pending_approval_ids: list[str]
     approval: ApprovalDecision | None
@@ -90,24 +123,30 @@ def initial_state(
     """Build the state a run starts from, with every key set.
 
     The sequences are copied into fresh lists so later mutation by the caller
-    cannot leak into a checkpoint. ``run_id`` defaults to a new uuid4 and
-    ``max_rounds`` to ``settings.MAX_TRIAL_ROUNDS``.
+    cannot leak into a checkpoint. ``run_id`` defaults to a new uuid4 and is
+    checked by ``validate_run_id``; ``max_rounds`` defaults to
+    ``settings.MAX_TRIAL_ROUNDS`` and must be at least 1. Both raise
+    ``ValueError``.
     """
+    rounds = max_rounds if max_rounds is not None else settings.MAX_TRIAL_ROUNDS
+    if rounds < 1:
+        raise ValueError(f"max_rounds must be at least 1, got {rounds}")
     return EngineState(
-        run_id=run_id if run_id is not None else new_id(),
+        run_id=validate_run_id(run_id if run_id is not None else new_id()),
         phase=RunPhase.connect,
         project=project,
         workloads=list(workloads),
         objectives=list(objectives),
         guardrails=list(guardrails),
         round=0,
-        max_rounds=max_rounds if max_rounds is not None else settings.MAX_TRIAL_ROUNDS,
+        max_rounds=rounds,
         baseline=None,
         hotspots=[],
         techniques=[],
         papers=[],
         hypotheses=[],
         trials=[],
+        round_trials=[],
         verdicts=[],
         pending_approval_ids=[],
         approval=None,

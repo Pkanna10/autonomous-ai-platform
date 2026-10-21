@@ -4,6 +4,7 @@ Verifies environment variable loading and settings validation.
 """
 
 import pytest
+from pydantic import ValidationError
 
 from autonomous_ai_agents.common.config import Settings
 
@@ -141,6 +142,57 @@ def test_settings_model_ids_can_be_overridden(
     # ASSERT
     assert settings.ENGINE_MODEL == "claude-sonnet-5-5"
     assert settings.TRIAGE_MODEL == "claude-opus-5-5"
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("engine", id="no trailing slash"),
+        pytest.param("engine/../", id="parent segment"),
+        pytest.param("engine..x/", id="double dot"),
+        pytest.param("eng ine/", id="space"),
+        pytest.param("engine~1/", id="tilde"),
+        pytest.param("engine@{/", id="reflog syntax"),
+        pytest.param("engine:x/", id="colon"),
+    ],
+)
+def test_settings_reject_an_unsafe_trial_branch_prefix(
+    monkeypatch: pytest.MonkeyPatch, prefix: str
+) -> None:
+    """Should refuse a branch prefix that cannot safely start a git branch.
+
+    GIVEN TRIAL_BRANCH_PREFIX set to an empty, slash-less, traversing or
+          non-refname value
+    WHEN creating Settings instance
+    THEN validation fails, so no node ever builds a branch from it
+    """
+    # ARRANGE
+    monkeypatch.setenv("TRIAL_BRANCH_PREFIX", prefix)
+
+    # ACT / ASSERT
+    with pytest.raises(ValidationError, match="TRIAL_BRANCH_PREFIX"):
+        Settings()
+
+
+@pytest.mark.parametrize("prefix", ["engine/", "bots/engine/", "ai_1.x-y/"])
+def test_settings_accept_a_safe_trial_branch_prefix(
+    monkeypatch: pytest.MonkeyPatch, prefix: str
+) -> None:
+    """Should keep a prefix made of refname characters ending with a slash.
+
+    GIVEN TRIAL_BRANCH_PREFIX set to a safe value
+    WHEN creating Settings instance
+    THEN the value is used as given
+    """
+    # ARRANGE
+    monkeypatch.setenv("TRIAL_BRANCH_PREFIX", prefix)
+
+    # ACT
+    settings = Settings()
+
+    # ASSERT
+    assert settings.TRIAL_BRANCH_PREFIX == prefix
 
 
 def test_settings_requires_anthropic_api_key() -> None:

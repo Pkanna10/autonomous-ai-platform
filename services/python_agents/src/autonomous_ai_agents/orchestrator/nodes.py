@@ -16,6 +16,16 @@ Every node follows the same contract:
 - it emits one ``EngineEvent`` through :func:`emit` (the live log) and
   includes it in the ``events`` delta so it is checkpointed too.
 
+A round's trials travel through the state, never through the repository:
+``trials`` puts the runner's unjudged trials in ``round_trials``, ``judges``
+replaces them with the judged copies (and appends those to ``trials``), and
+``verdicts`` reads ``round_trials``. The repository is an audit log, so a
+resume in another process (fresh repository) reaches the same verdicts.
+
+The human's approval decision has one representation: ``state["approval"]``,
+applied to the append-only ``verdicts`` by :func:`decided_verdicts` wherever
+the decided outcome matters (the gate, ``combine``, the report, ``learn``).
+
 Step 1 keeps ``understand``, ``profile``, ``research`` and ``watch`` as
 deterministic stubs fed from the context; ``hypotheses`` (ranking),
 ``trials`` (runner injection), ``judges``, ``verdicts``, ``approval_gate``
@@ -24,7 +34,9 @@ deterministic stubs fed from the context; ``hypotheses`` (ranking),
 
 from __future__ import annotations
 
+import re
 import statistics
+from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol
@@ -60,6 +72,7 @@ from autonomous_ai_agents.common.models import (
     Verdict,
     VerdictOutcome,
     Violation,
+    ViolationRule,
 )
 from autonomous_ai_agents.execution.runner import BaselineRunner, TrialRunner
 from autonomous_ai_agents.learning.lessons import lessons_from_verdicts
@@ -75,7 +88,7 @@ from autonomous_ai_agents.optimization.judges import (
 )
 from autonomous_ai_agents.optimization.ranking import rank_hypotheses
 from autonomous_ai_agents.orchestrator.events import emit, make_event
-from autonomous_ai_agents.orchestrator.state import EngineState
+from autonomous_ai_agents.orchestrator.state import EngineState, validate_run_id
 from autonomous_ai_agents.persistence.repository import Repository
 
 NodeDelta = dict[str, object]
@@ -126,7 +139,7 @@ class EngineError(Exception):
 
 
 class DeliveryError(EngineError):
-    """The delivery would be unsafe (for example onto the default branch)."""
+    """A branch would be unsafe (the default branch, outside the prefix, bad refname)."""
 
 
 @dataclass(frozen=True)
@@ -135,7 +148,11 @@ class NodeContext:
 
     ``candidates``, ``hotspots`` and ``techniques`` stand in for the research
     and profiler output until Steps 2 and 3 produce them; the rigour knobs
-    default to the settings.
+    default to the settings. The noise rule lives in the judges
+    (``default_judges(settings.NOISE_MULTIPLIER)``), not here.
+
+    Construction refuses duplicate or refname-unsafe candidate ids (each id
+    names a trial branch) and knobs below 1, with ``ValueError``.
     """
 
     runner: TrialRunner
@@ -147,9 +164,28 @@ class NodeContext:
     techniques: tuple[Technique, ...] = ()
     protected_patterns: tuple[str, ...] = DEFAULT_PROTECTED_PATTERNS
     min_runs: int = settings.MIN_RUNS
-    noise_multiplier: float = settings.NOISE_MULTIPLIER
     branch_prefix: str = settings.TRIAL_BRANCH_PREFIX
     max_hypotheses_per_round: int = 3
+
+    def __post_init__(self) -> None:
+        counts = Counter(candidate.id for candidate in self.candidates)
+        repeated = sorted(candidate_id for candidate_id, n in counts.items() if n > 1)
+        if repeated:
+            raise ValueError(f"candidate ids must be unique; repeated: {repeated}")
+        for candidate_id in counts:
+            try:
+                validate_run_id(candidate_id)
+            except ValueError as exc:
+                raise ValueError(
+                    f"candidate id {candidate_id!r} cannot name a trial branch: {exc}"
+                ) from exc
+        if self.max_hypotheses_per_round < 1:
+            raise ValueError(
+                "max_hypotheses_per_round must be at least 1, "
+                f"got {self.max_hypotheses_per_round}"
+            )
+        if self.min_runs < 1:
+            raise ValueError(f"min_runs must be at least 1, got {self.min_runs}")
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +199,11 @@ _STATUS_AFTER_VERDICT: dict[VerdictOutcome, HypothesisStatus] = {
     VerdictOutcome.inconclusive: HypothesisStatus.inconclusive,
     VerdictOutcome.needs_approval: HypothesisStatus.trialled,
 }
+
+_RUNNER_STATUSES: frozenset[TrialStatus] = frozenset(
+    {TrialStatus.measured, TrialStatus.failed}
+)
+"""The only statuses a runner may report; the judges and verdicts decide the rest."""
 
 
 def _announce(
@@ -195,26 +236,102 @@ def _title_for(hypotheses: Mapping[str, Hypothesis], verdict: Verdict) -> str:
     return verdict.hypothesis_id if hypothesis is None else hypothesis.title
 
 
-def _objective_metrics(objectives: Iterable[Objective]) -> frozenset[str]:
-    return frozenset(objective.metric for objective in objectives)
+def _objective_metrics(objectives: Iterable[Objective]) -> tuple[str, ...]:
+    """Objective metrics in objective order, each once."""
+    return tuple(dict.fromkeys(objective.metric for objective in objectives))
 
 
-def _run_count_violations(
+def _with_statuses(
+    hypotheses: Iterable[Hypothesis], status_for: Mapping[str, HypothesisStatus]
+) -> list[Hypothesis]:
+    return [
+        h.model_copy(update={"status": status_for[h.id]}) if h.id in status_for else h
+        for h in hypotheses
+    ]
+
+
+def measurement_violations(
     measurements: Iterable[Measurement],
-    objective_metrics: frozenset[str],
+    workload_ids: Iterable[str],
+    objective_metrics: Iterable[str],
     min_runs: int,
 ) -> tuple[Violation, ...]:
-    """Run-count violations on objective metrics only.
+    """Require exactly one measurement per (workload, objective metric) pair.
 
-    ``tests_passed`` is a single flag by design and guardrail metrics are
-    bounded, not proven, so neither needs ``min_runs`` runs.
+    For every pair, in workload then metric order: none ->
+    ``missing_measurement`` (a trial cannot dodge a regression check by not
+    reporting the metric); more than one -> ``duplicate_measurement`` (the
+    judges read one of them, so a runner could report a fast copy first);
+    the single one built from fewer than ``min_runs`` runs -> ``too_few_runs``.
+
+    Metrics that are not objectives are exempt: ``tests_passed`` is a single
+    flag by design and guardrail metrics are bounded, not proven. So are
+    measurements of workloads outside ``workload_ids``: no judge reads them.
     """
-    found = (
-        check_run_count(measurement.stats, min_runs)
-        for measurement in measurements
-        if measurement.metric in objective_metrics
+    metrics = tuple(dict.fromkeys(objective_metrics))
+    found: dict[tuple[str, str], list[Measurement]] = {}
+    for measurement in measurements:
+        key = (measurement.workload_id, measurement.metric)
+        found.setdefault(key, []).append(measurement)
+    violations: list[Violation] = []
+    for workload_id in dict.fromkeys(workload_ids):
+        for metric in metrics:
+            rows = found.get((workload_id, metric), [])
+            if not rows:
+                violations.append(
+                    Violation(
+                        rule=ViolationRule.missing_measurement,
+                        message=f"metric {metric} was not measured on workload "
+                        f"{workload_id}",
+                    )
+                )
+            elif len(rows) > 1:
+                violations.append(
+                    Violation(
+                        rule=ViolationRule.duplicate_measurement,
+                        message=f"metric {metric} was measured {len(rows)} times on "
+                        f"workload {workload_id}; exactly one measurement is required",
+                    )
+                )
+            else:
+                too_few = check_run_count(rows[0].stats, min_runs)
+                if too_few is not None:
+                    violations.append(
+                        too_few.model_copy(
+                            update={
+                                "message": f"metric {metric} on workload "
+                                f"{workload_id}: {too_few.message}"
+                            }
+                        )
+                    )
+    return tuple(violations)
+
+
+def _baseline_workload_ids(baseline: Baseline, metrics: Sequence[str]) -> list[str]:
+    """Workloads the baseline measured an objective metric on (what judges compare)."""
+    return list(
+        dict.fromkeys(
+            m.workload_id for m in baseline.measurements if m.metric in metrics
+        )
     )
-    return tuple(violation for violation in found if violation is not None)
+
+
+def _runner_trial_problems(
+    trial: Trial, hypothesis: Hypothesis, round_number: int
+) -> list[str]:
+    """Why a runner's Trial cannot be trusted as this hypothesis's round trial."""
+    problems: list[str] = []
+    if trial.hypothesis_id != hypothesis.id:
+        problems.append(
+            f"hypothesis_id is {trial.hypothesis_id!r}, expected {hypothesis.id!r}"
+        )
+    if trial.round != round_number:
+        problems.append(f"round is {trial.round}, expected {round_number}")
+    if trial.status not in _RUNNER_STATUSES:
+        problems.append(f"status is {trial.status}, expected measured or failed")
+    if trial.judge_results:
+        problems.append("judge_results must be empty: only the judges node judges")
+    return problems
 
 
 @dataclass(frozen=True)
@@ -252,14 +369,16 @@ def _summarize_primary(
     )
 
 
-def _apply_approval(
+def decided_verdicts(
     verdicts: Iterable[Verdict], approval: ApprovalDecision | None
 ) -> list[Verdict]:
-    """Rewrite ``needs_approval`` verdicts with the human's decision.
+    """Return ``verdicts`` with the human's decision applied, in order.
 
-    Approved ones become ``keep`` (with the approver), rejected ones become
-    ``reject``; undecided ones stay as they are. Other outcomes are never
-    touched: the gate only ever offered ``needs_approval`` verdicts.
+    Approved ``needs_approval`` verdicts become ``keep`` (with the approver
+    and note), rejected ones become ``reject`` (with the note), and both get
+    the decision in front of their summary; undecided ones are returned as
+    they are. Other outcomes are never touched: the
+    gate only ever offered ``needs_approval`` verdicts.
     """
     if approval is None:
         return list(verdicts)
@@ -276,6 +395,7 @@ def _apply_approval(
                         "outcome": VerdictOutcome.keep,
                         "approved_by": approval.approver,
                         "approval_note": approval.note,
+                        "summary": f"approved by {approval.approver}: {verdict.summary}",
                     }
                 )
             )
@@ -285,6 +405,7 @@ def _apply_approval(
                     update={
                         "outcome": VerdictOutcome.reject,
                         "approval_note": approval.note,
+                        "summary": f"rejected by {approval.approver}: {verdict.summary}",
                     }
                 )
             )
@@ -293,27 +414,98 @@ def _apply_approval(
     return decided
 
 
+_REFNAME_SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def _refname_problem(branch: str) -> str | None:
+    """Why ``branch`` is not a git refname the engine may create, or None."""
+    if "@{" in branch:
+        return "contains '@{'"
+    if branch.endswith("."):
+        return "ends with '.'"
+    for segment in branch.split("/"):
+        if not segment:
+            return "has an empty segment"
+        if ".." in segment:
+            return f"segment {segment!r} contains '..'"
+        if segment.endswith(".lock"):
+            return f"segment {segment!r} ends with '.lock'"
+        if _REFNAME_SEGMENT.fullmatch(segment) is None:
+            return (
+                f"segment {segment!r} must start with a letter or digit and use "
+                "only letters, digits, '.', '_' and '-'"
+            )
+    return None
+
+
 def assert_safe_branch(branch: str, project: Project, prefix: str) -> None:
-    """Refuse a delivery branch that is the default branch or outside ``prefix``."""
+    """Refuse a branch the engine must not create or deliver onto.
+
+    ``prefix`` must be non-empty and end with ``/``; ``branch`` must not be
+    the project's default branch, must start with ``prefix`` and must be a
+    valid git refname: ``/``-separated segments matching
+    ``[A-Za-z0-9][A-Za-z0-9._-]*``, none empty, none containing ``..`` or
+    ending with ``.lock``, no ``@{`` and no trailing ``.``. Raises
+    ``DeliveryError``.
+    """
+    if not prefix.endswith("/"):
+        raise DeliveryError(
+            f"engine branch prefix {prefix!r} must be non-empty and end with '/'"
+        )
     if branch == project.default_branch:
         raise DeliveryError(
-            f"refusing to deliver onto the default branch {branch!r} of {project.name}"
+            f"refusing to touch the default branch {branch!r} of {project.name}"
         )
     if not branch.startswith(prefix):
         raise DeliveryError(
-            f"delivery branch {branch!r} is outside the engine prefix {prefix!r}"
+            f"branch {branch!r} is outside the engine prefix {prefix!r}"
         )
+    problem = _refname_problem(branch)
+    if problem is not None:
+        raise DeliveryError(f"branch {branch!r} is not a safe git refname: {problem}")
+
+
+_CELL_LIMIT = 200
+"""Longest report cell, in characters, ellipsis included."""
+
+_LINE_BREAKS = re.compile(r"[\r\n]+")
+
+_CELL_ESCAPES = str.maketrans(
+    {
+        "\\": "\\\\",
+        "|": "\\|",
+        "`": "\\`",
+        "[": "\\[",
+        "]": "\\]",
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+    }
+)
 
 
 def _cell(text: str) -> str:
-    return text.replace("|", "\\|")
+    """Make untrusted text (titles, trial errors) inert inside one table cell.
+
+    Line breaks collapse to one space (no new rows, headings or blocks), the
+    text is cut to ``_CELL_LIMIT`` characters with an ellipsis, then
+    backslashes, pipes, backticks and brackets get markdown escapes and
+    ``&``, ``<`` and ``>`` become HTML entities (no cell breaks, code spans,
+    links or raw HTML). The backslash is escaped first so an input ``\\|``
+    cannot turn the pipe escape into a literal backslash plus a cell break.
+    """
+    flat = _LINE_BREAKS.sub(" ", text)
+    if len(flat) > _CELL_LIMIT:
+        flat = flat[: _CELL_LIMIT - 1] + "…"
+    return flat.translate(_CELL_ESCAPES)
 
 
 def _report(state: EngineState) -> str:
-    """A small markdown report: title, baseline, one row per verdict, kept list."""
+    """A small markdown report: title, baseline, one row per decided verdict, kept."""
     project = state["project"]
     hypotheses = _by_id(state["hypotheses"])
-    verdicts_by_id = {verdict.id: verdict for verdict in state["verdicts"]}
+    decided = decided_verdicts(state["verdicts"], state["approval"])
+    decided_by_id = {verdict.id: verdict for verdict in decided}
     baseline = state["baseline"]
     baseline_line = (
         "Baseline: not measured"
@@ -328,19 +520,38 @@ def _report(state: EngineState) -> str:
         "| Hypothesis | Outcome | Gain | Summary |",
         "| --- | --- | --- | --- |",
     ]
-    for verdict in state["verdicts"]:
+    for verdict in decided:
         gain = "n/a" if verdict.gain is None else f"{verdict.gain:+.1%}"
         lines.append(
             f"| {_cell(_title_for(hypotheses, verdict))} | {verdict.outcome.value} "
             f"| {gain} | {_cell(verdict.summary)} |"
         )
     kept = [
-        _title_for(hypotheses, verdicts_by_id[verdict_id])
+        _cell(_title_for(hypotheses, decided_by_id[verdict_id]))
         for verdict_id in state["kept_verdict_ids"]
-        if verdict_id in verdicts_by_id
+        if verdict_id in decided_by_id
     ]
     lines += ["", "Kept: " + (", ".join(kept) if kept else "nothing"), ""]
     return "\n".join(lines)
+
+
+def _await_decision(request: ApprovalRequest) -> ApprovalDecision:
+    """Interrupt until the human sends a valid ``ApprovalDecision``.
+
+    An invalid payload never raises: the gate interrupts again with the same
+    request carrying the validation error, so the thread is never poisoned by
+    a bad resume (LangGraph replays earlier resume values to earlier
+    ``interrupt()`` calls, and the next one waits for a fresh value).
+    """
+    payload = request.model_dump(mode="json")
+    while True:
+        raw = interrupt(payload)
+        try:
+            return ApprovalDecision.model_validate(raw)
+        except ValidationError as exc:
+            payload = request.model_copy(
+                update={"error": f"invalid approval decision: {exc}"}
+            ).model_dump(mode="json")
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +588,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                 kind=ObjectiveKind.runtime,
                 metric=METRIC_WALL_TIME_S,
                 direction=Direction.minimize,
+                min_relative_gain=settings.MIN_RELATIVE_GAIN,
                 description="minimize wall time",
             )
         ]
@@ -386,25 +598,23 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             state,
             RunPhase.define,
             f"objectives: {metrics}; guardrails: {kinds or 'none'}",
-            data={
-                "objectives": metrics,
-                "guardrails": kinds,
-                "min_runs": ctx.min_runs,
-                "noise_multiplier": ctx.noise_multiplier,
-            },
+            data={"objectives": metrics, "guardrails": kinds, "min_runs": ctx.min_runs},
         )
         return {"phase": RunPhase.define, "objectives": objectives, "events": [event]}
 
     def baseline(state: EngineState) -> NodeDelta:
         measurements = ctx.baseline_runner.measure(state["workloads"])
         objectives = tuple(state["objectives"])
-        violations = _run_count_violations(
-            measurements, _objective_metrics(objectives), ctx.min_runs
+        violations = measurement_violations(
+            measurements,
+            [workload.id for workload in state["workloads"]],
+            _objective_metrics(objectives),
+            ctx.min_runs,
         )
         if violations:
             raise EngineError(
                 "baseline is not trustworthy: "
-                + "; ".join(violation.message for violation in violations)
+                + "; ".join(f"{v.rule}: {v.message}" for v in violations)
             )
         measured = Baseline(
             measurements=measurements,
@@ -453,15 +663,19 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
 
     def hypotheses(state: EngineState) -> NodeDelta:
         round_number = state["round"] + 1
-        trialled = {trial.hypothesis_id for trial in state["trials"]}
-        candidates = [h for h in ctx.candidates if h.id not in trialled]
+        # A candidate is new when no trial ran it and no earlier round holds
+        # it; earlier rounds' hypotheses stay (with their statuses) so the
+        # report and the lessons see every idea the run tried.
+        seen = {trial.hypothesis_id for trial in state["trials"]} | {
+            hypothesis.id for hypothesis in state["hypotheses"]
+        }
+        candidates = [h for h in ctx.candidates if h.id not in seen]
         lessons = ctx.repository.list_lessons(state["project"].id)
-        ranked = rank_hypotheses(candidates, lessons)[: ctx.max_hypotheses_per_round]
-        # Earlier rounds' hypotheses stay (with their statuses) so the report
-        # and the lessons see every idea the run tried; only this round's
-        # ranked ones are ``proposed``.
-        carried = [
-            h for h in state["hypotheses"] if h.status is not HypothesisStatus.proposed
+        ranked = [
+            h.model_copy(update={"status": HypothesisStatus.proposed})
+            for h in rank_hypotheses(candidates, lessons)[
+                : ctx.max_hypotheses_per_round
+            ]
         ]
         event = _announce(
             state,
@@ -476,37 +690,45 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
         return {
             "phase": RunPhase.hypotheses,
             "round": round_number,
-            "hypotheses": [*carried, *ranked],
+            "hypotheses": [*state["hypotheses"], *ranked],
             "events": [event],
         }
 
     def trials(state: EngineState) -> NodeDelta:
         measured = _require_baseline(state)
         run_id = state["run_id"]
+        round_number = state["round"]
         new_trials: list[Trial] = []
         for hypothesis in state["hypotheses"]:
             if hypothesis.status is not HypothesisStatus.proposed:
                 continue
-            branch = f"{ctx.branch_prefix}{run_id[:8]}/{hypothesis.id[:8]}"
+            branch = f"{ctx.branch_prefix}trial-{run_id}-{hypothesis.id}"
+            assert_safe_branch(branch, state["project"], ctx.branch_prefix)
             trial = ctx.runner.run(
                 hypothesis,
                 state["workloads"],
                 measured,
-                round=state["round"],
+                round=round_number,
                 branch=branch,
             )
+            problems = _runner_trial_problems(trial, hypothesis, round_number)
+            if problems:
+                raise EngineError(
+                    f"runner returned an untrustworthy trial {trial.id} for "
+                    f"hypothesis {hypothesis.id}: " + "; ".join(problems)
+                )
             ctx.repository.save_trial(run_id, trial)
             new_trials.append(trial)
-        ran = {trial.hypothesis_id for trial in new_trials}
+        ran = {trial.hypothesis_id: HypothesisStatus.trialled for trial in new_trials}
         cost_usd = state["cost_usd"] + sum(trial.cost_usd for trial in new_trials)
         tokens_used = state["tokens_used"] + sum(t.tokens_used for t in new_trials)
         failed = sum(1 for t in new_trials if t.status is TrialStatus.failed)
         event = _announce(
             state,
             RunPhase.trials,
-            f"round {state['round']}: ran {len(new_trials)} trial(s), {failed} failed",
+            f"round {round_number}: ran {len(new_trials)} trial(s), {failed} failed",
             data={
-                "round": state["round"],
+                "round": round_number,
                 "trials": len(new_trials),
                 "failed": failed,
                 "cost_usd": cost_usd,
@@ -515,13 +737,8 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
         )
         return {
             "phase": RunPhase.trials,
-            "trials": new_trials,
-            "hypotheses": [
-                h.model_copy(update={"status": HypothesisStatus.trialled})
-                if h.id in ran
-                else h
-                for h in state["hypotheses"]
-            ],
+            "round_trials": new_trials,
+            "hypotheses": _with_statuses(state["hypotheses"], ran),
             "cost_usd": cost_usd,
             "tokens_used": tokens_used,
             "events": [event],
@@ -534,47 +751,62 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             for judge in ctx.judges
             if any(judge.applies_to(o) for o in measured.objectives)
         ]
-        current = [t for t in state["trials"] if t.round == state["round"]]
-        # The trials channel is append-only, so the judged copy lives in the
-        # repository (and later on the verdict), not in the state.
-        for trial in current:
-            results = tuple(judge.evaluate(measured, trial) for judge in active)
-            ctx.repository.save_trial(
-                state["run_id"], trial.model_copy(update={"judge_results": results})
+        judged = [
+            trial.model_copy(
+                update={
+                    "judge_results": tuple(
+                        judge.evaluate(measured, trial) for judge in active
+                    )
+                }
             )
+            for trial in state["round_trials"]
+        ]
+        for trial in judged:
+            ctx.repository.save_trial(state["run_id"], trial)
         event = _announce(
             state,
             RunPhase.judges,
-            f"round {state['round']}: judged {len(current)} trial(s) "
+            f"round {state['round']}: judged {len(judged)} trial(s) "
             f"with {len(active)} judge(s)",
             data={
                 "round": state["round"],
-                "trials": len(current),
+                "trials": len(judged),
                 "judges": ", ".join(judge.name for judge in active),
             },
         )
-        return {"phase": RunPhase.judges, "events": [event]}
+        return {
+            "phase": RunPhase.judges,
+            "trials": judged,
+            "round_trials": list(judged),
+            "events": [event],
+        }
 
     def verdicts(state: EngineState) -> NodeDelta:
         measured = _require_baseline(state)
         run_id = state["run_id"]
         known = _by_id(state["hypotheses"])
         objective_metrics = _objective_metrics(measured.objectives)
+        workload_ids = _baseline_workload_ids(measured, objective_metrics)
         primary = primary_metric(measured.objectives)
         new_verdicts: list[Verdict] = []
-        for trial in ctx.repository.list_trials(run_id):
-            if trial.round != state["round"]:
-                continue
+        for trial in state["round_trials"]:
             hypothesis = known.get(trial.hypothesis_id)
             if hypothesis is None:
                 raise EngineError(
                     f"trial {trial.id} refers to unknown hypothesis {trial.hypothesis_id}"
                 )
+            # A failed trial is rejected for failing (verdict rule 2); its
+            # missing measurements are a consequence, not a violation.
+            completeness = (
+                ()
+                if trial.status is TrialStatus.failed
+                else measurement_violations(
+                    trial.measurements, workload_ids, objective_metrics, ctx.min_runs
+                )
+            )
             violations = (
                 *check_diff_all(trial.touched_paths, ctx.protected_patterns),
-                *_run_count_violations(
-                    trial.measurements, objective_metrics, ctx.min_runs
-                ),
+                *completeness,
             )
             verdict = derive_verdict(
                 trial,
@@ -604,12 +836,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
         return {
             "phase": RunPhase.verdicts,
             "verdicts": new_verdicts,
-            "hypotheses": [
-                h.model_copy(update={"status": status_for[h.id]})
-                if h.id in status_for
-                else h
-                for h in state["hypotheses"]
-            ],
+            "hypotheses": _with_statuses(state["hypotheses"], status_for),
             "pending_approval_ids": [
                 v.id for v in new_verdicts if v.outcome is VerdictOutcome.needs_approval
             ],
@@ -618,8 +845,8 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
 
     def approval_gate(state: EngineState) -> NodeDelta:
         # Everything before interrupt() runs again on resume, so the request
-        # is built from state only and nothing is written until the decision
-        # is in hand.
+        # is built from state only and nothing is written until a valid
+        # decision is in hand.
         run_id = state["run_id"]
         known = _by_id(state["hypotheses"])
         verdicts_by_id = {v.id: v for v in state["verdicts"]}
@@ -642,56 +869,46 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             ),
             message=f"{len(pending)} change(s) need human approval before delivery",
         )
-        raw = interrupt(request.model_dump(mode="json"))
-        try:
-            decision = ApprovalDecision.model_validate(raw)
-        except ValidationError as exc:
-            raise EngineError(f"invalid approval decision: {exc}") from exc
-        pending_ids = {verdict.id for verdict in pending}
-        approved = set(decision.approved_verdict_ids) & pending_ids
-        rejected = set(decision.rejected_verdict_ids) & pending_ids
-        for verdict in pending:
-            if verdict.id in approved:
-                ctx.repository.save_verdict(
-                    run_id,
-                    verdict.model_copy(
-                        update={
-                            "approved_by": decision.approver,
-                            "approval_note": decision.note,
-                        }
-                    ),
-                )
+        decision = _await_decision(request)
+        decided = [
+            after
+            for before, after in zip(
+                pending, decided_verdicts(pending, decision), strict=True
+            )
+            if after.outcome is not before.outcome
+        ]
+        for verdict in decided:
+            ctx.repository.save_verdict(run_id, verdict)
+        approved = sum(1 for v in decided if v.outcome is VerdictOutcome.keep)
+        rejected = sum(1 for v in decided if v.outcome is VerdictOutcome.reject)
         event = _announce(
             state,
             RunPhase.approval,
-            f"approval by {decision.approver}: {len(approved)} approved, "
-            f"{len(rejected)} rejected",
+            f"approval by {decision.approver}: {approved} approved, "
+            f"{rejected} rejected",
             data={
                 "approver": decision.approver,
-                "approved": len(approved),
-                "rejected": len(rejected),
+                "approved": approved,
+                "rejected": rejected,
             },
         )
+        status_for = {
+            v.hypothesis_id: _STATUS_AFTER_VERDICT[v.outcome] for v in decided
+        }
         return {
             "phase": RunPhase.approval,
             "approval": decision,
             "pending_approval_ids": [],
+            "hypotheses": _with_statuses(state["hypotheses"], status_for),
             "events": [event],
         }
 
     def combine(state: EngineState) -> NodeDelta:
-        verdicts_by_id = {v.id: v for v in state["verdicts"]}
-        kept = [v.id for v in state["verdicts"] if v.outcome is VerdictOutcome.keep]
-        approval = state["approval"]
-        approved_ids = () if approval is None else approval.approved_verdict_ids
-        for verdict_id in approved_ids:
-            verdict = verdicts_by_id.get(verdict_id)
-            if (
-                verdict is not None
-                and verdict.outcome is VerdictOutcome.needs_approval
-                and verdict_id not in kept
-            ):
-                kept.append(verdict_id)
+        kept = [
+            verdict.id
+            for verdict in decided_verdicts(state["verdicts"], state["approval"])
+            if verdict.outcome is VerdictOutcome.keep
+        ]
         event = _announce(
             state,
             RunPhase.combine,
@@ -714,7 +931,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             )
             message = "nothing kept: delivering the report only"
         else:
-            branch = f"{ctx.branch_prefix}{state['run_id'][:8]}"
+            branch = f"{ctx.branch_prefix}run-{state['run_id']}"
             assert_safe_branch(branch, project, ctx.branch_prefix)
             trials_by_id = {trial.id: trial for trial in state["trials"]}
             verdicts_by_id = {verdict.id: verdict for verdict in state["verdicts"]}
@@ -743,7 +960,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
 
     def learn(state: EngineState) -> NodeDelta:
         known = _by_id(state["hypotheses"])
-        decided = _apply_approval(state["verdicts"], state["approval"])
+        decided = decided_verdicts(state["verdicts"], state["approval"])
         context = tuple(sorted({tag for hs in state["hotspots"] for tag in hs.tags}))
         lessons = lessons_from_verdicts(
             decided, known, project_id=state["project"].id, context=context
