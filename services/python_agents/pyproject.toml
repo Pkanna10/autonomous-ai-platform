@@ -342,21 +342,6 @@ no-build-isolation = false
 link-mode = "copy"
 
 # ============================================
-# UV Workspace Configuration (Tier 4: Proposal #18)
-# ============================================
-# Enables shared dependencies across Python monorepo packages
-# 3-5x faster than separate virtual environments
-[tool.uv.workspace]
-members = [
-    "orchestrator",
-    "research",
-    "code_generator",
-]
-
-# Shared development dependencies inherited by all workspace members
-# Future: When splitting into multiple packages
-
-# ============================================
 # Hatch Environment Configuration (Optional)
 # ============================================
 # Alternative to UV workspace for development environments
