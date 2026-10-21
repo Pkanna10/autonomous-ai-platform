@@ -23,7 +23,8 @@ from autonomous_ai_agents.common.models import (
     Violation,
     ViolationRule,
 )
-from autonomous_ai_agents.common.paths import PathTraversalError, normalize_path
+from autonomous_ai_agents.common.paths import PathTraversalError as PathTraversalError
+from autonomous_ai_agents.common.paths import normalize_path as normalize_path
 
 DEFAULT_PROTECTED_PATTERNS: tuple[str, ...] = (
     # Tests and benchmarks: a trial may not change what judges it.
