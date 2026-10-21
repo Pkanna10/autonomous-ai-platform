@@ -22,6 +22,12 @@ The checkpoint thread is the source of truth for a run: ``run`` and
 ``stream`` refuse a run id whose thread already exists, ``resume`` only
 continues a thread parked at the approval gate, and a failed result is built
 from the last checkpoint, never invented.
+
+``run`` and ``stream`` save the initial state to the repository before the
+graph starts (Step 2, decision 28): the run row exists before any lesson or
+trial refers to it, a crash leaves an audit row, and a repository refusal
+(``ProjectConflictError``, ``InvalidRecordIdError``) reaches the caller
+before any node has run.
 """
 
 from __future__ import annotations
@@ -176,12 +182,16 @@ class Orchestrator:
     the human's ``ApprovalDecision``. ``stream`` yields the live log instead.
     An ``EngineError`` raised by a node becomes a ``failed`` result whose
     state is the last checkpoint marked failed; any other exception
-    propagates. Every result's state (and every streamed run's final state)
-    is saved to the context's repository.
+    propagates. The initial state is saved to the context's repository
+    before the graph starts, and every result's state (and every streamed
+    run's final state) after it; an ``EngineError`` from that first save
+    propagates before any node runs.
 
-    ``run`` and ``stream`` raise ``ValueError`` for a run id whose thread
-    already exists; ``resume`` raises ``ValueError`` unless the run is
-    paused at the approval gate.
+    ``max_cost_usd`` is the run's hard cost cap (default
+    ``settings.MAX_COST_USD``; ``initial_state`` refuses a negative or
+    non-finite one with ``ValueError``). ``run`` and ``stream`` raise
+    ``ValueError`` for a run id whose thread already exists; ``resume``
+    raises ``ValueError`` unless the run is paused at the approval gate.
     """
 
     def __init__(
@@ -204,6 +214,7 @@ class Orchestrator:
         *,
         run_id: str | None = None,
         max_rounds: int | None = None,
+        max_cost_usd: float | None = None,
     ) -> EngineRunResult:
         """Start a run and drive it to completion, approval or failure."""
         state = initial_state(
@@ -213,9 +224,11 @@ class Orchestrator:
             guardrails,
             run_id=run_id,
             max_rounds=max_rounds,
+            max_cost_usd=max_cost_usd,
         )
         cfg = run_config(state["run_id"], state["max_rounds"])
         self._refuse_existing(state["run_id"])
+        self.context.repository.save_run(state)
         return self._invoke(state["run_id"], cfg, state)
 
     def resume(self, run_id: str, decision: ApprovalDecision) -> EngineRunResult:
@@ -243,6 +256,7 @@ class Orchestrator:
         *,
         run_id: str | None = None,
         max_rounds: int | None = None,
+        max_cost_usd: float | None = None,
     ) -> Iterator[EngineEvent]:
         """Start a run and yield its live events as they happen.
 
@@ -261,10 +275,12 @@ class Orchestrator:
             guardrails,
             run_id=run_id,
             max_rounds=max_rounds,
+            max_cost_usd=max_cost_usd,
         )
         run = state["run_id"]
         cfg = run_config(run, state["max_rounds"])
         self._refuse_existing(run)
+        self.context.repository.save_run(state)
         try:
             for chunk in self.graph.stream(state, cfg, stream_mode="custom"):
                 yield EngineEvent.model_validate(chunk)

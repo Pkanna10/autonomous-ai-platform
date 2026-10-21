@@ -10,6 +10,7 @@ reducers, so no graph is involved except for ``approval_gate``, whose
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import FrozenInstanceError, replace
@@ -20,22 +21,36 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
-from autonomous_ai_agents.common.config import settings
+from autonomous_ai_agents.clients.budget import Budget
+from autonomous_ai_agents.common.config import IsolationMode, settings
+from autonomous_ai_agents.common.errors import (
+    BudgetExceeded,
+    LLMConfigError,
+    LLMRequestError,
+    LLMUnavailable,
+    PreflightError,
+    RepoTamperedError,
+)
 from autonomous_ai_agents.common.models import (
     METRIC_PEAK_RSS_BYTES,
+    METRIC_TESTS_PASSED,
     METRIC_WALL_TIME_S,
     ApprovalDecision,
     ApprovalRequest,
     Baseline,
     ChangeClass,
+    Combination,
+    CombineSkip,
     Delivery,
     DeliveryKind,
     Direction,
     EngineEvent,
     EventLevel,
     Guardrail,
+    GuardrailKind,
     Hotspot,
     Hypothesis,
+    HypothesisSource,
     HypothesisStatus,
     JudgeOutcome,
     JudgeResult,
@@ -52,10 +67,29 @@ from autonomous_ai_agents.common.models import (
     TrialStatus,
     Verdict,
     VerdictOutcome,
+    Violation,
     ViolationRule,
     Workload,
 )
-from autonomous_ai_agents.execution.protocols import TrialBrief
+from autonomous_ai_agents.execution.fakes import (
+    CombineCall,
+    FakeCombiner,
+    FakePreflight,
+    FakeProfiler,
+    FakePublisher,
+    FakeUnderstander,
+    PreflightCall,
+    ProfileCall,
+    PublishCall,
+    UnderstandCall,
+)
+from autonomous_ai_agents.execution.protocols import (
+    CombineMeasured,
+    KeptChange,
+    PreflightReport,
+    TrialBrief,
+    UnderstandResult,
+)
 from autonomous_ai_agents.execution.runner import (
     OVER_BUDGET_ERROR,
     ScriptedOutcome,
@@ -662,8 +696,9 @@ class TestBaseline:
         """
         GIVEN a scripted baseline runner
         WHEN baseline runs
-        THEN the baseline carries measurements, objectives and guardrails
-             and the event reports n and the primary metric's mean
+        THEN the baseline carries measurements, objectives and guardrails,
+             the event reports n and the primary metric's mean, and the
+             workload's noisy_host note (Step 2) follows it
         """
         delta = make_nodes(make_context())["baseline"](base_state)
 
@@ -677,7 +712,8 @@ class TestBaseline:
             "tests_passed",
         }
         assert all(m.trial_id is None for m in baseline.measurements)
-        event = _only_event(delta)
+        event, note = _events(delta)
+        assert note.data["code"] == "noisy_host"
         assert event.data["metric"] == METRIC_WALL_TIME_S
         assert event.data["n"] == 5
         assert event.data["mean"] == pytest.approx(1.80)
@@ -1297,7 +1333,7 @@ class TestTrials:
             )
         ]
 
-    def test_an_overspent_run_offers_a_zero_budget(
+    def test_an_overspent_run_starts_no_trial(
         self,
         make_context: ContextFactory,
         base_state: EngineState,
@@ -1306,9 +1342,10 @@ class TestTrials:
     ) -> None:
         """
         GIVEN a run that already spent more than its cap
-        WHEN trials runs H1 (scripted to cost 0.12 USD)
-        THEN the runner is offered 0.0, never a negative budget, and the stub
-             fails the trial for exceeding it without charging anything
+        WHEN trials runs with H1 proposed
+        THEN (Step 2, decision 10) no trial starts: the runner is never
+             called, the round has no trials, the budget is marked exhausted
+             and nothing more is charged
         """
         runner = StubTrialRunner(design_scripts)
         nodes = make_nodes(make_context([h1_cache], runner=runner))
@@ -1317,11 +1354,39 @@ class TestTrials:
 
         delta = nodes["trials"](state)
 
-        assert runner.budgets == [0.0]
+        assert runner.budgets == []
+        assert _items(delta, "round_trials", Trial) == []
+        assert delta["budget_exhausted"] is True
+        assert delta["cost_usd"] == pytest.approx(0.6)
+        (exhausted,) = [e for e in _events(delta) if e.data.get("code")]
+        assert exhausted.data["code"] == "budget_exhausted"
+        assert exhausted.data["remaining_usd"] == 0.0
+
+    def test_a_stub_trial_over_its_budget_fails_without_overcharging(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+        design_scripts: dict[str, ScriptedOutcome],
+    ) -> None:
+        """
+        GIVEN 0.05 USD left and H1 scripted to cost 0.12 USD
+        WHEN trials runs H1
+        THEN the runner is offered the 0.05 left, the stub fails the trial
+             for exceeding it and charges exactly the budget, never more
+        """
+        runner = StubTrialRunner(design_scripts)
+        nodes = make_nodes(make_context([h1_cache], runner=runner))
+        state = _advance(nodes, base_state, _before("trials"))
+        state = cast(EngineState, {**state, "max_cost_usd": 0.5, "cost_usd": 0.45})
+
+        delta = nodes["trials"](state)
+
+        assert runner.budgets == [pytest.approx(0.05)]
         trial = _items(delta, "round_trials", Trial)[0]
         assert trial.error == OVER_BUDGET_ERROR
-        assert trial.cost_usd == 0.0
-        assert delta["cost_usd"] == pytest.approx(0.6)
+        assert trial.cost_usd == pytest.approx(0.05)
+        assert delta["cost_usd"] == pytest.approx(0.5)
 
     def test_counts_failed_trials(
         self,
@@ -2879,3 +2944,1947 @@ def test_nodes_write_nothing_but_trials_verdicts_and_lessons_to_the_repository(
     assert len(repository.list_verdicts(RUN_ID)) == 1
     assert len(repository.list_lessons()) == 1
     assert repository.get_run(RUN_ID) is None
+
+
+# ---------------------------------------------------------------------------
+# Step 2 (U10): the seams behind preflight, understand, profile, the running
+# budget, the violation merge, the combine re-test and the publisher
+# ---------------------------------------------------------------------------
+
+SHA = "a" * 40
+TIP = "b" * 40
+SLOW = (1.80, 1.75, 1.85, 1.80, 1.80)
+FAST = (1.05, 1.02, 1.08, 1.05, 1.05)
+
+
+def _coded(delta: NodeDelta, code: str) -> list[EngineEvent]:
+    return [event for event in _events(delta) if event.data.get("code") == code]
+
+
+def _preflight_report(
+    workloads: Sequence[Workload],
+    *,
+    dirty: Sequence[str] = (),
+    network: IsolationMode = "required",
+    fs: IsolationMode = "required",
+    test_command: tuple[str, ...] | None = None,
+    extra: Sequence[str] = (),
+    head: str = SHA,
+) -> PreflightReport:
+    return PreflightReport(
+        head_commit=head,
+        dirty_entries=tuple(dirty),
+        git_version=(2, 43, 0),
+        network=network,
+        fs=fs,
+        workloads=tuple(workloads),
+        test_command=test_command,
+        extra_protected=tuple(extra),
+    )
+
+
+def _efficiency(
+    project: Project, hypothesis_id: str, title: str, expected_gain: float = 0.4
+) -> Hypothesis:
+    return Hypothesis(
+        id=hypothesis_id,
+        project_id=project.id,
+        source=HypothesisSource.playbook,
+        title=title,
+        rationale=f"{title}: scripted for the combine tests",
+        change_class=ChangeClass.efficiency,
+        expected_gain=expected_gain,
+        provability=0.9,
+        risk=0.1,
+    )
+
+
+DESIGN_SCRIPTS_H1 = ScriptedOutcome(
+    touched_paths=("src/bridge/encoder.py",),
+    samples={METRIC_WALL_TIME_S: FAST, VAL_LOSS: (0.5,) * 5},
+    tests_passed=True,
+    cost_usd=0.12,
+    tokens_used=3400,
+)
+
+
+def _winning(wall: Sequence[float]) -> ScriptedOutcome:
+    return replace(
+        DESIGN_SCRIPTS_H1,
+        samples={METRIC_WALL_TIME_S: tuple(wall), VAL_LOSS: (0.5,) * 5},
+    )
+
+
+def _rows(
+    workload_id: str,
+    wall: Sequence[float],
+    *,
+    val_loss: Sequence[float] = (0.5,) * 5,
+    tests: float | None = 1.0,
+) -> tuple[Measurement, ...]:
+    rows = [
+        _measurement(workload_id, METRIC_WALL_TIME_S, wall),
+        _measurement(workload_id, VAL_LOSS, val_loss, unit=""),
+    ]
+    if tests is not None:
+        rows.append(
+            _measurement(workload_id, METRIC_TESTS_PASSED, (tests,), unit="bool")
+        )
+    return tuple(rows)
+
+
+def _measured(
+    workload_id: str,
+    applied: Sequence[str],
+    *,
+    tip: str = TIP,
+    skipped: Sequence[CombineSkip] = (),
+    baseline: tuple[Measurement, ...] | None = None,
+    combined: tuple[Measurement, ...] | None = None,
+) -> CombineMeasured:
+    return CombineMeasured(
+        tip_commit=tip,
+        applied=tuple(applied),
+        skipped=tuple(skipped),
+        baseline=_rows(workload_id, SLOW, tests=None) if baseline is None else baseline,
+        combined=_rows(workload_id, FAST) if combined is None else combined,
+    )
+
+
+def _cv(samples: Sequence[float]) -> float:
+    stats = RunStats.from_samples(samples, unit="s")
+    return stats.stdev / stats.mean
+
+
+def _committed(state: EngineState) -> EngineState:
+    """``state`` pinned at SHA, every trial committed (as the real runner does)."""
+    trials = [
+        trial.model_copy(update={"commit": f"{index + 1:040x}"})
+        for index, trial in enumerate(state["trials"])
+    ]
+    return cast(EngineState, {**state, "trials": trials, "base_commit": SHA})
+
+
+def _trial_of(state: EngineState, hypothesis: Hypothesis) -> Trial:
+    return next(t for t in state["trials"] if t.hypothesis_id == hypothesis.id)
+
+
+def _verdict_of(state: EngineState, hypothesis: Hypothesis) -> Verdict:
+    return next(v for v in state["verdicts"] if v.hypothesis_id == hypothesis.id)
+
+
+class _FixedBaselineRunner:
+    """A baseline runner that returns the given rows whatever it is asked."""
+
+    def __init__(self, rows: Sequence[Measurement]) -> None:
+        self._rows = tuple(rows)
+
+    def measure(
+        self, workloads: Sequence[Workload], *, run_id: str, commit: str | None
+    ) -> tuple[Measurement, ...]:
+        return self._rows
+
+
+class _ChargingUnderstander:
+    """Charges the budget it is given, then returns or raises its outcome."""
+
+    def __init__(
+        self, usd: float, tokens: int, outcome: UnderstandResult | Exception
+    ) -> None:
+        self._usd, self._tokens, self._outcome = usd, tokens, outcome
+
+    def understand(
+        self,
+        project: Project,
+        workloads: Sequence[Workload],
+        *,
+        commit: str,
+        budget: Budget,
+    ) -> UnderstandResult:
+        budget.record(self._usd, self._tokens)
+        if isinstance(self._outcome, Exception):
+            raise self._outcome
+        return self._outcome
+
+
+class TestStep2Context:
+    def test_seams_default_to_none_and_the_trial_floor_to_zero(
+        self, make_context: ContextFactory
+    ) -> None:
+        """
+        GIVEN a node context built without the Step 2 seams
+        WHEN its fields are read
+        THEN every seam is None (Step 1 behaviour) and min_trial_budget_usd is 0
+        """
+        ctx = make_context()
+
+        assert (
+            ctx.preflight,
+            ctx.understander,
+            ctx.profiler,
+            ctx.combiner,
+            ctx.publisher,
+        ) == (None, None, None, None, None)
+        assert ctx.min_trial_budget_usd == 0.0
+
+    @pytest.mark.parametrize("value", [-0.01, math.nan, math.inf])
+    def test_min_trial_budget_must_be_finite_and_not_negative(
+        self, make_context: ContextFactory, value: float
+    ) -> None:
+        """
+        GIVEN a negative, NaN or infinite min_trial_budget_usd
+        WHEN a node context is built
+        THEN a ValueError names the knob (NaN would let every trial start)
+        """
+        with pytest.raises(ValueError, match="min_trial_budget_usd"):
+            make_context(min_trial_budget_usd=value)
+
+
+class TestConnectWithPreflight:
+    def test_pins_the_commit_and_the_resolved_inputs(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_project: Project,
+        sample_workload: Workload,
+        sample_guardrails: tuple[Guardrail, ...],
+    ) -> None:
+        """
+        GIVEN a preflight that resolves the workload's python, a test command
+              and a repo-relative harness path, on a clean tree
+        WHEN connect runs
+        THEN the preflight sees the project, workloads and guardrails; the
+             state pins the head commit and takes the resolved workloads, test
+             command and extra protected paths; one info isolation event follows
+        """
+        resolved = sample_workload.model_copy(
+            update={"command": ("/usr/bin/python3", "train.py", "--steps", "20")}
+        )
+        command = ("/usr/bin/python3", "-m", "pytest")
+        preflight = FakePreflight(
+            _preflight_report([resolved], test_command=command, extra=("run.sh",))
+        )
+
+        delta = make_nodes(make_context(preflight=preflight))["connect"](base_state)
+
+        assert preflight.calls == [
+            PreflightCall(sample_project, (sample_workload,), sample_guardrails)
+        ]
+        assert set(delta) == {
+            "phase",
+            "project",
+            "workloads",
+            "base_commit",
+            "extra_protected",
+            "events",
+        }
+        assert delta["base_commit"] == SHA
+        assert delta["workloads"] == [resolved]
+        assert delta["extra_protected"] == ["run.sh"]
+        project = delta["project"]
+        assert isinstance(project, Project)
+        assert project.test_command == command
+        assert project.model_copy(update={"test_command": None}) == sample_project
+        connected, isolation = _events(delta)
+        assert connected.message == f"connected bridge at {SHA}"
+        assert connected.data == {
+            "workloads": 1,
+            "base_commit": SHA,
+            "git_version": "2.43.0",
+        }
+        assert isolation.level is EventLevel.info
+        assert isolation.data == {
+            "code": "isolation",
+            "network": "required",
+            "fs": "required",
+        }
+
+    def test_warns_that_uncommitted_changes_are_ignored(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_workload: Workload,
+    ) -> None:
+        """
+        GIVEN a preflight that saw two uncommitted entries
+        WHEN connect runs
+        THEN a dirty_tree_ignored warning gives the count and the measured sha
+        """
+        preflight = FakePreflight(
+            _preflight_report([sample_workload], dirty=(" M a.py", "?? b.txt"))
+        )
+
+        delta = make_nodes(make_context(preflight=preflight))["connect"](base_state)
+
+        (dirty,) = _coded(delta, "dirty_tree_ignored")
+        assert dirty.level is EventLevel.warning
+        assert dirty.message.endswith(
+            f"2 uncommitted changes ignored; run measures {SHA}"
+        )
+        assert dirty.data == {
+            "code": "dirty_tree_ignored",
+            "dirty_entries": 2,
+            "base_commit": SHA,
+        }
+
+    @pytest.mark.parametrize(
+        ("network", "fs", "level"),
+        [
+            ("required", "required", EventLevel.info),
+            ("best_effort", "required", EventLevel.warning),
+            ("required", "off", EventLevel.warning),
+            ("off", "best_effort", EventLevel.warning),
+        ],
+    )
+    def test_isolation_modes_warn_unless_both_are_required(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_workload: Workload,
+        network: IsolationMode,
+        fs: IsolationMode,
+        level: EventLevel,
+    ) -> None:
+        """
+        GIVEN the isolation modes the preflight reports
+        WHEN connect runs
+        THEN the isolation event names both, at warning level unless both
+             are required
+        """
+        preflight = FakePreflight(
+            _preflight_report([sample_workload], network=network, fs=fs)
+        )
+
+        delta = make_nodes(make_context(preflight=preflight))["connect"](base_state)
+
+        (isolation,) = _coded(delta, "isolation")
+        assert isolation.level is level
+        assert f"network {network}, filesystem {fs}" in isolation.message
+
+    def test_warns_once_per_workload_whose_inputs_are_ignored(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_project: Project,
+        sample_workload: Workload,
+    ) -> None:
+        """
+        GIVEN two workloads, only the second with inputs
+        WHEN connect runs
+        THEN exactly one workload_inputs_ignored warning names that workload
+             and counts its inputs (Step 2 never passes Workload.inputs)
+        """
+        with_inputs = Workload(
+            project_id=sample_project.id,
+            name="eval",
+            command=("python", "eval.py"),
+            inputs={"split": "val", "limit": 100},
+        )
+        workloads = [sample_workload, with_inputs]
+        state = cast(EngineState, {**base_state, "workloads": workloads})
+        preflight = FakePreflight(_preflight_report(workloads))
+
+        delta = make_nodes(make_context(preflight=preflight))["connect"](state)
+
+        (ignored,) = _coded(delta, "workload_inputs_ignored")
+        assert ignored.level is EventLevel.warning
+        assert "eval" in ignored.message
+        assert ignored.data == {
+            "code": "workload_inputs_ignored",
+            "workload_id": with_inputs.id,
+            "inputs": 2,
+        }
+
+    def test_a_preflight_error_stops_the_run(
+        self, make_context: ContextFactory, base_state: EngineState
+    ) -> None:
+        """
+        GIVEN a preflight that refuses the repository
+        WHEN connect runs
+        THEN its PreflightError (an EngineError) propagates
+        """
+        preflight = FakePreflight(error=PreflightError("git 2.30 is older than 2.38"))
+
+        with pytest.raises(PreflightError, match="older than 2.38"):
+            make_nodes(make_context(preflight=preflight))["connect"](base_state)
+        assert issubclass(PreflightError, EngineError)
+
+    @pytest.mark.parametrize(
+        "head", ["", "HEAD", "--upload-pack=evil", "A" * 40, "a" * 39, "a" * 41]
+    )
+    def test_refuses_a_head_that_is_not_a_full_commit_id(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_workload: Workload,
+        head: str,
+    ) -> None:
+        """
+        GIVEN a preflight report whose head commit is not 40 or 64 lowercase hex
+        WHEN connect runs
+        THEN an EngineError refuses it: the sha later reaches git argv
+        """
+        preflight = FakePreflight(_preflight_report([sample_workload], head=head))
+
+        with pytest.raises(EngineError, match="commit"):
+            make_nodes(make_context(preflight=preflight))["connect"](base_state)
+
+    def test_accepts_a_sha256_head(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_workload: Workload,
+    ) -> None:
+        """
+        GIVEN a SHA-256 repository (64 hex digit commit ids)
+        WHEN connect runs
+        THEN the commit is pinned
+        """
+        head = "c" * 64
+        preflight = FakePreflight(_preflight_report([sample_workload], head=head))
+
+        delta = make_nodes(make_context(preflight=preflight))["connect"](base_state)
+
+        assert delta["base_commit"] == head
+
+    def test_refuses_resolved_workloads_that_are_not_the_runs(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_project: Project,
+    ) -> None:
+        """
+        GIVEN a preflight report that returns a different workload
+        WHEN connect runs
+        THEN an EngineError says the resolved workloads do not match
+        """
+        stranger = Workload(project_id=sample_project.id, name="x", command=("x",))
+        preflight = FakePreflight(_preflight_report([stranger]))
+
+        with pytest.raises(EngineError, match="workloads"):
+            make_nodes(make_context(preflight=preflight))["connect"](base_state)
+
+
+class TestUnderstandWithUnderstander:
+    @pytest.fixture
+    def pinned(self, base_state: EngineState) -> EngineState:
+        return cast(
+            EngineState,
+            {
+                **base_state,
+                "base_commit": SHA,
+                "max_cost_usd": 2.0,
+                "cost_usd": 0.5,
+                "tokens_used": 100,
+            },
+        )
+
+    def test_reads_the_project_at_the_base_within_the_run_budget(
+        self,
+        make_context: ContextFactory,
+        pinned: EngineState,
+        sample_project: Project,
+        sample_workload: Workload,
+    ) -> None:
+        """
+        GIVEN a 2.00 USD cap with 0.50 spent and an understander costing 0.03
+        WHEN understand runs
+        THEN it reads the project at the base commit with Budget(2.0, 0.5),
+             the state gets the understanding, and cost and tokens add up
+        """
+        understanding = ProjectUnderstanding(
+            language="python", summary="dedupe helpers", served_by_model="m"
+        )
+        understander = FakeUnderstander(
+            UnderstandResult(
+                understanding, notes=("dropped x.py",), cost_usd=0.03, tokens_used=1200
+            )
+        )
+
+        delta = make_nodes(make_context(understander=understander))["understand"](
+            pinned
+        )
+
+        assert understander.calls == [
+            UnderstandCall(sample_project, (sample_workload,), SHA, 2.0, 0.5)
+        ]
+        assert set(delta) == {
+            "phase",
+            "understanding",
+            "cost_usd",
+            "tokens_used",
+            "events",
+        }
+        assert delta["understanding"] == understanding
+        assert delta["cost_usd"] == pytest.approx(0.53)
+        assert delta["tokens_used"] == 1300
+        understood, note = _events(delta)
+        assert understood.level is EventLevel.info
+        assert "python" in understood.message
+        assert note.data["code"] == "understand_note"
+        assert "dropped x.py" in note.message
+
+    def test_a_soft_failure_result_warns(
+        self, make_context: ContextFactory, pinned: EngineState
+    ) -> None:
+        """
+        GIVEN an understander that returns no understanding
+        WHEN understand runs
+        THEN the state's understanding is None and a warning says so
+        """
+        understander = FakeUnderstander(UnderstandResult(None, cost_usd=0.01))
+
+        delta = make_nodes(make_context(understander=understander))["understand"](
+            pinned
+        )
+
+        assert delta["understanding"] is None
+        assert delta["cost_usd"] == pytest.approx(0.51)
+        (warning,) = _events(delta)
+        assert warning.level is EventLevel.warning
+        assert warning.data["code"] == "understand_unavailable"
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            BudgetExceeded("cap reached"),
+            LLMConfigError("401 from the API"),
+            RepoTamperedError("refs changed"),
+        ],
+        ids=["budget", "config", "tampered"],
+    )
+    def test_engine_errors_stop_the_run(
+        self, make_context: ContextFactory, pinned: EngineState, error: EngineError
+    ) -> None:
+        """
+        GIVEN an understander that raises BudgetExceeded, LLMConfigError or
+              any other EngineError
+        WHEN understand runs
+        THEN the error propagates: an EngineError means the run cannot go on
+        """
+        understander = FakeUnderstander(error=error)
+
+        with pytest.raises(type(error)):
+            make_nodes(make_context(understander=understander))["understand"](pinned)
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            LLMUnavailable("529 overloaded"),
+            LLMRequestError("400 bad request"),
+            ValueError("reply did not match the schema"),
+            RuntimeError("bug"),
+        ],
+        ids=["unavailable", "request", "schema", "other"],
+    )
+    def test_any_other_failure_leaves_no_understanding_and_warns(
+        self, make_context: ContextFactory, pinned: EngineState, error: Exception
+    ) -> None:
+        """
+        GIVEN an understander that raises anything else
+        WHEN understand runs
+        THEN the run goes on without an understanding and a warning names
+             the error type; nothing was charged
+        """
+        understander = FakeUnderstander(error=error)
+
+        delta = make_nodes(make_context(understander=understander))["understand"](
+            pinned
+        )
+
+        assert delta["understanding"] is None
+        assert delta["cost_usd"] == pytest.approx(0.5)
+        assert delta["tokens_used"] == 100
+        (warning,) = _events(delta)
+        assert warning.level is EventLevel.warning
+        assert warning.data["code"] == "understand_failed"
+        assert type(error).__name__ in warning.message
+
+    def test_money_charged_before_a_failure_still_counts(
+        self, make_context: ContextFactory, pinned: EngineState
+    ) -> None:
+        """
+        GIVEN an understander that charges 0.04 USD to the budget, then times out
+        WHEN understand runs
+        THEN the 0.04 USD and its tokens are on the run's total anyway
+        """
+        understander = _ChargingUnderstander(0.04, 900, LLMUnavailable("timeout"))
+
+        delta = make_nodes(make_context(understander=understander))["understand"](
+            pinned
+        )
+
+        assert delta["understanding"] is None
+        assert delta["cost_usd"] == pytest.approx(0.54)
+        assert delta["tokens_used"] == 1000
+
+    def test_a_charge_reported_twice_is_counted_once(
+        self, make_context: ContextFactory, pinned: EngineState
+    ) -> None:
+        """
+        GIVEN an understander that charges 0.02 USD to the budget and also
+              reports the same 0.02 USD in its result
+        WHEN understand runs
+        THEN the run total grows by 0.02 USD, not 0.04
+        """
+        result = UnderstandResult(None, cost_usd=0.02, tokens_used=500)
+        understander = _ChargingUnderstander(0.02, 500, result)
+
+        delta = make_nodes(make_context(understander=understander))["understand"](
+            pinned
+        )
+
+        assert delta["cost_usd"] == pytest.approx(0.52)
+        assert delta["tokens_used"] == 600
+
+    def test_needs_a_pinned_commit(
+        self, make_context: ContextFactory, base_state: EngineState
+    ) -> None:
+        """
+        GIVEN an understander but no pinned base commit (no preflight ran)
+        WHEN understand runs
+        THEN an EngineError says the commit is missing
+        """
+        understander = FakeUnderstander(UnderstandResult(None))
+
+        with pytest.raises(EngineError, match="base commit"):
+            make_nodes(make_context(understander=understander))["understand"](
+                base_state
+            )
+        assert understander.calls == []
+
+
+class TestBaselineStep2:
+    def test_records_the_pinned_commit_on_the_baseline(
+        self, make_context: ContextFactory, base_state: EngineState
+    ) -> None:
+        """
+        GIVEN a state pinned at SHA
+        WHEN baseline runs
+        THEN the baseline records the commit it measured
+        """
+        state = cast(EngineState, {**base_state, "base_commit": SHA})
+
+        baseline = make_nodes(make_context())["baseline"](state)["baseline"]
+
+        assert isinstance(baseline, Baseline)
+        assert baseline.commit == SHA
+
+    def test_missing_output_fingerprints_fail_closed_under_equivalence(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_project: Project,
+    ) -> None:
+        """
+        GIVEN an output_equivalence guardrail and a baseline whose runs did not
+              agree on one output (no fingerprint)
+        WHEN baseline runs
+        THEN an EngineError asks for a seed or an output_file before any
+             money is spent on trials
+        """
+        equivalence = Guardrail(
+            project_id=sample_project.id,
+            kind=GuardrailKind.output_equivalence,
+            description="outputs must not change",
+        )
+        state = cast(
+            EngineState,
+            {**base_state, "guardrails": [*base_state["guardrails"], equivalence]},
+        )
+        script = ScriptedOutcome(
+            samples={METRIC_WALL_TIME_S: SLOW, VAL_LOSS: (0.5,) * 5}, tests_passed=True
+        )
+        ctx = make_context(baseline_runner=StubBaselineRunner(script))
+
+        with pytest.raises(EngineError, match="nondeterministic or missing output"):
+            make_nodes(ctx)["baseline"](state)
+
+    def test_agreed_fingerprints_pass_under_equivalence(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_project: Project,
+    ) -> None:
+        """
+        GIVEN an output_equivalence guardrail and a baseline whose runs agreed
+              on one output fingerprint
+        WHEN baseline runs
+        THEN the baseline is measured
+        """
+        equivalence = Guardrail(
+            project_id=sample_project.id,
+            kind=GuardrailKind.output_equivalence,
+            description="outputs must not change",
+        )
+        state = cast(
+            EngineState,
+            {**base_state, "guardrails": [*base_state["guardrails"], equivalence]},
+        )
+
+        delta = make_nodes(make_context())["baseline"](state)
+
+        assert isinstance(delta["baseline"], Baseline)
+
+    def test_missing_fingerprints_are_fine_without_equivalence(
+        self, make_context: ContextFactory, base_state: EngineState
+    ) -> None:
+        """
+        GIVEN no output_equivalence guardrail and no fingerprints
+        WHEN baseline runs
+        THEN the baseline is measured
+        """
+        script = ScriptedOutcome(
+            samples={METRIC_WALL_TIME_S: SLOW, VAL_LOSS: (0.5,) * 5}, tests_passed=True
+        )
+        ctx = make_context(baseline_runner=StubBaselineRunner(script))
+
+        assert isinstance(make_nodes(ctx)["baseline"](base_state)["baseline"], Baseline)
+
+    def test_a_failing_test_suite_fails_closed_under_tests_pass(
+        self, make_context: ContextFactory, base_state: EngineState
+    ) -> None:
+        """
+        GIVEN a tests_pass guardrail and a baseline whose test suite fails
+        WHEN baseline runs
+        THEN an EngineError says the suite already fails at the base
+        """
+        script = ScriptedOutcome(
+            samples={METRIC_WALL_TIME_S: SLOW, VAL_LOSS: (0.5,) * 5},
+            tests_passed=False,
+        )
+        ctx = make_context(baseline_runner=StubBaselineRunner(script))
+
+        with pytest.raises(EngineError, match="test suite"):
+            make_nodes(ctx)["baseline"](base_state)
+
+    def test_a_failing_suite_is_fine_without_tests_pass(
+        self, make_context: ContextFactory, base_state: EngineState
+    ) -> None:
+        """
+        GIVEN no tests_pass guardrail and a failing tests_passed row
+        WHEN baseline runs
+        THEN the baseline is measured (nobody asked for passing tests)
+        """
+        state = cast(
+            EngineState,
+            {
+                **base_state,
+                "guardrails": [
+                    g
+                    for g in base_state["guardrails"]
+                    if g.kind is not GuardrailKind.tests_pass
+                ],
+            },
+        )
+        script = ScriptedOutcome(
+            samples={METRIC_WALL_TIME_S: SLOW, VAL_LOSS: (0.5,) * 5},
+            tests_passed=False,
+        )
+        ctx = make_context(baseline_runner=StubBaselineRunner(script))
+
+        assert isinstance(make_nodes(ctx)["baseline"](state)["baseline"], Baseline)
+
+    def test_a_quiet_host_gets_an_info_noisy_host_with_its_floor(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_workload: Workload,
+    ) -> None:
+        """
+        GIVEN the design baseline (CV 1.96 %, mean 1.80 s)
+        WHEN baseline runs
+        THEN the baseline event comes first, then one info-level noisy_host
+             event for the workload with the smallest provable gain
+             max(2 x CV, 2 %) = 3.93 %, which the baseline event also reports
+        """
+        delta = make_nodes(make_context())["baseline"](base_state)
+
+        summary, note = _events(delta)
+        cv = _cv(SLOW)
+        assert "code" not in summary.data
+        assert summary.data["smallest_provable_gain"] == pytest.approx(2 * cv)
+        assert note.data["code"] == "noisy_host"
+        assert note.phase is RunPhase.baseline
+        assert note.level is EventLevel.info
+        assert note.message.startswith("noisy_host: workload train-step: CV 2.0%")
+        assert "start-up" not in note.message
+        assert note.data["workload_id"] == sample_workload.id
+        assert note.data["cv"] == pytest.approx(cv)
+        assert note.data["smallest_provable_gain"] == pytest.approx(2 * cv)
+
+    def test_a_noisy_workload_gets_a_warning_with_its_floor(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_workload: Workload,
+    ) -> None:
+        """
+        GIVEN a baseline whose wall time varies by about 25 %
+        WHEN baseline runs
+        THEN a noisy_host warning names the workload with its CV and the
+             smallest provable gain 2 x CV
+        """
+        noisy = (1.0, 1.3, 0.8, 1.2, 0.7)
+        script = ScriptedOutcome(
+            samples={METRIC_WALL_TIME_S: noisy, VAL_LOSS: (0.5,) * 5}, tests_passed=True
+        )
+        ctx = make_context(baseline_runner=StubBaselineRunner(script))
+
+        delta = make_nodes(ctx)["baseline"](base_state)
+
+        (warning,) = _coded(delta, "noisy_host")
+        cv = _cv(noisy)
+        assert warning.level is EventLevel.warning
+        assert sample_workload.name in warning.message
+        assert warning.data["workload_id"] == sample_workload.id
+        assert warning.data["cv"] == pytest.approx(cv)
+        assert warning.data["smallest_provable_gain"] == pytest.approx(2 * cv)
+
+    def test_a_short_workload_gets_a_warning_even_when_steady(
+        self, make_context: ContextFactory, base_state: EngineState
+    ) -> None:
+        """
+        GIVEN a steady baseline whose mean wall time is 0.2 s
+        WHEN baseline runs
+        THEN a noisy_host warning says runs under 0.5 s are start-up dominated
+        """
+        script = ScriptedOutcome(
+            samples={METRIC_WALL_TIME_S: (0.2,) * 5, VAL_LOSS: (0.5,) * 5},
+            tests_passed=True,
+        )
+        ctx = make_context(baseline_runner=StubBaselineRunner(script))
+
+        (warning,) = _coded(make_nodes(ctx)["baseline"](base_state), "noisy_host")
+
+        assert warning.level is EventLevel.warning
+        assert "0.5 s" in warning.message
+        assert warning.data["smallest_provable_gain"] == pytest.approx(0.02)
+
+    def test_a_zero_mean_cannot_prove_any_relative_gain(
+        self, make_context: ContextFactory, base_state: EngineState
+    ) -> None:
+        """
+        GIVEN a primary metric whose baseline mean is 0
+        WHEN baseline runs
+        THEN a noisy_host warning says no relative gain is provable (no NaN)
+        """
+        script = ScriptedOutcome(
+            samples={METRIC_WALL_TIME_S: (0.0,) * 5, VAL_LOSS: (0.5,) * 5},
+            tests_passed=True,
+        )
+        ctx = make_context(baseline_runner=StubBaselineRunner(script))
+
+        delta = make_nodes(ctx)["baseline"](base_state)
+
+        (warning,) = _coded(delta, "noisy_host")
+        assert warning.level is EventLevel.warning
+        assert warning.data["smallest_provable_gain"] is None
+        assert warning.data["cv"] is None
+        (summary,) = [e for e in _events(delta) if "code" not in e.data]
+        assert summary.data["smallest_provable_gain"] is None
+
+    def test_each_of_two_workloads_gets_a_noisy_host_at_its_own_level(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_project: Project,
+        sample_workload: Workload,
+    ) -> None:
+        """
+        GIVEN two workloads, the second noisy
+        WHEN baseline runs
+        THEN one noisy_host event per workload, in workload order: info for
+             the quiet first, warning for the noisy second; the baseline
+             event reports the worse floor
+        """
+        other = Workload(project_id=sample_project.id, name="eval", command=("x",))
+        noisy = (1.0, 1.3, 0.8, 1.2, 0.7)
+        rows = [
+            *_rows(sample_workload.id, SLOW),
+            *_rows(other.id, noisy),
+        ]
+        state = cast(EngineState, {**base_state, "workloads": [sample_workload, other]})
+        ctx = make_context(baseline_runner=_FixedBaselineRunner(rows))
+
+        delta = make_nodes(ctx)["baseline"](state)
+
+        quiet, loud = _coded(delta, "noisy_host")
+        assert (quiet.data["workload_id"], quiet.level) == (
+            sample_workload.id,
+            EventLevel.info,
+        )
+        assert (loud.data["workload_id"], loud.level) == (other.id, EventLevel.warning)
+        assert quiet.data["smallest_provable_gain"] == pytest.approx(2 * _cv(SLOW))
+        (summary,) = [e for e in _events(delta) if "code" not in e.data]
+        assert summary.data["smallest_provable_gain"] == pytest.approx(2 * _cv(noisy))
+
+    def test_the_floor_uses_the_noise_multiplier_and_the_objective_gain(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_objective: Objective,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        GIVEN NOISE_MULTIPLIER 3 and a primary objective asking for 15 %
+        WHEN baseline runs on the design baseline (CV 1.96 %)
+        THEN the floor is max(3 x CV, 15 %) = 15 %, a warning (above 10 %)
+        """
+        monkeypatch.setattr(settings, "NOISE_MULTIPLIER", 3.0)
+        demanding = sample_objective.model_copy(update={"min_relative_gain": 0.15})
+        state = cast(EngineState, {**base_state, "objectives": [demanding]})
+
+        delta = make_nodes(make_context())["baseline"](state)
+
+        (warning,) = _coded(delta, "noisy_host")
+        assert warning.level is EventLevel.warning
+        assert warning.data["smallest_provable_gain"] == pytest.approx(0.15)
+
+
+class TestProfileWithProfiler:
+    def test_profiles_at_the_base_and_reports_skipped_workloads(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_project: Project,
+        sample_workload: Workload,
+    ) -> None:
+        """
+        GIVEN a profiler that finds one hotspot and skips one workload
+        WHEN profile runs on a state pinned at SHA
+        THEN it profiles this run's workloads at SHA, the state takes the
+             profiler's hotspots (not the context's stand-ins) and a
+             profile_skipped event carries the note
+        """
+        found = _hotspot(sample_project, sample_workload, "hot_loop")
+        stand_in = _hotspot(sample_project, sample_workload, "stand_in")
+        profiler = FakeProfiler([found], notes=("eval: not a Python command",))
+        ctx = make_context(profiler=profiler, hotspots=(stand_in,))
+        state = cast(EngineState, {**base_state, "base_commit": SHA})
+
+        delta = make_nodes(ctx)["profile"](state)
+
+        assert profiler.calls == [ProfileCall((sample_workload,), RUN_ID, SHA)]
+        assert _items(delta, "hotspots", Hotspot) == [found]
+        profiled, skipped = _events(delta)
+        assert profiled.data["hotspots"] == 1
+        assert skipped.data["code"] == "profile_skipped"
+        assert "not a Python command" in skipped.message
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            EngineError(
+                "profiled frame /home/dev/bridge/src/x.py is outside the worktree"
+            ),
+            RepoTamperedError("refs changed during profile"),
+        ],
+        ids=["editable-install", "tampered"],
+    )
+    def test_profiler_refusals_stop_the_run(
+        self, make_context: ContextFactory, base_state: EngineState, error: EngineError
+    ) -> None:
+        """
+        GIVEN a profiler that refuses an editable install or detects tampering
+        WHEN profile runs
+        THEN its EngineError propagates with the path it named
+        """
+        ctx = make_context(profiler=FakeProfiler(error=error))
+        state = cast(EngineState, {**base_state, "base_commit": SHA})
+
+        with pytest.raises(type(error), match=re.escape(str(error))):
+            make_nodes(ctx)["profile"](state)
+
+    def test_needs_a_pinned_commit(
+        self, make_context: ContextFactory, base_state: EngineState
+    ) -> None:
+        """
+        GIVEN a profiler but no pinned base commit
+        WHEN profile runs
+        THEN an EngineError says the commit is missing and nothing is profiled
+        """
+        profiler = FakeProfiler()
+
+        with pytest.raises(EngineError, match="base commit"):
+            make_nodes(make_context(profiler=profiler))["profile"](base_state)
+        assert profiler.calls == []
+
+
+class TestTrialsRunningBudget:
+    @pytest.fixture
+    def three(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+        h2_protected: Hypothesis,
+        h3_noise: Hypothesis,
+        design_scripts: dict[str, ScriptedOutcome],
+    ) -> Callable[..., tuple[StubTrialRunner, dict[str, NodeFn], EngineState]]:
+        """H1 (0.12 USD), H2 (0.08) and H3 (0.05) proposed, 0.25 of a 1.00 cap spent."""
+
+        def build(
+            **overrides: Any,
+        ) -> tuple[StubTrialRunner, dict[str, NodeFn], EngineState]:
+            runner = StubTrialRunner(design_scripts)
+            nodes = make_nodes(
+                make_context(
+                    [h1_cache, h2_protected, h3_noise], runner=runner, **overrides
+                )
+            )
+            state = _advance(nodes, base_state, _before("trials"))
+            state = cast(EngineState, {**state, "max_cost_usd": 1.0, "cost_usd": 0.25})
+            return runner, nodes, state
+
+        return build
+
+    def test_each_trial_is_offered_only_what_is_left(
+        self,
+        three: Callable[..., tuple[StubTrialRunner, dict[str, NodeFn], EngineState]],
+    ) -> None:
+        """
+        GIVEN three proposed hypotheses and 0.75 USD left
+        WHEN trials runs
+        THEN the running total shrinks the offer before each trial
+             (0.75, 0.63, 0.55), never the same remainder three times
+        """
+        runner, nodes, state = three()
+
+        delta = nodes["trials"](state)
+
+        assert runner.budgets == [
+            pytest.approx(0.75),
+            pytest.approx(0.63),
+            pytest.approx(0.55),
+        ]
+        assert delta["cost_usd"] == pytest.approx(0.50)
+        assert "budget_exhausted" not in delta
+
+    def test_stops_before_a_trial_that_cannot_afford_one_request(
+        self,
+        three: Callable[..., tuple[StubTrialRunner, dict[str, NodeFn], EngineState]],
+        h3_noise: Hypothesis,
+    ) -> None:
+        """
+        GIVEN min_trial_budget_usd 0.60 and 0.75 USD left
+        WHEN trials runs
+        THEN H1 (offered 0.75) and H2 (0.63) run, H3 (0.55 < 0.60) never
+             starts and stays proposed, a budget_exhausted warning counts it
+             and the state flag is set
+        """
+        runner, nodes, state = three(min_trial_budget_usd=0.6)
+
+        delta = nodes["trials"](state)
+
+        assert runner.budgets == [pytest.approx(0.75), pytest.approx(0.63)]
+        assert delta["budget_exhausted"] is True
+        assert delta["cost_usd"] == pytest.approx(0.45)
+        (exhausted,) = _coded(delta, "budget_exhausted")
+        assert exhausted.level is EventLevel.warning
+        assert exhausted.phase is RunPhase.trials
+        assert exhausted.data["remaining_usd"] == pytest.approx(0.55)
+        assert exhausted.data["min_trial_budget_usd"] == pytest.approx(0.6)
+        assert exhausted.data["not_started"] == 1
+        statuses = {h.id: h.status for h in _items(delta, "hypotheses", Hypothesis)}
+        assert statuses[h3_noise.id] is HypothesisStatus.proposed
+        summary = [e for e in _events(delta) if "code" not in e.data]
+        assert summary[0].data["trials"] == 2
+
+    def test_stops_when_the_cap_is_spent_exactly(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+        h3_noise: Hypothesis,
+        design_scripts: dict[str, ScriptedOutcome],
+    ) -> None:
+        """
+        GIVEN a 0.12 USD cap and H1 costing exactly 0.12
+        WHEN trials runs H1 then H3
+        THEN H1 runs, and with nothing left H3 never starts
+        """
+        runner = StubTrialRunner(design_scripts)
+        nodes = make_nodes(make_context([h1_cache, h3_noise], runner=runner))
+        state = _advance(nodes, base_state, _before("trials"))
+        state = cast(EngineState, {**state, "max_cost_usd": 0.12})
+
+        delta = nodes["trials"](state)
+
+        assert runner.budgets == [pytest.approx(0.12)]
+        assert delta["budget_exhausted"] is True
+
+    def test_refuses_a_trial_that_spent_more_than_it_was_offered(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+        design_scripts: dict[str, ScriptedOutcome],
+    ) -> None:
+        """
+        GIVEN a runner whose trial reports 9.00 USD against a 5.00 USD offer
+        WHEN trials runs
+        THEN an EngineError names the overspend and nothing is saved
+        """
+        runner = _TamperingRunner(StubTrialRunner(design_scripts), {"cost_usd": 9.0})
+        ctx = make_context([h1_cache], runner=runner)
+        nodes = make_nodes(ctx)
+        state = _advance(nodes, base_state, _before("trials"))
+
+        with pytest.raises(EngineError, match="cost_usd 9.0 exceeds its budget"):
+            nodes["trials"](state)
+        assert ctx.repository.list_trials(RUN_ID) == ()
+
+
+class TestRouterBudget:
+    def test_an_exhausted_budget_goes_straight_to_combine(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+        h3_noise: Hypothesis,
+    ) -> None:
+        """
+        GIVEN round 1 of 3, an untrialled candidate left and nothing kept,
+              but the budget exhausted
+        WHEN after_verdicts routes
+        THEN the run goes to combine instead of spinning empty rounds
+        """
+        ctx = make_context([h1_cache, h3_noise])
+        base_state["round"] = 1
+        base_state["trials"] = [Trial(hypothesis_id=h1_cache.id, round=1)]
+        base_state["budget_exhausted"] = True
+
+        assert make_router(ctx)(base_state) == "combine"
+
+    def test_pending_approval_still_comes_first(
+        self, make_context: ContextFactory, base_state: EngineState
+    ) -> None:
+        """
+        GIVEN a pending approval and an exhausted budget
+        WHEN after_verdicts routes
+        THEN the human is asked first
+        """
+        base_state["pending_approval_ids"] = ["verdict"]
+        base_state["budget_exhausted"] = True
+
+        assert make_router(make_context())(base_state) == "approval_gate"
+
+
+class TestVerdictsMergeViolations:
+    def test_extra_protected_paths_from_connect_reject(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+        design_scripts: dict[str, ScriptedOutcome],
+    ) -> None:
+        """
+        GIVEN connect protected the harness run.sh and H1 touched it
+        WHEN verdicts runs
+        THEN H1 is rejected for a protected_path violation on run.sh
+        """
+        scripts = {
+            h1_cache.title: replace(
+                design_scripts[h1_cache.title], touched_paths=("run.sh",)
+            )
+        }
+        nodes = make_nodes(make_context([h1_cache], scripts))
+        state = _advance(nodes, base_state, _before("verdicts"))
+        state["extra_protected"] = ["run.sh"]
+
+        (verdict,) = _items(nodes["verdicts"](state), "verdicts", Verdict)
+
+        assert verdict.outcome is VerdictOutcome.reject
+        (violation,) = verdict.violations
+        assert (violation.rule, violation.path, violation.pattern) == (
+            ViolationRule.protected_path,
+            "run.sh",
+            "run.sh",
+        )
+
+    def test_capture_violations_join_and_duplicates_are_dropped(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+    ) -> None:
+        """
+        GIVEN a failed trial whose runner reported a symlink and the same
+              protected test file the node's own check finds
+        WHEN verdicts runs
+        THEN the verdict lists the node's protected_path violation, then the
+             runner's symlink, without repeating the (rule, path, pattern)
+        """
+        nodes = make_nodes(make_context([h1_cache]))
+        state = _advance(nodes, base_state, _before("verdicts"))
+        runner_saw = (
+            Violation(
+                rule=ViolationRule.protected_path,
+                path="tests/test_x.py",
+                pattern="**/tests/**",
+                message="runner saw it too",
+            ),
+            Violation(
+                rule=ViolationRule.forbidden_file_mode,
+                path="src/fast.py",
+                message="new symlink",
+            ),
+        )
+        state["round_trials"] = [
+            t.model_copy(
+                update={
+                    "touched_paths": ("tests/test_x.py", "src/fast.py"),
+                    "violations": runner_saw,
+                    "status": TrialStatus.failed,
+                }
+            )
+            for t in state["round_trials"]
+        ]
+
+        (verdict,) = _items(nodes["verdicts"](state), "verdicts", Verdict)
+
+        assert verdict.outcome is VerdictOutcome.reject
+        assert [(v.rule, v.path) for v in verdict.violations] == [
+            (ViolationRule.protected_path, "tests/test_x.py"),
+            (ViolationRule.forbidden_file_mode, "src/fast.py"),
+        ]
+        assert verdict.violations[0].message != "runner saw it too"
+
+
+class TestCombineWithCombiner:
+    def test_a_held_re_test_keeps_the_applied_changes(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_project: Project,
+        sample_workload: Workload,
+        h1_cache: Hypothesis,
+    ) -> None:
+        """
+        GIVEN H1 kept and a combiner whose ABAB re-test of the tip holds,
+              tests included
+        WHEN combine runs
+        THEN the combiner gets H1 as a KeptChange at the base, the verdict
+             is keep, H1's verdict stays kept and the Combination records it
+        """
+        nodes = make_nodes(make_context([h1_cache]))
+        state = _committed(_advance(nodes, base_state, _before("combine")))
+        trial, verdict = _trial_of(state, h1_cache), _verdict_of(state, h1_cache)
+        combiner = FakeCombiner([_measured(sample_workload.id, [trial.id])])
+        nodes = make_nodes(make_context([h1_cache], combiner=combiner))
+        ranked = next(h for h in state["hypotheses"] if h.id == h1_cache.id)
+
+        delta = nodes["combine"](state)
+
+        assert combiner.calls == [
+            CombineCall(
+                RUN_ID,
+                state["project"],
+                SHA,
+                (
+                    KeptChange(
+                        trial_id=trial.id,
+                        hypothesis_id=h1_cache.id,
+                        verdict_id=verdict.id,
+                        commit=trial.commit or "",
+                        score=ranked.score,
+                        gain=verdict.gain,
+                    ),
+                ),
+                (sample_workload,),
+            )
+        ]
+        assert set(delta) == {"phase", "kept_verdict_ids", "combination", "events"}
+        assert delta["kept_verdict_ids"] == [verdict.id]
+        combination = delta["combination"]
+        assert isinstance(combination, Combination)
+        assert combination.holds is True
+        assert combination.base_commit == SHA
+        assert combination.tip_commit == TIP
+        assert combination.applied_trial_ids == (trial.id,)
+        assert combination.fallback_trial_id is None
+        outcomes = {r.judge: r.outcome for r in combination.judge_results}
+        assert outcomes["speed"] is JudgeOutcome.passed
+        assert outcomes["tests"] is JudgeOutcome.passed
+        assert "held" in combination.summary
+        event = _only_event(delta)
+        assert event.data["holds"] is True
+        assert event.data["delivered"] == 1
+
+    @pytest.mark.parametrize(
+        ("combined", "reason"),
+        [
+            pytest.param(_rows("W", FAST, tests=None), "tests", id="tests-row-missing"),
+            pytest.param(_rows("W", FAST, tests=0.0), "tests", id="tests-failing"),
+            pytest.param(
+                _rows("W", FAST, val_loss=(0.0,) * 5),
+                "guardrail",
+                id="guardrail-inconclusive",
+            ),
+            pytest.param(_rows("W", SLOW), METRIC_WALL_TIME_S, id="no-gain"),
+        ],
+    )
+    def test_a_failed_re_test_of_one_change_keeps_nothing(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_workload: Workload,
+        h1_cache: Hypothesis,
+        combined: tuple[Measurement, ...],
+        reason: str,
+    ) -> None:
+        """
+        GIVEN H1 alone kept and a re-test whose tests row is missing or
+              failing, whose guardrail is inconclusive, or with no gain
+        WHEN combine runs
+        THEN the combination does not hold, no fallback runs (the only single
+             change is the set that just failed) and nothing is kept
+        """
+        rows = tuple(
+            m.model_copy(update={"workload_id": sample_workload.id}) for m in combined
+        )
+        baseline = _rows(
+            sample_workload.id,
+            SLOW,
+            tests=None,
+            val_loss=((0.0,) * 5 if reason == "guardrail" else (0.5,) * 5),
+        )
+        nodes = make_nodes(make_context([h1_cache]))
+        state = _committed(_advance(nodes, base_state, _before("combine")))
+        trial = _trial_of(state, h1_cache)
+        combiner = FakeCombiner(
+            [
+                _measured(
+                    sample_workload.id, [trial.id], baseline=baseline, combined=rows
+                )
+            ]
+        )
+
+        delta = make_nodes(make_context([h1_cache], combiner=combiner))["combine"](
+            state
+        )
+
+        assert len(combiner.calls) == 1
+        assert delta["kept_verdict_ids"] == []
+        combination = delta["combination"]
+        assert isinstance(combination, Combination)
+        assert combination.holds is False
+        assert combination.fallback_trial_id is None
+        assert "no fallback" in combination.summary
+        assert "nothing delivered" in combination.summary
+        assert reason in combination.summary
+
+    def test_an_incomplete_interleaved_baseline_does_not_hold(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_workload: Workload,
+        h1_cache: Hypothesis,
+    ) -> None:
+        """
+        GIVEN a re-test whose A runs (the interleaved baseline) are missing
+        WHEN combine runs
+        THEN the combination is rejected for the missing measurements
+        """
+        nodes = make_nodes(make_context([h1_cache]))
+        state = _committed(_advance(nodes, base_state, _before("combine")))
+        trial = _trial_of(state, h1_cache)
+        combiner = FakeCombiner(
+            [_measured(sample_workload.id, [trial.id], baseline=())]
+        )
+
+        delta = make_nodes(make_context([h1_cache], combiner=combiner))["combine"](
+            state
+        )
+
+        combination = delta["combination"]
+        assert isinstance(combination, Combination)
+        assert combination.holds is False
+        assert "interleaved baseline" in combination.summary
+
+    def test_kept_changes_go_in_score_order_then_by_hypothesis_id(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_project: Project,
+        sample_workload: Workload,
+        h1_cache: Hypothesis,
+        h4_behaviour: Hypothesis,
+    ) -> None:
+        """
+        GIVEN two equal-score efficiency keeps (ids tie-b, tie-a) and an
+              approved lower-score behaviour change
+        WHEN combine runs
+        THEN the combiner gets tie-a, tie-b, then the approved change
+        """
+        tie_b = h1_cache.model_copy(update={"id": "tie-b"})
+        tie_a = h1_cache.model_copy(update={"id": "tie-a"})
+        candidates = [tie_b, tie_a, h4_behaviour]
+        nodes = make_nodes(make_context(candidates, max_hypotheses_per_round=3))
+        state = _committed(_advance(nodes, base_state, _before("combine")))
+        state["approval"] = ApprovalDecision(
+            approved_verdict_ids=(_verdict_of(state, h4_behaviour).id,), approver="pk"
+        )
+        applied = [t.id for t in state["trials"]]
+        combiner = FakeCombiner([_measured(sample_workload.id, applied)])
+
+        delta = make_nodes(make_context(candidates, combiner=combiner))["combine"](
+            state
+        )
+
+        (call,) = combiner.calls
+        assert [c.hypothesis_id for c in call.kept] == [
+            "tie-a",
+            "tie-b",
+            h4_behaviour.id,
+        ]
+        assert sorted(cast(list[str], delta["kept_verdict_ids"])) == sorted(
+            v.id for v in state["verdicts"]
+        )
+
+    def test_falls_back_to_the_best_gain_with_an_id_tie_break(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_project: Project,
+        sample_workload: Workload,
+    ) -> None:
+        """
+        GIVEN three kept changes: hyp-b and hyp-a with the same 41.7 % gain,
+              hyp-c with less, and a greedy re-test that fails its tests
+        WHEN combine runs
+        THEN one fallback re-tests hyp-a alone (best gain, smaller id); it
+             holds, so only hyp-a's verdict is kept
+        """
+        hyp_b = _efficiency(sample_project, "hyp-b", "b-fast")
+        hyp_a = _efficiency(sample_project, "hyp-a", "a-fast")
+        hyp_c = _efficiency(sample_project, "hyp-c", "c-less", expected_gain=0.9)
+        scripts = {
+            "b-fast": _winning(FAST),
+            "a-fast": _winning(FAST),
+            "c-less": _winning((1.40, 1.38, 1.42, 1.40, 1.40)),
+        }
+        candidates = [hyp_b, hyp_a, hyp_c]
+        nodes = make_nodes(make_context(candidates, scripts))
+        state = _committed(_advance(nodes, base_state, _before("combine")))
+        assert all(v.outcome is VerdictOutcome.keep for v in state["verdicts"])
+        all_ids = [t.id for t in state["trials"]]
+        trial_a = _trial_of(state, hyp_a)
+        combiner = FakeCombiner(
+            [
+                _measured(
+                    sample_workload.id,
+                    all_ids,
+                    combined=_rows(sample_workload.id, FAST, tests=0.0),
+                ),
+                _measured(sample_workload.id, [trial_a.id], tip="d" * 40),
+            ]
+        )
+
+        delta = make_nodes(make_context(candidates, scripts, combiner=combiner))[
+            "combine"
+        ](state)
+
+        greedy, fallback = combiner.calls
+        assert [c.hypothesis_id for c in greedy.kept] == ["hyp-c", "hyp-a", "hyp-b"]
+        assert [c.hypothesis_id for c in fallback.kept] == ["hyp-a"]
+        assert delta["kept_verdict_ids"] == [_verdict_of(state, hyp_a).id]
+        combination = delta["combination"]
+        assert isinstance(combination, Combination)
+        assert combination.holds is True
+        assert combination.fallback_trial_id == trial_a.id
+        assert combination.tip_commit == "d" * 40
+        assert combination.applied_trial_ids == (trial_a.id,)
+        assert "fallback" in combination.summary
+
+    def test_the_fallback_never_re_tests_the_set_that_just_failed(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_project: Project,
+        sample_workload: Workload,
+    ) -> None:
+        """
+        GIVEN two kept changes where the best one applied alone (the other
+              conflicted) and that re-test failed
+        WHEN combine runs
+        THEN the fallback re-tests the other change, not the failed best one;
+             when that fails too nothing is kept and both skips and attempts
+             are in the summary
+        """
+        best = _efficiency(sample_project, "best", "best-fast")
+        other = _efficiency(sample_project, "other", "other-less")
+        scripts = {
+            "best-fast": _winning(FAST),
+            "other-less": _winning((1.40, 1.38, 1.42, 1.40, 1.40)),
+        }
+        candidates = [best, other]
+        nodes = make_nodes(make_context(candidates, scripts))
+        state = _committed(_advance(nodes, base_state, _before("combine")))
+        trial_best, trial_other = _trial_of(state, best), _trial_of(state, other)
+        skip = CombineSkip(
+            trial_id=trial_other.id, reason="conflict", paths=("dedupe/core.py",)
+        )
+        failing = _rows(sample_workload.id, FAST, tests=0.0)
+        combiner = FakeCombiner(
+            [
+                _measured(
+                    sample_workload.id,
+                    [trial_best.id],
+                    skipped=[skip],
+                    combined=failing,
+                ),
+                _measured(sample_workload.id, [trial_other.id], combined=failing),
+            ]
+        )
+
+        delta = make_nodes(make_context(candidates, scripts, combiner=combiner))[
+            "combine"
+        ](state)
+
+        assert [c.trial_id for c in combiner.calls[1].kept] == [trial_other.id]
+        assert delta["kept_verdict_ids"] == []
+        combination = delta["combination"]
+        assert isinstance(combination, Combination)
+        assert combination.holds is False
+        assert combination.fallback_trial_id == trial_other.id
+        assert combination.skipped == (skip,)
+        assert "conflict" in combination.summary
+        assert "dedupe/core.py" in combination.summary
+        assert "nothing delivered" in combination.summary
+
+    def test_when_both_fail_deliver_is_report_only_and_lessons_stand(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_project: Project,
+        sample_workload: Workload,
+    ) -> None:
+        """
+        GIVEN two kept changes whose combination and best single change both
+              fail their re-test
+        WHEN combine, deliver and learn run
+        THEN nothing is kept, the delivery is report_only with no publish,
+             and the lessons still record both individual keeps
+        """
+        one = _efficiency(sample_project, "one", "one-fast")
+        two = _efficiency(sample_project, "two", "two-fast")
+        scripts = {"one-fast": _winning(FAST), "two-fast": _winning(FAST)}
+        failing = _rows(sample_workload.id, FAST, tests=0.0)
+        base_nodes = make_nodes(make_context([one, two], scripts))
+        state = _committed(_advance(base_nodes, base_state, _before("combine")))
+        ids = [t.id for t in state["trials"]]
+        combiner = FakeCombiner(
+            [
+                _measured(sample_workload.id, ids, combined=failing),
+                _measured(
+                    sample_workload.id, [_trial_of(state, one).id], combined=failing
+                ),
+            ]
+        )
+        publisher = FakePublisher("diff")
+        nodes = make_nodes(
+            make_context([one, two], scripts, combiner=combiner, publisher=publisher)
+        )
+
+        state = _apply(state, nodes["combine"](state))
+        delivery = nodes["deliver"](state)["delivery"]
+        lessons = _items(nodes["learn"](state), "lessons", Lesson)
+
+        assert state["kept_verdict_ids"] == []
+        assert isinstance(delivery, Delivery)
+        assert delivery.kind is DeliveryKind.report_only
+        assert publisher.calls == []
+        assert [lesson.outcome for lesson in lessons] == [VerdictOutcome.keep] * 2
+
+    def test_a_re_test_that_applied_nothing_says_so(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_workload: Workload,
+        h1_cache: Hypothesis,
+    ) -> None:
+        """
+        GIVEN a combiner that applies nothing (H1 skipped) on the greedy merge
+              and on the fallback, yet reports passing B runs both times
+        WHEN combine runs
+        THEN nothing is kept and the summary says both re-tests applied
+             nothing instead of quoting a keep verdict as the failure reason
+        """
+        nodes = make_nodes(make_context([h1_cache]))
+        state = _committed(_advance(nodes, base_state, _before("combine")))
+        trial = _trial_of(state, h1_cache)
+        skip = CombineSkip(trial_id=trial.id, reason="conflict", paths=("a.py",))
+        combiner = FakeCombiner(
+            [
+                _measured(sample_workload.id, [], skipped=[skip]),
+                _measured(sample_workload.id, [], skipped=[skip]),
+            ]
+        )
+        nodes = make_nodes(make_context([h1_cache], combiner=combiner))
+
+        delta = nodes["combine"](state)
+
+        assert delta["kept_verdict_ids"] == []
+        combination = delta["combination"]
+        assert isinstance(combination, Combination)
+        assert combination.holds is False
+        assert combination.fallback_trial_id == trial.id
+        summary = combination.summary
+        assert "re-test did not hold: nothing was applied (tip is the base)" in summary
+        assert (
+            f"fallback re-tested trial {trial.id[:8]} alone and did not hold: "
+            "nothing was applied (tip is the base)"
+        ) in summary
+        assert "all judges passed" not in summary
+
+    def test_nothing_kept_never_calls_the_combiner(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h3_noise: Hypothesis,
+    ) -> None:
+        """
+        GIVEN only an inconclusive verdict
+        WHEN combine runs with a combiner
+        THEN the combiner is not called and nothing is kept
+        """
+        combiner = FakeCombiner([])
+        nodes = make_nodes(make_context([h3_noise], combiner=combiner))
+        state = _committed(_advance(nodes, base_state, _before("combine")))
+
+        delta = nodes["combine"](state)
+
+        assert combiner.calls == []
+        assert delta["kept_verdict_ids"] == []
+        assert "combination" not in delta
+        assert "nothing" in _only_event(delta).message
+
+    def test_a_kept_trial_without_a_commit_cannot_be_combined(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+    ) -> None:
+        """
+        GIVEN a kept trial the runner never committed
+        WHEN combine runs with a combiner
+        THEN an EngineError names the verdict and the combiner is not called
+        """
+        combiner = FakeCombiner([])
+        nodes = make_nodes(make_context([h1_cache], combiner=combiner))
+        state = _advance(nodes, base_state, _before("combine"))
+        state["base_commit"] = SHA
+
+        with pytest.raises(EngineError, match="no committed trial"):
+            nodes["combine"](state)
+        assert combiner.calls == []
+
+    def test_needs_a_pinned_commit(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+    ) -> None:
+        """
+        GIVEN a kept change but no pinned base commit
+        WHEN combine runs with a combiner
+        THEN an EngineError says the commit is missing
+        """
+        combiner = FakeCombiner([])
+        nodes = make_nodes(make_context([h1_cache], combiner=combiner))
+        state = _committed(_advance(nodes, base_state, _before("combine")))
+        state["base_commit"] = None
+
+        with pytest.raises(EngineError, match="base commit"):
+            nodes["combine"](state)
+
+    @pytest.mark.parametrize(
+        "problem", ["unknown-applied", "unknown-skipped", "twice", "bad-tip"]
+    )
+    def test_refuses_an_untrustworthy_combiner_result(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_workload: Workload,
+        h1_cache: Hypothesis,
+        problem: str,
+    ) -> None:
+        """
+        GIVEN a combiner that reports a trial it was not given, a trial twice,
+              or a tip that is not a commit id
+        WHEN combine runs
+        THEN an EngineError refuses the result
+        """
+        nodes = make_nodes(make_context([h1_cache]))
+        state = _committed(_advance(nodes, base_state, _before("combine")))
+        trial_id = _trial_of(state, h1_cache).id
+        stranger = CombineSkip(trial_id="stranger", reason="conflict")
+        measured = {
+            "unknown-applied": _measured(sample_workload.id, ["stranger"]),
+            "unknown-skipped": _measured(
+                sample_workload.id, [trial_id], skipped=[stranger]
+            ),
+            "twice": _measured(sample_workload.id, [trial_id, trial_id]),
+            "bad-tip": _measured(sample_workload.id, [trial_id], tip="--evil"),
+        }[problem]
+        combiner = FakeCombiner([measured])
+
+        with pytest.raises(EngineError, match="combiner"):
+            make_nodes(make_context([h1_cache], combiner=combiner))["combine"](state)
+
+
+class TestDeliverWithPublisher:
+    def _combined_state(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        workload: Workload,
+        h1: Hypothesis,
+    ) -> EngineState:
+        nodes = make_nodes(make_context([h1]))
+        state = _committed(_advance(nodes, base_state, _before("combine")))
+        trial = _trial_of(state, h1)
+        combiner = FakeCombiner([_measured(workload.id, [trial.id])])
+        return _apply(
+            state, make_nodes(make_context([h1], combiner=combiner))["combine"](state)
+        )
+
+    def test_publishes_the_combined_tip_and_uses_its_diff(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_workload: Workload,
+        h1_cache: Hypothesis,
+    ) -> None:
+        """
+        GIVEN a held combination of H1 at tip TIP on base SHA
+        WHEN deliver runs with a publisher
+        THEN the publisher creates engine/run-<id> at TIP from SHA, and the
+             delivery carries its capped diff and the tip commit
+        """
+        state = self._combined_state(
+            make_context, base_state, sample_workload, h1_cache
+        )
+        publisher = FakePublisher("diff --git a/x b/x")
+
+        delta = make_nodes(make_context([h1_cache], publisher=publisher))["deliver"](
+            state
+        )
+
+        branch = f"engine/run-{RUN_ID}"
+        assert publisher.calls == [PublishCall(state["project"], branch, TIP, SHA)]
+        delivery = delta["delivery"]
+        assert isinstance(delivery, Delivery)
+        assert delivery.kind is DeliveryKind.branch
+        assert delivery.branch == branch
+        assert delivery.commit == TIP
+        assert delivery.combined_diff == "diff --git a/x b/x"
+        assert delivery.verdict_ids == tuple(state["kept_verdict_ids"])
+        assert _only_event(delta).data == {
+            "kind": "branch",
+            "kept": 1,
+            "branch": branch,
+            "commit": TIP,
+        }
+
+    def test_refuses_the_default_branch_before_publishing(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_workload: Workload,
+        h1_cache: Hypothesis,
+    ) -> None:
+        """
+        GIVEN a project whose default branch is the delivery branch
+        WHEN deliver runs with a publisher
+        THEN a DeliveryError is raised and nothing is published
+        """
+        state = self._combined_state(
+            make_context, base_state, sample_workload, h1_cache
+        )
+        state["project"] = state["project"].model_copy(
+            update={"default_branch": f"engine/run-{RUN_ID}"}
+        )
+        publisher = FakePublisher()
+
+        with pytest.raises(DeliveryError):
+            make_nodes(make_context([h1_cache], publisher=publisher))["deliver"](state)
+        assert publisher.calls == []
+
+    @pytest.mark.parametrize("missing", ["combination", "held", "base"])
+    def test_publishing_needs_a_held_combination_at_a_pinned_base(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_workload: Workload,
+        h1_cache: Hypothesis,
+        missing: str,
+    ) -> None:
+        """
+        GIVEN kept changes but no combination, one that did not hold, or no base
+        WHEN deliver runs with a publisher
+        THEN an EngineError refuses to publish anything untested
+        """
+        state = self._combined_state(
+            make_context, base_state, sample_workload, h1_cache
+        )
+        combination = state["combination"]
+        assert combination is not None
+        if missing == "combination":
+            state["combination"] = None
+        elif missing == "held":
+            state["combination"] = combination.model_copy(update={"holds": False})
+        else:
+            state["base_commit"] = None
+        publisher = FakePublisher()
+
+        with pytest.raises(EngineError, match="publish"):
+            make_nodes(make_context([h1_cache], publisher=publisher))["deliver"](state)
+        assert publisher.calls == []
+
+
+class TestReportRunConditions:
+    def test_step1_runs_say_what_was_not_checked(
+        self, make_context: ContextFactory, base_state: EngineState
+    ) -> None:
+        """
+        GIVEN a run with no Step 2 seams
+        WHEN deliver writes the report
+        THEN the Run conditions section says the commit was not pinned, the
+             isolation not checked, defines peak RSS and lists no trial refs
+        """
+        nodes = make_nodes(make_context())
+        report = cast(
+            Delivery, nodes["deliver"](base_state)["delivery"]
+        ).report_markdown
+
+        assert "**Run conditions**" in report
+        assert "- Measured commit: not pinned" in report
+        assert "- Isolation: not checked" in report
+        assert "largest single process among the waited-for descendants" in report
+        assert "- Trial refs: none" in report
+        assert "for-each-ref" not in report
+
+    def test_step2_runs_list_every_condition_and_the_cleanup_command(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_project: Project,
+        sample_workload: Workload,
+        h1_cache: Hypothesis,
+    ) -> None:
+        """
+        GIVEN a run whose preflight saw 2 dirty entries and best-effort
+              networking, a workload with ignored inputs, a held combination
+              and a committed trial
+        WHEN deliver writes the report
+        THEN Run conditions lists the sha, the dirty count, both isolation
+             modes, the noise floor, the ignored inputs, the combination
+             summary, the trial ref and a copyable cleanup command
+        """
+        with_inputs = sample_workload.model_copy(update={"inputs": {"steps": 20}})
+        state = cast(EngineState, {**base_state, "workloads": [with_inputs]})
+        preflight = FakePreflight(
+            _preflight_report([with_inputs], dirty=("a", "b"), network="best_effort")
+        )
+        nodes = make_nodes(make_context([h1_cache], preflight=preflight))
+        state = _committed(_advance(nodes, state, _before("combine")))
+        trial = _trial_of(state, h1_cache)
+        combiner = FakeCombiner([_measured(sample_workload.id, [trial.id])])
+        nodes = make_nodes(make_context([h1_cache], combiner=combiner))
+        state = _apply(state, nodes["combine"](state))
+
+        report = cast(Delivery, nodes["deliver"](state)["delivery"]).report_markdown
+
+        combination = state["combination"]
+        assert combination is not None
+        ref = f"refs/heads/engine/trial-{RUN_ID}-{h1_cache.id}"
+        assert f"- Measured commit: {SHA}" in report
+        assert "- Uncommitted changes ignored: 2" in report
+        assert "- Isolation: network best_effort, filesystem required" in report
+        assert (
+            f"- Noise floor: smallest provable gain train-step {2 * _cv(SLOW):.1%}"
+            in report
+        )
+        assert "- Workload inputs ignored: train-step" in report
+        assert "- Combination: " + combination.summary[:40] in report
+        assert f"- Trial refs: {ref}" in report
+        assert (
+            "```\ngit for-each-ref --format='%(refname)' "
+            f"'refs/heads/engine/trial-{RUN_ID}-*' | xargs -n1 git update-ref -d\n```"
+        ) in report
+
+    def test_run_conditions_are_sanitised(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_workload: Workload,
+        h1_cache: Hypothesis,
+    ) -> None:
+        """
+        GIVEN a combiner skip whose conflict path tries to inject a heading,
+              raw HTML and a link, and a workload name with a line break
+        WHEN deliver writes the report
+        THEN the report still has one heading, no raw HTML and no link
+        """
+        hostile = "x\n\n## Approved <img src=x> [merge](https://attacker.example)"
+        named = sample_workload.model_copy(update={"name": hostile, "inputs": {"a": 1}})
+        state = cast(EngineState, {**base_state, "workloads": [named]})
+        nodes = make_nodes(make_context([h1_cache]))
+        state = _committed(_advance(nodes, state, _before("combine")))
+        trial = _trial_of(state, h1_cache)
+        skip = CombineSkip(trial_id=trial.id, reason=hostile, paths=(hostile,))
+        combiner = FakeCombiner(
+            [
+                _measured(sample_workload.id, [], skipped=[skip]),
+                _measured(sample_workload.id, [trial.id]),
+            ]
+        )
+        nodes = make_nodes(make_context([h1_cache], combiner=combiner))
+        state = _apply(state, nodes["combine"](state))
+
+        report = cast(Delivery, nodes["deliver"](state)["delivery"]).report_markdown
+
+        combination = state["combination"]
+        assert combination is not None
+        assert combination.holds is True
+        assert combination.fallback_trial_id == trial.id
+        assert "applied nothing" in combination.summary
+        assert "re-test did not hold: nothing was applied" in combination.summary
+        assert (
+            "all judges passed; efficiency"
+            not in combination.summary.split("fallback")[0]
+        )
+        lines = report.splitlines()
+        assert [line for line in lines if line.startswith("#")] == [lines[0]]
+        assert "<img" not in report
+        assert re.search(r"(?<!\\)\]\(", report) is None
+        assert re.search(r"(?i)www(?!\\)\.", report) is None
+
+    def test_an_unsafe_ref_prefix_omits_the_cleanup_command(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+    ) -> None:
+        """
+        GIVEN a committed trial but a branch prefix with characters a shell
+              would interpret
+        WHEN deliver writes the report
+        THEN the trial ref is listed but no cleanup command is printed
+        """
+        nodes = make_nodes(make_context([h1_cache]))
+        state = _committed(_advance(nodes, base_state, _before("deliver")))
+        state["kept_verdict_ids"] = []
+
+        report = cast(
+            Delivery,
+            make_nodes(make_context([h1_cache], branch_prefix="eng'$(x)/"))["deliver"](
+                state
+            )["delivery"],
+        ).report_markdown
+
+        assert "- Trial refs: refs/heads/engine/trial-" in report
+        assert "for-each-ref" not in report

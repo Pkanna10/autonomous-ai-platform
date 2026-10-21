@@ -9,6 +9,7 @@ the approval gate and resume later, and reports every run as an
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import FrozenInstanceError
@@ -24,26 +25,48 @@ from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel
 
 from autonomous_ai_agents.common.config import settings
+from autonomous_ai_agents.common.errors import (
+    InvalidRecordIdError,
+    ProjectConflictError,
+)
 from autonomous_ai_agents.common.models import (
     ENGINE_SERDE_ALLOWLIST,
+    METRIC_TESTS_PASSED,
     METRIC_WALL_TIME_S,
     ApprovalDecision,
     Baseline,
     ChangeClass,
     DeliveryKind,
+    EngineEvent,
     EventLevel,
     Guardrail,
     Hypothesis,
     HypothesisStatus,
+    Measurement,
     Objective,
     Project,
+    ProjectUnderstanding,
     RunPhase,
+    RunStats,
     Trial,
     TrialStatus,
     VerdictOutcome,
     Workload,
 )
-from autonomous_ai_agents.execution.protocols import TrialBrief
+from autonomous_ai_agents.execution.fakes import (
+    FAKE_COMMIT,
+    FakePreflight,
+    FakeProfiler,
+    FakePublisher,
+    FakeUnderstander,
+    PublishCall,
+)
+from autonomous_ai_agents.execution.protocols import (
+    CombineMeasured,
+    KeptChange,
+    TrialBrief,
+    UnderstandResult,
+)
 from autonomous_ai_agents.execution.runner import (
     ScriptedOutcome,
     StubBaselineRunner,
@@ -64,7 +87,7 @@ from autonomous_ai_agents.orchestrator.nodes import (
     EngineError,
     NodeContext,
 )
-from autonomous_ai_agents.orchestrator.state import initial_state
+from autonomous_ai_agents.orchestrator.state import EngineState, initial_state
 from autonomous_ai_agents.persistence.repository import InMemoryRepository
 
 ContextFactory = Callable[..., NodeContext]
@@ -87,6 +110,11 @@ DELIVERY_PHASES: list[RunPhase] = [
     RunPhase.learn,
     RunPhase.watch,
 ]
+
+
+def _node_phases(events: Sequence[EngineEvent]) -> list[RunPhase]:
+    """The phase of each node's own event, without coded notes such as noisy_host."""
+    return [event.phase for event in events if "code" not in event.data]
 
 
 # ---------------------------------------------------------------------------
@@ -522,7 +550,9 @@ class TestOrchestrator:
         """
         GIVEN H1 as the only candidate
         WHEN the orchestrator streams the run
-        THEN EngineEvents arrive one per node in loop order, tagged with the run id
+        THEN each node's EngineEvent arrives in loop order, tagged with the
+             run id, and the baseline's info-level noisy_host note follows the
+             baseline event
         """
         orchestrator = Orchestrator(context=make_context([h1_cache]))
 
@@ -536,11 +566,18 @@ class TestOrchestrator:
             )
         )
 
-        assert [e.phase for e in events] == [
+        assert _node_phases(events) == [
             *LOOP_PHASES,
             *DELIVERY_PHASES,
             RunPhase.done,
         ]
+        notes = [(i, e) for i, e in enumerate(events) if "code" in e.data]
+        assert [(e.data["code"], e.level) for _, e in notes] == [
+            ("noisy_host", EventLevel.info)
+        ]
+        (index, _), baseline_index = notes[0], LOOP_PHASES.index(RunPhase.baseline)
+        assert index == baseline_index + 1
+        assert events[baseline_index].phase is RunPhase.baseline
         assert events[-1].message == "done: 1 change(s) kept"
         assert events[-1].data == {"kept": 1}
         assert all(e.run_id == "run-stream" for e in events)
@@ -615,7 +652,7 @@ class TestOrchestrator:
                 run_id="run-stream-gate",
             )
         )
-        assert [e.phase for e in events] == [*LOOP_PHASES, RunPhase.approval]
+        assert _node_phases(events) == [*LOOP_PHASES, RunPhase.approval]
         paused_event = events[-1]
         assert paused_event.message == "paused: 1 change(s) need approval"
         assert paused_event.data == {"pending": 1}
@@ -634,7 +671,7 @@ class TestOrchestrator:
         )
 
         assert resumed.status == "done"
-        assert [e.phase for e in resumed.state["events"]] == [
+        assert _node_phases(resumed.state["events"]) == [
             *LOOP_PHASES,
             RunPhase.approval,
             *DELIVERY_PHASES,
@@ -865,7 +902,8 @@ class TestOrchestratorGuards:
               that fails
         WHEN the orchestrator runs
         THEN the EngineError propagates: no failed state is invented from
-             nothing and nothing is saved
+             nothing, and the repository holds only the initial row that
+             Step 2 saves before the graph starts (decision 28)
         """
         script = ScriptedOutcome(samples={METRIC_WALL_TIME_S: (1.8, 1.8)})
         ctx = make_context(baseline_runner=StubBaselineRunner(script))
@@ -876,7 +914,11 @@ class TestOrchestratorGuards:
 
         with pytest.raises(EngineError, match="2 runs measured"):
             orchestrator.run(*inputs, run_id="run-forgotten")
-        assert ctx.repository.get_run("run-forgotten") is None
+        saved = ctx.repository.get_run("run-forgotten")
+        assert saved is not None
+        assert saved["phase"] is RunPhase.connect
+        assert saved["error"] is None
+        assert saved["events"] == []
 
     def test_a_runner_reporting_the_wrong_round_fails_the_run(
         self,
@@ -966,3 +1008,299 @@ class TestOrchestratorGuards:
         assert result.status == "done"
         assert result.state["round"] == 60
         assert len(result.state["verdicts"]) == 60
+
+
+# ---------------------------------------------------------------------------
+# Step 2 (U10): the cost cap, the first save and a run over every seam
+# ---------------------------------------------------------------------------
+
+SLOW = (1.80, 1.75, 1.85, 1.80, 1.80)
+FAST = (1.05, 1.02, 1.08, 1.05, 1.05)
+TIP = "b" * 40
+
+
+class _RecordingRepository(InMemoryRepository):
+    """Records (phase, event count) per save_run, or raises on every save."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        super().__init__()
+        self.saved: list[tuple[RunPhase, int]] = []
+        self._error = error
+
+    def save_run(self, state: EngineState) -> None:
+        if self._error is not None:
+            raise self._error
+        self.saved.append((state["phase"], len(state["events"])))
+        super().save_run(state)
+
+
+class _CommittingRunner:
+    """Commits every trial the stub reports, as the real runner does."""
+
+    def __init__(self, inner: StubTrialRunner) -> None:
+        self._inner = inner
+
+    def run(
+        self,
+        hypothesis: Hypothesis,
+        workloads: Sequence[Workload],
+        baseline: Baseline,
+        *,
+        round: int,
+        branch: str,
+        budget_usd: float,
+        brief: TrialBrief,
+    ) -> Trial:
+        trial = self._inner.run(
+            hypothesis,
+            workloads,
+            baseline,
+            round=round,
+            branch=branch,
+            budget_usd=budget_usd,
+            brief=brief,
+        )
+        return trial.model_copy(update={"commit": "e" * 40})
+
+
+def _row(workload_id: str, metric: str, samples: Sequence[float]) -> Measurement:
+    values = tuple(samples)
+    unit = "s" if metric.endswith("_s") else ""
+    return Measurement(
+        workload_id=workload_id,
+        metric=metric,
+        stats=RunStats.from_samples(values, unit=unit),
+        samples=values,
+    )
+
+
+class _EchoCombiner:
+    """Applies every kept change it is given; the re-test always holds."""
+
+    def __init__(self) -> None:
+        self.kept: list[tuple[KeptChange, ...]] = []
+
+    def combine(
+        self,
+        run_id: str,
+        project: Project,
+        base_commit: str,
+        kept: Sequence[KeptChange],
+        workloads: Sequence[Workload],
+    ) -> CombineMeasured:
+        self.kept.append(tuple(kept))
+        ids = [w.id for w in workloads]
+        return CombineMeasured(
+            tip_commit=TIP,
+            applied=tuple(change.trial_id for change in kept),
+            skipped=(),
+            baseline=tuple(
+                row
+                for wid in ids
+                for row in (
+                    _row(wid, METRIC_WALL_TIME_S, SLOW),
+                    _row(wid, "val_loss", (0.5,) * 5),
+                )
+            ),
+            combined=tuple(
+                row
+                for wid in ids
+                for row in (
+                    _row(wid, METRIC_WALL_TIME_S, FAST),
+                    _row(wid, "val_loss", (0.5,) * 5),
+                    _row(wid, METRIC_TESTS_PASSED, (1.0,)),
+                )
+            ),
+        )
+
+
+class TestOrchestratorStep2:
+    @pytest.fixture
+    def inputs(
+        self,
+        sample_project: Project,
+        sample_workload: Workload,
+        sample_objective: Objective,
+        sample_guardrails: tuple[Guardrail, ...],
+    ) -> tuple[Project, list[Workload], list[Objective], tuple[Guardrail, ...]]:
+        return sample_project, [sample_workload], [sample_objective], sample_guardrails
+
+    def test_run_and_stream_carry_the_cost_cap_into_the_state(
+        self,
+        make_context: ContextFactory,
+        inputs: tuple[Project, list[Workload], list[Objective], tuple[Guardrail, ...]],
+        h1_cache: Hypothesis,
+    ) -> None:
+        """
+        GIVEN max_cost_usd 0.75
+        WHEN a run is started with run() and another with stream()
+        THEN both states carry the 0.75 USD cap
+        """
+        ctx = make_context([h1_cache])
+        orchestrator = Orchestrator(context=ctx)
+
+        result = orchestrator.run(*inputs, run_id="run-cap", max_cost_usd=0.75)
+        list(orchestrator.stream(*inputs, run_id="run-cap-stream", max_cost_usd=0.75))
+
+        assert result.state["max_cost_usd"] == 0.75
+        streamed = ctx.repository.get_run("run-cap-stream")
+        assert streamed is not None and streamed["max_cost_usd"] == 0.75
+
+    def test_the_cap_defaults_to_the_setting(
+        self,
+        make_context: ContextFactory,
+        inputs: tuple[Project, list[Workload], list[Objective], tuple[Guardrail, ...]],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        GIVEN MAX_COST_USD set to 1.25 and no max_cost_usd argument
+        WHEN the orchestrator runs
+        THEN the state's cap is 1.25
+        """
+        monkeypatch.setattr(settings, "MAX_COST_USD", 1.25)
+
+        result = Orchestrator(context=make_context()).run(*inputs, run_id="run-dflt")
+
+        assert result.state["max_cost_usd"] == 1.25
+
+    def test_an_invalid_cap_is_refused_before_anything_is_saved(
+        self,
+        make_context: ContextFactory,
+        inputs: tuple[Project, list[Workload], list[Objective], tuple[Guardrail, ...]],
+    ) -> None:
+        """
+        GIVEN a negative max_cost_usd
+        WHEN the orchestrator runs
+        THEN a ValueError refuses it and nothing is saved
+        """
+        repository = _RecordingRepository()
+        ctx = make_context(repository=repository)
+
+        with pytest.raises(ValueError, match="max_cost_usd"):
+            Orchestrator(context=ctx).run(*inputs, run_id="run-neg", max_cost_usd=-1.0)
+        assert repository.saved == []
+
+    @pytest.mark.parametrize("mode", ["run", "stream"])
+    def test_the_initial_state_is_saved_before_any_node_runs(
+        self,
+        make_context: ContextFactory,
+        inputs: tuple[Project, list[Workload], list[Objective], tuple[Guardrail, ...]],
+        h1_cache: Hypothesis,
+        mode: str,
+    ) -> None:
+        """
+        GIVEN a repository that records every save
+        WHEN a run is driven to completion with run() or stream()
+        THEN the first save is the initial state (phase connect, no events),
+             before the graph ran, and the last is the finished run
+        """
+        repository = _RecordingRepository()
+        orchestrator = Orchestrator(
+            context=make_context([h1_cache], repository=repository)
+        )
+
+        if mode == "run":
+            orchestrator.run(*inputs, run_id="run-first-save")
+        else:
+            list(orchestrator.stream(*inputs, run_id="run-first-save"))
+
+        assert repository.saved[0] == (RunPhase.connect, 0)
+        assert repository.saved[-1][0] is RunPhase.done
+        assert len(repository.saved) == 2
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            ProjectConflictError(
+                "root /home/dev/bridge is already registered as project p1"
+            ),
+            InvalidRecordIdError("run_id 'run-x' is not a UUID"),
+        ],
+        ids=["conflict", "invalid-id"],
+    )
+    @pytest.mark.parametrize("mode", ["run", "stream"])
+    def test_an_engine_error_from_the_first_save_stops_before_any_node(
+        self,
+        make_context: ContextFactory,
+        inputs: tuple[Project, list[Workload], list[Objective], tuple[Guardrail, ...]],
+        h1_cache: Hypothesis,
+        error: EngineError,
+        mode: str,
+    ) -> None:
+        """
+        GIVEN a repository whose first save raises ProjectConflictError or
+              InvalidRecordIdError
+        WHEN the orchestrator runs or streams
+        THEN that engine error reaches the caller, no node ran (the
+             preflight was never asked) and no checkpoint thread exists
+        """
+        preflight = FakePreflight()
+        ctx = make_context(
+            [h1_cache], repository=_RecordingRepository(error), preflight=preflight
+        )
+        orchestrator = Orchestrator(context=ctx)
+
+        with pytest.raises(type(error), match=re.escape(str(error))):
+            if mode == "run":
+                orchestrator.run(*inputs, run_id="run-clash")
+            else:
+                next(orchestrator.stream(*inputs, run_id="run-clash"))
+
+        assert preflight.calls == []
+        assert not orchestrator.graph.get_state(run_config("run-clash", 3)).values
+
+    def test_a_run_over_every_seam_delivers_the_re_tested_tip(
+        self,
+        make_context: ContextFactory,
+        inputs: tuple[Project, list[Workload], list[Objective], tuple[Guardrail, ...]],
+        sample_project: Project,
+        h1_cache: Hypothesis,
+        design_scripts: dict[str, ScriptedOutcome],
+    ) -> None:
+        """
+        GIVEN fakes for preflight, understand, profile, combine and publish,
+              and a runner that commits H1
+        WHEN the orchestrator runs
+        THEN the run is pinned at the preflight's commit, understands the
+             project, re-tests H1 at the tip, publishes it and charges the
+             understanding plus the trial
+        """
+        understanding = ProjectUnderstanding(
+            language="python", summary="a bridge", served_by_model="m"
+        )
+        combiner = _EchoCombiner()
+        publisher = FakePublisher("diff --git a/encoder.py b/encoder.py")
+        ctx = make_context(
+            [h1_cache],
+            runner=_CommittingRunner(StubTrialRunner(design_scripts)),
+            preflight=FakePreflight(),
+            understander=FakeUnderstander(
+                UnderstandResult(understanding, cost_usd=0.01, tokens_used=10)
+            ),
+            profiler=FakeProfiler(),
+            combiner=combiner,
+            publisher=publisher,
+        )
+
+        result = Orchestrator(context=ctx).run(
+            *inputs, run_id="run-seams", max_cost_usd=1.0
+        )
+
+        assert result.status == "done"
+        state = result.state
+        assert state["base_commit"] == FAKE_COMMIT
+        assert state["understanding"] == understanding
+        assert state["cost_usd"] == pytest.approx(0.01 + 0.12)
+        assert [c.hypothesis_id for c in combiner.kept[0]] == [h1_cache.id]
+        combination = state["combination"]
+        assert combination is not None and combination.holds
+        assert publisher.calls == [
+            PublishCall(sample_project, "engine/run-run-seams", TIP, FAKE_COMMIT)
+        ]
+        delivery = state["delivery"]
+        assert delivery is not None
+        assert delivery.commit == TIP
+        assert delivery.combined_diff == "diff --git a/encoder.py b/encoder.py"
+        assert f"Measured commit: {FAKE_COMMIT}" in delivery.report_markdown
+        codes = [e.data.get("code") for e in state["events"]]
+        assert "isolation" in codes

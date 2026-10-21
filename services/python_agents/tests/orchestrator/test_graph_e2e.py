@@ -156,7 +156,12 @@ def test_h1_is_kept_and_delivered_on_an_engine_branch(
     assert final["kept_verdict_ids"] == [verdict.id]
     assert len(final["lessons"]) == 1
     assert len(ctx.repository.list_lessons(sample_project.id)) == 1
-    assert [event.phase for event in final["events"]] == LOOP_ORDER
+    assert [
+        event.phase for event in final["events"] if "code" not in event.data
+    ] == LOOP_ORDER
+    assert [
+        event.data["code"] for event in final["events"] if "code" in event.data
+    ] == ["noisy_host"]
     assert final["round"] == 1
     assert [h.status for h in final["hypotheses"]] == [HypothesisStatus.kept]
     assert final["cost_usd"] == pytest.approx(0.12)
@@ -318,7 +323,7 @@ def test_h4_interrupts_for_approval_and_is_delivered_once_approved(
     assert f"| {h4_behaviour.title} | keep |" in delivery.report_markdown
     (lesson,) = final["lessons"]
     assert lesson.outcome is VerdictOutcome.keep
-    assert [e.phase for e in final["events"]][9:11] == [
+    assert [e.phase for e in final["events"] if "code" not in e.data][9:11] == [
         RunPhase.verdicts,
         RunPhase.approval,
     ]
