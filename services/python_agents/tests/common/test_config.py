@@ -331,7 +331,7 @@ def test_settings_step2_defaults(clean_env: Path) -> None:
 
     # ASSERT
     assert settings.ENGINE_FALLBACKS is True
-    assert settings.ENGINE_FALLBACK_MODELS == ("claude-opus-5", "claude-opus-4-8")
+    assert settings.ENGINE_FALLBACK_MODELS == ("claude-opus-4-8",)
     assert settings.NETWORK_ISOLATION == "required"
     assert settings.FS_ISOLATION == "required"
     assert settings.GIT_EXECUTABLE == "git"
@@ -346,7 +346,7 @@ def test_settings_step2_defaults(clean_env: Path) -> None:
     assert settings.EDITOR_MAX_FILES == 10
     assert settings.EDITOR_MAX_FILE_BYTES == 256 * KIB
     assert settings.EDITOR_MAX_TOTAL_BYTES == 1 * MIB
-    assert settings.EDITOR_MAX_TOKENS == 16000
+    assert settings.EDITOR_MAX_TOKENS == 8000
     assert settings.UNDERSTAND_MAX_TOKENS == 8000
     assert settings.LLM_MAX_RETRIES == 2
     assert settings.LLM_TIMEOUT_S == 300

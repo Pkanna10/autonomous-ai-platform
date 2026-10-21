@@ -887,20 +887,30 @@ def test_one_worst_case_editor_request_with_the_shipped_defaults(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    GIVEN the shipped chain, pricing table and EDITOR_MAX_TOKENS
+    GIVEN the shipped engine model, fallback chain, pricing table and
+          EDITOR_MAX_TOKENS
     WHEN the factory's min_trial_budget_usd formula is evaluated
-    THEN it is 3 x 16,000 x $25/MTok = $1.20 (the floor below which no trial starts)
+    THEN it is 2 models x 8,000 x $25/MTok = $0.40 (the floor below which no
+         trial starts), small enough that a $5 run affords many editor turns
     """
-    for name in ("MODEL_PRICING", "EDITOR_MAX_TOKENS", "TRIAGE_MODEL"):
+    for name in (
+        "MODEL_PRICING",
+        "EDITOR_MAX_TOKENS",
+        "TRIAGE_MODEL",
+        "ENGINE_MODEL",
+        "ENGINE_FALLBACKS",
+        "ENGINE_FALLBACK_MODELS",
+    ):
         monkeypatch.delenv(name, raising=False)
-    cfg = _settings()
+    cfg = Settings(_env_file=None)
 
     estimate = preflight_estimate(
         0, cfg.EDITOR_MAX_TOKENS, chain(cfg), cfg.MODEL_PRICING
     )
 
-    assert cfg.EDITOR_MAX_TOKENS == 16_000
-    assert estimate == pytest.approx(1.20)
+    assert chain(cfg) == ("claude-opus-5-5", "claude-opus-4-8")
+    assert cfg.EDITOR_MAX_TOKENS == 8_000
+    assert estimate == pytest.approx(0.40)
 
 
 @pytest.mark.parametrize("argument", ["prompt_tokens", "max_tokens"])

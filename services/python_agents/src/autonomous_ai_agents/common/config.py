@@ -95,8 +95,13 @@ class Settings(BaseSettings):
     ENGINE_FALLBACKS: bool = True
     """Send ``ENGINE_FALLBACK_MODELS`` as the request's server-side fallbacks."""
 
-    ENGINE_FALLBACK_MODELS: tuple[str, ...] = ("claude-opus-5", "claude-opus-4-8")
-    """Fallback chain sent verbatim; the cost estimate prices the same chain."""
+    ENGINE_FALLBACK_MODELS: tuple[str, ...] = ("claude-opus-4-8",)
+    """Fallback chain sent verbatim; the cost estimate prices the same chain.
+
+    One fallback by default: the pre-send estimate assumes every model in the
+    chain could bill a full response, so each extra model multiplies the
+    worst case a request must fit under the run's cost cap.
+    """
 
     MODEL_PRICING: dict[str, ModelPrice] = Field(
         default_factory=lambda: dict(_DEFAULT_PRICING)
@@ -120,8 +125,9 @@ class Settings(BaseSettings):
     EDITOR_MAX_FILES: int = Field(default=10, ge=1)
     EDITOR_MAX_FILE_BYTES: int = Field(default=256 * _KIB, ge=1)
     EDITOR_MAX_TOTAL_BYTES: int = Field(default=1 * _MIB, ge=1)
-    EDITOR_MAX_TOKENS: int = Field(default=16000, ge=1)
-    """``max_tokens`` for each editor request."""
+    EDITOR_MAX_TOKENS: int = Field(default=8000, ge=1)
+    """``max_tokens`` for each editor request (tool calls are short; this keeps
+    the worst-case estimate of one request well under the default cost cap)."""
 
     # ============================================
     # Engine: measurement rigour and budget
