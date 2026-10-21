@@ -22,6 +22,7 @@ jobs:
       typescript: ${{ steps.filter.outputs.typescript }}
       python: ${{ steps.filter.outputs.python }}
       workflows: ${{ steps.filter.outputs.workflows }}
+      infrastructure: ${{ steps.filter.outputs.infrastructure }}
     steps:
       - uses: actions/checkout@v4
 
@@ -40,6 +41,9 @@ jobs:
               - 'services/python_agents/pyproject.toml'
             workflows:
               - '.github/workflows/**'
+            infrastructure:
+              - 'infrastructure/schema/**'
+              - 'docker-compose.dev.yml'
 
   # Shared setup for TypeScript jobs
   setup-typescript:
@@ -287,6 +291,167 @@ jobs:
       - name: Run tests with parallelization
         run: uv run pytest -n auto --cov --cov-report=xml --cov-report=term
         if: hashFiles('services/python_agents/tests/**/*.py') != ''
+
+  # Database schema: apply every migration to a real Postgres, then re-apply the
+  # newest one to prove it is idempotent (same image as docker-compose.dev.yml)
+  schema-apply:
+    name: Schema Apply (Postgres)
+    runs-on: ubuntu-22.04
+    needs: detect-changes
+    if: |
+      needs.detect-changes.outputs.infrastructure == 'true' ||
+      needs.detect-changes.outputs.workflows == 'true' ||
+      github.event_name == 'push'
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: ai_platform
+          POSTGRES_USER: dev
+          POSTGRES_PASSWORD: devpass
+        ports:
+          - '5432:5432'
+        options: >-
+          --health-cmd "pg_isready -U dev -d ai_platform"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Ensure psql is available
+        run: which psql || (sudo apt-get update && sudo apt-get install -y postgresql-client)
+
+      # Same order as docker-entrypoint-initdb.d on a fresh volume (file name order)
+      - name: Apply migrations in order (001 -> 002 -> 003)
+        run: |
+          for file in infrastructure/schema/*.sql; do
+            echo "::group::${file}"
+            PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -v ON_ERROR_STOP=1 -f "${file}"
+            echo "::endgroup::"
+          done
+
+      - name: Snapshot schema catalog before the second run
+        run: |
+          snapshot() {
+            PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -tAc "SELECT conrelid::regclass, conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE connamespace = 'public'::regnamespace ORDER BY 1, 2" > "$1"
+            PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -tAc "SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' ORDER BY 1, 2" >> "$1"
+            PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -tAc "SELECT table_name, column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = 'public' ORDER BY 1, 2" >> "$1"
+          }
+          snapshot /tmp/schema-before.txt
+
+      - name: Re-apply 003 (idempotence proof)
+        run: |
+          PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -v ON_ERROR_STOP=1 -f infrastructure/schema/003_engine.sql
+
+      - name: Second run changed nothing (no duplicated constraints or indexes)
+        run: |
+          snapshot() {
+            PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -tAc "SELECT conrelid::regclass, conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE connamespace = 'public'::regnamespace ORDER BY 1, 2" > "$1"
+            PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -tAc "SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' ORDER BY 1, 2" >> "$1"
+            PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -tAc "SELECT table_name, column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = 'public' ORDER BY 1, 2" >> "$1"
+          }
+          snapshot /tmp/schema-after.txt
+          diff -u /tmp/schema-before.txt /tmp/schema-after.txt
+
+      - name: Verify engine tables and columns
+        run: |
+          query() {
+            PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -v ON_ERROR_STOP=1 -tAc "$1"
+          }
+          status=0
+          for table in projects workloads objectives guardrails techniques hotspots hypotheses lessons; do
+            if [ "$(query "SELECT to_regclass('public.${table}') IS NOT NULL")" = "t" ]; then
+              echo "table ${table}: present"
+            else
+              echo "::error::table ${table} is missing"
+              status=1
+            fi
+          done
+          for column in claims citation_count; do
+            if [ "$(query "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'research_papers' AND column_name = '${column}')")" = "t" ]; then
+              echo "column research_papers.${column}: present"
+            else
+              echo "::error::column research_papers.${column} is missing"
+              status=1
+            fi
+          done
+          exit "${status}"
+
+  # Database init exactly as a developer runs it: docker compose starts the
+  # postgres service on an empty volume, the image's entrypoint applies every
+  # file mounted at /docker-entrypoint-initdb.d, and the result must be a
+  # healthy database with the 14 engine tables and no error in the init log.
+  compose-init:
+    name: Compose Init (Postgres)
+    runs-on: ubuntu-22.04
+    needs: detect-changes
+    if: |
+      needs.detect-changes.outputs.infrastructure == 'true' ||
+      needs.detect-changes.outputs.workflows == 'true' ||
+      github.event_name == 'push'
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    env:
+      COMPOSE_FILE: docker-compose.dev.yml
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Start postgres on an empty volume
+        run: |
+          docker compose down -v --remove-orphans || true
+          docker compose up -d postgres
+
+      - name: Wait for the healthcheck
+        run: |
+          container="$(docker compose ps -q postgres)"
+          for _ in $(seq 1 60); do
+            status="$(docker inspect --format '{{.State.Health.Status}}' "${container}")"
+            if [ "${status}" = "healthy" ]; then
+              echo "postgres is healthy"
+              exit 0
+            fi
+            if [ "$(docker inspect --format '{{.State.Status}}' "${container}")" != "running" ]; then
+              echo "::error::postgres container stopped during init"
+              docker compose logs postgres
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "::error::postgres did not become healthy in 120 s"
+          docker compose logs postgres
+          exit 1
+
+      - name: Init log has no errors
+        run: |
+          docker compose logs postgres > /tmp/postgres-init.log
+          if grep -iE '(^|[^a-z])(error|fatal)([^a-z]|$)' /tmp/postgres-init.log; then
+            echo "::error::postgres init log contains errors (see above)"
+            exit 1
+          fi
+          echo "init log is clean ($(wc -l < /tmp/postgres-init.log) lines)"
+
+      - name: Database has the 14 engine tables
+        run: |
+          count="$(docker compose exec -T postgres psql -U dev -d ai_platform -tAc \
+            "select count(*) from pg_tables where schemaname = 'public'")"
+          echo "public tables: ${count}"
+          docker compose exec -T postgres psql -U dev -d ai_platform -c '\dt'
+          if [ "${count}" != "14" ]; then
+            echo "::error::expected 14 tables after 001 -> 002 -> 003, found ${count}"
+            exit 1
+          fi
+
+      - name: Tear down (volume included)
+        if: always()
+        run: docker compose down -v --remove-orphans
 
   # Dependency security scan (optimized)
   security:

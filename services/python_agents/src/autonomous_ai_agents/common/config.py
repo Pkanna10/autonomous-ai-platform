@@ -3,7 +3,10 @@
 Loads configuration from environment variables using pydantic-settings.
 """
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from autonomous_ai_agents.common.refnames import branch_prefix_problem
 
 
 class Settings(BaseSettings):
@@ -27,6 +30,45 @@ class Settings(BaseSettings):
     # ============================================
     ANTHROPIC_API_KEY: str = "test-key-placeholder"
     """Anthropic API key for Claude access. Set via environment variable."""
+
+    # ============================================
+    # Claude models used by the engine
+    # ============================================
+    ENGINE_MODEL: str = "claude-opus-5-5"
+    """Model for understanding code, extracting claims and writing trial edits."""
+
+    TRIAGE_MODEL: str = "claude-haiku-5-5"
+    """Cheap model for high-volume work such as daily paper triage."""
+
+    # ============================================
+    # Engine: measurement rigour and budget
+    # ============================================
+    MIN_RUNS: int = 5
+    """Minimum timed runs per measurement (baseline and every trial)."""
+
+    NOISE_MULTIPLIER: float = 2.0
+    """A gain must exceed this many standard deviations of the noisier side."""
+
+    MIN_RELATIVE_GAIN: float = 0.02
+    """Smallest relative gain worth keeping, as a fraction of the baseline."""
+
+    MAX_TRIAL_ROUNDS: int = 3
+    """Hypothesis -> trial rounds before the engine gives up on a workload."""
+
+    MAX_COST_USD: float = 5.0
+    """Hard cap on Claude API spend per engine run."""
+
+    TRIAL_BRANCH_PREFIX: str = "engine/"
+    """Prefix for trial and delivery branches; the default branch is never touched."""
+
+    @field_validator("TRIAL_BRANCH_PREFIX")
+    @classmethod
+    def _safe_branch_prefix(cls, value: str) -> str:
+        """Non-empty, ends with ``/`` and starts a valid git refname."""
+        problem = branch_prefix_problem(value)
+        if problem is not None:
+            raise ValueError(f"TRIAL_BRANCH_PREFIX {value!r}: {problem}")
+        return value
 
     # ============================================
     # Database

@@ -1,7 +1,7 @@
 {
   "name": "@autonomous-ai/agent-core",
   "version": "1.0.0",
-  "description": "Core AI agent orchestration logic with Claude Sonnet 4.5 integration",
+  "description": "Core AI agent orchestration logic with Claude integration",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
@@ -25,12 +25,12 @@
   "license": "ISC",
   "packageManager": "pnpm@10.20.0",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.68.0",
-    "pg": "^8.16.3"
+    "@anthropic-ai/sdk": "^0.137.0",
+    "pg": "^8.23.1"
   },
   "devDependencies": {
-    "@types/node": "^24.10.0",
-    "@types/pg": "^8.15.6",
-    "esbuild": "^0.25.0"
+    "@types/node": "^24.19.2",
+    "@types/pg": "^8.23.1",
+    "esbuild": "^0.25.12"
   }
 }

@@ -37,12 +37,12 @@ try {
   // 3. Has explicit packageType field set to "service"
   isService = Boolean(
     pkg.packageType === 'service' ||
-      pkg.scripts?.start ||
-      pkg.dependencies?.express ||
-      pkg.dependencies?.fastify ||
-      pkg.dependencies?.koa ||
-      pkg.dependencies?.hapi ||
-      pkg.dependencies?.['@hapi/hapi']
+    pkg.scripts?.start ||
+    pkg.dependencies?.express ||
+    pkg.dependencies?.fastify ||
+    pkg.dependencies?.koa ||
+    pkg.dependencies?.hapi ||
+    pkg.dependencies?.['@hapi/hapi']
   );
 
   console.log(`[Healthcheck] Package: ${pkg.name || 'unknown'}`);

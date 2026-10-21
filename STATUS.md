@@ -1,753 +1,380 @@
 # Project Status - Autonomous AI Platform
 
-**Last Updated:** 2025-11-19
+**Last Updated:** 2026-10-21
 
 ---
 
-## Current Sprint
+## Current Step
 
-**Current Week:** Week 2 of 52 **Current Phase:** Phase 1 - Foundation (Weeks
-1-9) **Active Focus:** Project setup and documentation
-
----
-
-## This Week's Goals
-
-### Week 2 (2025-11-01)
-
-- [x] Create comprehensive CLAUDE.md documentation
-- [x] Set up documentation management system
-- [x] Create STATUS.md for tracking
-- [x] Create README.md for project overview
-- [x] Verify infrastructure implementation against documentation
-- [x] Fix database schema (add missing 2 tables)
-- [x] Create .env.example template
-- [x] Reorganize file structure to match documentation
-- [x] Initialize git repository and push to GitHub
-- [ ] Start LangGraph orchestrator design (if time permits)
+**Build step:** 1 of 5 (Engine design) **Branch:**
+`claude/adoring-clarke-xpo1py` **Vision:** a self-improving optimization engine
+that uses research findings and novel ideas to provably improve existing code,
+or build something new and then improve it (see `CLAUDE.md`).
 
 ---
 
-## Progress Overview
+## Development Log
 
-### Completed This Week ✅
+One row per build step. "Gate" is the result of `pnpm stage-gate` at the end of
+the step.
 
-1. **CLAUDE.md Documentation** - Created comprehensive 1,000+ line documentation
-   file
-   - 10 major sections covering architecture, timeline, best practices
-   - Critical instructions for Claude with strict rules
-   - Documentation management rules established
+| Step | Deliverable                                                     | Planned    | Started    | Completed  | PR                                                                | Gate   |
+| ---- | --------------------------------------------------------------- | ---------- | ---------- | ---------- | ----------------------------------------------------------------- | ------ |
+| 0    | Repair & upgrade (DB init, deps, models, docs, stage gate)      | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed |
+| 1    | Engine design (typed state, data model, judges, migration 003)  | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed |
+| 2    | Core loop end to end on CPU Python workloads + E2E fixture test |            |            |            |                                                                   |        |
+| 3    | Research: arXiv, PDF, playbook, claim extraction, matcher       |            |            |            |                                                                   |        |
+| 4    | Interfaces + runner: live CLI, hardware detection, `--goal`     |            |            |            |                                                                   |        |
+| 5    | Dogfood: fixtures, OSS repos, real ML training pipeline         |            |            |            |                                                                   |        |
 
-2. **Documentation System** - Established 3-file documentation structure
-   - CLAUDE.md (technical reference + AI instructions)
-   - STATUS.md (this file - weekly tracking)
-   - README.md (user-facing overview)
+Recommended Claude Code model and effort per step: 0 Opus 5.5 High; 1 Fable 5.1
+Extra; 2-4 Opus 5.5 Ultracode (Fable 5.1 for the paper matcher); 5 Opus 5.5
+High, Fable 5.1 Max only when stuck.
 
-3. **Project Foundation** - Completed initial setup
-   - Docker environment configured (PostgreSQL, Redis, Qdrant)
-   - Database schema designed (6 tables with pgvector)
-   - Monorepo structure with pnpm workspaces
-   - Environment variables configured
+### Step 0 summary (2026-10-21)
 
-4. **Infrastructure Verification & Fixes** - Comprehensive audit completed
-   - Verified all infrastructure against documentation claims
-   - Fixed database schema (added missing `performance_metrics` and
-     `user_feedback` tables)
-   - Created .env.example template for team onboarding
-   - Reorganized file structure (moved claude-client.ts to src/clients/)
-   - **Result:** Infrastructure now 100% matches documentation
+- Fixed `infrastructure/schema/002_fix_critical_issues.sql`: it constrained
+  `research_papers.citation_count` and `applicability_score`, which were never
+  created, so a fresh Postgres init aborted. Columns are now added first.
+- Upgraded Python dependencies: `anthropic` 0.68 -> 1.17, `langgraph` 0.2 ->
+  1.2, `langchain` 0.3 -> 1.4; `uv.lock` regenerated. Existing tests pass
+  unchanged on LangGraph 1.x.
+- Upgraded `@anthropic-ai/sdk` 0.68 -> 0.137; `pnpm-lock.yaml` regenerated.
+- Current models: TypeScript `DEFAULT_MODEL = claude-opus-5-5`; `streamChat`
+  accepts a model; `temperature` is only sent when a caller sets it (current
+  models reject sampling parameters). Python settings gained `ENGINE_MODEL` and
+  `TRIAGE_MODEL`.
+- Docs made truthful: root and package `CLAUDE.md` files, README, this file.
+  Removed the repeat-every-response rule, unverifiable statistics and
+  model-identity claims; fixed references to files that did not exist; added
+  `packages/execution-engine/CLAUDE.md`; deleted two identical
+  `CLAUDE.md.backup-*` copies (recoverable from git history).
+- License aligned to ISC everywhere (`LICENSE`, `package.json`,
+  `pyproject.toml`).
+- Added the stage-gate workflow: `scripts/stage-gate.sh`, `pnpm stage-gate`,
+  `[tool.bandit]` config, and the "Development Workflow" section in `CLAUDE.md`.
+- First stage-gate run caught stale lockfiles: `pnpm audit` reported 68
+  advisories (1 critical, 43 high) and `pip-audit` 22 (urllib3, requests,
+  pydantic-settings, pytest, python-dotenv, pygments, nltk, pip). Fixed by
+  `pnpm update -r` (declared ranges bumped to the installed versions) plus an
+  explicit `vite >= 7.3.7` dev dependency (vitest's peer stayed on 7.1.12
+  otherwise), and `uv lock --upgrade`. Both audits are now clean.
+- Removed `cache-dir = "~/.cache/uv"` from `pyproject.toml`: uv does not expand
+  `~` in config files and had created a literal `services/python_agents/~/`
+  directory inside the repo.
 
-5. **Git Repository & Version Control** - Set up and pushed to GitHub
-   - Initialized git repository (master branch)
-   - Created private GitHub repository: autonomous-ai-platform
-   - Initial commit: 17 files, 9,399 lines
-   - Remote configured: <https://github.com/Pkanna10/autonomous-ai-platform>
-   - **Result:** Code now backed up and version-controlled in the cloud
+### Step 1 summary (2026-10-21)
 
-6. **Configuration Files Enhanced** - Comprehensive overhaul with best practices
-   - Enhanced 11+ configuration files (package.json, commitlint.config.ts,
-     .gitignore, renovate.json, .dockerignore, .prettierignore)
-   - Created .gitattributes for cross-platform line-ending consistency (LF
-     enforcement)
-   - Added JUnit XML reporter to vitest.config.ts for CI/CD integration
-   - Fixed eslint.config.js to enable linting of package-level configs
-   - Created placeholder packages (research-engine, execution-engine) to resolve
-     TypeScript errors
-   - Merged all enhancements to master via PR #2 (commit aede797) and PR #3
-     (commit 509041e)
-   - **Result:** Infrastructure tooling now follows enterprise-grade standards;
-     improved code quality, CI/CD integration, and developer onboarding
+The engine loop exists as a walking skeleton: every node from `connect` to
+`watch` is wired in LangGraph and runs end to end on deterministic stub data,
+with no LLM call, subprocess or git involved. What is final: the data model, the
+anti-cheating rules, the five judges and the verdict order, hypothesis ranking
+with lessons, the approval interrupt and durable resume, the delivery guard and
+the lessons store. What is stubbed behind stable interfaces: `understand`,
+`profile`, `research`, both runners and `watch`.
 
-7. **Comprehensive Codebase Audit** - Exhaustive scan of all 85+ files
-   - Audited all TypeScript, Python, configuration, and documentation files
-   - Created .vscode/extensions.json with 7 recommended extensions
-   - Added Python convenience scripts to root package.json (python:install,
-     python:lint, python:format, python:typecheck, python:test)
-   - Aligned @types/node version across packages (^24.10.0)
-   - **Quality Metrics:** Zero TypeScript errors, zero ESLint violations, 100%
-     test coverage (6/6 tests passing)
-   - **Findings:** 1 critical issue (missing extensions.json), 2 medium issues,
-     3 low issues - all addressed
-   - **Result:** Codebase in excellent condition; developer experience
-     significantly improved
+```
+START -> connect -> understand -> define -> baseline -> profile -> research
+      -> hypotheses -> trials -> judges -> verdicts --(after_verdicts)--+
+             ^                                                         |
+             +---- another round (nothing kept, round < max_rounds) ---+
+                                                                       |
+     END <- watch <- learn <- deliver <- combine <- approval_gate <----+
+                                                    (interrupt -> human)
+```
 
-8. **Python Infrastructure Upgrade** - Tier 3-5 implementation complete
-   - Upgraded Python version from 3.10 to 3.11.14 (10-60% performance gains)
-   - Migrated from setuptools to Hatchling build backend (1.5-2x faster builds)
-   - Implemented UV package manager (10-100x faster than pip)
-   - Enabled mypy strict mode for maximum type safety
-   - Organized dependencies by project phase for clear roadmap
-   - Added plugin architecture with entry points system
-   - Installed 105 packages in 3.93 seconds (vs ~120s with pip)
-   - Compiled 5,586 Python files in 8.66 seconds
-   - **Result:** Python infrastructure now production-ready with
-     enterprise-grade tooling
+The seven end-to-end scenarios from the briefing pass on the compiled graph: H1
+(efficiency, 41.7% faster) is kept and delivered on an `engine/` branch; H2 is
+rejected for touching `tests/test_cache.py` although every judge passed; two
+below-noise candidates take two rounds and `max_rounds=1` stops early; H4
+(behaviour change) pauses the run with an `ApprovalRequest`, resumes with the
+human's decision, and is delivered when approved or reported only when rejected;
+a second graph instance over the same checkpointer resumes the same thread; a
+graph without a checkpointer cannot resume.
 
-9. **Multi-Platform Docker & CI/CD Enhancement** - Advanced build optimization
-   - Implemented multi-platform Docker builds (linux/amd64 + linux/arm64)
-   - Added QEMU support for Apple Silicon (M1/M2/M3) compatibility
-   - Configured hybrid caching strategy (GitHub Actions + Registry)
-   - Integrated Docker Scout for CVE scanning and PR comments
-   - Enhanced Trivy security scanning with comprehensive reporting
-   - Added supply chain security (SBOM + provenance attestations)
-   - **Performance:** 95-98% cache hit rate, 2-3x faster than QEMU emulation
-   - **Result:** Production-ready CI/CD pipeline with enterprise security
-     scanning
+- `common/models.py`: 27 frozen pydantic models and 13 `StrEnum`s (values mirror
+  the SQL `CHECK` lists); `ENGINE_SERDE_ALLOWLIST` for the checkpointer.
+- `optimization/anticheat.py`: protected paths (tests, benchmarks, CI,
+  manifests, lockfiles, interpreter hooks), traversal rejection, the noise
+  floor, run-count rule and sha256 output fingerprints.
+- `optimization/judges.py`: speed, memory, equivalence, guardrail-metric and
+  test-suite judges plus `derive_verdict`.
+- `optimization/ranking.py`, `learning/lessons.py`: score with lesson boost;
+  verdict to lesson.
+- `orchestrator/`: `EngineState` (25 keys, 4 append-only channels), 15 node
+  closures over a frozen `NodeContext`, the router,
+  `Orchestrator.run / resume / stream`, live `EngineEvent`s.
+- `execution/runner.py`, `persistence/repository.py`: `TrialRunner`,
+  `BaselineRunner` and `Repository` protocols with stub and in-memory
+  implementations.
+- `infrastructure/schema/003_engine.sql`: 8 new tables, 3 extended, idempotent;
+  verified by two CI jobs: `schema-apply` (psql, idempotence diff) and
+  `compose-init`, which runs `docker compose up postgres` on an empty volume
+  exactly as a developer does and asserts a clean init log and 14 tables, so the
+  manual Docker check is no longer needed.
+- Tests: 560 passing, 100% coverage of 1,431 statements; mypy strict on `src`
+  and `tests`; the stage gate now type-checks tests too.
 
-**GRANULAR BREAKDOWN (Items 8-9 expanded for precision):**
-
-10. **Python Modern Project Structure** (Week 2, Day 10)
-    - Implemented src/ layout with 5 packages, 7 modules, 3 test files
-    - LangGraph orchestrator scaffolding (state.py, nodes.py, main.py with
-      proper AgentState schema)
-    - Research engine stubs (arxiv_monitor.py, pdf_parser.py)
-    - pydantic-settings for type-safe config (common/config.py)
-    - pytest fixtures and test infrastructure (conftest.py)
-    - langgraph.json deployment configuration
-    - **Status:** Scaffolding 100%, logic implementation pending Week 3
-    - **Result:** Ready for Phase 1 Week 3-4 orchestrator implementation
-
-11. **Node.js Production Dockerfile** (Week 2, Day 9) - 15 best practices
-    - 7-stage build: base → pruner → installer → builder → dev → production →
-      distroless
-    - Target image size: 200-250MB (vs 1GB baseline, 70-90% reduction)
-    - Distroless variant: 0-2 CVEs (vs 28-37 in slim, 93% improvement)
-    - Graceful shutdown handler (packages/agent-core/src/shutdown.ts, 216 lines)
-    - Native healthcheck script (infrastructure/docker/healthcheck.js, 69 lines)
-    - Non-root user: nodejs:nodejs (UID 1001, GID 1001)
-    - **Benefits:** 40-45% faster CI builds, zero zombies, 93% fewer CVEs
-
-12. **Python Production Dockerfile** (Week 2, Day 8) - 11 best practices
-    - Multi-stage build: builder → production (70-80% size reduction)
-    - Non-root user: appuser (prevents 80%+ container escapes)
-    - Base image: python:3.11-slim-bookworm (149MB, ~40 CVEs vs 152 in full)
-    - BuildKit secrets (never bakes ANTHROPIC_API_KEY)
-    - Tini init system for PID 1 signal handling
-    - HEALTHCHECK directive for auto-restart
-    - Pre-compiled bytecode (15-30% faster startup)
-    - **Research:** 10 reports, 20,569 lines informing implementation
-
-13. **Docker Compose Healthchecks** (Week 2, Day 7) - 10x faster
-    - Fixed critical Qdrant bug (curl removed in v1.7+, now uses bash /dev/tcp)
-    - PostgreSQL: -h localhost flag (80% better network issue detection)
-    - Redis: --raw incr ping (write path validation, catches disk failures)
-    - Service orchestration: depends_on: service_healthy (50-70% less churn)
-    - Cold start optimization: start_interval: 1s (Docker 25+, 50s → 5s)
-    - **Impact:** 10x faster cold starts, production-grade orchestration
-
-14. **pyproject.toml Modernization** (Week 2, Day 6) - 11 improvements
-    - Ruff replaces Black (30x faster: 300ms → 10ms formatting)
-    - Security: pip-audit, bandit, safety added
-    - Coverage: --cov-fail-under=90 enforcement (CLAUDE.md requirement)
-    - CLI scripts: research-agent, orchestrator-agent
-    - PyPI: 6 → 18 classifiers (+40% search impressions)
-    - pytest-xdist + pytest-timeout for parallel testing
-    - **Result:** Enterprise-grade package configuration
-
-15. **ESLint Import Sorting** (Week 2, Day 5) - 5-10 min/day saved
-    - Custom monorepo groups: side effects, Node.js, external, internal, parent,
-      sibling, styles
-    - Zero-config automatic sorting on save
-    - Pre-commit integration with --fix flag
-    - **Impact:** Eliminates "sort imports" code review comments
-
-16. **VS Code Settings** (Week 2, Day 4) - 67-80% RAM reduction
-    - files.watcherExclude (prevents watching 79,000+ pnpm files)
-    - TypeScript inlay hints (15-20% productivity gain)
-    - Python monorepo paths (fixes cross-package imports)
-    - **Metrics:** 67-80% RAM reduction, 15-20% faster development
-
-17. **Python 3.11 Upgrade** (Week 2, Day 3)
-    - 3.10 → 3.11.14 (10-60% async performance gain)
-    - .python-version for pyenv/asdf
-    - Support until Oct 2027
-    - **Result:** Modern, high-performance Python infrastructure
-
-18. **Dependency Management Strategy** (Week 2, Day 2)
-    - Removed .github/dependabot.yml
-    - Two-tool approach: Renovate (regular) + Dependabot (security only via
-      GitHub Settings)
-    - **Rationale:** Superior monorepo support with Renovate
-    - **Result:** Reduced PR noise, clearer security vs regular update
-      separation
-
-19. **Comprehensive Codebase Upgrade** (Week 2, Day 7 - 2025-11-14) - ⭐⭐⭐⭐⭐
-    Production-Ready
-    - **Full 100% Audit:** 9 specialized agents audited 65 files (3,979 lines)
-    - **Critical Database Fixes:** Added missing foreign key, 19 indexes (vs 8),
-      11 CHECK constraints, 2 unique constraints
-    - **Test Coverage Boost:** 60% → 80%+ overall (TypeScript: 0% → 90%+ for
-      shutdown.ts, Python: 33% → 67%)
-    - **Documentation Complete:** 100% JSDoc for TypeScript, comprehensive
-      database security section in SECURITY.md
-    - **Build Optimization:** TypeScript project references configured (+20-30%
-      faster incremental builds)
-    - **Files Changed:** 11 files, 1,835 insertions (5 new test files, 6
-      enhanced configs)
-    - **Grade Improvement:** B+ (82/100) → A+ (96/100)
-    - **All 9 Components:** Agent 1-9 all ⭐⭐⭐⭐⭐ Production-Ready status
-      achieved
-    - **Technical Debt:** Resolved all 6 critical issues (database schema,
-      shutdown tests, JSDoc, project references, langgraph env vars)
-    - **Result:** Codebase now in top 5% for quality, testing, and production
-      readiness
-
-20. **CLAUDE.md v3.0.0 - Advanced Prompting Techniques Implementation** (Week 2,
-    Day 8 - 2025-11-19) - ⭐⭐⭐⭐⭐ Research-Backed Excellence
-    - **Hierarchical Structure Upgrade:** Root CLAUDE.md (14.7KB → 25.2KB) + 3
-      package-specific files synced to v3.0.0
-    - **Advanced Techniques Added:** Meta-Cognitive Thinking (Claude 4.5
-      inspired), Meta-Prompting (+30%), Graph of Thoughts (+62%, -31% cost), 26
-      Principled Instructions (+57.7% quality, +36.4% accuracy), Enhanced
-      Constitutional AI (95%+ vulnerability block), XML-Structured Prompting
-      (40%+ performance), Chain of Density (optimal summarization)
-    - **Research Foundation:** Synthesized 45 autonomous research agents (96,807
-      lines, 2.6MB), 30+ academic papers (arXiv, NeurIPS, ICLR, ACL),
-      Anthropic's Claude 4.5 production system prompt patterns
-    - **Cross-File Consistency:** All 4 CLAUDE.md files (root + agent-core +
-      research-engine + python_agents) now v3.0.0 with advanced prompting
-      references
-    - **Prompt Caching Integration:** Updated ClaudeClient with
-      enablePromptCaching (default: true) for 90% cost reduction, 85% latency
-      improvement
-    - **Files Changed:** 5 files (CLAUDE.md, 3 package CLAUDE.md,
-      claude-client.ts), +310 lines net
-    - **Total Size:** 47.4KB → 61.3KB (hierarchical on-demand loading, still
-      optimal)
-    - **Expected Impact:** +57.7% quality, +36.4% accuracy, +30-62% complex task
-      performance, 56-95% vulnerability reduction
-    - **Result:** Most comprehensive system prompt engineering effort ever
-      undertaken; Claude Code workspace optimized for maximum effectiveness
-
-### In Progress 🟡
-
-1. **LangGraph Orchestrator Implementation** - 50% complete
-   - ✅ Scaffolding complete (state.py, nodes.py, main.py structure with
-     AgentState schema)
-   - ✅ Test infrastructure configured (conftest.py, fixtures for sample_state,
-     sample_user_input, mock_anthropic_client)
-   - ⏳ Implement node logic (intent_parser, task_planner, error_recovery)
-   - ⏳ Add Claude API integration to nodes
-   - ⏳ Write comprehensive unit tests for all nodes
-
-2. **Agent Core Package** - 50% complete (upgraded from 30%)
-   - ✅ ClaudeClient implemented
-   - ✅ Test setup configured
-   - ✅ Orchestrator scaffolding complete
-   - ⏳ Database client pending
-   - ⏳ Package manager pending
-
-### Blocked ⛔
-
-- None currently
+Reviewed by the Reviewer role (Opus 5.5) in three passes (wave 1, wave 2, a
+verification pass on the wave-2 fixes) plus a `/security-review`; every blocking
+finding was fixed test-first in a follow-up commit before the gate. Stage gate:
+passed (2 warnings: outdated majors left to Renovate).
 
 ---
 
-## Decisions Made This Week
+## What Exists Today
 
-### 2025-11-01
-
-1. **Documentation Strategy**
-   - Decision: Use only 3 documentation files (CLAUDE.md, STATUS.md, README.md)
-   - Rationale: Reduce overhead for solo developer, prevent documentation drift
-   - Impact: Clear boundaries on where to document what
-
-2. **Project Structure**
-   - Decision: Monorepo with pnpm workspaces
-   - Rationale: Better code sharing, easier dependency management
-   - Impact: All packages share same node_modules, faster installs
-
-3. **Infrastructure Verification Process**
-   - Decision: Perform comprehensive audit before proceeding to Week 3
-   - Rationale: Found discrepancies between documentation and implementation
-     (only 4/6 tables existed)
-   - Impact: Infrastructure now 100% complete and verified, solid foundation for
-     development
-
-4. **File Organization Standards**
-   - Decision: Align actual code structure with CLAUDE.md documentation
-   - Rationale: Moved claude-client.ts to src/clients/ subdirectory to match
-     docs
-   - Impact: Consistency between documentation and implementation reduces
-     confusion
-
-5. **Version Control with GitHub**
-   - Decision: Use GitHub CLI (`gh`) for repository management
-   - Rationale: Streamlines repo creation, authentication, and push operations
-     from command line
-   - Impact: Single command creates private repo and pushes code; cleaner
-     workflow than web UI
-
-### 2025-11-08
-
-1. **Cross-Platform Line Ending Enforcement**
-   - Decision: Create .gitattributes file enforcing LF (Unix) line endings for
-     all text files
-   - Rationale: Prevents CRLF vs LF issues that cause merge conflicts and
-     formatting inconsistencies
-   - Impact: Consistent line endings across Windows/Mac/Linux; cleaner git diffs
-
-2. **CI/CD Test Reporting**
-   - Decision: Add JUnit XML reporter to Vitest, conditional on CI environment
-   - Rationale: GitHub Actions, Jenkins, and other CI systems require structured
-     test output
-   - Impact: Better test visibility in CI pipelines; automated test result
-     parsing
-
-3. **Configuration File Linting Strategy**
-   - Decision: Enable ESLint for package-level configs while excluding root
-     tooling configs
-   - Rationale: Root configs (vitest.config.ts, eslint.config.js) are not in
-     TypeScript project; package configs should be linted
-   - Impact: More comprehensive code quality checks; catches errors in config
-     files within packages
-
-4. **Dependency Update Automation**
-   - Decision: Configure Renovate with automerge for patches and high-priority
-     security alerts
-   - Rationale: Reduce manual overhead for safe updates while prioritizing
-     security vulnerabilities
-   - Impact: Automated dependency maintenance; faster security patch adoption
-
-5. **Comprehensive Codebase Audit Strategy**
-   - Decision: Perform exhaustive audit covering all file types (TypeScript,
-     Python, configs, docs)
-   - Rationale: Ensure no hidden issues, verify all recent changes didn't
-     introduce problems
-   - Impact: Identified and fixed missing extensions.json, added Python scripts,
-     aligned dependencies; codebase now pristine with zero errors/warnings
-
-### 2025-11-14
-
-1. **Python Version Upgrade Strategy**
-   - Decision: Upgrade from Python 3.10 to Python 3.11.14
-   - Rationale: 10-60% performance improvements (especially async), better error
-     messages, longer support (until Oct 2027)
-   - Impact: Faster LangGraph agent execution, improved developer experience,
-     future-proof for 2+ years
-
-2. **Build System Migration**
-   - Decision: Migrate from setuptools to Hatchling
-   - Rationale: 1.5-2x faster builds, simpler configuration, excellent PEP 621
-     support, no C extensions needed
-   - Impact: Faster development iteration, cleaner pyproject.toml, reduced build
-     complexity
-
-3. **Package Manager Standardization**
-   - Decision: Adopt UV as primary Python package manager
-   - Rationale: 10-100x faster than pip (8-10x without cache, 80-115x with warm
-     cache), proven reliability
-   - Impact: 105 packages installed in 3.93s (vs ~120s with pip); developer
-     productivity significantly improved
-
-4. **Type Safety Enhancement**
-   - Decision: Enable mypy strict mode with all strict flags
-   - Rationale: Maximum type safety prevents runtime errors, catches bugs at
-     development time
-   - Impact: Higher code quality, easier refactoring, better IDE support; may
-     require 2-4 hours initial fixes
-
-5. **Multi-Platform Docker Build Strategy**
-   - Decision: Support both linux/amd64 and linux/arm64 platforms
-   - Rationale: Apple Silicon (M1/M2/M3) adoption growing; ensure compatibility
-     for all developers
-   - Impact: 2-3x faster native builds vs QEMU emulation; broader developer
-     support
-
-6. **Hybrid Caching Architecture**
-   - Decision: Use both GitHub Actions cache AND registry cache
-   - Rationale: GHA cache for ephemeral builds, registry for long-term
-     persistence; 95-98% hit rate
-   - Impact: 40-45% faster builds with proper cache configuration; reduced CI/CD
-     costs
-
-7. **Security Scanning Integration**
-   - Decision: Dual scanning with Trivy + Docker Scout
-   - Rationale: Trivy for comprehensive vulnerability detection, Scout for PR
-     comments and comparisons
-   - Impact: Automated security feedback in PRs, SARIF uploads to GitHub
-     Security tab; production-ready scanning
-
-### 2025-11-19
-
-1. **Advanced Prompting Techniques Implementation**
-   - Decision: Implement cutting-edge prompt engineering patterns from
-     comprehensive research (45 agents, 30+ papers)
-   - Rationale: Maximize Claude Code effectiveness through evidence-based
-     techniques with peer-reviewed validation
-   - Impact: +57.7% quality, +36.4% accuracy, +30-62% complex task performance;
-     prevents instruction decay; enables sophisticated reasoning patterns
-     (Meta-prompting, Graph of Thoughts, Constitutional AI)
-
-2. **Hierarchical CLAUDE.md Version Synchronization**
-   - Decision: Sync all package-specific CLAUDE.md files to v3.0.0 with
-     cross-references to root advanced techniques
-   - Rationale: Ensure consistent application of advanced patterns across all
-     packages while maintaining package-specific context
-   - Impact: Context-aware technique application (e.g., Chain of Density
-     emphasized for research-engine, Graph of Thoughts for python_agents); clear
-     hierarchical structure prevents duplication
-
-3. **Prompt Caching as Default**
-   - Decision: Enable prompt caching by default (enablePromptCaching: true) in
-     ClaudeClient
-   - Rationale: 90% cost reduction and 85% latency improvement for repeated
-     system prompts with minimal implementation complexity
-   - Impact: Automatic cost optimization for CLAUDE.md file contents (>1024
-     tokens); no developer action required; 5-minute TTL for cache hits
-
-4. **Claude 4.5 System Prompt Pattern Adoption**
-   - Decision: Adopt ANTML-style XML tags, hierarchical organization, and
-     meta-cognitive protocols from Anthropic's production system prompt
-   - Rationale: Leverage Anthropic's production expertise; Claude specifically
-     tuned for XML parsing; proven effectiveness in production
-   - Impact: 40%+ performance improvement on complex tasks; better parseability;
-     reduced ambiguity; thinking tags force deliberation before action
+| Component                                                                            | State                              |
+| ------------------------------------------------------------------------------------ | ---------------------------------- |
+| Docker Compose: Postgres 16 + pgvector, Redis, Qdrant                                | Working                            |
+| Schema `001_initial.sql` + `002_fix_critical_issues.sql` + `003_engine.sql`          | Working; applied in CI on every PR |
+| CI: lint, typecheck, tests, coverage, Python CI                                      | Working                            |
+| Security: OSV, Trivy, Docker Scout, pip-audit, bandit, safety, secret scan, Renovate | Working                            |
+| `packages/agent-core` Claude client + shutdown                                       | Working (33 Vitest tests)          |
+| `services/python_agents` settings                                                    | Working                            |
+| LangGraph orchestrator (`EngineState`, 15 nodes, router, `Orchestrator`)             | Walking skeleton on stub data      |
+| `research/arxiv_monitor.py`, `pdf_parser.py`                                         | Placeholders                       |
+| `packages/research-engine`, `execution-engine`                                       | TypeScript placeholders            |
+| Data model, anti-cheating, judges, ranking, lessons, repository protocol             | Working (Step 1)                   |
+| Real runners, profiler, research matcher, Postgres repository, CLI, web console      | Not started                        |
 
 ---
 
-## Next Week Preview
+## Decisions
 
-### Week 3 (2025-11-08) - Planned
+### 2026-10-21 (Step 1)
 
-**Focus:** LangGraph Orchestrator Implementation
+- **Team and process adopted** (see `CLAUDE.md` "Development Workflow"): Lead,
+  Builders, Reviewer (different model, read-only), Verifier, Researcher; Shape
+  Up / Kanban / XP / DORA. Evidence from the research pass: DORA 2025 (AI raises
+  throughput, hurts stability without small batches and strong version control),
+  Google review data (median change ~24 lines, one reviewer), TDD studies
+  (40-90% fewer defects), Anthropic's SDLC ("separating agents is critical"),
+  self-preference bias of same-model review, and agent test-gaming rates
+  (39-76%).
+- **Judges live outside the engine state** (in `NodeContext`), and the paths
+  that configure them are protected: reward hacking is the dominant failure mode
+  of optimisation agents, so nothing a trial writes may reach what judges it.
+- **A gain must strictly exceed a measured noise floor** (max of 2 x stdev on
+  either side and a minimum relative gain): single timings lie; five runs and a
+  floor make "faster" a claim with evidence.
+- **Models are frozen and forbid unknown fields; state lists use `operator.add`
+  reducers and nodes return deltas**: checkpoints replay state, and Step 2's
+  parallel trials append concurrently.
+- **Human approval is a LangGraph `interrupt()` inside `approval_gate`**, not
+  `interrupt_before`: the decision travels in `Command(resume=...)` and lands in
+  state; the node does nothing before the interrupt because that code re-runs on
+  resume.
+- **No SQLAlchemy/alembic yet**: a `Repository` protocol with an in-memory
+  implementation; Postgres via `psycopg` and parameterised SQL in Step 2. Schema
+  stays hand-written SQL applied by the Postgres entrypoint.
+- **Schema 003**: every project-scoped foreign key cascades on project delete (a
+  lesson with `project_id = NULL` means _global_, so SET NULL would have leaked
+  one project's lessons into all others); `lessons.hypothesis_id` and
+  `technique_id` carry no foreign key because hypotheses and techniques live
+  inside the run state (`task_executions.state JSONB`); ranking inputs are
+  `NOT NULL` as in the models; unique partial index on `research_papers.doi`.
+  Verified locally on PostgreSQL 16 + pgvector and by the `schema-apply` CI job,
+  which diffs the catalog before and after a second run to prove idempotence.
+- **A secondary objective inside its noise floor is neutral.** With two
+  objectives (runtime, memory), an unchanged memory figure must not veto a
+  proven speedup; only the primary objective and guardrail judges block, and
+  regressions beyond noise still fail.
+- **The Reviewer role paid for itself on its first pass**: it found that
+  checkpoints dropped enum types on resume (`state["phase"]` became a plain
+  string), that the speed judge could pass a workload inside its own noise
+  floor, order-sensitive fingerprint pairing, missing path validation on
+  `Workload.working_dir`, and unprotected dependency manifests and interpreter
+  hooks. All fixed with tests first (`f1c1003`, `da6e30a`).
+- **GHA cache export made non-fatal** (`ignore-error=true`) after a build failed
+  on `error writing layer blob: not_found` with a fully built image.
+- **Nodes are closures over a frozen `NodeContext`** (`make_nodes(ctx)`), not
+  module-level functions reading globals: the runner, judges, repository,
+  protected patterns and rigour knobs are injected once, so tests script every
+  external effect and nothing in the checkpointed state can replace a judge.
+- **The round loop is bounded by `max_rounds` and by the candidate pool**: the
+  router goes back to `hypotheses` only when nothing was kept, the round cap is
+  not reached and untrialled candidates remain; otherwise it proceeds to
+  `combine` even with nothing to deliver, so a run always ends with a report.
+- **`hypotheses` is a plain key that carries earlier rounds forward**: the
+  report and the lessons need every idea the run tried, so each round keeps the
+  decided hypotheses and appends the newly ranked ones; `trials` runs only the
+  `proposed` ones.
+- **Judge results travel through the repository, not the `trials` channel**: the
+  channel is append-only, so `judges` saves the judged copy and `verdicts` reads
+  it back. The Step 2 Postgres repository makes that path durable; the verdict
+  itself carries the judge results, so the state stays self-describing.
+- **A failed run is a result, not an exception**: `EngineError` (untrustworthy
+  baseline, unknown hypothesis, malformed approval payload) becomes
+  `EngineRunResult(status="failed")` with the last checkpointed state and the
+  error text; `stream` ends with one error-level event. Any other exception
+  propagates, because it is a bug.
+- **`mypy` runs on `tests` as well as `src` in the stage gate**: typed tests
+  caught two real signature drifts in Step 1; the cost is zero once tests are
+  written typed from the start.
+- **The state is the only source of truth inside a run** (review wave 2): judge
+  results first travelled through the repository because the `trials` channel is
+  append-only; a resume on a fresh repository then lost every verdict of the
+  round. A plain `round_trials` key (replaced each round) now carries the
+  round's trials from `trials` through `judges` to `verdicts`, and the
+  repository is an audit sink.
+- **Every objective and guardrail metric must be measured exactly once per
+  workload**: the run-count rule only checked measurements that existed, so a
+  trial could be kept by omitting a secondary metric or listing a fast (or
+  healthy) duplicate first. Missing and duplicate measurements are violations;
+  an incomplete baseline fails the run. The minimum run count applies to
+  objective metrics only, because guardrails are bounded, not proven.
+- **The approval gate never raises after `interrupt()`**: LangGraph replays the
+  first resume value, so an exception after the interrupt wedges the thread for
+  good. A malformed decision re-interrupts with the error on the request.
+- **Branch names use full ids and are never nested** (`engine/run-<run_id>`,
+  `engine/trial-<run_id>-<hypothesis_id>`): 8-character prefixes collided and
+  `engine/<run>` cannot coexist with `engine/<run>/<trial>` in git. Run ids,
+  candidate ids, the prefix and every branch are validated as git refnames.
+- **One representation of a human decision**: the gate, `combine`, the report
+  and the lessons all derive from `decided_verdicts(verdicts, approval)`, and
+  the gate saves the decided copies, so the repository, the state and the report
+  agree.
+- **Trial branches are not idempotent yet**: lesson ids are `uuid5(verdict id)`
+  so a re-executed `learn` replaces rather than duplicates rows; trial ids come
+  from the runner and get an idempotency key with the real runner in Step 2.
+- **The default context fails loudly instead of faking a baseline**: the
+  `langgraph.json` entry point compiles over stub runners that measure nothing,
+  so a run on it stops at the baseline with `missing_measurement`. A default
+  that fabricated numbers would let the engine report "done" on nothing; the
+  real runner (Step 2) replaces the stub.
+- **Dependency majors wait for their own PRs** (TypeScript 7, ESLint 10, Vitest
+  5, Vite 8, redis 8, PyMuPDF 2): none is needed by Step 1 and each changes
+  tooling behaviour; Renovate opens them weekly.
 
-#### Goals
+### 2026-10-21
 
-- [ ] Set up Python environment for LangGraph
-- [ ] Design LangGraph state machine
-- [ ] Implement intent parser node
-- [ ] Implement task planner node
-- [ ] Add error recovery with Reflexion pattern
-- [ ] Write unit tests for orchestrator
-- [ ] Document orchestrator design in CLAUDE.md
+- **Vision clarified.** One user-facing goal ("make it better"); internally,
+  judges per improvement kind (speed/memory, quality, robustness, novel
+  capability); autonomy proportional to verifiability; one loop for all judges.
+- **Keep the 7-layer architecture and the repo layout.** Build L4, L6, L7; build
+  L3 narrowly later; integrate L1, L2 (LangGraph), L5 (sandboxes). An earlier
+  proposal to drop LangGraph, `packages/` and the placeholder modules was
+  withdrawn.
+- **Keep LangGraph** for checkpointing/resume of long trials, human-in-the-loop
+  interrupts, conditional retry edges and streamed node events.
+- **Models via settings only.** `ENGINE_MODEL` and `TRIAGE_MODEL`; no model
+  strings in code.
+- **Stage gate after every step** (upgrades, audits, security review, docs,
+  quality, PR). Recorded in the Development Log above.
+- **Market research (2026-10-21).** Interfaces, orchestration and sandboxes are
+  commoditized (Claude Code, Codex, Cursor, Devin, Lovable, E2B, Modal).
+  Paper-to-standalone-repo tools exist (PaperCoder, DeepCode, alphaXiv). No
+  product turns research plus experiments into proven improvements of a user's
+  own code; systems and algorithms papers are nearly untouched. "PaperForge" as
+  a name is taken.
 
-#### Success Criteria
+### 2025-11 (summary of the foundation phase)
 
-- LangGraph orchestrator can parse user intents
-- State machine transitions between nodes correctly
-- Error recovery pattern implemented and tested
-- 90%+ test coverage for orchestrator
+- Monorepo with pnpm workspaces, Turborepo, Husky and commitlint.
+- Docker Compose for Postgres + pgvector, Redis and Qdrant with healthchecks.
+- Python 3.11 service with uv, Hatchling, Ruff, mypy strict, pytest-xdist.
+- Multi-stage Dockerfiles (non-root, tini, BuildKit secrets), multi-platform
+  builds, SBOM and provenance.
+- CI with path filtering and caching; security workflows with OSV, Trivy and
+  Docker Scout; Renovate.
+- Hierarchical `CLAUDE.md` files.
 
 ---
 
-## Metrics Snapshot
+## Next: Step 2 (Core loop on CPU Python workloads)
 
-| Metric                 | Current  | Target | Status               |
-| ---------------------- | -------- | ------ | -------------------- |
-| Phase Completion       | Week 2/9 | Week 9 | 22% ⏳               |
-| Test Coverage          | 100%     | 90%+   | ✅ Excellent         |
-| Components Complete    | 10/16    | 16/16  | 63% 🟡               |
-| Documentation          | 100%     | 100%   | ✅                   |
-| Infrastructure         | 100%     | 100%   | ✅ Production-ready  |
-| Code Quality           | 100%     | 95%+   | ✅ Pristine          |
-| LangGraph Orchestrator | 50%      | 100%   | 🟡 Scaffolding done  |
-| Docker Infrastructure  | 100%     | 100%   | ✅ Multi-platform    |
-| Python Tooling         | 100%     | 100%   | ✅ Enterprise-grade  |
-| CI/CD Pipeline         | 100%     | 100%   | ✅ Security scanning |
+Recommended session setting: **Opus 5.5, Ultracode** (Fable 5.1 for the briefing
+and the review of the runner's isolation).
 
-**New Performance Metrics (Week 2):**
+- [ ] Real `BaselineRunner` and `TrialRunner`: git worktree per trial,
+      subprocess runs of `Workload.command` (argv, no shell) with warm-up and
+      N >= 5 timed runs, peak RSS, output fingerprints, timeouts, network off.
+- [ ] `understand` node on `ENGINE_MODEL` with the `--max-cost` cap and token
+      accounting into `cost_usd` / `tokens_used`.
+- [ ] Trial edits by Claude inside the worktree; diff capture into `Trial.diff`
+      and `touched_paths` (the anti-cheating input).
+- [ ] `combine` re-tests the combined diff; `deliver` creates the real
+      `engine/<run>` branch (never the default branch).
+- [ ] Postgres `Repository` with `psycopg` and parameterised SQL
+      (`task_executions.user_intent` is `NOT NULL`; fill it from the goal).
+- [ ] E2E fixture: a small CPU Python repo with a known win, run through the
+      whole loop in CI.
+- [ ] Decide whether judged trials get their own state key (see Decisions).
+- [ ] Stage gate, development log row, PR, report.
 
-- **Docker Image Size:** Target 200-250MB (vs 1GB baseline, 70-80% reduction)
-- **CI/CD Build Time:** Cold 8-12 min, Warm 1-2 min (95-98% cache hit rate)
-- **Package Installation:** 3.93s for 105 packages (30x faster than pip)
-- **Python Compilation:** 8.66s for 5,586 files
-- **VS Code RAM Usage:** 67-80% reduction (files.watcherExclude optimization)
-- **Developer Productivity:** +15-20% (VS Code inlay hints)
-- **Code Formatting:** 30x faster (Ruff 10ms vs Black 300ms)
-- **Docker Cold Start:** 10x faster (50s → 5s with start_interval)
-- **Container Security:** 93% fewer CVEs (distroless: 0-2 vs slim: 28-37)
-- **CLAUDE.md Size:** 14.7KB → 25.2KB root (+71%), 47.4KB → 61.3KB total (+29%)
-- **CLAUDE.md Version:** All files synchronized to v3.0.0
-- **Expected AI Quality:** +57.7% quality, +36.4% accuracy (26 Principled
-  Instructions)
-- **Expected AI Performance:** +30-62% on complex tasks (Meta-prompting, GoT)
-- **Expected Cost Savings:** 90% reduction with prompt caching, -31% with GoT
-- **Expected Security:** 56-95% vulnerability reduction (Constitutional AI)
+---
+
+## Metrics Snapshot (2026-10-21)
+
+| Metric                         | Value                                                      |
+| ------------------------------ | ---------------------------------------------------------- |
+| Python tests                   | 560 passed                                                 |
+| Python coverage                | 100% of 1,431 statements (placeholders excluded)           |
+| TypeScript tests               | 33 passed                                                  |
+| Product code (non-placeholder) | ~3,200 lines Python + 450 lines SQL; ~8,000 lines of tests |
+| Engine features shipped        | Walking skeleton of the full loop (stub runners)           |
+
+---
+
+## Delivery Metrics (DORA-style, per step)
+
+| Step | Lead time | CI-red pushes                | Rework commits        | Reverts |
+| ---- | --------- | ---------------------------- | --------------------- | ------- |
+| 0    | ~2 h      | 0                            | 0                     | 0       |
+| 1    | ~4.5 h    | 2 (GHA cache; README format) | 6 (regroup, 5 review) | 0       |
+
+## Lessons (retro per step)
+
+### Step 1
+
+- **A Reviewer on a different model earns its cost.** Two passes found seven
+  real defects (enum types lost on resume, a judge passing inside its noise
+  floor, order-sensitive fingerprint pairing, missing path validation, open
+  protected-path gaps, and more) that the authors and the Lead had missed. Keep
+  it mandatory for every unit that touches judges, state or security.
+- **Split units by source size, not by topic.** U7+U8 (nodes plus graph) grew to
+  ~1,100 source lines and ~2,700 test lines in one Builder; it worked but took
+  the longest of any unit. Cap a Builder at ~400 source lines and give parallel
+  Builders a shared fixture contract (`conftest.py`) up front.
+- **Parallel Bash calls share a working directory.** A `cd` inside one call
+  moved another Builder's files into the repo root. Lead and Builders now use
+  absolute paths only.
+- **Guard the commit header length and the pipeline exit code.** Commitlint
+  rejected 72+ character headers three times, and `cmd | tail && git commit` let
+  a mypy failure through once. The Lead checks `wc -c` on the header and uses
+  `set -o pipefail` before every commit.
+- **Ruff formats fenced Python in Markdown.** README examples must pass
+  `ruff format --check` like code; the gate caught it.
+- **Record decisions as they are made.** Writing the "why" into this file while
+  the unit was fresh made the Step 1 report a copy job instead of an archaeology
+  job.
 
 ---
 
 ## Technical Debt
 
-None yet - project just started!
+- `pyproject.toml` `[project.scripts]` and `[project.entry-points]` reference
+  modules that do not exist yet (`cli`, `codegen`, `tools`, `integrations`).
+  Implement or remove in Step 4.
+- `packages/research-engine` (TypeScript) duplicates the Python research
+  module's purpose. Decision (Step 1): it stays a placeholder until TypeScript
+  workloads exist; research is built in Python.
+- `StubTrialRunner._unit_for` labels `throughput_per_s` as seconds; fix when the
+  real runner lands.
+- Both pgvector and Qdrant are configured. Pick one when embeddings land (Step
+  3).
+- `services/python_agents/Dockerfile` installs with pip while CI uses uv.
+- Local development may run on Python 3.13 while CI pins 3.11.
 
 ---
 
-## Notes & Observations
-
-### 2025-11-19 (CLAUDE.md v3.0.0 - Advanced Prompting Techniques)
-
-- **Research Synthesis Achievement:**
-  - ✅ Synthesized 45 autonomous research agents (96,807 lines, 2.6MB total)
-  - ✅ Analyzed 30+ academic papers (arXiv, NeurIPS, ICLR, ACL)
-  - ✅ Extracted patterns from Anthropic's Claude 4.5 production system prompt
-  - ✅ Implemented 100+ statistical improvements with evidence-based validation
-  - ✅ Most comprehensive prompt engineering effort ever undertaken
-
-- **Advanced Techniques Implemented:**
-  - ✅ Meta-Cognitive Thinking: 4-step validation protocol (Understand →
-    Validate → Plan → Identify Risks)
-  - ✅ Meta-Prompting: Multi-perspective decomposition (+30% improvement,
-    arXiv:2401.12954)
-  - ✅ Graph of Thoughts: Non-linear reasoning with refinement loops (+62%
-    improvement, -31% cost, arXiv:2308.09687)
-  - ✅ 26 Principled Instructions: Evidence-based patterns (+57.7% quality,
-    +36.4% accuracy, arXiv:2312.16171)
-  - ✅ Enhanced Constitutional AI: Multi-round critique workflow (95%+
-    vulnerability block rate, arXiv:2212.08073)
-  - ✅ XML-Structured Prompting: ANTML-style tags (40%+ performance on complex
-    tasks)
-  - ✅ Chain of Density: Iterative summarization (best-in-class,
-    arXiv:2309.04269)
-
-- **Hierarchical Structure Consistency:**
-  - ✅ Root CLAUDE.md: 25.2KB (comprehensive patterns + all techniques)
-  - ✅ agent-core: 9.7KB (TypeScript/Vitest/LangGraph + technique references)
-  - ✅ research-engine: 12.1KB (Python/PyMuPDF/arXiv + Chain of Density
-    emphasis)
-  - ✅ python_agents: 14.2KB (LangGraph/async + Meta-Prompting/GoT emphasis)
-  - ✅ All files version-synchronized to 3.0.0 with changelogs
-  - ✅ Cross-references ensure consistent application across packages
-
-- **Prompt Caching Integration:**
-  - ✅ ClaudeClient updated with enablePromptCaching (default: true)
-  - ✅ Automatic cache_control injection for system prompts
-  - ✅ 90% cost reduction for CLAUDE.md contents (>1024 tokens)
-  - ✅ 85% latency improvement on cache hits (5 min TTL)
-  - ✅ Zero developer action required - works automatically
-
-- **Expected Performance Improvements:**
-  - Quality: +57.7% (26 Principled Instructions)
-  - Accuracy: +36.4% (26 Principled Instructions)
-  - Complex tasks: +30-62% (Meta-prompting +30%, GoT +62%)
-  - Cost: -31% on complex tasks (Graph of Thoughts)
-  - Prompt caching: -90% cost, -85% latency
-  - Security: 56-95% vulnerability reduction (Constitutional AI 56%, classifiers
-    95%)
-
-- **Key Learnings:**
-  - Recursive patterns (Principle 5) prevent instruction decay after 4-5
-    interactions
-  - Graph of Thoughts superior to Tree-of-Thoughts for non-linear problems
-  - XML structuring significantly improves Claude's parsing and reduces
-    ambiguity
-  - Meta-cognitive thinking tags force deliberation before action (prevents
-    hasty execution)
-  - Chain of Density produces human-quality summaries at optimal entity density
-    (0.15)
-  - Hierarchical on-demand loading allows larger total size without performance
-    degradation
-
-- **Research Documentation Sources:**
-  - agent_02_system_prompt_patterns.md: Claude 4.5 ANTML patterns
-  - agent_05_academic_research.md: Academic paper findings
-  - agent_23_advanced_prompting.md: Cutting-edge techniques
-  - All patterns cross-validated across multiple sources for accuracy
-
-- **Next Focus:**
-  - CLAUDE.md v3.0.0 complete and production-ready
-  - Ready to apply advanced techniques to LangGraph orchestrator implementation
-    (Week 3)
-  - Techniques like Meta-Prompting and Graph of Thoughts ideal for agent design
-  - Constitutional AI will ensure high-quality, secure code generation
-
-### 2025-11-14 (Python Infrastructure Upgrade & CI/CD Enhancement)
-
-- **Tier 3-5 Implementation:**
-  - ✅ Implemented all Tier 3, 4, and 5 proposals from comprehensive research
-    documentation
-  - ✅ Python 3.11.14: 10-60% performance gains over 3.10 (especially async)
-  - ✅ Hatchling: 1.5-2x faster builds than setuptools
-  - ✅ UV: Installed 105 packages in 3.93s (vs ~120s with pip) - 30x faster!
-  - ✅ mypy strict mode: Maximum type safety with all strict flags enabled
-  - ✅ Plugin architecture: Entry points for extensible
-    agents/tools/integrations
-
-- **Docker & CI/CD Enhancements:**
-  - ✅ Multi-platform builds: linux/amd64 + linux/arm64 (Apple Silicon support)
-  - ✅ QEMU integration: 2-3x faster native builds vs emulation
-  - ✅ Hybrid caching: 95-98% cache hit rate (GHA + Registry)
-  - ✅ Docker Scout: CVE scanning with automated PR comments
-  - ✅ Supply chain security: SBOM + provenance attestations
-  - ✅ Comprehensive Trivy scanning with GitHub Security integration
-
-- **Build Performance Metrics:**
-  - Package installation: 3.93s (105 packages) vs ~120s with pip (30x speedup)
-  - Python compilation: 8.66s (5,586 files)
-  - Docker cache hit rate: 95-98%
-  - Build speedup: 40-45% with proper cache configuration
-
-- **Research Documentation Processed:**
-  - 26 comprehensive research reports (totaling ~983KB)
-  - Topics: Docker healthchecks, multi-platform builds, Python packaging,
-    security scanning
-  - All findings implemented in production configuration
-
-- **Key Learnings:**
-  - UV package manager is production-ready and delivers promised 10-100x speedup
-  - Hatchling migration straightforward for pure Python projects
-  - Multi-platform builds add minimal complexity for significant benefit
-  - Hybrid caching strategy crucial for optimal CI/CD performance
-
-- **Next Focus:**
-  - Research documentation archived (cleared 26 files)
-  - Ready to start LangGraph orchestrator implementation (Week 3)
-  - Python infrastructure now enterprise-grade and production-ready
-
-### 2025-11-11 (Comprehensive Codebase Audit)
-
-- **Audit Scope:**
-  - ✅ Scanned all 85+ files across entire codebase
-  - ✅ Checked for TypeScript errors, ESLint violations, unused code, deprecated
-    settings
-  - ✅ Validated all configuration files against schemas
-  - ✅ Verified all file path references exist
-  - ✅ Reviewed Python files for type hints and imports
-
-- **Quality Metrics (Outstanding):**
-  - ✅ Zero TypeScript compilation errors
-  - ✅ Zero ESLint violations
-  - ✅ 100% test coverage (6/6 tests passing)
-  - ✅ All Prettier formatting compliant
-  - ✅ All pre-commit checks passing
-
-- **Issues Found & Fixed:**
-  - 🔴 Critical (1): Missing .vscode/extensions.json → Created with 7
-    recommended extensions
-  - 🟡 Medium (2): Missing Python scripts → Added 5 convenience scripts;
-    Console.log in test-setup already justified
-  - 🟢 Low (3): @types/node version mismatch → Aligned to ^24.10.0; Placeholder
-    exports intentional
-
-- **Developer Experience Improvements:**
-  - New developers will now get VS Code extension recommendations automatically
-  - Python operations now have convenient npm scripts (python:install,
-    python:lint, etc.)
-  - Dependency versions aligned across packages for consistency
-
-- **Key Learning:** Regular comprehensive audits catch small issues before they
-  become problems
-- **Outcome:** Codebase in pristine condition; ready for Phase 1 Week 3
-  development
-- **Next Focus:** LangGraph orchestrator implementation
-
-### 2025-11-08 (Configuration Enhancement)
-
-- **Configuration Files Overhaul:**
-  - ✅ Enhanced 11+ configuration files with enterprise best practices
-  - ✅ Created .gitattributes for cross-platform line-ending consistency
-  - ✅ Added CI/CD test reporting (JUnit XML for Vitest)
-  - ✅ Fixed ESLint configuration to lint package-level configs
-  - ✅ Resolved TypeScript project errors with placeholder packages
-
-- **Merge Workflow Validation:**
-  - Verified all enhancements survived merge conflicts
-  - PR #2 (commit aede797): First batch merged successfully
-  - PR #3 (commit 509041e): Second batch merged successfully
-  - Master branch now contains all configuration improvements
-
-- **Key Learning:** Always verify changes after merges with potential conflicts
-- **Impact:** Infrastructure tooling now enterprise-grade; improved code
-  quality, CI/CD integration
-- **Next Focus:** Ready to start LangGraph orchestrator implementation (Week 3)
-
-### 2025-11-01 (Afternoon - Verification)
-
-- **Infrastructure Audit Results:**
-  - ✅ Docker environment: Fully verified and working
-  - ✅ Monorepo structure: Correctly configured
-  - ❌ Database schema: Only 4/6 tables existed (FIXED)
-  - ❌ No .env.example template (FIXED)
-  - ⚠️ File structure misalignment (FIXED)
-
-- **Key Learning:** Always verify implementation against documentation claims
-- **Outcome:** Infrastructure now 100% complete, ready for Week 3 development
-- **Next Focus:** LangGraph orchestrator implementation
-
-### 2025-11-01 (Morning)
-
-- Documentation is extremely thorough - 6,388 lines in documentation_guide/ +
-  1,000+ in CLAUDE.md
-- Timeline is ambitious but well-planned (12 months, 6 phases)
-- Research paper integration is the key differentiator
-- Need to focus on one phase at a time to avoid scope creep
-
----
-
-## Resources & Links
-
-- [CLAUDE.md](./CLAUDE.md) - Comprehensive technical documentation
-- [README.md](./README.md) - Project overview and quick start
-- [Documentation Guide](./documentation_guide/) - Original specifications
-  (frozen)
-- [Docker Compose](./docker-compose.dev.yml) - Development environment
-
----
-
-## Quick Reference
-
-### Current Environment
+## Useful Commands
 
 ```bash
-# Services running
-PostgreSQL 16: localhost:5432 (ai_platform)
-Redis 7: localhost:6379
-Qdrant: localhost:6333
-
-# Development
-Node.js: 20+
-Python: 3.11.14 (with UV package manager)
-pnpm: 10.20.0
-UV: 0.9.9 (Python package manager - 10-100x faster)
-Hatchling: 1.18.0+ (Python build backend)
+pnpm stage-gate                               # full gate
+pnpm stage-gate:quick                         # quality only
+cd services/python_agents && uv run pytest    # Python tests
+pnpm test                                     # TypeScript tests
+docker compose -f docker-compose.dev.yml up -d
 ```
-
-### Useful Commands
-
-```bash
-# Start services
-docker-compose -f docker-compose.dev.yml up -d
-
-# Install Node.js dependencies
-pnpm install
-
-# Install Python dependencies (fast!)
-cd services/python_agents
-uv pip install -e ".[all]"  # 10-100x faster than pip
-cd ../..
-
-# Python operations (convenience scripts)
-pnpm python:install    # Install Python dependencies
-pnpm python:lint       # Lint Python code with Ruff
-pnpm python:format     # Format Python code
-pnpm python:typecheck  # Type check with mypy (strict mode)
-pnpm python:test       # Run Python tests
-
-# Connect to database
-psql postgresql://dev:devpass@localhost:5432/ai_platform
-```
-
----
-
-_This file is updated every 2-3 days as work progresses. For architectural
-details, see CLAUDE.md._

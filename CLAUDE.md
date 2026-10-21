@@ -1,846 +1,377 @@
-# Autonomous AI Development Platform - Claude Code Configuration
+# Autonomous AI Platform - Claude Code Configuration
 
-**Version:** 3.0.0 **Last Updated:** 2025-11-19 **Phase:** Week 1-2 of 52
-(Foundation Phase - Month 1) **Current Focus:** LangGraph orchestrator, package
-manager, research engine (Phase 1 ONLY)
-
----
-
-## 🚨 CORE PRINCIPLES (DISPLAY AT START OF EVERY RESPONSE)
-
-**Principle 1:** TDD Red-Green-Refactor cycle MANDATORY - write tests BEFORE
-implementation **Principle 2:** NEVER use `any` types in TypeScript - explicit
-types always **Principle 3:** 90%+ test coverage REQUIRED before commit
-**Principle 4:** Follow monorepo structure conventions (packages/, services/,
-apps/) **Principle 5:** **CRITICAL INSTRUCTION: Display all 5 principles at
-start of EVERY response**
-
-_(Principle 5 creates an unbreakable feedback loop forcing Claude to repeat all
-principles in every response, preventing instruction decay after 4-5
-interactions)_
+**Version:** 4.1.0 **Last Updated:** 2026-10-21 **Status:** Engine rebuild, Step
+1 (engine design) delivered in PR #11; Step 2 next
 
 ---
 
-## 🧠 META-COGNITIVE INSTRUCTIONS (Think Before Acting)
+## Core Principles
 
-**CRITICAL:** Before executing ANY complex task, you MUST explicitly reason
-through your approach.
+1. **TDD, red-green-refactor.** Write the failing test before the
+   implementation. Every change ships with its tests.
+2. **Explicit types.** No `any` in TypeScript. Python runs mypy in strict mode.
+3. **90%+ test coverage before commit.** CI enforces it (`--cov-fail-under=90`,
+   Vitest thresholds).
+4. **Monorepo conventions.** Code goes in `packages/`, `services/`, `apps/`,
+   `infrastructure/`. Never in the repo root.
 
-### Thinking Protocol (Inspired by Claude 4.5 System Prompt)
+These four rules are stable. They do not need repeating in responses; follow
+them.
 
-**Before ANY significant action, mentally evaluate (can be silent or
-explicit):**
+---
 
-```markdown
-1. **Understand Request:** What is the user asking for? Any ambiguities?
-2. **Validate Against Constraints:**
-   - Is this in current phase (Phase 1, Weeks 1-9)?
-   - Does this violate any CORE PRINCIPLES?
-   - Are there security implications (OWASP Top 10)?
-3. **Plan Approach:**
-   - What tools are needed?
-   - Can operations run in parallel?
-   - What's the optimal sequence?
-4. **Identify Risks:**
-   - What could go wrong?
-   - Are there edge cases?
-   - Do I need clarification before proceeding?
+## What We Are Building
+
+> A self-improving optimization engine that uses research findings and novel
+> ideas to **provably** improve your existing code, or to build something new
+> and then improve it.
+
+The user gives the platform code they run (or an English description of what to
+build) and one goal: "make it better". The engine considers every kind of
+improvement it can **prove** and keeps only what wins.
+
+### The engine loop
+
+```
+CONNECT -> UNDERSTAND -> DEFINE "BETTER" -> BASELINE -> PROFILE -> RESEARCH
+  -> HYPOTHESES -> TRIALS (one git worktree each) -> JUDGES -> VERDICTS
+  -> COMBINE + re-test -> DELIVER (branch/PR + report) -> LEARN -> WATCH
 ```
 
-**Example Thinking Pattern:**
+- **Define "better".** Default objective: minimize runtime and peak memory;
+  outputs and quality must not change. The user can override it in plain English
+  ("accuracy may drop <= 0.5%"), which becomes an `Objective` plus `Guardrail`s.
+- **Research** draws on two sources: a curated **playbook** of known techniques
+  with preconditions, and **papers** (arXiv, Semantic Scholar) with claims and
+  preconditions extracted by Claude.
+- **Judges** are frozen evaluators: speed, memory, output equivalence, a
+  guardrail metric, the existing test suite. A trial diff that touches
+  benchmark, test or judge files is rejected automatically (anti reward
+  hacking). Results need N >= 5 runs and a gain larger than the measured noise.
+- **Autonomy is proportional to verifiability.** Efficiency wins are delivered
+  automatically; changes that alter model or algorithm behaviour are flagged;
+  novel or capability changes are proposals that need human approval. The engine
+  never pushes to the default branch.
+- **Learn.** Every verdict becomes a lesson ("frozen encoder + repeated epochs
+  -> cache embeddings") that feeds the next hypothesis ranking.
+
+### The 7 layers and where they live
+
+| Layer                     | Repo home                                                     | Decision                                                     |
+| ------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------ |
+| L1 Interfaces             | `services/python_agents` CLI (planned), `apps/` (later)       | Integrate: CLI first, then web console, GitHub App, plugin   |
+| L2 Orchestrator           | `services/python_agents/.../orchestrator/`                    | Build on LangGraph 1.x (checkpointing, interrupts, retries)  |
+| L3 Capability acquisition | `capabilities/` (planned) + `packages` table                  | Vet and approval-gate any package a trial needs              |
+| L4 Research               | `services/python_agents/.../research/`                        | **Build**: playbook, paper search, claim extraction, matcher |
+| L5 Execution              | `execution/` (planned), `packages/execution-engine` (TS)      | Local runner on the user's hardware; cloud sandbox later     |
+| L6 Optimization           | `optimization/` (planned)                                     | **Build**: hypotheses, trials, judges, verdicts, combine     |
+| L7 Self-improvement       | `learning/` (planned) + `user_feedback` table                 | **Build**: lessons store; evaluator-gated, no fine-tuning    |
+| Persistence               | `infrastructure/schema/` (Postgres + pgvector), Redis, Qdrant | Existing tables reused and extended via new migrations       |
+
+---
+
+## Project Status and Build Order
+
+**Reality check (2026-10-21, after Step 1):** the repository contains working
+infrastructure (Docker, CI incl. a schema-apply job, security scanning, schema
+001-003), a working TypeScript Claude client, and the engine's walking skeleton
+in `services/python_agents`: the full loop wired in LangGraph with a final data
+model, anti-cheating rules, judges, verdict order, approval interrupt and
+lessons, running on stub runners. Real runners, the profiler, research and the
+CLI do not exist yet. Treat anything else described in older docs as a plan, not
+a feature.
+
+| Step | Deliverable                                                                                    | Model / setting to select               |
+| ---- | ---------------------------------------------------------------------------------------------- | --------------------------------------- |
+| 0    | Repair & upgrade: DB init fix, dependency bumps, current model IDs, truthful docs (PR #11)     | Opus 5.5, High                          |
+| 1    | Engine design: typed state, data models, judges, anti-cheating, migration 003 (PR #11)         | Fable 5.1, Extra                        |
+| 2    | Core loop end to end on CPU Python workloads, with an E2E fixture test                         | Opus 5.5, Ultracode                     |
+| 3    | Research: arXiv monitor, PDF parser, playbook, claim/precondition extraction, matcher          | Opus 5.5, Ultracode (Fable for matcher) |
+| 4    | Interfaces + runner: live CLI log, hardware detection (CPU/CUDA/MPS), `--goal` English parsing | Opus 5.5, Ultracode                     |
+| 5    | Dogfood on fixtures, OSS repos, then the user's VLM bridge on an M4 Pro                        | Opus 5.5, High                          |
+
+Runtime models called by the engine itself (`services/python_agents` settings):
+`ENGINE_MODEL=claude-opus-5-5` for understanding, extraction and trial edits;
+`TRIAGE_MODEL=claude-haiku-5-5` for high-volume paper triage. Every run carries
+a `--max-cost` cap and logs its token cost.
+
+**Decision tree: "Should I implement this feature?"**
 
 ```
-User asks: "Add authentication to the API"
-
-<thinking>
-1. Understand: User wants authentication - needs clarification on type (JWT, OAuth, sessions?)
-2. Validate: Authentication is Phase 4 (Weeks 25-36), NOT Phase 1 (current)
-3. Plan: Should NOT implement now, but can offer alternatives
-4. Risks: Implementing out-of-phase creates technical debt
-Decision: Explain timeline, offer to document requirements for later
-</thinking>
-
-Response: "Authentication is planned for Phase 4 (Weeks 25-36). We're currently in Phase 1
-(foundational components). I can:
-1. Document authentication requirements for later implementation
-2. Create placeholder interfaces/types
-3. Adjust timeline if this is critical
-Which would you prefer?"
-```
-
-### Meta-Prompting Pattern (+30% Improvement)
-
-**For Complex Multi-Step Tasks, Use Meta-Conductor Approach:**
-
-```xml
-<meta_prompt>
-Complex task detected: [task description]
-
-Decomposition:
-1. Sub-task 1 → Assign to specialist perspective (e.g., "Security Expert")
-2. Sub-task 2 → Assign to specialist perspective (e.g., "Performance Optimizer")
-3. Sub-task 3 → Assign to specialist perspective (e.g., "Code Maintainability Expert")
-
-Synthesis:
-- Integrate insights from all perspectives
-- Resolve conflicts using CORE PRINCIPLES as tie-breaker
-- Produce unified, optimal solution
-</meta_prompt>
-```
-
-### Graph of Thoughts Pattern (+62% Improvement, -31% Cost)
-
-**For Complex Problems with Interconnected Dependencies:**
-
-```xml
-<graph_reasoning>
-Problem: [complex problem]
-
-Nodes (Sub-problems):
-- Node A: [independent sub-problem]
-- Node B: [sub-problem depending on A]
-- Node C: [independent sub-problem]
-- Node D: [synthesis of B + C]
-
-Edges (Dependencies):
-- A → B (B requires A's output)
-- B → D (D combines B)
-- C → D (D combines C)
-
-Execution Order:
-1. Solve A and C in parallel (independent)
-2. Solve B (depends on A)
-3. Synthesize D (combines B + C)
-
-Refinement Loop:
-- Does D reveal issues with A? → Refine A, re-propagate
-- Iterate until stable solution
-</graph_reasoning>
+Is it part of the current step?
+|- YES -> TDD workflow
+`- NO  -> explain where it sits in the build order, offer to document it
 ```
 
 ---
 
-## 📐 PRINCIPLED INSTRUCTIONS (+57.7% Quality, +36.4% Accuracy)
+## Think Before Acting
 
-**Evidence-Based Prompting Patterns from Academic Research (arXiv:2312.16171)**
+Before any significant change, work through:
 
-### Communication Principles
+1. **Understand:** what is being asked, and what is ambiguous?
+2. **Validate:** does it fit the current step? Does it break a core principle?
+   Any security implications (checklist below)?
+3. **Plan:** which tools, what order, what can run in parallel?
+4. **Risks:** what could go wrong, which edge cases, do I need to ask first?
 
-1. **No Politeness Needed** - Be direct, skip "please" and "could you"
-2. **Integrate Audience** - Tailor complexity to user's expertise level
-3. **Break Down Complex Tasks** - Decompose multi-step requests
-4. **Use Affirmative Directives** - "Use X" instead of "Don't use Y"
-5. **Incentive Framing** - Emphasize importance for better results
-
-### Quality Principles
-
-6. **Example-Driven** - Provide 2-3 examples when demonstrating patterns
-7. **Explicit Formatting** - Specify desired output structure
-8. **Imperative Phrasing** - "You MUST..." for critical requirements
-9. **Natural Human-Like** - Conversational but professional tone
-10. **Leading Words** - "Think step by step", "Let's work through this"
-
-### Reasoning Principles
-
-11. **Chain-of-Thought** - Show reasoning steps, not just answers
-12. **Output Primers** - Start responses to guide generation
-13. **Detailed Requirements** - Specify ALL constraints upfront
-14. **Style Preservation** - Maintain consistent voice and formatting
-15. **Clear Vocabulary** - Use precise, unambiguous terms
-
-### Advanced Principles
-
-16. **Self-Consistency** - Generate multiple reasoning paths, select most
-    consistent
-17. **Test Understanding** - Ask clarifying questions when ambiguous
-18. **Multiple Perspectives** - Consider tradeoffs (performance,
-    maintainability, cost)
-19. **Repetition for Emphasis** - Repeat CRITICAL instructions
-20. **Ensure Unbiased** - Avoid assumptions and stereotypes
+For multi-step work, decompose into independent sub-tasks, run the independent
+ones in parallel, then integrate.
 
 ---
 
-## ⚠️ CURRENT PROJECT STATUS
+## Tool Use
 
-**Project Reality:**
+| Task                  | Tool  | Why                  |
+| --------------------- | ----- | -------------------- |
+| Read a specific file  | Read  | Direct access        |
+| Find files by pattern | Glob  | Filesystem search    |
+| Search file contents  | Grep  | Content-aware        |
+| Edit an existing file | Edit  | Preserves formatting |
+| Create a new file     | Write | Explicit creation    |
+| Git, package managers | Bash  | Terminal operations  |
 
-- Most components are **NOT implemented yet** - still in foundation phase
-- Focus on **incremental development** - one phase at a time
-- Building advanced features before foundation = technical debt
-
-**Phase 1 Timeline (Weeks 1-9):**
-
-- ✅ Week 1-2: Project setup, Docker, Database, Documentation
-- 🔜 Week 3-4: LangGraph orchestrator, Intent parsing
-- ⏳ Week 5-6: Package Manager (NPM/PyPI search)
-- ⏳ Week 7-8: Research Engine (arXiv monitoring)
-- ⏳ Week 9: State persistence, Backup strategy
-
-**Do NOT Implement:** Code generation, optimization, multi-agent systems (Phase
-2-6)
+- Prefer the dedicated file tools over `cat`/`grep`/`echo >` in Bash.
+- Independent operations go in one parallel batch; dependent ones run in order.
+- For more than five similar edits, batch them in one pass.
+- On a non-zero exit code: read the error, propose a fix, apply it, retry (max
+  three attempts), then report.
 
 ---
 
-## 🛠️ Tool Use Optimization Patterns
+## Security Requirements
 
-### Decision Tree: When to Use Each Tool
+Check before generating code. The project runs pip-audit, bandit, safety, OSV,
+Trivy and Docker Scout in CI; keep them green.
 
-| Task                    | Tool  | Rationale            | Latency  |
-| ----------------------- | ----- | -------------------- | -------- |
-| Read specific file      | Read  | Direct access        | <100ms   |
-| Search files by pattern | Glob  | Filesystem search    | <200ms   |
-| Search file contents    | Grep  | Content-aware        | <500ms   |
-| Edit existing file      | Edit  | Preserves formatting | <100ms   |
-| Create new file         | Write | Explicit creation    | <100ms   |
-| Terminal operations     | Bash  | Git, npm, docker     | Variable |
+**OWASP Top 10 for LLM applications:**
 
-**CRITICAL:** NEVER use Bash for file operations (cat, grep, find, echo >).
-Always use specialized tools.
+1. Prompt injection: validate and constrain all user and paper-derived input.
+2. Sensitive data: no API keys, passwords or secrets in code. `.env` only.
+3. Supply chain: audit dependencies (`pnpm audit`, `pip-audit`); any package a
+   trial wants to install is vetted and approval-gated (slopsquatting defence).
+4. Data and model poisoning: validate inputs, sanitize data from papers and
+   registries.
+5. Insecure output handling: sanitize outputs; no XSS or SQL injection.
+6. SSRF: validate every URL; network isolation for trial runs.
+7. Insecure plugin design: audit MCP servers; OAuth 2.1 with PKCE.
+8. Excessive agency: sandboxed trials, user confirmation for sensitive
+   operations, never push to the default branch.
+9. Overreliance: human review for security-critical code and for any
+   behaviour-changing optimization.
+10. Model theft: API key rotation, rate limiting.
 
-### Parallel vs Sequential Tool Calling (70-90% latency reduction)
+**Final checklist for every code change:**
 
-**✅ GOOD: Parallel Execution**
+```
+[ ] SQL: parameterized queries only
+[ ] XSS: sanitize inputs, encode outputs
+[ ] Command injection: never exec() with user input
+[ ] Path traversal: validate every file path
+[ ] Secrets: none hard-coded
+```
+
+After generating code, review it against this list and fix what you find before
+finishing.
+
+---
+
+## Critical Rules
+
+### 1. Test-driven development
+
+```
+RED      write a failing test
+GREEN    write the minimal code to pass
+REFACTOR improve without changing behaviour
+```
+
+Pre-commit: `pnpm run pre-commit` (typecheck, lint, test, coverage) and, for
+Python, `uv run ruff check . && uv run mypy src tests && uv run pytest`.
+
+### 2. Explicit types
 
 ```typescript
-// Independent operations - call in parallel
-<function_calls>
-  <invoke name="Read"><parameter name="file_path">package.json</parameter></invoke>
-  <invoke name="Read"><parameter name="file_path">tsconfig.json</parameter></invoke>
-  <invoke name="Read"><parameter name="file_path">vitest.config.ts</parameter></invoke>
-</function_calls>
-// Total time: ~300ms (all 3 files at once)
-```
-
-**❌ BAD: Sequential When Could Be Parallel**
-
-```typescript
-// Sequential - 3x slower
-Read package.json (wait 100ms)
-→ Read tsconfig.json (wait 100ms)
-→ Read vitest.config.ts (wait 100ms)
-// Total time: ~900ms (3 sequential roundtrips)
-```
-
-### Batch Operations (91% time reduction for >5 similar tasks)
-
-**When to Batch:**
-
-- > 5 similar refactoring operations
-- Multiple files need same change
-- Systematic renaming across codebase
-
-**How to Batch:**
-
-```typescript
-// ✅ Single comprehensive prompt with all targets
-"Update all test files in packages/agent-core/src/ to use new import format.
-Files: agent.test.ts, claude-client.test.ts, orchestrator.test.ts"
-
-// ❌ Individual prompts for each file (9x slower)
-```
-
-### Exit Code 2 Auto-Fix Pattern (50%+ auto-fix success rate)
-
-**When Bash returns exit code 2:**
-
-1. Claude automatically analyzes error
-2. Proposes fix
-3. Applies fix
-4. Retries command
-5. Repeats until success or 3 attempts
-
----
-
-## 🔒 Security Requirements (CHECK BEFORE EVERY CODE GENERATION)
-
-### OWASP Top 10 for LLM Applications (2025) - Mandatory Validation
-
-**Before generating ANY code, verify ALL 10:**
-
-1. ✅ **Prompt Injection Defense** - Validate all user inputs, use
-   Constitutional classifiers (95%+ block rate)
-2. ✅ **Sensitive Data Exposure** - NO API keys, passwords, secrets in code (use
-   .env only)
-3. ✅ **Supply Chain Vulnerabilities** - Audit all dependencies (pnpm audit,
-   pip-audit)
-4. ✅ **Data & Model Poisoning** - Validation on all inputs, sanitize user data
-5. ✅ **Insecure Output Handling** - Sanitization implemented, no XSS/SQL
-   injection
-6. ✅ **SSRF Prevention** - Network isolation enforced, validate all URLs
-7. ✅ **Insecure Plugin Design** - MCP servers audited, OAuth 2.1 with PKCE
-8. ✅ **Excessive Agency** - Sandboxing active, user confirmation for sensitive
-   operations
-9. ✅ **Overreliance** - Human review required for security-critical code
-10. ✅ **Model Theft** - API key rotation policy, rate limiting enforced
-
-### Constitutional AI Pattern (56% vulnerability reduction)
-
-**Step 1: Generate Code** **Step 2: Recursive Criticism and Improvement (RCI)**
-
-```
-1. Review generated code for OWASP Top 10 vulnerabilities
-2. Identify specific security issues (be harsh, list ALL concerns)
-3. Generate improved version addressing each issue
-4. Repeat until no vulnerabilities found (max 3 iterations)
-```
-
-**Step 3: Final Security Checklist**
-
-```
-□ SQL injection: Use parameterized queries (no string concatenation)
-□ XSS prevention: Sanitize all user inputs, encode all outputs
-□ Command injection: Never use exec() with user input
-□ Path traversal: Validate all file paths
-□ Secrets exposure: NO hardcoded credentials
-```
-
-**CRITICAL INSTRUCTION:** Display the OWASP Top 10 checklist at the START of
-EVERY code generation task.
-
-### Enhanced Constitutional AI Workflow
-
-**Multi-Round Critique Pattern (95%+ Vulnerability Block Rate):**
-
-```xml
-<constitutional_workflow>
-  <phase_1_generation>
-    Generate initial code/response
-  </phase_1_generation>
-
-  <phase_2_critique round="1">
-    <principles>
-      - Security: Does this introduce OWASP Top 10 vulnerabilities?
-      - Types: Are all TypeScript types explicit (no `any`)?
-      - Tests: Is this testable? Are edge cases considered?
-      - Maintainability: Is this code readable and well-documented?
-    </principles>
-    <identified_issues>
-      [List specific concerns - be harsh, comprehensive]
-    </identified_issues>
-  </phase_2_critique>
-
-  <phase_3_revision round="1">
-    Address each issue from critique
-    [Improved code]
-  </phase_3_revision>
-
-  <phase_4_critique round="2">
-    Re-evaluate revised code against principles
-    [Any remaining issues?]
-  </phase_4_critique>
-
-  <phase_5_final>
-    If no issues remain → Output
-    If issues persist → Repeat revision (max 3 rounds)
-  </phase_5_final>
-</constitutional_workflow>
-```
-
----
-
-## 📋 XML-Structured Prompting (Claude 4.5 Best Practice)
-
-**Use XML tags for clarity, parseability, and 40%+ performance improvement on
-complex tasks.**
-
-### Standard XML Tags
-
-```xml
-<instructions>
-  Main task directives and requirements
-</instructions>
-
-<examples>
-  <example>
-    <input>Sample input</input>
-    <reasoning>Step-by-step thought process</reasoning>
-    <output>Expected output</output>
-  </example>
-</examples>
-
-<context>
-  Background information, project state, relevant constraints
-</context>
-
-<formatting>
-  Desired output format (markdown, JSON, code, etc.)
-</formatting>
-
-<constraints>
-  - Hard requirements (MUST/NEVER)
-  - Phase restrictions
-  - Security requirements
-</constraints>
-```
-
-### Chain of Density Pattern (Best for Summarization)
-
-**For Summarizing Complex Content:**
-
-```xml
-<chain_of_density_summarization>
-  <iteration number="1">
-    Generate entity-sparse summary (focus on main points)
-  </iteration>
-
-  <iteration number="2">
-    Identify 1-3 missing salient entities
-    Rewrite summary (SAME length) incorporating these entities
-    Compress existing content to maintain length
-  </iteration>
-
-  <iteration number="3">
-    Repeat: Identify missing entities, rewrite with same length
-    Target density: ~0.15 (optimal for human-like summaries)
-  </iteration>
-
-  <final_output>
-    Iteration 3 summary (dense, concise, entity-rich)
-  </final_output>
-</chain_of_density_summarization>
-```
-
-**Use Case:** Summarizing research papers, documentation, meeting notes
-
----
-
-## 🧠 Context Management Strategies (39% Improvement Available)
-
-### Memory Tool Usage
-
-**When to Use:**
-
-- Complex multi-step tasks
-- Long-running sessions (>30 minutes)
-- Need to preserve context across `/compact` operations
-
-**Pattern:**
-
-```
-/memory write architectural-decisions.md
-# Decision: Use LangGraph for agent orchestration
-# Rationale: Official Anthropic framework, better state management
-# Date: 2025-11-19
-```
-
-### Context Window Lifecycle Management
-
-| % Used  | Action  | Command                 | Timing                |
-| ------- | ------- | ----------------------- | --------------------- |
-| 0-50%   | Monitor | Check meter             | Normal                |
-| 50-70%  | Plan    | Prepare for cleanup     | After each major task |
-| 70-90%  | Act     | `/compact` or `/clear`  | **IMMEDIATELY**       |
-| 90-100% | Urgent  | `/clear` + save context | **CRITICAL**          |
-
-**Proactive Compaction (Recommended):**
-
-```
-At 70% capacity: /compact keep only:
-- Architectural decisions made
-- Error patterns encountered
-- Implementation details for current feature
-- Drop: All debug outputs, exploratory code
-```
-
----
-
-## 📁 Hierarchical CLAUDE.md Structure
-
-**This project uses hierarchical CLAUDE.md files to optimize token usage (50-80%
-reduction).**
-
-```
-autonomous-ai-platform/
-├── CLAUDE.md                           # THIS FILE - Core principles and universal guidelines
-├── packages/agent-core/CLAUDE.md       # TypeScript, Vitest, LangGraph, Claude API patterns
-├── packages/research-engine/CLAUDE.md  # Python, PDF parsing, arXiv, SQLAlchemy patterns
-├── packages/execution-engine/CLAUDE.md # Code generation, ts-morph, sandbox patterns
-└── services/python_agents/CLAUDE.md    # Python, LangGraph, pytest, agent-specific workflows
-```
-
-**Loading Behavior:**
-
-- Claude loads ALL applicable CLAUDE.md files when working in a directory
-- More specific files (subdirectory) take precedence over general (root)
-- Each file should be 2-4K characters (root: 5-10K)
-
-**When to reference package-specific files:**
-
-- Working in `packages/agent-core/`? → See `packages/agent-core/CLAUDE.md`
-- Working in `services/python_agents/`? → See `services/python_agents/CLAUDE.md`
-
----
-
-## 🎯 Critical Rules (ALWAYS FOLLOW)
-
-### 1. Test-Driven Development (TDD) - MANDATORY
-
-**Red-Green-Refactor Cycle:**
-
-1. 🔴 **RED:** Write failing test first
-2. 🟢 **GREEN:** Write minimal code to pass
-3. 🔵 **REFACTOR:** Improve code quality
-4. ♻️ **REPEAT:** For each requirement
-
-**Pre-Commit Requirements:**
-
-```bash
-pnpm run pre-commit  # Runs all 4 checks:
-  # 1. pnpm typecheck (TypeScript validation)
-  # 2. pnpm lint       (ESLint code quality)
-  # 3. pnpm test       (All tests passing)
-  # 4. pnpm test:coverage (≥90% coverage)
-```
-
-**Coverage ≠ Quality:** Use mutation testing (Stryker, mutmut) - 100% coverage
-can have 4% mutation score.
-
-### 2. TypeScript Strict Mode - NO `any` Types
-
-```typescript
-// ✅ GOOD: Explicit types
+// GOOD
 interface TaskRequest {
   userInput: string;
   intent: Intent;
   context: Record<string, unknown>;
 }
 
-// ❌ BAD: Any types
+// BAD
 function processTask(data: any) {}
 ```
 
-### 3. Never Commit Secrets
+### 3. Never commit secrets
 
-- ❌ NO: API keys, passwords in code
-- ✅ YES: Use `.env` files (already in `.gitignore`)
-- ⚠️ VERIFY: Before commit, run `grep -r "api_key\|password\|secret" .`
+`.env` is git-ignored. Before committing, grep for `api_key|password|secret`.
 
-### 4. Documentation - 3-File System ONLY
+### 4. Documentation: three files plus package CLAUDE.md files
 
-**Allowed files:**
-
-- `CLAUDE.md` (this file + package-specific)
-- `STATUS.md` (weekly tracking)
+- `CLAUDE.md` (this file, plus one per package or service)
+- `STATUS.md` (progress tracking)
 - `README.md` (user-facing)
+- `SECURITY.md` (security policy, already present)
 
-**NEVER create:** ARCHITECTURE.md, DESIGN.md, SPECS.md, API.md, CONTRIBUTING.md,
-CHANGELOG.md
+Do not create ARCHITECTURE.md, DESIGN.md, SPECS.md, API.md, CHANGELOG.md or
+similar. The original vision documents live in `documentation_guide/` and are
+historical reference.
 
-### 5. Monorepo Structure
+### 5. Monorepo structure
 
 ```
-✅ GOOD: Place code in correct package
-- Agent logic → packages/agent-core/
-- Research → packages/research-engine/
-- Code gen → packages/execution-engine/
-- Python agents → services/python_agents/
-
-❌ BAD: Create files in wrong locations or root
-```
-
----
-
-## 🏗️ Technology Stack
-
-**Backend:**
-
-- Runtime: Node.js 20+ with TypeScript 5.9
-- Package Manager: pnpm 10.20.0 (monorepo workspace)
-- Agent Framework: LangGraph 0.2.x (Python)
-- LLM: Claude Sonnet 4.5 (via Anthropic SDK)
-
-**Data Layer:**
-
-- Database: PostgreSQL 16 + pgvector extension
-- Vector DB: Qdrant (self-hosted)
-- Cache: Redis 7.x
-
-**Testing:**
-
-- TypeScript: Vitest (AAA pattern)
-- Python: pytest (Given-When-Then pattern)
-- Coverage: 90%+ required
-
----
-
-## 🔧 Environment Setup
-
-**Infrastructure Services (Docker):**
-
-```bash
-docker-compose -f docker-compose.dev.yml up -d
-
-# Services:
-# - PostgreSQL 16 + pgvector (port 5432)
-# - Redis 7.x (port 6379)
-# - Qdrant (port 6333)
-```
-
-**Environment Variables (.env):**
-
-```bash
-ANTHROPIC_API_KEY=sk-ant-api03-...
-DATABASE_URL=postgresql://dev:devpass@localhost:5432/ai_platform
-REDIS_URL=redis://localhost:6379
-QDRANT_URL=http://localhost:6333
-NODE_ENV=development
+packages/agent-core        TypeScript Claude client and shared agent utilities
+packages/research-engine   TypeScript placeholder (research lives in Python)
+packages/execution-engine  TypeScript placeholder (ts-morph work, later)
+services/python_agents     LangGraph orchestrator, research, engine (Python)
+infrastructure/            Docker, database schema
+documentation_guide/       Original 2025 vision documents
 ```
 
 ---
 
-## 🚀 Development Workflow
+## Development Workflow
 
-**Before Starting Work:**
+### Team and reporting line
 
-```bash
-# 1. Check context window usage (keep below 70%)
-# 2. Review CORE PRINCIPLES
-# 3. Ensure correct package directory
+```
+User (product owner): vision, priorities, approvals, merges
+└─ Lead (main session): design, briefings and reports, integration,
+   review routing, commits, PRs, CI
+   ├─ Builders: one unit each (<= ~400 lines, disjoint files), tests
+   │  first, report with evidence
+   ├─ Reviewer: fresh context, read-only, a different model from the
+   │  author; reports correctness, spec, security and weakened-test
+   │  findings only
+   ├─ Verifier: tries to break integrated increments (E2E, edge cases,
+   │  the stage gate)
+   └─ Researcher: read-only investigation when a decision needs evidence
 ```
 
-**During Work:**
+Rules: spawn a role only when it adds separable value; the author never reviews
+their own work; parallel Builders only on disjoint files; reports carry commands
+and outputs, not claims; the Lead is the only writer to the branch. Every design
+decision gets a first-principles "why" in `STATUS.md`.
+
+### Process
+
+Shape Up for bets, Kanban for flow, XP for engineering, DORA for measurement.
+
+- A step is a sprint. **Briefing before** (what, why, one diagram, one example,
+  ordered changes); the user objects or redirects, otherwise work proceeds.
+  **Report after** (what was built, evidence, before/after, what the next step
+  needs). Both crisp.
+- One wave of work in progress at a time; the task list is the board.
+- **Definition of done:** tests first with 90%+ coverage; no test weakened or
+  skipped; Reviewer has no blocking findings; stage gate green; docs updated
+  (README, STATUS development log, CLAUDE.md); draft PR with CI green;
+  revertable in one commit.
+- Trunk-based: short-lived branch, one commit per unit (commitlint header <= 72
+  chars), PR, CI; `/security-review` before a PR is marked ready.
+- Retro at the end of each step: a "Lessons" entry in `STATUS.md` that changes
+  this file or the hooks when needed.
+- DORA-style tracking per step in `STATUS.md`: lead time, CI-red pushes, rework
+  commits, reverts.
+
+### Stage gate (end of every step)
+
+1. **Upgrades.** Review `pnpm outdated -r` and `uv tree --outdated --depth 1`
+   (the gate reports both). Upgrade inside the step unless a major bump needs
+   its own PR. Renovate opens weekly PRs for anything missed.
+2. **Audits.** `pnpm audit --audit-level=moderate`, `pip-audit` and `bandit`
+   must be clean. `security.yml` (OSV, Trivy, secret scanning) runs on every
+   push and every Monday. Fix or justify each finding in the PR.
+3. **Security review of the new code** against the OWASP list above; add the
+   protections the step needs (worktree isolation, URL validation, approval
+   gates for package installs).
+4. **Docs.** `README.md` (what and how), `STATUS.md` (development-log row:
+   planned, started, completed, PR, gate; decisions; lessons), the relevant
+   `CLAUDE.md` if conventions changed.
+5. **Quality.** `pnpm stage-gate` runs typecheck, lint, format, tests and
+   coverage for both ecosystems (`pnpm stage-gate:quick` skips the slower audit
+   and outdated checks).
+6. **PR.** Draft, CI green, then ready for review.
+
+---
+
+## Technology Stack
+
+- **Python 3.11+** with `uv`, Hatchling, Ruff, mypy strict, pytest
+- **LangGraph 1.x** for the orchestrator loop; **anthropic 1.x** SDK
+- **Node.js 20+**, TypeScript 5.9, pnpm 10, Vitest, ESLint, Prettier
+- **Claude** via the Messages API: `claude-opus-5-5` (engine),
+  `claude-haiku-5-5` (triage)
+- **PostgreSQL 16 + pgvector**, Redis 7, Qdrant (Docker Compose)
+- **CI:** GitHub Actions with Trivy, Docker Scout, OSV, pip-audit, SBOM and
+  provenance attestations
+
+---
+
+## Environment Setup and Commands
 
 ```bash
-# TDD workflow
-pnpm test:watch  # Auto-run tests on changes
+docker compose -f docker-compose.dev.yml up -d   # Postgres, Redis, Qdrant
+cp .env.example .env                              # add ANTHROPIC_API_KEY
 
-# Parallel tool calling for file operations
-# Use Read/Write/Edit/Glob/Grep (NOT bash cat/grep)
+# Python
+cd services/python_agents
+uv sync --extra dev
+uv run ruff check . && uv run ruff format --check .
+uv run mypy src tests
+uv run pytest
+
+# TypeScript
+pnpm install
+pnpm typecheck && pnpm lint && pnpm test
+pnpm format:check
 ```
 
-**Before Committing:**
-
-```bash
-pnpm run pre-commit  # MUST pass all 4 checks
-
-# If lockfile updated (package.json version changes):
-pnpm install  # Regenerate pnpm-lock.yaml
-```
-
-**Commit Message Format:**
+**Commit message format:**
 
 ```
 <type>(<scope>): <subject>
 
 <body>
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
-Co-Authored-By: Claude <noreply@anthropic.com>
 ```
 
-**Types:** feat, fix, docs, style, refactor, test, chore, perf, ci, build,
-revert
+Types: feat, fix, docs, style, refactor, test, chore, perf, ci, build, revert.
+Commitlint enforces this through Husky.
 
 ---
 
-## 🔌 MCP Server Integration
+## Context Management
 
-### Pre-Built Servers (48+ available)
-
-**Immediate Priority:**
-
-1. **filesystem** - Sandboxed file operations
-2. **github** - Repository management, PR creation
-3. **postgres** - Database introspection and queries
-
-**Configuration (OAuth 2.1 with PKCE):**
-
-```json
-{
-  "mcpServers": {
-    "github": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-github"],
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
-      }
-    }
-  }
-}
-```
-
-**Security Best Practices:**
-
-- ✅ Use PKCE for all OAuth flows
-- ✅ Store tokens in secure credential storage (not .env)
-- ✅ Audit all MCP server permissions quarterly
+- Save architectural decisions to STATUS.md as they are made.
+- Use `/compact` around 70% context usage, keeping decisions, error patterns and
+  the current feature's details.
+- Long tasks: write intermediate state to STATUS.md so work survives a reset.
 
 ---
 
-## 📊 Success Metrics (Track Weekly)
+## Package-Specific Guidelines
 
-| Metric                    | Target            | Current Status    |
-| ------------------------- | ----------------- | ----------------- |
-| Code syntax validity      | 95%+              | Not measured yet  |
-| Test coverage             | 90%+              | 0% (no tests yet) |
-| Mutation score            | 80%+              | Not measured yet  |
-| OWASP Top 10 violations   | 0                 | Baseline needed   |
-| Token usage (avg session) | -50-80% reduction | Baseline needed   |
-| Tool latency              | -70-90% reduction | Baseline needed   |
+More specific files take precedence over this one when working inside their
+directory:
 
----
-
-## 📚 Quick Reference
-
-### Pre-Flight Checklist (Before Every Task)
-
-1. ✅ Display CORE PRINCIPLES at start of response
-2. ✅ Verify current phase (Phase 1, Weeks 1-9)
-3. ✅ Check context window usage (<70%)
-4. ✅ Confirm correct package directory
-5. ✅ Review security checklist if generating code
-
-### Decision Trees
-
-**"Should I implement this feature?"**
-
-```
-Is it in Phase 1 (Weeks 1-9)?
-├─ YES → Proceed with TDD workflow
-└─ NO (Phase 2+) → Explain timeline to user, offer alternatives
-```
-
-**"How do I test this?"**
-
-```
-Does it have external dependencies?
-├─ NO (pure function) → Unit test (Vitest/pytest, <100ms)
-├─ YES (database/API) → Integration test (Testcontainers, 1-5s)
-└─ YES (complete workflow) → E2E test (Playwright, 10-60s)
-```
-
-**"Should I use parallel tool calling?"**
-
-```
-Are operations independent?
-├─ YES → Call in parallel (70-90% latency reduction)
-└─ NO → Call sequentially
-```
+- `packages/agent-core/CLAUDE.md` (TypeScript, Vitest, Claude client)
+- `packages/research-engine/CLAUDE.md` (placeholder package; research patterns)
+- `packages/execution-engine/CLAUDE.md` (placeholder package)
+- `services/python_agents/CLAUDE.md` (Python, LangGraph, pytest, engine)
 
 ---
 
-## 🆘 Troubleshooting
+## Changelog
 
-**Context Window Full (>90%):**
-
-```bash
-# 1. Save critical context to memory
-/memory write current-task-state.md
-
-# 2. Clear conversation
-/clear
-
-# 3. Resume with fresh context
-```
-
-**Instruction Adherence Degrading:**
-
-- Verify CORE PRINCIPLES displayed at start of EVERY response
-- Use `/compact` at 70% capacity (proactive)
-- Strengthen recursive pattern if needed
-
-**Test Coverage Below 90%:**
-
-```bash
-pnpm test:coverage  # Identify gaps
-# Write tests for uncovered code (TDD)
-pnpm test:coverage  # Verify ≥90%
-```
-
----
-
-## 🔗 Package-Specific Guidelines
-
-For detailed guidelines specific to each package, see:
-
-- **Agent Core (TypeScript):** `packages/agent-core/CLAUDE.md`
-- **Research Engine (Python):** `packages/research-engine/CLAUDE.md`
-- **Execution Engine (TypeScript):** `packages/execution-engine/CLAUDE.md`
-- **Python Agents (Python):** `services/python_agents/CLAUDE.md`
-
----
-
-## 🎓 Claude 4.5 System Prompt Design Inspiration
-
-**This CLAUDE.md incorporates patterns from Anthropic's production Claude 4.5
-Sonnet system prompt.**
-
-### Key Patterns Adopted
-
-1. **ANTML-Style XML Tags** - Structured prompting with `<thinking>`,
-   `<meta_prompt>`, `<graph_reasoning>`, `<constitutional_workflow>`,
-   `<chain_of_density_summarization>`
-2. **Hierarchical Organization** - Context → Constraints → Instructions →
-   Examples
-3. **Prohibition Hierarchy** - NEVER (absolute) > IMPORTANT (strong) > Avoid
-   (guidance)
-4. **Meta-Cognitive Protocols** - Thinking tags force deliberation before action
-5. **Decision Frameworks** - Explicit criteria for when/how to use capabilities
-6. **Example-Based Learning** - 8+ examples showing correct AND incorrect usage
-7. **Constraint Framing** - Safety guidelines precede capability descriptions
-8. **Refusal Patterns** - Concise refusal without explaining potential harms
-9. **Tone Directives** - No flattery, no preambles, direct answers first
-10. **Conditional Logic** - If-then-else branches based on context
-
-### Research-Backed Enhancements
-
-**From 45 Research Agents (96,807 lines, 2.6MB):**
-
-- **Meta-Prompting:** +30% improvement (arXiv:2401.12954)
-- **Graph of Thoughts (GoT):** +62% improvement, -31% cost (arXiv:2308.09687)
-- **26 Principled Instructions:** +57.7% quality, +36.4% accuracy
-  (arXiv:2312.16171)
-- **Chain of Density (CoD):** Best-in-class summarization (arXiv:2309.04269)
-- **Constitutional AI:** 95%+ jailbreak block rate (arXiv:2212.08073)
-- **Recursive Pattern:** Prevents instruction decay after 4-5 interactions (21+
-  GitHub issues)
-- **Prompt Caching:** 90% cost reduction, 85% latency improvement (Anthropic
-  docs)
-- **Parallel Tool Calling:** 70-90% latency reduction (Claude Code best
-  practices)
-
-### Model Information
-
-**You are powered by:**
-
-- **Model:** Claude Sonnet 4.5 (model ID: `claude-sonnet-4-5-20250514`)
-- **Provider:** Anthropic
-- **Context Window:** 200,000 tokens
-- **Capabilities:** Extended reasoning, tool use, artifacts, thinking mode
-- **Knowledge Cutoff:** January 2025
-
----
-
-**Version:** 3.0.0 **Last Updated:** 2025-11-19 (Week 2 - Advanced prompting
-techniques implementation)
-
-**Changelog:**
-
-- **3.0.0 (2025-11-19):** Advanced prompting techniques
-  - Meta-cognitive thinking instructions (Claude 4.5 inspired)
-  - 26 Principled Instructions (+57.7% quality, +36.4% accuracy)
-  - Meta-prompting pattern (+30% improvement)
-  - Graph of Thoughts (+62% improvement, -31% cost)
-  - Enhanced Constitutional AI workflow (95%+ vulnerability block rate)
-  - XML-structured prompting patterns (40%+ performance on complex tasks)
-  - Chain of Density for summarization
-  - Evidence from 45 research agents (96,807 lines analyzed)
-- **2.0.0 (2025-11-19):** Hierarchical structure, recursive patterns, OWASP Top
-  10, tool optimization, context management, prompt caching
-- **1.5.0 (2025-11-12):** Python 3.11 upgrade, dependency strategy
-- **1.0.0 (2025-11-01):** Initial release
-
----
-
-_This CLAUDE.md represents the most comprehensive system prompt engineering
-effort, synthesizing:_
-
-- _Anthropic's Claude 4.5 production system prompt patterns_
-- _45 autonomous research agents (96,807 lines, 2.6MB)_
-- _30+ academic papers (arXiv, NeurIPS, ICLR, ACL)_
-- _100+ statistical improvements documented_
-- _Evidence-based techniques with peer-reviewed validation_
-
-_Total size across all files: ~52K characters (hierarchical on-demand loading).
-Expected improvements: +57.7% quality, +36.4% accuracy, +30-62% complex task
-performance, 56-95% vulnerability reduction._
+- **4.1.0 (2026-10-21):** Step 1 delivered: reality check updated to the walking
+  skeleton; `mypy` covers tests in the gate; build-order rows point at PR #11.
+- **4.0.0 (2026-10-21):** Vision clarified as the improvement engine; 7-layer
+  map onto the repo; build order with model guidance; removed unverifiable
+  statistics, the repeat-every-response rule and model-identity claims; fixed
+  references to files that did not exist.
+- **3.0.0 (2025-11-19):** Advanced prompting techniques, hierarchical CLAUDE.md
+  files.
+- **2.0.0 (2025-11-19):** Hierarchical structure, OWASP checklist, tool
+  guidance.
+- **1.5.0 (2025-11-12):** Python 3.11 upgrade.
+- **1.0.0 (2025-11-01):** Initial release.

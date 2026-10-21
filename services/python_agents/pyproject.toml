@@ -17,7 +17,7 @@ version = "0.1.0"
 description = "LangGraph orchestrator and research agents for autonomous AI platform"
 readme = "README.md"
 requires-python = ">=3.11"
-license = "MIT"
+license = "ISC"
 authors = [{ name = "Praveen Kanna" }]
 maintainers = [{ name = "Praveen Kanna" }]
 keywords = [
@@ -44,7 +44,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     # License
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: ISC License (ISCL)",
     # Natural Language
     "Natural Language :: English",
     # Operating System
@@ -70,9 +70,9 @@ classifiers = [
 # Phase 1, Week 3-4: LangGraph Orchestrator & Intent Parsing
 dependencies = [
     # Core AI/ML (constrained for fast resolution)
-    "anthropic>=0.68.0,<0.69.0",      # Claude Sonnet 4.5 API client
-    "langgraph>=0.2.0,<0.3.0",        # State machine orchestration
-    "langchain>=0.3.0,<0.4.0",        # LLM framework base
+    "anthropic>=1.17.0,<2.0.0",       # Claude API client (Messages API)
+    "langgraph>=1.2.0,<2.0.0",        # State machine orchestration
+    "langchain>=1.4.0,<2.0.0",        # LLM framework base
 
     # Data validation & settings
     "pydantic>=2.0.0,<3.0.0",
@@ -250,6 +250,14 @@ module = ["langgraph.*", "langchain.*", "arxiv.*", "sentence_transformers.*"]
 ignore_missing_imports = true
 
 # ============================================
+# Bandit (SAST) Configuration - used by scripts/stage-gate.sh
+# ============================================
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "htmlcov"]
+# B101: assert is fine in tests (excluded) and in typed invariants
+skips = ["B101"]
+
+# ============================================
 # pytest Configuration (Proposal 3)
 # ============================================
 [tool.pytest.ini_options]
@@ -317,8 +325,9 @@ exclude_lines = [
 # Use UV's fast dependency resolver
 index-url = "https://pypi.org/simple"
 
-# Enable global cache for maximum performance
-cache-dir = "~/.cache/uv"
+# Cache: uv's default (~/.cache/uv or UV_CACHE_DIR). Do not set `cache-dir`
+# here: uv does not expand `~` in config files and created a literal
+# `services/python_agents/~/` directory inside the repo.
 
 # Use system Python (skip Python download)
 python-preference = "system"
@@ -331,21 +340,6 @@ no-build-isolation = false
 
 # Link mode for faster installations (symlink when possible)
 link-mode = "copy"
-
-# ============================================
-# UV Workspace Configuration (Tier 4: Proposal #18)
-# ============================================
-# Enables shared dependencies across Python monorepo packages
-# 3-5x faster than separate virtual environments
-[tool.uv.workspace]
-members = [
-    "orchestrator",
-    "research",
-    "code_generator",
-]
-
-# Shared development dependencies inherited by all workspace members
-# Future: When splitting into multiple packages
 
 # ============================================
 # Hatch Environment Configuration (Optional)

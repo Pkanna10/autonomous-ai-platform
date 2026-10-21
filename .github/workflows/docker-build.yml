@@ -98,7 +98,7 @@ jobs:
           cache-from: |
             type=gha,scope=node-${{ matrix.service.name }}
             ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}/{1}:buildcache', env.IMAGE_BASE, matrix.service.name) || '' }}
-          cache-to: type=gha,mode=max,scope=node-${{ matrix.service.name }}
+          cache-to: type=gha,mode=max,ignore-error=true,scope=node-${{ matrix.service.name }}
           provenance: true
           sbom: true
 
@@ -131,7 +131,7 @@ jobs:
           cache-from: |
             type=gha,scope=node-distroless-${{ matrix.service.name }}
             ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}/{1}:buildcache-distroless', env.IMAGE_BASE, matrix.service.name) || '' }}
-          cache-to: type=gha,mode=max,scope=node-distroless-${{ matrix.service.name }}
+          cache-to: type=gha,mode=max,ignore-error=true,scope=node-distroless-${{ matrix.service.name }}
 
   # Test Docker images (run healthchecks and basic smoke tests)
   test-docker:
@@ -303,7 +303,7 @@ jobs:
           cache-from: |
             type=gha,scope=${{ github.workflow }}-${{ matrix.service.name }}
             ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}/{1}:buildcache', env.IMAGE_BASE, matrix.service.name) || '' }}
-          cache-to: type=gha,mode=max,scope=${{ github.workflow }}-${{ matrix.service.name }}
+          cache-to: type=gha,mode=max,ignore-error=true,scope=${{ github.workflow }}-${{ matrix.service.name }}
           provenance: mode=max
           sbom: true
 

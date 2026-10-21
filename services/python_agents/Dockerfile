@@ -65,7 +65,7 @@ COPY services/python_agents/tests/ ./tests/
 
 # Proposal #3: Install Python dependencies and package with cache mount
 # Production build: pip install . (not -e editable) installs to site-packages
-# pyproject.toml (PEP 621) includes: langgraph>=0.2.0, anthropic>=0.68.0, pydantic>=2.0.0
+# pyproject.toml (PEP 621) includes: langgraph>=1.2.0, anthropic>=1.17.0, pydantic>=2.0.0
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install ".[dev]"
 
