@@ -230,9 +230,14 @@ documentation_guide/       Original 2025 vision documents
 
 ## Development Workflow: Stage Gate After Every Step
 
-Every step in the build order ends with the same gate. A step is not done until
-all of it passes, and the result is recorded in `STATUS.md`.
+Every step in the build order starts with a briefing, ends with the same gate,
+and closes with a report. A step is not done until all of it passes and the
+result is recorded in `STATUS.md`.
 
+0. **Briefing before the step.** Before touching code, explain what the step
+   adds and why, with a diagram of where it sits in the engine loop, a concrete
+   example of the behaviour it enables, and the ordered list of changes. The
+   user confirms before implementation starts.
 1. **Upgrades.** Review `pnpm outdated -r` and `uv tree --outdated --depth 1`
    (the gate reports both). Upgrade inside the step unless a major bump needs
    its own PR. Renovate opens weekly PRs for anything missed.
@@ -249,6 +254,10 @@ all of it passes, and the result is recorded in `STATUS.md`.
    coverage for both ecosystems and fails on any red check
    (`pnpm stage-gate:quick` skips the slower audit and outdated checks).
 6. **PR.** Open as draft, let CI run, fix until green, then mark ready.
+7. **Report after the step.** Same pattern as the briefing: what was
+   accomplished (diagram, example, before/after), what was verified and how,
+   what was found and fixed on the way, and what the next step needs from the
+   user.
 
 ---
 
