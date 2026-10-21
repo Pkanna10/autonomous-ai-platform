@@ -18,14 +18,14 @@ or build something new and then improve it (see `CLAUDE.md`).
 One row per build step. "Gate" is the result of `pnpm stage-gate` at the end of
 the step.
 
-| Step | Deliverable                                                     | Planned    | Started    | Completed  | PR                                                                | Gate   |
-| ---- | --------------------------------------------------------------- | ---------- | ---------- | ---------- | ----------------------------------------------------------------- | ------ |
-| 0    | Repair & upgrade (DB init, deps, models, docs, stage gate)      | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed |
-| 1    | Engine design (typed state, data model, judges, migration 003)  | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed |
-| 2    | Core loop end to end on CPU Python workloads + E2E fixture test |            |            |            |                                                                   |        |
-| 3    | Research: arXiv, PDF, playbook, claim extraction, matcher       |            |            |            |                                                                   |        |
-| 4    | Interfaces + runner: live CLI, hardware detection, `--goal`     |            |            |            |                                                                   |        |
-| 5    | Dogfood: fixtures, OSS repos, real ML training pipeline         |            |            |            |                                                                   |        |
+| Step | Deliverable                                                     | Planned    | Started    | Completed  | PR                                                                | Gate    |
+| ---- | --------------------------------------------------------------- | ---------- | ---------- | ---------- | ----------------------------------------------------------------- | ------- |
+| 0    | Repair & upgrade (DB init, deps, models, docs, stage gate)      | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed  |
+| 1    | Engine design (typed state, data model, judges, migration 003)  | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed  |
+| 2    | Core loop end to end on CPU Python workloads + E2E fixture test | 2026-10-21 | 2026-10-21 |            |                                                                   | pending |
+| 3    | Research: arXiv, PDF, playbook, claim extraction, matcher       |            |            |            |                                                                   |         |
+| 4    | Interfaces + runner: live CLI, hardware detection, `--goal`     |            |            |            |                                                                   |         |
+| 5    | Dogfood: fixtures, OSS repos, real ML training pipeline         |            |            |            |                                                                   |         |
 
 Recommended Claude Code model and effort per step: 0 Opus 5.5 High; 1 Fable 5.1
 Extra; 2-4 Opus 5.5 Ultracode (Fable 5.1 for the paper matcher); 5 Opus 5.5
@@ -141,6 +141,54 @@ passed (2 warnings: outdated majors left to Renovate).
 ---
 
 ## Decisions
+
+### 2026-10-21 (Step 2)
+
+Designed by a research-and-design workflow: four research tracks verified in the
+sandbox (process measurement, git worktrees, the Claude editor, Postgres and the
+fixture), three independent designs (security-first, smallest testable,
+forward-compatible), two judges on different models (both chose the smallest
+testable design, 39 and 40 of 50), a synthesis and a completeness critic whose 5
+blockers and 12 should-fixes were closed before building.
+
+- **Every external effect sits behind a protocol with a deterministic fake**
+  (git, process runner, editor, Claude transport, profiler, combiner, publisher,
+  repository): the whole loop must be provable in CI with no API key and no
+  network.
+- **Workloads start through a tiny launcher process**: on Linux a child's peak
+  RSS can never read below the RSS of the process that spawned it (measured: a
+  `/bin/true` child of a 311 MiB engine reports 311 MiB; through a fresh
+  launcher, 6.5 MiB). Without it the memory judge measures the engine, not the
+  workload.
+- **Trials run sandboxed and fail closed**: network namespace (`unshare -rn`)
+  with a private loopback, Landlock write confinement to the worktree and a
+  scratch directory, a PID namespace so orphans die, and a per-run self-check
+  that the isolation really applied (macOS: `sandbox-exec` with the same
+  checks). The engine runs Claude-edited code on the user's machine; a fresh
+  HOME is not a sandbox.
+- **The engine never trusts what the editor says it changed**: the diff and the
+  touched paths come from git after the edit (`--no-renames`, so a renamed test
+  shows up as a protected path), symlinks, mode changes, binaries, git metadata
+  and unreported writes are violations, and a violating trial is never executed.
+- **The user's repository is fingerprinted before and after every phase that
+  runs repo code** (refs, config, hooks): tampering aborts the run.
+- **The cost cap is a hard bound**: the SDK's own retries are off, every attempt
+  is checked against a worst-case estimate before it is sent, the fallback chain
+  that is billed is the chain that is priced, and the trials node keeps a
+  running total so three trials cannot each spend the full remainder.
+- **Combine always re-tests**: the combined change is measured interleaved with
+  a fresh baseline (ABAB) and the test suite runs on its tip; it is delivered
+  only if the full verdict rules still say keep, else the best single change is
+  re-tested, else the run delivers a report only.
+- **Delivery is a create-only ref update**: `refs/heads/engine/run-<id>` is
+  created with `update-ref`, never `branch -f`, never on a checked-out or
+  default branch, never pushed.
+- **Trials run serially**: overlapping measurements disturb each other, and this
+  host's run-to-run variation is already 9-28 %.
+- **Postgres stores runs, trials and verdicts in the 003 JSONB columns; no new
+  tables** (migration 004 only adds a thread index, a lesson sequence and
+  `projects.test_command`): one source of truth per run, and the state
+  round-trips through a typed serializer that also works on Python 3.11.
 
 ### 2026-10-21 (Step 1)
 
