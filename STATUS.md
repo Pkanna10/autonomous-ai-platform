@@ -18,14 +18,14 @@ or build something new and then improve it (see `CLAUDE.md`).
 One row per build step. "Gate" is the result of `pnpm stage-gate` at the end of
 the step.
 
-| Step | Deliverable                                                     | Planned    | Started    | Completed  | PR                                                                | Gate    |
-| ---- | --------------------------------------------------------------- | ---------- | ---------- | ---------- | ----------------------------------------------------------------- | ------- |
-| 0    | Repair & upgrade (DB init, deps, models, docs, stage gate)      | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed  |
-| 1    | Engine design (typed state, data model, judges, migration 003)  | 2026-10-21 | 2026-10-21 |            | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | pending |
-| 2    | Core loop end to end on CPU Python workloads + E2E fixture test |            |            |            |                                                                   |         |
-| 3    | Research: arXiv, PDF, playbook, claim extraction, matcher       |            |            |            |                                                                   |         |
-| 4    | Interfaces + runner: live CLI, hardware detection, `--goal`     |            |            |            |                                                                   |         |
-| 5    | Dogfood: fixtures, OSS repos, real ML training pipeline         |            |            |            |                                                                   |         |
+| Step | Deliverable                                                     | Planned    | Started    | Completed  | PR                                                                | Gate   |
+| ---- | --------------------------------------------------------------- | ---------- | ---------- | ---------- | ----------------------------------------------------------------- | ------ |
+| 0    | Repair & upgrade (DB init, deps, models, docs, stage gate)      | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed |
+| 1    | Engine design (typed state, data model, judges, migration 003)  | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed |
+| 2    | Core loop end to end on CPU Python workloads + E2E fixture test |            |            |            |                                                                   |        |
+| 3    | Research: arXiv, PDF, playbook, claim extraction, matcher       |            |            |            |                                                                   |        |
+| 4    | Interfaces + runner: live CLI, hardware detection, `--goal`     |            |            |            |                                                                   |        |
+| 5    | Dogfood: fixtures, OSS repos, real ML training pipeline         |            |            |            |                                                                   |        |
 
 Recommended Claude Code model and effort per step: 0 Opus 5.5 High; 1 Fable 5.1
 Extra; 2-4 Opus 5.5 Ultracode (Fable 5.1 for the paper matcher); 5 Opus 5.5
@@ -101,7 +101,7 @@ graph without a checkpointer cannot resume.
   test-suite judges plus `derive_verdict`.
 - `optimization/ranking.py`, `learning/lessons.py`: score with lesson boost;
   verdict to lesson.
-- `orchestrator/`: `EngineState` (24 keys, 4 append-only channels), 15 node
+- `orchestrator/`: `EngineState` (25 keys, 4 append-only channels), 15 node
   closures over a frozen `NodeContext`, the router,
   `Orchestrator.run / resume / stream`, live `EngineEvent`s.
 - `execution/runner.py`, `persistence/repository.py`: `TrialRunner`,
@@ -109,11 +109,13 @@ graph without a checkpointer cannot resume.
   implementations.
 - `infrastructure/schema/003_engine.sql`: 8 new tables, 3 extended, idempotent;
   verified by the new `schema-apply` CI job.
-- Tests: 432 passing, 100% coverage of 1,276 statements; mypy strict on `src`
+- Tests: 546 passing, 100% coverage of 1,407 statements; mypy strict on `src`
   and `tests`; the stage gate now type-checks tests too.
 
-Reviewed by the Reviewer role (Opus 5.5) in two passes; every blocking finding
-was fixed test-first in a follow-up commit before the gate.
+Reviewed by the Reviewer role (Opus 5.5) in three passes (wave 1, wave 2, a
+verification pass on the wave-2 fixes) plus a `/security-review`; every blocking
+finding was fixed test-first in a follow-up commit before the gate. Stage gate:
+passed (2 warnings: outdated majors left to Renovate).
 
 ---
 
@@ -232,6 +234,11 @@ was fixed test-first in a follow-up commit before the gate.
 - **Trial branches are not idempotent yet**: lesson ids are `uuid5(verdict id)`
   so a re-executed `learn` replaces rather than duplicates rows; trial ids come
   from the runner and get an idempotency key with the real runner in Step 2.
+- **The default context fails loudly instead of faking a baseline**: the
+  `langgraph.json` entry point compiles over stub runners that measure nothing,
+  so a run on it stops at the baseline with `missing_measurement`. A default
+  that fabricated numbers would let the engine report "done" on nothing; the
+  real runner (Step 2) replaces the stub.
 - **Dependency majors wait for their own PRs** (TypeScript 7, ESLint 10, Vitest
   5, Vite 8, redis 8, PyMuPDF 2): none is needed by Step 1 and each changes
   tooling behaviour; Renovate opens them weekly.
@@ -298,10 +305,10 @@ and the review of the runner's isolation).
 
 | Metric                         | Value                                                      |
 | ------------------------------ | ---------------------------------------------------------- |
-| Python tests                   | 432 passed                                                 |
-| Python coverage                | 100% of 1,276 statements (placeholders excluded)           |
+| Python tests                   | 546 passed                                                 |
+| Python coverage                | 100% of 1,407 statements (placeholders excluded)           |
 | TypeScript tests               | 33 passed                                                  |
-| Product code (non-placeholder) | ~2,900 lines Python + 450 lines SQL; ~6,500 lines of tests |
+| Product code (non-placeholder) | ~3,200 lines Python + 450 lines SQL; ~8,000 lines of tests |
 | Engine features shipped        | Walking skeleton of the full loop (stub runners)           |
 
 ---
@@ -311,7 +318,7 @@ and the review of the runner's isolation).
 | Step | Lead time | CI-red pushes                | Rework commits        | Reverts |
 | ---- | --------- | ---------------------------- | --------------------- | ------- |
 | 0    | ~2 h      | 0                            | 0                     | 0       |
-| 1    | ~4 h      | 2 (GHA cache; README format) | 4 (regroup, 3 review) | 0       |
+| 1    | ~4 h      | 2 (GHA cache; README format) | 5 (regroup, 4 review) | 0       |
 
 ## Lessons (retro per step)
 

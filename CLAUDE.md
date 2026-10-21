@@ -1,7 +1,7 @@
 # Autonomous AI Platform - Claude Code Configuration
 
-**Version:** 4.0.0 **Last Updated:** 2026-10-21 **Status:** Engine rebuild, Step
-1 (engine design) in progress
+**Version:** 4.1.0 **Last Updated:** 2026-10-21 **Status:** Engine rebuild, Step
+1 (engine design) delivered in PR #11; Step 2 next
 
 ---
 
@@ -72,20 +72,23 @@ CONNECT -> UNDERSTAND -> DEFINE "BETTER" -> BASELINE -> PROFILE -> RESEARCH
 
 ## Project Status and Build Order
 
-**Reality check (2026-10-21):** the repository contains working infrastructure
-(Docker, CI, security scanning, schema), a working TypeScript Claude client, a
-settings module, and a LangGraph graph whose three nodes are placeholders. The
-research modules are placeholders. Treat anything else described in older docs
-as a plan, not a feature.
+**Reality check (2026-10-21, after Step 1):** the repository contains working
+infrastructure (Docker, CI incl. a schema-apply job, security scanning, schema
+001-003), a working TypeScript Claude client, and the engine's walking skeleton
+in `services/python_agents`: the full loop wired in LangGraph with a final data
+model, anti-cheating rules, judges, verdict order, approval interrupt and
+lessons, running on stub runners. Real runners, the profiler, research and the
+CLI do not exist yet. Treat anything else described in older docs as a plan, not
+a feature.
 
-| Step | Deliverable                                                                                       | Model / setting to select               |
-| ---- | ------------------------------------------------------------------------------------------------- | --------------------------------------- |
-| 0    | Repair & upgrade: DB init fix, dependency bumps, current model IDs, truthful docs (this PR)       | Opus 5.5, High                          |
-| 1    | Engine design: typed state and data models, judge/node interfaces, anti-cheating rules, migration | Fable 5.1, Extra                        |
-| 2    | Core loop end to end on CPU Python workloads, with an E2E fixture test                            | Opus 5.5, Ultracode                     |
-| 3    | Research: arXiv monitor, PDF parser, playbook, claim/precondition extraction, matcher             | Opus 5.5, Ultracode (Fable for matcher) |
-| 4    | Interfaces + runner: live CLI log, hardware detection (CPU/CUDA/MPS), `--goal` English parsing    | Opus 5.5, Ultracode                     |
-| 5    | Dogfood on fixtures, OSS repos, then the user's VLM bridge on an M4 Pro                           | Opus 5.5, High                          |
+| Step | Deliverable                                                                                    | Model / setting to select               |
+| ---- | ---------------------------------------------------------------------------------------------- | --------------------------------------- |
+| 0    | Repair & upgrade: DB init fix, dependency bumps, current model IDs, truthful docs (PR #11)     | Opus 5.5, High                          |
+| 1    | Engine design: typed state, data models, judges, anti-cheating, migration 003 (PR #11)         | Fable 5.1, Extra                        |
+| 2    | Core loop end to end on CPU Python workloads, with an E2E fixture test                         | Opus 5.5, Ultracode                     |
+| 3    | Research: arXiv monitor, PDF parser, playbook, claim/precondition extraction, matcher          | Opus 5.5, Ultracode (Fable for matcher) |
+| 4    | Interfaces + runner: live CLI log, hardware detection (CPU/CUDA/MPS), `--goal` English parsing | Opus 5.5, Ultracode                     |
+| 5    | Dogfood on fixtures, OSS repos, then the user's VLM bridge on an M4 Pro                        | Opus 5.5, High                          |
 
 Runtime models called by the engine itself (`services/python_agents` settings):
 `ENGINE_MODEL=claude-opus-5-5` for understanding, extraction and trial edits;
@@ -360,6 +363,8 @@ directory:
 
 ## Changelog
 
+- **4.1.0 (2026-10-21):** Step 1 delivered: reality check updated to the walking
+  skeleton; `mypy` covers tests in the gate; build-order rows point at PR #11.
 - **4.0.0 (2026-10-21):** Vision clarified as the improvement engine; 7-layer
   map onto the repo; build order with model guidance; removed unverifiable
   statistics, the repeat-every-response rule and model-identity claims; fixed
