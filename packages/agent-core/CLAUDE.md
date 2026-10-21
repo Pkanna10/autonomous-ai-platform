@@ -1,34 +1,17 @@
 # Agent Core Package - Claude Code Configuration
 
-**Package:** `@autonomous-ai/agent-core` **Version:** 3.0.0 **Primary
+**Package:** `@autonomous-ai/agent-core` **Version:** 4.0.0 **Primary
 Language:** TypeScript 5.9+ **Runtime:** Node.js 20+ **Testing:** Vitest
-
----
-
-## 📚 Advanced Prompting Techniques
-
-**IMPORTANT:** This file contains package-specific patterns. For advanced
-prompting techniques, see root `CLAUDE.md`:
-
-- **Meta-Cognitive Thinking** - Use `<thinking>` tags before complex tasks
-- **Meta-Prompting** - Decompose complex tasks (+30% improvement)
-- **Graph of Thoughts** - Non-linear reasoning for complex problems (+62%)
-- **26 Principled Instructions** - Evidence-based quality patterns (+57.7%)
-- **Constitutional AI** - Multi-round critique for code quality (95%+
-  vulnerability block)
-- **XML-Structured Prompting** - Use standard tags for clarity (40%+
-  performance)
-- **Chain of Density** - Optimal summarization technique
-
-**Apply these patterns when working in this package.**
 
 ---
 
 ## 🎯 Package Purpose
 
-Core AI agent orchestration logic using LangGraph and Claude Sonnet 4.5. Handles
-intent parsing, task planning, execution coordination, and database
-interactions.
+TypeScript client for Claude (`ClaudeClient`, default model
+`DEFAULT_MODEL = 'claude-opus-5-5'`) plus shared Node.js utilities (graceful
+shutdown). The live orchestrator is Python (`services/python_agents`); the
+LangGraph section below shows the equivalent TypeScript shape for reference
+only.
 
 ---
 
@@ -126,7 +109,7 @@ describe('ClaudeClient', () => {
 
 ---
 
-## 🤖 LangGraph Agent Orchestration
+## 🤖 LangGraph Agent Orchestration (reference; the live graph is Python)
 
 ### State Machine Pattern
 
@@ -211,37 +194,41 @@ console.log(response.content[0].text);
 ### Streaming Pattern
 
 ```typescript
-const stream = await client.streamChat(
+await client.streamChat(
   [{ role: 'user', content: 'Generate code for...' }],
-  {
-    onChunk: (chunk) => {
-      process.stdout.write(chunk.delta.text);
-    },
-  }
+  (text) => process.stdout.write(text),
+  { model: 'claude-sonnet-5-5', systemPrompt: 'Be concise.' }
 );
 ```
 
-### Tool Use Pattern
+Sampling parameters (`temperature`) are only forwarded when a caller sets them;
+current Claude models reject them, so leave them unset.
+
+### Tool Use Pattern (SDK directly; `ClaudeClient` has no `tools` option yet)
 
 ```typescript
-const response = await client.chat(
-  [{ role: 'user', content: 'Search for lodash package' }],
-  {
-    tools: [
-      {
-        name: 'search_npm',
-        description: 'Search NPM registry for packages',
-        input_schema: {
-          type: 'object',
-          properties: {
-            query: { type: 'string' },
-          },
-          required: ['query'],
+import Anthropic from '@anthropic-ai/sdk';
+import { DEFAULT_MODEL } from './clients/claude-client';
+
+const anthropic = new Anthropic();
+const response = await anthropic.messages.create({
+  model: DEFAULT_MODEL,
+  max_tokens: 4096,
+  messages: [{ role: 'user', content: 'Search for lodash package' }],
+  tools: [
+    {
+      name: 'search_npm',
+      description: 'Search NPM registry for packages',
+      input_schema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string' },
         },
+        required: ['query'],
       },
-    ],
-  }
-);
+    },
+  ],
+});
 
 // Handle tool calls
 if (response.stop_reason === 'tool_use') {
@@ -384,24 +371,26 @@ for (const pkg of packages) {
 
 ## 📁 Key Files
 
-| File                                  | Purpose                      |
-| ------------------------------------- | ---------------------------- |
-| `src/clients/claude-client.ts`        | Claude API wrapper           |
-| `src/orchestrator/agent.ts`           | LangGraph state machine      |
-| `src/parsers/intent-parser.ts`        | User intent detection        |
-| `src/repositories/package-repo.ts`    | Package database access      |
-| `src/repositories/task-repo.ts`       | Task execution tracking      |
-| `src/__tests__/intent-parser.test.ts` | Intent parser unit tests     |
-| `src/__tests__/claude-client.test.ts` | Claude client tests (mocked) |
+| File                                | Status  | Purpose                                 |
+| ----------------------------------- | ------- | --------------------------------------- |
+| `src/clients/claude-client.ts`      | exists  | Claude API wrapper (`DEFAULT_MODEL`)    |
+| `src/clients/claude-client.test.ts` | exists  | Claude client tests (SDK mocked)        |
+| `src/shutdown.ts`                   | exists  | Graceful SIGTERM/SIGINT handling        |
+| `src/shutdown.test.ts`              | exists  | Shutdown handler tests                  |
+| `src/test-setup.ts`                 | exists  | Vitest setup and shared mocks           |
+| `src/repositories/*.ts`             | planned | Postgres access (packages, tasks, runs) |
+
+Tests live next to the code they test (`*.test.ts`), not in `__tests__/`.
 
 ---
 
-**Version:** 3.0.0 **Last Updated:** 2025-11-19
+**Version:** 4.0.0 **Last Updated:** 2026-10-21
 
 **Changelog:**
 
+- **4.0.0 (2026-10-21):** Truthful package purpose and key-files table; Claude
+  Opus 5.5 default; streaming takes a model option; removed prompting-technique
+  claims
 - **3.0.0 (2025-11-19):** Added advanced prompting technique references
-  (Meta-Cognitive, Meta-Prompting, GoT, Constitutional AI, XML structuring,
-  Chain of Density)
 - **2.0.0 (2025-11-19):** Initial hierarchical structure implementation with
   TypeScript/Vitest/LangGraph patterns

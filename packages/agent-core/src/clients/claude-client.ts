@@ -2,10 +2,18 @@
 import Anthropic from '@anthropic-ai/sdk';
 
 /**
+ * Default Claude model for the platform.
+ *
+ * Kept in one place so every caller (and the Python `ENGINE_MODEL` setting)
+ * can be bumped together when a new generation ships.
+ */
+export const DEFAULT_MODEL = 'claude-opus-5-5';
+
+/**
  * Claude AI Client for interacting with Anthropic's API
  *
  * Provides methods for both standard and streaming chat interactions
- * with Claude Sonnet 4.5 model. Handles API authentication, message
+ * with Claude (Opus 5.5 by default). Handles API authentication, message
  * formatting, and response parsing.
  *
  * @example
@@ -45,9 +53,11 @@ export class ClaudeClient {
    *
    * @param messages - Array of message objects with role and content
    * @param options - Optional configuration for the chat request
-   * @param options.model - Claude model to use (default: claude-sonnet-4-20250514)
+   * @param options.model - Claude model to use (default: {@link DEFAULT_MODEL})
    * @param options.maxTokens - Maximum tokens in response (default: 4096)
-   * @param options.temperature - Randomness 0-1, 0=deterministic (default: 0)
+   * @param options.temperature - Randomness 0-1. Only forwarded when set: current
+   *   Claude models (Opus 5.5 and newer) reject sampling parameters with a 400,
+   *   so leave it unset unless you are targeting an older model.
    * @param options.systemPrompt - System prompt to set context/behavior
    * @param options.enablePromptCaching - Enable prompt caching for system prompt (default: true)
    *   Reduces costs by 90% and latency by 85% for repeated system prompts.
@@ -64,9 +74,8 @@ export class ClaudeClient {
    * const response = await client.chat([
    *   { role: 'user', content: 'Explain quantum computing' }
    * ], {
-   *   model: 'claude-sonnet-4-20250514',
+   *   model: 'claude-sonnet-5-5',
    *   maxTokens: 2048,
-   *   temperature: 0.7,
    *   systemPrompt: 'You are a helpful physics teacher.'
    * });
    *
@@ -110,13 +119,18 @@ export class ClaudeClient {
       ];
     }
 
-    const response = await this.client.messages.create({
-      model: options?.model ?? 'claude-sonnet-4-20250514',
+    const request: Anthropic.MessageCreateParamsNonStreaming = {
+      model: options?.model ?? DEFAULT_MODEL,
       max_tokens: options?.maxTokens ?? 4096,
-      temperature: options?.temperature ?? 0,
       system: systemBlocks,
       messages,
-    });
+    };
+    // Sampling parameters are rejected by current models; only send on request.
+    if (options?.temperature !== undefined) {
+      request.temperature = options.temperature;
+    }
+
+    const response = await this.client.messages.create(request);
 
     return response;
   }
@@ -130,6 +144,7 @@ export class ClaudeClient {
    * @param messages - Array of message objects with role and content
    * @param onChunk - Callback function called for each text chunk received
    * @param options - Optional configuration for streaming
+   * @param options.model - Claude model to use (default: {@link DEFAULT_MODEL})
    * @param options.systemPrompt - System prompt to set context/behavior
    * @param options.enablePromptCaching - Enable prompt caching (default: true)
    * @param options.maxTokens - Maximum tokens in response (default: 4096)
@@ -164,6 +179,7 @@ export class ClaudeClient {
     messages: Anthropic.MessageParam[],
     onChunk: (text: string) => void,
     options?: {
+      model?: string;
       systemPrompt?: string;
       enablePromptCaching?: boolean;
       maxTokens?: number;
@@ -187,7 +203,7 @@ export class ClaudeClient {
     }
 
     const stream = await this.client.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: options?.model ?? DEFAULT_MODEL,
       max_tokens: options?.maxTokens ?? 4096,
       system: systemBlocks,
       messages,

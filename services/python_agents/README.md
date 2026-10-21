@@ -139,12 +139,12 @@ User Input → Intent Parser → Task Planner → Execution → Results
 
 ```python
 class AgentState(TypedDict):
-    user_input: str                  # Original request
-    intent: str | None               # Detected intent
-    context: dict                    # Execution context
-    messages: list[str]              # Message history
-    error: str | None                # Error tracking
-    result: dict | None              # Execution results
+    user_input: str  # Original request
+    intent: str | None  # Detected intent
+    context: dict  # Execution context
+    messages: list[str]  # Message history
+    error: str | None  # Error tracking
+    result: dict | None  # Execution results
 ```
 
 ## 📚 Dependencies

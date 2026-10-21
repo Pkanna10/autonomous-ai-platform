@@ -11,6 +11,8 @@
 -- 4. Missing CHECK constraints on enums (HIGH)
 -- 5. Missing composite indexes for common queries (MEDIUM)
 -- 6. Missing GIN indexes on JSONB columns (MEDIUM)
+-- 7. research_papers.citation_count / applicability_score referenced by CHECK
+--    constraints but never created in 001_initial.sql (CRITICAL - broke initdb)
 
 -- ============================================================================
 -- Fix 1: Add missing task_id foreign key to generated_code table
@@ -105,6 +107,16 @@ ALTER TABLE user_feedback
   ADD CONSTRAINT chk_rating
   CHECK (rating IS NULL OR (rating >= 1 AND rating <= 5));
 
+-- Research papers: the two columns below were referenced by constraints but
+-- never created in 001_initial.sql, which aborted the docker-entrypoint initdb.
+-- Add them first (idempotent), then constrain them.
+ALTER TABLE research_papers
+  ADD COLUMN IF NOT EXISTS citation_count INTEGER DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS applicability_score FLOAT;
+
+COMMENT ON COLUMN research_papers.citation_count IS 'Citation count from external sources (e.g. Semantic Scholar)';
+COMMENT ON COLUMN research_papers.applicability_score IS 'Applicability of the paper to the analysed codebase (0.0-1.0)';
+
 -- Research papers: Validate non-negative citation count
 ALTER TABLE research_papers
   ADD CONSTRAINT chk_citation_count
@@ -186,7 +198,8 @@ ORDER BY table_name, constraint_name;
 -- Migration Complete
 -- ============================================================================
 -- Total changes:
--- - 1 new column (generated_code.task_id)
+-- - 3 new columns (generated_code.task_id, research_papers.citation_count,
+--   research_papers.applicability_score)
 -- - 11 new indexes (3 single-column, 4 composite, 3 GIN, 2 unique)
 -- - 10 new CHECK constraints (enums + numeric ranges)
 -- - 1 new foreign key constraint

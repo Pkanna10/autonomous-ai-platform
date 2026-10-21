@@ -39,7 +39,13 @@ def test_settings_uses_defaults_when_not_provided(
     THEN should use default values for optional fields
     """
     # ARRANGE - Clear all test env vars and set only required ones
-    for key in ["ENVIRONMENT", "LOG_LEVEL", "DATABASE_URL"]:
+    for key in [
+        "ENVIRONMENT",
+        "LOG_LEVEL",
+        "DATABASE_URL",
+        "ENGINE_MODEL",
+        "TRIAGE_MODEL",
+    ]:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-456")
 
@@ -53,6 +59,29 @@ def test_settings_uses_defaults_when_not_provided(
     assert settings.ENVIRONMENT == "development"  # Default value
     assert settings.MAX_RETRIES == 3
     assert settings.TIMEOUT_SECONDS == 30
+    assert settings.ENGINE_MODEL == "claude-opus-5-5"
+    assert settings.TRIAGE_MODEL == "claude-haiku-5-5"
+
+
+def test_settings_model_ids_can_be_overridden(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Should allow the engine and triage models to be swapped via env vars.
+
+    GIVEN ENGINE_MODEL and TRIAGE_MODEL set in the environment
+    WHEN creating Settings instance
+    THEN should use the environment values instead of the defaults
+    """
+    # ARRANGE
+    monkeypatch.setenv("ENGINE_MODEL", "claude-sonnet-5-5")
+    monkeypatch.setenv("TRIAGE_MODEL", "claude-opus-5-5")
+
+    # ACT
+    settings = Settings()
+
+    # ASSERT
+    assert settings.ENGINE_MODEL == "claude-sonnet-5-5"
+    assert settings.TRIAGE_MODEL == "claude-opus-5-5"
 
 
 def test_settings_requires_anthropic_api_key() -> None:

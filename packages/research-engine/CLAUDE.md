@@ -1,34 +1,21 @@
 # Research Engine Package - Claude Code Configuration
 
-**Package:** `@autonomous-ai/research-engine` **Version:** 3.0.0 **Primary
-Language:** Python 3.11+ **Testing:** pytest **Key Libraries:** PyMuPDF,
-requests, SQLAlchemy, sentence-transformers
+**Package:** `@autonomous-ai/research-engine` **Version:** 4.0.0 **Status:**
+TypeScript placeholder (`src/index.ts` exports `PLACEHOLDER`)
 
----
-
-## 📚 Advanced Prompting Techniques
-
-**IMPORTANT:** This file contains package-specific patterns. For advanced
-prompting techniques, see root `CLAUDE.md`:
-
-- **Meta-Cognitive Thinking** - Use `<thinking>` tags before complex tasks
-- **Meta-Prompting** - Decompose complex tasks (+30% improvement)
-- **Graph of Thoughts** - Non-linear reasoning for complex problems (+62%)
-- **26 Principled Instructions** - Evidence-based quality patterns (+57.7%)
-- **Constitutional AI** - Multi-round critique for code quality (95%+
-  vulnerability block)
-- **XML-Structured Prompting** - Use standard tags for clarity (40%+
-  performance)
-- **Chain of Density** - **Especially useful for summarizing research papers!**
-
-**Apply these patterns when working in this package.**
+The research engine itself is implemented in **Python** under
+`services/python_agents/src/autonomous_ai_agents/research/`. The patterns below
+are Python (PyMuPDF, `arxiv`, SQLAlchemy, sentence-transformers) and apply
+there. This package stays as the home for any TypeScript-side research tooling,
+if it is ever needed.
 
 ---
 
 ## 🎯 Package Purpose
 
-Research paper discovery, PDF parsing, algorithm extraction, and semantic
-indexing for academic CS papers from arXiv, ACM, and other sources.
+Layer 4 of the engine: paper discovery (arXiv, Semantic Scholar), parsing, claim
+and precondition extraction, and matching papers to profiled hotspots in the
+user's code. Build order Step 3 implements it in Python.
 
 ---
 
@@ -427,24 +414,26 @@ scheduler.add_job(daily_arxiv_monitor, 'cron', hour=6)
 
 ## 📁 Key Files
 
-| File                                | Purpose                         |
-| ----------------------------------- | ------------------------------- |
-| `src/arxiv/fetcher.py`              | arXiv API client                |
-| `src/parser/pdf_parser.py`          | PDF text extraction             |
-| `src/parser/algorithm_extractor.py` | Algorithm pseudocode extraction |
-| `src/models/paper.py`               | SQLAlchemy models               |
-| `src/repositories/paper_repo.py`    | Database access layer           |
-| `tests/test_pdf_parser.py`          | PDF parsing tests               |
-| `tests/test_arxiv_fetcher.py`       | arXiv API tests (mocked)        |
+Python paths under `services/python_agents/src/autonomous_ai_agents/`:
+
+| File                                    | Status      | Purpose                               |
+| --------------------------------------- | ----------- | ------------------------------------- |
+| `research/arxiv_monitor.py`             | placeholder | arXiv API client and daily monitor    |
+| `research/pdf_parser.py`                | placeholder | PyMuPDF text extraction               |
+| `research/playbook.py`                  | planned     | Curated techniques with preconditions |
+| `research/extract.py`                   | planned     | Claim and precondition extraction     |
+| `research/matcher.py`                   | planned     | Hotspot-to-precondition matching      |
+| `packages/research-engine/src/index.ts` | placeholder | TypeScript placeholder export         |
 
 ---
 
-**Version:** 3.0.0 **Last Updated:** 2025-11-19
+**Version:** 4.0.0 **Last Updated:** 2026-10-21
 
 **Changelog:**
 
+- **4.0.0 (2026-10-21):** Clarified that this package is a TypeScript
+  placeholder and the engine's research layer is Python; truthful key-files
+  table; removed prompting-technique claims
 - **3.0.0 (2025-11-19):** Added advanced prompting technique references
-  (Meta-Cognitive, Meta-Prompting, GoT, Constitutional AI, XML structuring,
-  Chain of Density - especially useful for research paper summarization)
 - **2.0.0 (2025-11-19):** Initial hierarchical structure implementation with
   Python/pytest/PyMuPDF/arXiv patterns

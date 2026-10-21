@@ -1,10 +1,10 @@
 /**
  * Agent Core Package
  *
- * Core AI agent orchestration logic with Claude Sonnet 4.5 integration.
+ * Core AI agent orchestration logic with Claude integration.
  * This package provides the foundation for the autonomous AI development platform.
  *
  * @packageDocumentation
  */
 
-export { ClaudeClient } from './clients/claude-client';
+export { ClaudeClient, DEFAULT_MODEL } from './clients/claude-client';

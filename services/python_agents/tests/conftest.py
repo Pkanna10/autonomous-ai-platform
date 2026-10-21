@@ -57,7 +57,7 @@ def mock_claude_response() -> dict[str, Any]:
     return {
         "id": "msg_test123",
         "content": [{"type": "text", "text": "Mocked Claude response"}],
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-opus-5-5",
         "role": "assistant",
         "stop_reason": "end_turn",
         "usage": {"input_tokens": 10, "output_tokens": 20},

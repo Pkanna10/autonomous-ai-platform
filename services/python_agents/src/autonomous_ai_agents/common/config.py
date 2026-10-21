@@ -29,6 +29,15 @@ class Settings(BaseSettings):
     """Anthropic API key for Claude access. Set via environment variable."""
 
     # ============================================
+    # Claude models used by the engine
+    # ============================================
+    ENGINE_MODEL: str = "claude-opus-5-5"
+    """Model for understanding code, extracting claims and writing trial edits."""
+
+    TRIAGE_MODEL: str = "claude-haiku-5-5"
+    """Cheap model for high-volume work such as daily paper triage."""
+
+    # ============================================
     # Database
     # ============================================
     DATABASE_URL: str = "postgresql://dev:devpass@localhost:5432/ai_platform"

@@ -22,7 +22,7 @@ def intent_parser_node(state: AgentState) -> dict[str, Any]:
     Returns:
         Updated state with detected intent
     """
-    # TODO: Implement intent parsing using Claude Sonnet 4.5
+    # TODO: Implement intent parsing using Claude (settings.ENGINE_MODEL)
     # - Detect package installation requests
     # - Identify research paper queries
     # - Recognize code generation tasks

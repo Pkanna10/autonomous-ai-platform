@@ -49,9 +49,8 @@ describe('ClaudeClient', () => {
 
       // ASSERT
       expect(mockCreate).toHaveBeenCalledWith({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-opus-5-5',
         max_tokens: 4096,
-        temperature: 0,
         system: undefined,
         messages,
       });
@@ -63,7 +62,7 @@ describe('ClaudeClient', () => {
       const client = new ClaudeClient();
       const messages: Anthropic.MessageParam[] = [{ role: 'user', content: 'Hello' }];
       const options = {
-        model: 'claude-opus-4-20250514',
+        model: 'claude-sonnet-5-5',
         maxTokens: 2048,
         temperature: 0.7,
         systemPrompt: 'You are a helpful assistant.',
@@ -80,7 +79,7 @@ describe('ClaudeClient', () => {
 
       // ASSERT
       expect(mockCreate).toHaveBeenCalledWith({
-        model: 'claude-opus-4-20250514',
+        model: 'claude-sonnet-5-5',
         max_tokens: 2048,
         temperature: 0.7,
         system: 'You are a helpful assistant.',
@@ -110,13 +109,50 @@ describe('ClaudeClient', () => {
 
       // ASSERT
       expect(mockCreate).toHaveBeenCalledWith({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-opus-5-5',
+        max_tokens: 4096,
+        system: undefined,
+        messages,
+      });
+      expect(response).toEqual(mockResponse);
+    });
+
+    it('should send temperature when explicitly set to zero', async () => {
+      // ARRANGE - current Claude models reject sampling params, so the client
+      // must only forward temperature when the caller asks for it, including 0
+      const client = new ClaudeClient();
+      const messages: Anthropic.MessageParam[] = [{ role: 'user', content: 'Test' }];
+      mockCreate.mockResolvedValue({ id: 'msg_t0', content: [] });
+
+      // ACT
+      await client.chat(messages, { temperature: 0, enablePromptCaching: false });
+
+      // ASSERT
+      expect(mockCreate).toHaveBeenCalledWith({
+        model: 'claude-opus-5-5',
         max_tokens: 4096,
         temperature: 0,
         system: undefined,
         messages,
       });
-      expect(response).toEqual(mockResponse);
+    });
+
+    it('should wrap the system prompt in a cacheable block by default', async () => {
+      // ARRANGE
+      const client = new ClaudeClient();
+      const messages: Anthropic.MessageParam[] = [{ role: 'user', content: 'Test' }];
+      mockCreate.mockResolvedValue({ id: 'msg_cache', content: [] });
+
+      // ACT
+      await client.chat(messages, { systemPrompt: 'Be terse.' });
+
+      // ASSERT
+      expect(mockCreate).toHaveBeenCalledWith({
+        model: 'claude-opus-5-5',
+        max_tokens: 4096,
+        system: [{ type: 'text', text: 'Be terse.', cache_control: { type: 'ephemeral' } }],
+        messages,
+      });
     });
   });
 
@@ -171,12 +207,37 @@ describe('ClaudeClient', () => {
 
       // ASSERT
       expect(mockCreate).toHaveBeenCalledWith({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-opus-5-5',
         max_tokens: 4096,
+        system: undefined,
         messages,
         stream: true,
       });
       expect(chunks).toEqual(['Once ', 'upon ', 'a time']);
+    });
+
+    it('should stream with a caller-provided model', async () => {
+      // ARRANGE
+      const client = new ClaudeClient();
+      const messages: Anthropic.MessageParam[] = [{ role: 'user', content: 'Hi' }];
+      const mockStream = {
+        async *[Symbol.asyncIterator](): AsyncGenerator<{ type: string }> {
+          yield { type: 'message_stop' };
+        },
+      };
+      mockCreate.mockResolvedValue(mockStream);
+
+      // ACT
+      await client.streamChat(messages, () => undefined, { model: 'claude-sonnet-5-5' });
+
+      // ASSERT
+      expect(mockCreate).toHaveBeenCalledWith({
+        model: 'claude-sonnet-5-5',
+        max_tokens: 4096,
+        system: undefined,
+        messages,
+        stream: true,
+      });
     });
 
     it('should ignore non-text-delta events when streaming', async () => {
