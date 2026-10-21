@@ -78,6 +78,7 @@ from autonomous_ai_agents.common.models import (
     ViolationRule,
 )
 from autonomous_ai_agents.common.refnames import refname_problem
+from autonomous_ai_agents.execution.protocols import TrialBrief
 from autonomous_ai_agents.execution.runner import BaselineRunner, TrialRunner
 from autonomous_ai_agents.learning.lessons import lessons_from_verdicts
 from autonomous_ai_agents.optimization.anticheat import (
@@ -608,7 +609,9 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
         return {"phase": RunPhase.define, "objectives": objectives, "events": [event]}
 
     def baseline(state: EngineState) -> NodeDelta:
-        measurements = ctx.baseline_runner.measure(state["workloads"])
+        measurements = ctx.baseline_runner.measure(
+            state["workloads"], run_id=state["run_id"], commit=state["base_commit"]
+        )
         objectives = tuple(state["objectives"])
         violations = measurement_violations(
             measurements,
@@ -716,6 +719,15 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                 measured,
                 round=round_number,
                 branch=branch,
+                # Interim (U3): U10 replaces this with the running total.
+                budget_usd=max(0.0, state["max_cost_usd"] - state["cost_usd"]),
+                brief=TrialBrief(
+                    understanding=state["understanding"],
+                    hotspots=tuple(
+                        h for h in state["hotspots"] if h.id in hypothesis.hotspot_ids
+                    ),
+                    protected=(*ctx.protected_patterns, *state["extra_protected"]),
+                ),
             )
             problems = _runner_trial_problems(trial, hypothesis, round_number)
             if problems:

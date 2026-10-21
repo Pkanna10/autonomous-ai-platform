@@ -1,12 +1,17 @@
-"""Tests for the trial runner interface and its scripted stub (Step 1, unit U5).
+"""Tests for the trial runner interface and its scripted stub (Step 1 U5, Step 2 U3).
 
 ``TrialRunner`` is the seam between the orchestrator and the hardware that
 runs trials. ``StubTrialRunner`` replays scripted outcomes so the whole loop
-can be tested without subprocesses, git or an LLM.
+can be tested without subprocesses, git or an LLM. Step 2 adds the money and
+the brief to every trial (``budget_usd``, ``brief``) and the run id and
+commit to every baseline (``run_id``, ``commit``).
 """
 
 from __future__ import annotations
 
+import inspect
+import math
+from collections.abc import Callable
 from datetime import UTC
 
 import pytest
@@ -25,6 +30,7 @@ from autonomous_ai_agents.common.models import (
     TrialStatus,
     Workload,
 )
+from autonomous_ai_agents.execution.protocols import TrialBrief
 from autonomous_ai_agents.execution.runner import (
     BaselineRunner,
     ScriptedOutcome,
@@ -36,6 +42,9 @@ from autonomous_ai_agents.execution.runner import (
 WALL_SAMPLES: tuple[float, ...] = (1.05, 1.02, 1.08, 1.05, 1.05)
 RSS_SAMPLES: tuple[float, ...] = (1.0e9, 1.1e9, 1.0e9, 1.0e9, 1.05e9)
 FINGERPRINT = "a" * 64
+BUDGET = 5.0
+BRIEF = TrialBrief(understanding=None, hotspots=(), protected=("tests/**",))
+COMMIT = "0123456789abcdef0123456789abcdef01234567"
 
 FAST = ScriptedOutcome(
     touched_paths=("src/bridge/encoder.py",),
@@ -135,7 +144,13 @@ def test_run_builds_a_measured_trial_from_the_script() -> None:
     runner = StubTrialRunner({hypothesis.id: FAST})
 
     trial = runner.run(
-        hypothesis, workloads, _baseline(workloads), round=2, branch="engine/run-1/h1"
+        hypothesis,
+        workloads,
+        _baseline(workloads),
+        round=2,
+        branch="engine/run-1/h1",
+        budget_usd=BUDGET,
+        brief=BRIEF,
     )
 
     assert trial.hypothesis_id == hypothesis.id
@@ -162,7 +177,13 @@ def test_run_measures_every_workload_times_every_metric() -> None:
     runner = StubTrialRunner({hypothesis.id: FAST})
 
     trial = runner.run(
-        hypothesis, workloads, _baseline(workloads), round=1, branch="engine/x"
+        hypothesis,
+        workloads,
+        _baseline(workloads),
+        round=1,
+        branch="engine/x",
+        budget_usd=BUDGET,
+        brief=BRIEF,
     )
 
     assert len(trial.measurements) == 2 * 3
@@ -198,7 +219,13 @@ def test_unknown_metric_gets_an_empty_unit() -> None:
     )
 
     trial = runner.run(
-        hypothesis, workloads, _baseline(workloads), round=1, branch="engine/x"
+        hypothesis,
+        workloads,
+        _baseline(workloads),
+        round=1,
+        branch="engine/x",
+        budget_usd=BUDGET,
+        brief=BRIEF,
     )
 
     assert len(trial.measurements) == 1
@@ -226,7 +253,13 @@ def test_tests_passed_becomes_a_boolean_measurement(
     )
 
     trial = runner.run(
-        hypothesis, workloads, _baseline(workloads), round=1, branch="engine/x"
+        hypothesis,
+        workloads,
+        _baseline(workloads),
+        round=1,
+        branch="engine/x",
+        budget_usd=BUDGET,
+        brief=BRIEF,
     )
 
     assert len(trial.measurements) == len(workloads)
@@ -252,7 +285,13 @@ def test_tests_passed_none_adds_no_measurement() -> None:
     )
 
     trial = runner.run(
-        hypothesis, workloads, _baseline(workloads), round=1, branch="engine/x"
+        hypothesis,
+        workloads,
+        _baseline(workloads),
+        round=1,
+        branch="engine/x",
+        budget_usd=BUDGET,
+        brief=BRIEF,
     )
 
     assert {m.metric for m in trial.measurements} == {METRIC_WALL_TIME_S}
@@ -270,10 +309,22 @@ def test_run_is_deterministic_apart_from_ids_and_timestamps() -> None:
     runner = StubTrialRunner({hypothesis.id: FAST})
 
     first = runner.run(
-        hypothesis, workloads, _baseline(workloads), round=1, branch="engine/x"
+        hypothesis,
+        workloads,
+        _baseline(workloads),
+        round=1,
+        branch="engine/x",
+        budget_usd=BUDGET,
+        brief=BRIEF,
     )
     second = runner.run(
-        hypothesis, workloads, _baseline(workloads), round=1, branch="engine/x"
+        hypothesis,
+        workloads,
+        _baseline(workloads),
+        round=1,
+        branch="engine/x",
+        budget_usd=BUDGET,
+        brief=BRIEF,
     )
 
     def shape(trial_measurements: tuple[Measurement, ...]) -> list[tuple[object, ...]]:
@@ -302,7 +353,13 @@ def test_error_script_yields_a_failed_trial_without_measurements() -> None:
     runner = StubTrialRunner({hypothesis.id: BROKEN})
 
     trial = runner.run(
-        hypothesis, workloads, _baseline(workloads), round=1, branch="engine/x"
+        hypothesis,
+        workloads,
+        _baseline(workloads),
+        round=1,
+        branch="engine/x",
+        budget_usd=BUDGET,
+        brief=BRIEF,
     )
 
     assert trial.status is TrialStatus.failed
@@ -332,7 +389,13 @@ def test_unscripted_hypothesis_without_default_raises_key_error() -> None:
 
     with pytest.raises(KeyError, match=f"{hypothesis.id}.*{hypothesis.title}"):
         runner.run(
-            hypothesis, workloads, _baseline(workloads), round=1, branch="engine/x"
+            hypothesis,
+            workloads,
+            _baseline(workloads),
+            round=1,
+            branch="engine/x",
+            budget_usd=BUDGET,
+            brief=BRIEF,
         )
 
 
@@ -349,10 +412,22 @@ def test_scripts_fall_back_to_title_then_default() -> None:
     runner = StubTrialRunner({titled.title: FAST}, default=BROKEN)
 
     by_title = runner.run(
-        titled, workloads, _baseline(workloads), round=1, branch="engine/x"
+        titled,
+        workloads,
+        _baseline(workloads),
+        round=1,
+        branch="engine/x",
+        budget_usd=BUDGET,
+        brief=BRIEF,
     )
     by_default = runner.run(
-        other, workloads, _baseline(workloads), round=1, branch="engine/x"
+        other,
+        workloads,
+        _baseline(workloads),
+        round=1,
+        branch="engine/x",
+        budget_usd=BUDGET,
+        brief=BRIEF,
     )
 
     assert by_title.status is TrialStatus.measured
@@ -372,7 +447,13 @@ def test_id_script_wins_over_title_script() -> None:
     runner = StubTrialRunner({hypothesis.id: FAST, hypothesis.title: BROKEN})
 
     trial = runner.run(
-        hypothesis, workloads, _baseline(workloads), round=1, branch="engine/x"
+        hypothesis,
+        workloads,
+        _baseline(workloads),
+        round=1,
+        branch="engine/x",
+        budget_usd=BUDGET,
+        brief=BRIEF,
     )
 
     assert trial.status is TrialStatus.measured
@@ -393,11 +474,43 @@ def test_runner_records_every_call() -> None:
     )
     runner = StubTrialRunner({first.id: FAST, second.id: BROKEN})
 
-    runner.run(first, workloads, _baseline(workloads), round=1, branch="engine/a")
-    runner.run(second, workloads, _baseline(workloads), round=1, branch="engine/b")
-    runner.run(first, workloads, _baseline(workloads), round=2, branch="engine/a2")
+    runner.run(
+        first,
+        workloads,
+        _baseline(workloads),
+        round=1,
+        branch="engine/a",
+        budget_usd=BUDGET,
+        brief=BRIEF,
+    )
+    runner.run(
+        second,
+        workloads,
+        _baseline(workloads),
+        round=1,
+        branch="engine/b",
+        budget_usd=BUDGET,
+        brief=BRIEF,
+    )
+    runner.run(
+        first,
+        workloads,
+        _baseline(workloads),
+        round=2,
+        branch="engine/a2",
+        budget_usd=BUDGET,
+        brief=BRIEF,
+    )
     with pytest.raises(KeyError):
-        runner.run(unscripted, workloads, _baseline(workloads), round=2, branch="x")
+        runner.run(
+            unscripted,
+            workloads,
+            _baseline(workloads),
+            round=2,
+            branch="x",
+            budget_usd=BUDGET,
+            brief=BRIEF,
+        )
 
     assert runner.calls == [
         (first.id, 1),
@@ -469,17 +582,39 @@ def test_stub_baseline_runner_measures_every_workload_times_every_metric() -> No
 
 def test_stub_baseline_runner_records_every_call() -> None:
     """
-    GIVEN a stub baseline runner measured twice with different workloads
+    GIVEN a stub baseline runner measured twice with different workloads,
+          once with a run id and commit and once without
     WHEN the calls are inspected
-    THEN they list the workload ids of each call in order
+    THEN they list (workload ids, run id, commit) of each call in order,
+         None standing for an argument that was not passed
     """
     train, evaluate = _workloads(_project())
     runner = StubBaselineRunner(FAST)
 
-    runner.measure((train, evaluate))
+    runner.measure((train, evaluate), run_id="r1", commit=COMMIT)
     runner.measure((evaluate,))
 
-    assert runner.calls == [(train.id, evaluate.id), (evaluate.id,)]
+    assert runner.calls == [
+        ((train.id, evaluate.id), "r1", COMMIT),
+        ((evaluate.id,), None, None),
+    ]
+
+
+def test_stub_baseline_runner_ignores_run_id_and_commit() -> None:
+    """
+    GIVEN the same script measured with and without a run id and commit
+    WHEN the measurements are compared
+    THEN they have the same shape: the stub measures nothing real
+    """
+    workloads = _workloads(_project())
+    runner = StubBaselineRunner(FAST)
+
+    plain = runner.measure(workloads)
+    pinned = runner.measure(workloads, run_id="r1", commit=COMMIT)
+
+    assert [(m.workload_id, m.metric, m.samples) for m in plain] == [
+        (m.workload_id, m.metric, m.samples) for m in pinned
+    ]
 
 
 def test_stub_baseline_runner_with_an_empty_script_measures_nothing() -> None:
@@ -491,3 +626,213 @@ def test_stub_baseline_runner_with_an_empty_script_measures_nothing() -> None:
     workloads = _workloads(_project())
 
     assert StubBaselineRunner(ScriptedOutcome()).measure(workloads) == ()
+
+
+# ---------------------------------------------------------------------------
+# Step 2 signatures: budget, brief, run id and commit
+# ---------------------------------------------------------------------------
+
+KW = inspect.Parameter.KEYWORD_ONLY
+
+
+def _params(method: Callable[..., object]) -> dict[str, inspect.Parameter]:
+    params = inspect.signature(method).parameters
+    return {name: p for name, p in params.items() if name != "self"}
+
+
+@pytest.mark.parametrize("method", [TrialRunner.run, StubTrialRunner.run])
+def test_trial_runner_requires_budget_and_brief_keywords(
+    method: Callable[..., object],
+) -> None:
+    """
+    GIVEN the TrialRunner protocol and the stub
+    WHEN run's signature is inspected
+    THEN round, branch, budget_usd and brief are keyword-only with no
+         default, so no call site can forget the money or the brief
+    """
+    params = _params(method)
+
+    assert list(params) == [
+        "hypothesis",
+        "workloads",
+        "baseline",
+        "round",
+        "branch",
+        "budget_usd",
+        "brief",
+    ]
+    for name in ("round", "branch", "budget_usd", "brief"):
+        assert params[name].kind is KW, name
+        assert params[name].default is inspect.Parameter.empty, name
+
+
+def test_baseline_runner_protocol_requires_run_id_and_commit_keywords() -> None:
+    """
+    GIVEN the BaselineRunner protocol and the stub
+    WHEN measure's signatures are inspected
+    THEN the protocol takes run_id and commit keyword-only with no default,
+         and the stub accepts both with None defaults
+    """
+    protocol, stub = (
+        _params(BaselineRunner.measure),
+        _params(StubBaselineRunner.measure),
+    )
+
+    assert list(protocol) == list(stub) == ["workloads", "run_id", "commit"]
+    for name in ("run_id", "commit"):
+        assert protocol[name].kind is KW and stub[name].kind is KW
+        assert protocol[name].default is inspect.Parameter.empty
+        assert stub[name].default is None
+
+
+def test_runner_records_every_budget_and_brief() -> None:
+    """
+    GIVEN a stub runner called twice with different budgets and briefs
+    WHEN its records are inspected
+    THEN budgets and briefs list what each call received, in call order,
+         alongside the unchanged (hypothesis id, round) calls
+    """
+    project = _project()
+    workloads = _workloads(project)
+    hypothesis = _hypothesis(project)
+    other = TrialBrief(understanding=None, hotspots=(), protected=())
+    runner = StubTrialRunner({hypothesis.id: FAST})
+
+    runner.run(
+        hypothesis,
+        workloads,
+        _baseline(workloads),
+        round=1,
+        branch="engine/a",
+        budget_usd=4.5,
+        brief=BRIEF,
+    )
+    runner.run(
+        hypothesis,
+        workloads,
+        _baseline(workloads),
+        round=2,
+        branch="engine/a",
+        budget_usd=0.25,
+        brief=other,
+    )
+
+    assert runner.calls == [(hypothesis.id, 1), (hypothesis.id, 2)]
+    assert runner.budgets == [4.5, 0.25]
+    assert runner.briefs == [BRIEF, other]
+
+
+@pytest.mark.parametrize(("budget", "tokens"), [(0.05, 1416), (0.0, 0)])
+def test_scripted_cost_above_the_budget_fails_the_trial(
+    budget: float, tokens: int
+) -> None:
+    """
+    GIVEN a hypothesis scripted to cost 0.12 USD for 3400 tokens and a
+          budget of 0.05 USD (or nothing)
+    WHEN the stub runner runs it
+    THEN the trial is failed with "scripted cost exceeds budget", has no
+         measurements, is charged the whole budget and the same share of the
+         tokens (3400 x 0.05 / 0.12, rounded down) and touched nothing: a
+         real runner's editor stops at its budget check, before capture
+    """
+    project = _project()
+    workloads = _workloads(project)
+    hypothesis = _hypothesis(project)
+    runner = StubTrialRunner({hypothesis.id: FAST})
+
+    trial = runner.run(
+        hypothesis,
+        workloads,
+        _baseline(workloads),
+        round=1,
+        branch="engine/x",
+        budget_usd=budget,
+        brief=BRIEF,
+    )
+
+    assert trial.status is TrialStatus.failed
+    assert trial.error == "scripted cost exceeds budget"
+    assert trial.measurements == ()
+    assert trial.cost_usd == budget
+    assert trial.tokens_used == tokens
+    assert trial.touched_paths == ()
+
+
+def test_scripted_cost_equal_to_the_budget_is_measured() -> None:
+    """
+    GIVEN a hypothesis scripted to cost exactly the budget
+    WHEN the stub runner runs it
+    THEN the trial is measured and charged its scripted cost (only a cost
+         strictly above the budget fails)
+    """
+    project = _project()
+    workloads = _workloads(project)
+    hypothesis = _hypothesis(project)
+    runner = StubTrialRunner({hypothesis.id: FAST})
+
+    trial = runner.run(
+        hypothesis,
+        workloads,
+        _baseline(workloads),
+        round=1,
+        branch="engine/x",
+        budget_usd=FAST.cost_usd,
+        brief=BRIEF,
+    )
+
+    assert trial.status is TrialStatus.measured
+    assert trial.cost_usd == FAST.cost_usd
+
+
+def test_scripted_error_wins_over_the_budget_error() -> None:
+    """
+    GIVEN a hypothesis scripted to fail and to cost more than the budget
+    WHEN the stub runner runs it
+    THEN the trial carries the scripted error and its scripted paths, and is
+         charged at most the budget with the same share of the tokens
+    """
+    project = _project()
+    workloads = _workloads(project)
+    hypothesis = _hypothesis(project)
+    runner = StubTrialRunner({hypothesis.id: BROKEN})
+
+    trial = runner.run(
+        hypothesis,
+        workloads,
+        _baseline(workloads),
+        round=1,
+        branch="engine/x",
+        budget_usd=0.01,
+        brief=BRIEF,
+    )
+
+    assert trial.status is TrialStatus.failed
+    assert trial.error == BROKEN.error
+    assert trial.cost_usd == 0.01
+    assert trial.tokens_used == 180  # 900 x 0.01 / 0.05
+    assert trial.touched_paths == BROKEN.touched_paths
+
+
+@pytest.mark.parametrize("budget", [-0.01, math.nan, math.inf, -math.inf])
+def test_negative_or_non_finite_budget_is_refused(budget: float) -> None:
+    """
+    GIVEN a budget below 0, NaN or infinite
+    WHEN the stub runner runs a hypothesis
+    THEN a ValueError names budget_usd: NaN would let any cost through, and
+         the node always passes a finite, clamped remainder
+    """
+    project = _project()
+    workloads = _workloads(project)
+    hypothesis = _hypothesis(project)
+    runner = StubTrialRunner({hypothesis.id: FAST})
+
+    with pytest.raises(ValueError, match="budget_usd"):
+        runner.run(
+            hypothesis,
+            workloads,
+            _baseline(workloads),
+            round=1,
+            branch="engine/x",
+            budget_usd=budget,
+            brief=BRIEF,
+        )

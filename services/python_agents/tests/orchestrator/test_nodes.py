@@ -44,6 +44,7 @@ from autonomous_ai_agents.common.models import (
     Objective,
     ObjectiveKind,
     Project,
+    ProjectUnderstanding,
     RunPhase,
     RunStats,
     Technique,
@@ -54,7 +55,9 @@ from autonomous_ai_agents.common.models import (
     ViolationRule,
     Workload,
 )
+from autonomous_ai_agents.execution.protocols import TrialBrief
 from autonomous_ai_agents.execution.runner import (
+    OVER_BUDGET_ERROR,
     ScriptedOutcome,
     StubBaselineRunner,
     StubTrialRunner,
@@ -259,9 +262,17 @@ class _TamperingRunner:
         *,
         round: int,
         branch: str,
+        budget_usd: float,
+        brief: TrialBrief,
     ) -> Trial:
         trial = self._inner.run(
-            hypothesis, workloads, baseline, round=round, branch=branch
+            hypothesis,
+            workloads,
+            baseline,
+            round=round,
+            branch=branch,
+            budget_usd=budget_usd,
+            brief=brief,
         )
         return trial.model_copy(update=self._update)
 
@@ -280,9 +291,17 @@ class _CherryPickingRunner:
         *,
         round: int,
         branch: str,
+        budget_usd: float,
+        brief: TrialBrief,
     ) -> Trial:
         trial = self._inner.run(
-            hypothesis, workloads, baseline, round=round, branch=branch
+            hypothesis,
+            workloads,
+            baseline,
+            round=round,
+            branch=branch,
+            budget_usd=budget_usd,
+            brief=brief,
         )
         fast = tuple(
             _measurement(m.workload_id, m.metric, (1.0,) * 5)
@@ -306,9 +325,17 @@ class _GuardrailDodgingRunner:
         *,
         round: int,
         branch: str,
+        budget_usd: float,
+        brief: TrialBrief,
     ) -> Trial:
         trial = self._inner.run(
-            hypothesis, workloads, baseline, round=round, branch=branch
+            hypothesis,
+            workloads,
+            baseline,
+            round=round,
+            branch=branch,
+            budget_usd=budget_usd,
+            brief=brief,
         )
         healthy = tuple(
             _measurement(m.workload_id, m.metric, (0.5,) * 5, unit="")
@@ -326,8 +353,10 @@ class _DoublingBaselineRunner:
     def __init__(self, inner: StubBaselineRunner) -> None:
         self._inner = inner
 
-    def measure(self, workloads: Sequence[Workload]) -> tuple[Measurement, ...]:
-        measured = self._inner.measure(workloads)
+    def measure(
+        self, workloads: Sequence[Workload], *, run_id: str, commit: str | None
+    ) -> tuple[Measurement, ...]:
+        measured = self._inner.measure(workloads, run_id=run_id, commit=commit)
         return (*measured, *measured)
 
 
@@ -652,6 +681,45 @@ class TestBaseline:
         assert event.data["metric"] == METRIC_WALL_TIME_S
         assert event.data["n"] == 5
         assert event.data["mean"] == pytest.approx(1.80)
+
+    def test_passes_the_run_id_and_base_commit_to_the_runner(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        baseline_script: ScriptedOutcome,
+        sample_workload: Workload,
+    ) -> None:
+        """
+        GIVEN a state whose connect pinned base commit abc123
+        WHEN baseline runs
+        THEN the runner is asked to measure the workloads for this run id
+             at that commit (its worktree is <run>/baseline at the base)
+        """
+        runner = StubBaselineRunner(baseline_script)
+        state = cast(EngineState, {**base_state, "base_commit": "abc123"})
+
+        make_nodes(make_context(baseline_runner=runner))["baseline"](state)
+
+        assert runner.calls == [((sample_workload.id,), RUN_ID, "abc123")]
+
+    def test_passes_no_commit_while_connect_pins_none(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        baseline_script: ScriptedOutcome,
+    ) -> None:
+        """
+        GIVEN a fresh state (the Step 1 connect stub pins no commit)
+        WHEN baseline runs
+        THEN the runner gets commit None and the run id
+        """
+        runner = StubBaselineRunner(baseline_script)
+
+        make_nodes(make_context(baseline_runner=runner))["baseline"](base_state)
+
+        assert [(run_id, commit) for _, run_id, commit in runner.calls] == [
+            (RUN_ID, None)
+        ]
 
     def test_raises_when_an_objective_metric_has_too_few_runs(
         self, make_context: ContextFactory, base_state: EngineState
@@ -1178,6 +1246,82 @@ class TestTrials:
         assert delta["cost_usd"] == pytest.approx(0.12 + 0.05)
         assert delta["tokens_used"] == 3400 + 1200
         assert len(ctx.repository.list_trials(RUN_ID)) == 2
+
+    def test_passes_the_remaining_budget_and_a_brief_to_the_runner(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_project: Project,
+        sample_workload: Workload,
+        h1_cache: Hypothesis,
+        design_scripts: dict[str, ScriptedOutcome],
+    ) -> None:
+        """
+        GIVEN a 1.00 USD cap with 0.25 USD already spent, an understanding,
+              two profiled hotspots of which H1 targets one, and an extra
+              protected harness path from connect
+        WHEN trials runs H1
+        THEN the runner gets budget_usd 0.75 and a brief carrying the
+             understanding, only H1's hotspot, and the context's protected
+             patterns followed by the extra ones
+        """
+        mine = _hotspot(sample_project, sample_workload, "mine")
+        other = _hotspot(sample_project, sample_workload, "other")
+        hypothesis = h1_cache.model_copy(update={"hotspot_ids": (mine.id,)})
+        understanding = ProjectUnderstanding(
+            language="python", summary="a VLM bridge", served_by_model="m"
+        )
+        runner = StubTrialRunner(design_scripts)
+        ctx = make_context([hypothesis], runner=runner, hotspots=(mine, other))
+        nodes = make_nodes(ctx)
+        state = _advance(nodes, base_state, _before("trials"))
+        state = cast(
+            EngineState,
+            {
+                **state,
+                "max_cost_usd": 1.0,
+                "cost_usd": 0.25,
+                "understanding": understanding,
+                "extra_protected": ["run.sh"],
+            },
+        )
+
+        nodes["trials"](state)
+
+        assert runner.budgets == [pytest.approx(0.75)]
+        assert runner.briefs == [
+            TrialBrief(
+                understanding=understanding,
+                hotspots=(mine,),
+                protected=(*DEFAULT_PROTECTED_PATTERNS, "run.sh"),
+            )
+        ]
+
+    def test_an_overspent_run_offers_a_zero_budget(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+        design_scripts: dict[str, ScriptedOutcome],
+    ) -> None:
+        """
+        GIVEN a run that already spent more than its cap
+        WHEN trials runs H1 (scripted to cost 0.12 USD)
+        THEN the runner is offered 0.0, never a negative budget, and the stub
+             fails the trial for exceeding it without charging anything
+        """
+        runner = StubTrialRunner(design_scripts)
+        nodes = make_nodes(make_context([h1_cache], runner=runner))
+        state = _advance(nodes, base_state, _before("trials"))
+        state = cast(EngineState, {**state, "max_cost_usd": 0.5, "cost_usd": 0.6})
+
+        delta = nodes["trials"](state)
+
+        assert runner.budgets == [0.0]
+        trial = _items(delta, "round_trials", Trial)[0]
+        assert trial.error == OVER_BUDGET_ERROR
+        assert trial.cost_usd == 0.0
+        assert delta["cost_usd"] == pytest.approx(0.6)
 
     def test_counts_failed_trials(
         self,
@@ -2395,14 +2539,20 @@ class TestDeliver:
         )
 
         class _UnitRunner(StubBaselineRunner):
-            def measure(self, workloads: Sequence[Workload]) -> tuple[Measurement, ...]:
+            def measure(
+                self,
+                workloads: Sequence[Workload],
+                *,
+                run_id: str | None = None,
+                commit: str | None = None,
+            ) -> tuple[Measurement, ...]:
                 return tuple(
                     m.model_copy(
                         update={
                             "stats": m.stats.model_copy(update={"unit": unit_attack})
                         }
                     )
-                    for m in super().measure(workloads)
+                    for m in super().measure(workloads, run_id=run_id, commit=commit)
                 )
 
         nodes = make_nodes(

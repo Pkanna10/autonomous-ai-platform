@@ -46,6 +46,7 @@ from autonomous_ai_agents.common.models import (
     ViolationRule,
     Workload,
 )
+from autonomous_ai_agents.execution.protocols import TrialBrief
 from autonomous_ai_agents.execution.runner import ScriptedOutcome, StubTrialRunner
 from autonomous_ai_agents.orchestrator.main import (
     EngineGraph,
@@ -464,11 +465,21 @@ class _FlakyRunner(StubTrialRunner):
         *,
         round: int,
         branch: str,
+        budget_usd: float,
+        brief: TrialBrief,
     ) -> Trial:
         if hypothesis.id == self._flaky_id and not self._failed_once:
             self._failed_once = True
             raise ConnectionError("worktree creation failed (transient)")
-        return super().run(hypothesis, workloads, baseline, round=round, branch=branch)
+        return super().run(
+            hypothesis,
+            workloads,
+            baseline,
+            round=round,
+            branch=branch,
+            budget_usd=budget_usd,
+            brief=brief,
+        )
 
 
 def test_a_re_executed_trials_node_gets_verdicts_for_its_final_trials_only(

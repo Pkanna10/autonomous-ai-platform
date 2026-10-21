@@ -43,6 +43,7 @@ from autonomous_ai_agents.common.models import (
     VerdictOutcome,
     Workload,
 )
+from autonomous_ai_agents.execution.protocols import TrialBrief
 from autonomous_ai_agents.execution.runner import (
     ScriptedOutcome,
     StubBaselineRunner,
@@ -250,7 +251,13 @@ class TestDefaultContext:
         THEN it returns a measured trial with no measurements (the default script)
         """
         trial = default_context().runner.run(
-            h1_cache, [sample_workload], Baseline(), round=1, branch="engine/x"
+            h1_cache,
+            [sample_workload],
+            Baseline(),
+            round=1,
+            branch="engine/x",
+            budget_usd=1.0,
+            brief=TrialBrief(understanding=None, hotspots=(), protected=()),
         )
 
         assert trial.status is TrialStatus.measured
@@ -660,9 +667,17 @@ class _WrongRoundRunner:
         *,
         round: int,
         branch: str,
+        budget_usd: float,
+        brief: TrialBrief,
     ) -> Trial:
         return self._inner.run(
-            hypothesis, workloads, baseline, round=round + 1, branch=branch
+            hypothesis,
+            workloads,
+            baseline,
+            round=round + 1,
+            branch=branch,
+            budget_usd=budget_usd,
+            brief=brief,
         )
 
 
