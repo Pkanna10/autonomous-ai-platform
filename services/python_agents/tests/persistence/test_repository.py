@@ -1,9 +1,14 @@
-"""Tests for the engine repository (Step 1, unit U5).
+"""Tests for the engine repository (Step 1, unit U5; Postgres in Step 2, U8).
 
 The ``repository`` fixture is parametrised over every implementation in
-``REPOSITORY_FACTORIES`` so the Step 2 Postgres class runs the same contract:
-add it to the dict (with a skip when no database is reachable) and nothing
-else changes.
+``REPOSITORY_FACTORIES``, so ``InMemoryRepository`` and ``PostgresRepository``
+run the same contract. The Postgres case carries the ``postgres`` marker and
+is skipped when ``TEST_DATABASE_URL`` is unset (see ``conftest.py``).
+
+Step 2 changed builders only: ``lessons.project_id`` is a foreign key to
+``projects``, so a project lesson's project is first registered through
+``save_run`` with a uuid4 id (``_registered_project``) and listed by that id.
+No assertion changed.
 """
 
 from __future__ import annotations
@@ -30,16 +35,34 @@ from autonomous_ai_agents.common.models import (
 from autonomous_ai_agents.orchestrator.state import EngineState, initial_state
 from autonomous_ai_agents.persistence.repository import InMemoryRepository, Repository
 
-REPOSITORY_FACTORIES: dict[str, Callable[[], Repository]] = {
-    "in_memory": InMemoryRepository,
+
+def _in_memory(request: pytest.FixtureRequest) -> Repository:
+    return InMemoryRepository()
+
+
+def _postgres(request: pytest.FixtureRequest) -> Repository:
+    """A PostgresRepository on this worker's emptied test database (or a skip)."""
+    repository: Repository = request.getfixturevalue("postgres_repository")
+    return repository
+
+
+REPOSITORY_FACTORIES: dict[str, Callable[[pytest.FixtureRequest], Repository]] = {
+    "in_memory": _in_memory,
+    "postgres": _postgres,
 }
+_MARKS: dict[str, pytest.MarkDecorator] = {"postgres": pytest.mark.postgres}
 
 
-@pytest.fixture(params=sorted(REPOSITORY_FACTORIES))
+@pytest.fixture(
+    params=[
+        pytest.param(name, marks=[_MARKS[name]] if name in _MARKS else [])
+        for name in sorted(REPOSITORY_FACTORIES)
+    ]
+)
 def repository(request: pytest.FixtureRequest) -> Iterator[Repository]:
     """Yield a fresh repository of the parametrised implementation."""
     name: str = request.param
-    yield REPOSITORY_FACTORIES[name]()
+    yield REPOSITORY_FACTORIES[name](request)
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +106,20 @@ def _verdict(trial: Trial, outcome: VerdictOutcome = VerdictOutcome.keep) -> Ver
 
 def _lesson(project_id: str | None, text: str) -> Lesson:
     return Lesson(project_id=project_id, outcome=VerdictOutcome.keep, text=text)
+
+
+def _registered_project(repository: Repository, key: str) -> str:
+    """Save a run for a fresh project rooted at /home/dev/<key>; return its id.
+
+    A project lesson needs its project registered first on Postgres
+    (``lessons.project_id`` references ``projects``); the in-memory backend
+    accepts any id either way.
+    """
+    state = _state(f"run-{key}")
+    project = state["project"].model_copy(update={"root_path": f"/home/dev/{key}"})
+    state["project"] = project
+    repository.save_run(state)
+    return project.id
 
 
 # ---------------------------------------------------------------------------
@@ -261,8 +298,12 @@ def test_list_lessons_without_filter_returns_all_in_insertion_order(
     THEN all come back in the order saved
     """
     global_lesson = _lesson(None, "frozen encoder -> cache embeddings")
-    project_a = _lesson("project-a", "bf16 needs approval here")
-    project_b = _lesson("project-b", "numba hurt on this workload")
+    project_a = _lesson(
+        _registered_project(repository, "project-a"), "bf16 needs approval here"
+    )
+    project_b = _lesson(
+        _registered_project(repository, "project-b"), "numba hurt on this workload"
+    )
 
     repository.save_lesson(project_a)
     repository.save_lesson(global_lesson)
@@ -280,15 +321,17 @@ def test_list_lessons_for_a_project_includes_global_ones(
     WHEN lessons are listed for one project
     THEN that project's lessons and the global ones come back, others do not
     """
+    a_id = _registered_project(repository, "project-a")
+    b_id = _registered_project(repository, "project-b")
     global_lesson = _lesson(None, "frozen encoder -> cache embeddings")
-    project_a = _lesson("project-a", "bf16 needs approval here")
-    project_b = _lesson("project-b", "numba hurt on this workload")
+    project_a = _lesson(a_id, "bf16 needs approval here")
+    project_b = _lesson(b_id, "numba hurt on this workload")
     repository.save_lesson(project_a)
     repository.save_lesson(global_lesson)
     repository.save_lesson(project_b)
 
-    assert repository.list_lessons("project-a") == (project_a, global_lesson)
-    assert repository.list_lessons("project-b") == (global_lesson, project_b)
+    assert repository.list_lessons(a_id) == (project_a, global_lesson)
+    assert repository.list_lessons(b_id) == (global_lesson, project_b)
     assert repository.list_lessons("unknown") == (global_lesson,)
 
 
@@ -300,7 +343,7 @@ def test_saving_a_lesson_with_the_same_id_replaces_it(
     WHEN a reweighted copy with the same id is saved
     THEN the list holds the reweighted copy only
     """
-    lesson = _lesson("project-a", "cache embeddings")
+    lesson = _lesson(_registered_project(repository, "project-a"), "cache embeddings")
     repository.save_lesson(lesson)
     reweighted = lesson.model_copy(update={"weight": 2.0})
 
