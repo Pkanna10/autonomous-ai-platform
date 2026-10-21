@@ -8,6 +8,7 @@ through JSON unchanged.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, date, datetime
 from enum import StrEnum
@@ -703,3 +704,103 @@ def test_measurement_fingerprint_is_64_hex_chars_or_none() -> None:
         _measurement(workload, fingerprint="not-a-digest")
     assert _measurement(workload, fingerprint=None).output_fingerprint is None
     assert _measurement(workload).output_fingerprint == "a" * 64
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: enum allowlist, approval overlap, path validators
+# ---------------------------------------------------------------------------
+
+
+def test_engine_enum_classes_and_serde_allowlist_list_every_enum() -> None:
+    """
+    GIVEN the enum allowlist and the combined serde allowlist
+    WHEN compared with every StrEnum defined in the models module
+    THEN they match exactly, so no enum can be left out of checkpoint allowlists
+    """
+    expected = {
+        obj
+        for obj in vars(m).values()
+        if isinstance(obj, type)
+        and issubclass(obj, StrEnum)
+        and obj is not StrEnum
+        and obj.__module__ == m.__name__
+    }
+
+    assert set(m.ENGINE_ENUM_CLASSES) == expected
+    assert set(m.ENGINE_SERDE_ALLOWLIST) == set(ENGINE_MODEL_CLASSES) | expected
+    assert len(m.ENGINE_SERDE_ALLOWLIST) == len(set(m.ENGINE_SERDE_ALLOWLIST))
+
+
+def test_serde_allowlist_round_trips_models_and_enums(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    GIVEN the checkpoint serializer built with the engine allowlist
+    WHEN a payload holding enums and a model is dumped and loaded
+    THEN enums come back as enum members, the model as itself, with no
+         "blocked deserialization" warning
+    """
+    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+    serde = JsonPlusSerializer(allowed_msgpack_modules=m.ENGINE_SERDE_ALLOWLIST)
+    payload = {
+        "phase": RunPhase.baseline,
+        "outcome": VerdictOutcome.keep,
+        "project": _project(),
+    }
+
+    with caplog.at_level(logging.WARNING):
+        restored = serde.loads_typed(serde.dumps_typed(payload))
+
+    assert restored["phase"] is RunPhase.baseline
+    assert restored["outcome"] is VerdictOutcome.keep
+    assert isinstance(restored["project"], Project)
+    assert restored["project"] == payload["project"]
+    blocked = [
+        r
+        for r in caplog.records
+        if "locked" in r.getMessage() or "unregistered" in r.getMessage()
+    ]
+    assert blocked == []
+
+
+def test_approval_decision_ids_must_be_disjoint() -> None:
+    """
+    GIVEN a verdict id listed as both approved and rejected
+    WHEN constructing an ApprovalDecision
+    THEN validation fails
+    """
+    with pytest.raises(ValidationError):
+        ApprovalDecision(
+            approved_verdict_ids=("v1",), rejected_verdict_ids=("v1",), approver="p"
+        )
+
+
+@pytest.mark.parametrize("bad", ["../escape", "/abs/path", "C:\\x", "~/home"])
+def test_workload_working_dir_and_hotspot_path_stay_inside_project(bad: str) -> None:
+    """
+    GIVEN a path that escapes the project root
+    WHEN used as a workload working_dir or a hotspot file_path
+    THEN validation fails, while relative paths are normalised
+    """
+    project = _project()
+
+    with pytest.raises(ValidationError):
+        Workload(project_id=project.id, name="t", command=("python",), working_dir=bad)
+    with pytest.raises(ValidationError):
+        Hotspot(
+            project_id=project.id,
+            workload_id="w",
+            file_path=bad,
+            symbol="f",
+            self_time_s=0.0,
+            total_time_s=0.0,
+            share=0.0,
+        )
+    assert (
+        Workload(
+            project_id=project.id, name="t", command=("python",), working_dir="./sub"
+        ).working_dir
+        == "sub"
+    )
+    assert _workload(project).working_dir == "."

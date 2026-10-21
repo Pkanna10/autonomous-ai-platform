@@ -1335,3 +1335,143 @@ def test_example_h4_bf16_autocast_needs_approval() -> None:
     assert results[3].outcome is PASSED
     assert verdict.outcome is VerdictOutcome.needs_approval
     assert verdict.gain == pytest.approx(0.30 / 1.80)
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: per-workload floors, secondary objectives are neutral
+# ---------------------------------------------------------------------------
+
+
+def test_metric_gain_judge_requires_every_workload_to_clear_its_own_floor() -> None:
+    """
+    GIVEN a noisy workload whose 10% gain sits inside its own floor and a quiet
+          workload whose 5% gain clears its floor
+    WHEN the speed judge evaluates the trial
+    THEN the result is inconclusive and names the noisy workload
+    """
+    from autonomous_ai_agents.common.models import (
+        METRIC_WALL_TIME_S,
+        Baseline,
+        Direction,
+        Hypothesis,
+        HypothesisSource,
+        Measurement,
+        Objective,
+        ObjectiveKind,
+        RunStats,
+        Trial,
+        TrialStatus,
+    )
+    from autonomous_ai_agents.optimization.judges import SpeedJudge
+
+    def measurement(
+        workload: str, samples: tuple[float, ...], trial_id: str | None
+    ) -> Measurement:
+        return Measurement(
+            workload_id=workload,
+            trial_id=trial_id,
+            metric=METRIC_WALL_TIME_S,
+            stats=RunStats.from_samples(samples, unit="s"),
+            samples=samples,
+        )
+
+    objective = Objective(
+        project_id="p",
+        kind=ObjectiveKind.runtime,
+        metric=METRIC_WALL_TIME_S,
+        direction=Direction.minimize,
+        min_relative_gain=0.02,
+        description="runtime",
+    )
+    baseline = Baseline(
+        measurements=(
+            measurement("noisy", (1.6, 1.8, 2.0, 1.8, 1.8), None),
+            measurement("quiet", (1.0, 1.0, 1.0, 1.0, 1.0), None),
+        ),
+        objectives=(objective,),
+    )
+    hypothesis = Hypothesis(
+        project_id="p",
+        source=HypothesisSource.playbook,
+        title="t",
+        rationale="r",
+        change_class=ChangeClass.efficiency,
+        expected_gain=0.1,
+        provability=0.9,
+        risk=0.1,
+    )
+    trial = Trial(
+        hypothesis_id=hypothesis.id,
+        round=1,
+        status=TrialStatus.measured,
+        measurements=(
+            measurement("noisy", (1.62,) * 5, "t1"),
+            measurement("quiet", (0.95,) * 5, "t1"),
+        ),
+    )
+
+    result = SpeedJudge().evaluate(baseline, trial)
+
+    assert result.outcome is JudgeOutcome.inconclusive
+    assert "noisy" in result.reason
+
+
+def test_secondary_objective_inside_noise_is_neutral_but_primary_is_not() -> None:
+    """
+    GIVEN a passed primary-metric judge and an inconclusive secondary one
+    WHEN the verdict is derived with each metric as primary in turn
+    THEN the secondary inside its noise is neutral (keep), the primary is not,
+         and an inconclusive guardrail judge always blocks
+    """
+    from autonomous_ai_agents.common.models import (
+        METRIC_PEAK_RSS_BYTES,
+        METRIC_WALL_TIME_S,
+        Hypothesis,
+        HypothesisSource,
+        JudgeResult,
+        Trial,
+        TrialStatus,
+    )
+    from autonomous_ai_agents.optimization.judges import derive_verdict
+
+    hypothesis = Hypothesis(
+        project_id="p",
+        source=HypothesisSource.playbook,
+        title="t",
+        rationale="r",
+        change_class=ChangeClass.efficiency,
+        expected_gain=0.1,
+        provability=0.9,
+        risk=0.1,
+    )
+    trial = Trial(hypothesis_id=hypothesis.id, round=1, status=TrialStatus.measured)
+    speed = JudgeResult(
+        judge="speed",
+        outcome=JudgeOutcome.passed,
+        metric=METRIC_WALL_TIME_S,
+        gain=0.4,
+        reason="x",
+    )
+    memory = JudgeResult(
+        judge="memory",
+        outcome=JudgeOutcome.inconclusive,
+        metric=METRIC_PEAK_RSS_BYTES,
+        reason="inside noise",
+    )
+    guard = JudgeResult(
+        judge="guardrail", outcome=JudgeOutcome.inconclusive, reason="missing"
+    )
+
+    keep = derive_verdict(
+        trial, hypothesis, (speed, memory), (), primary_metric=METRIC_WALL_TIME_S
+    )
+    blocked = derive_verdict(
+        trial, hypothesis, (speed, memory), (), primary_metric=METRIC_PEAK_RSS_BYTES
+    )
+    guarded = derive_verdict(
+        trial, hypothesis, (speed, guard), (), primary_metric=METRIC_WALL_TIME_S
+    )
+
+    assert keep.outcome is VerdictOutcome.keep
+    assert blocked.outcome is VerdictOutcome.inconclusive
+    assert guarded.outcome is VerdictOutcome.inconclusive

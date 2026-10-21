@@ -27,6 +27,8 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from autonomous_ai_agents.common.paths import normalize_path
+
 # ---------------------------------------------------------------------------
 # Constants and helpers
 # ---------------------------------------------------------------------------
@@ -170,6 +172,25 @@ class EventLevel(StrEnum):
     error = "error"
 
 
+ENGINE_ENUM_CLASSES: tuple[type[StrEnum], ...] = (
+    RunPhase,
+    ObjectiveKind,
+    Direction,
+    GuardrailKind,
+    ChangeClass,
+    HypothesisSource,
+    HypothesisStatus,
+    TrialStatus,
+    JudgeOutcome,
+    VerdictOutcome,
+    ViolationRule,
+    DeliveryKind,
+    EventLevel,
+)
+"""Every engine enum. Checkpoint deserialisation must allow these too, or
+``state["phase"]`` comes back as a plain string after a resume."""
+
+
 # ---------------------------------------------------------------------------
 # Project, workloads, objectives, guardrails
 # ---------------------------------------------------------------------------
@@ -208,6 +229,11 @@ class Workload(EngineModel):
     warmup_runs: int = Field(default=1, ge=0)
     runs: int = Field(default=MIN_RUNS, ge=MIN_RUNS)
     created_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator("working_dir")
+    @classmethod
+    def _working_dir_inside_project(cls, value: str) -> str:
+        return normalize_path(value)
 
 
 class Objective(EngineModel):
@@ -325,6 +351,11 @@ class Hotspot(EngineModel):
     calls: int | None = None
     memory_bytes: int | None = None
     tags: tuple[str, ...] = ()
+
+    @field_validator("file_path")
+    @classmethod
+    def _file_path_inside_project(cls, value: str) -> str:
+        return normalize_path(value)
 
 
 # ---------------------------------------------------------------------------
@@ -545,6 +576,13 @@ class ApprovalDecision(EngineModel):
     note: str | None = None
     decided_at: datetime = Field(default_factory=utc_now)
 
+    @model_validator(mode="after")
+    def _ids_are_disjoint(self) -> Self:
+        overlap = set(self.approved_verdict_ids) & set(self.rejected_verdict_ids)
+        if overlap:
+            raise ValueError(f"verdicts both approved and rejected: {sorted(overlap)}")
+        return self
+
 
 class EngineEvent(EngineModel):
     """One line of the live log."""
@@ -584,3 +622,6 @@ ENGINE_MODEL_CLASSES: tuple[type[EngineModel], ...] = (
     EngineEvent,
 )
 """Every model that may appear in checkpointed state (checkpointer allowlist)."""
+
+ENGINE_SERDE_ALLOWLIST: tuple[type, ...] = (*ENGINE_MODEL_CLASSES, *ENGINE_ENUM_CLASSES)
+"""Pass to ``JsonPlusSerializer(allowed_msgpack_modules=...)`` for the checkpointer."""

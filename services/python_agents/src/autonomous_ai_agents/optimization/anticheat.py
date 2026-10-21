@@ -11,10 +11,8 @@ from __future__ import annotations
 
 import hashlib
 import math
-import re
 from collections.abc import Iterable, Sequence
 from fnmatch import fnmatchcase
-from pathlib import PurePosixPath
 
 from autonomous_ai_agents.common.models import (
     MIN_RUNS,
@@ -25,6 +23,7 @@ from autonomous_ai_agents.common.models import (
     Violation,
     ViolationRule,
 )
+from autonomous_ai_agents.common.paths import PathTraversalError, normalize_path
 
 DEFAULT_PROTECTED_PATTERNS: tuple[str, ...] = (
     # Tests and benchmarks: a trial may not change what judges it.
@@ -42,6 +41,24 @@ DEFAULT_PROTECTED_PATTERNS: tuple[str, ...] = (
     "**/tox.ini",
     "**/setup.cfg",
     "**/noxfile.py",
+    # Dependency manifests and lockfiles: a trial may not install packages
+    # on its own (installs are vetted and approval-gated).
+    "**/setup.py",
+    "**/requirements*.txt",
+    "**/uv.lock",
+    "**/poetry.lock",
+    "**/Pipfile",
+    "**/Pipfile.lock",
+    "**/package.json",
+    "**/package-lock.json",
+    "**/pnpm-lock.yaml",
+    "**/yarn.lock",
+    # Interpreter start-up hooks and environment files.
+    "**/sitecustomize.py",
+    "**/usercustomize.py",
+    "**/*.pth",
+    "**/.env",
+    "**/.env.*",
     # CI and hooks.
     ".github/**",
     ".gitlab-ci.yml",
@@ -54,27 +71,6 @@ DEFAULT_PROTECTED_PATTERNS: tuple[str, ...] = (
     "**/engine.yaml",
 )
 """Paths a trial must never modify. Matched with fnmatch on POSIX relative paths."""
-
-_WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:")
-
-
-class PathTraversalError(ValueError):
-    """Raised for absolute paths, home-relative paths or any ``..`` segment."""
-
-
-def normalize_path(path: str) -> str:
-    """Return ``path`` as a clean POSIX path relative to the project root.
-
-    Backslashes become slashes, ``./`` prefixes and doubled slashes are
-    collapsed. Absolute, drive-letter, ``~`` and ``..`` paths are refused.
-    """
-    candidate = path.replace("\\", "/")
-    if candidate.startswith(("/", "~")) or _WINDOWS_DRIVE.match(candidate):
-        raise PathTraversalError(f"path must be relative to the project root: {path!r}")
-    posix = PurePosixPath(candidate)
-    if ".." in posix.parts:
-        raise PathTraversalError(f"path must not contain '..': {path!r}")
-    return posix.as_posix()
 
 
 def _matches(path: str, pattern: str) -> bool:
@@ -190,22 +186,48 @@ def fingerprint(payload: bytes | str) -> str:
 
 def _fingerprints_by_workload(
     measurements: Sequence[Measurement],
-) -> dict[str, str | None]:
-    """First fingerprint seen per workload, in measurement order."""
-    seen: dict[str, str | None] = {}
+) -> tuple[dict[str, str | None], tuple[str, ...]]:
+    """Per workload: the agreed fingerprint (None when absent) and the conflicts.
+
+    Rows without a fingerprint (for example ``tests_passed``) are ignored, so
+    row order never matters. A workload whose rows disagree is a conflict.
+    """
+    seen: dict[str, set[str]] = {}
     for measurement in measurements:
-        seen.setdefault(measurement.workload_id, measurement.output_fingerprint)
-    return seen
+        digests = seen.setdefault(measurement.workload_id, set())
+        if measurement.output_fingerprint is not None:
+            digests.add(measurement.output_fingerprint)
+    agreed = {
+        workload_id: next(iter(digests)) if len(digests) == 1 else None
+        for workload_id, digests in seen.items()
+    }
+    conflicts = tuple(
+        workload_id for workload_id, digests in seen.items() if len(digests) > 1
+    )
+    return agreed, conflicts
 
 
 def compare_fingerprints(
     baseline: Sequence[Measurement], trial: Sequence[Measurement]
 ) -> tuple[Violation, ...]:
     """Pair baseline and trial outputs per workload and report every difference."""
-    expected = _fingerprints_by_workload(baseline)
-    actual = _fingerprints_by_workload(trial)
-    violations: list[Violation] = []
+    expected, baseline_conflicts = _fingerprints_by_workload(baseline)
+    actual, trial_conflicts = _fingerprints_by_workload(trial)
+    violations: list[Violation] = [
+        Violation(
+            rule=ViolationRule.fingerprint_mismatch,
+            message=f"workload {workload_id}: inconsistent fingerprints on {side}",
+        )
+        for side, conflicts in (
+            ("baseline", baseline_conflicts),
+            ("trial", trial_conflicts),
+        )
+        for workload_id in conflicts
+    ]
+    skip = set(baseline_conflicts) | set(trial_conflicts)
     for workload_id, baseline_digest in expected.items():
+        if workload_id in skip:
+            continue
         trial_digest = actual.get(workload_id)
         if baseline_digest is None or trial_digest is None:
             side = "baseline" if baseline_digest is None else "trial"

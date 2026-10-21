@@ -390,3 +390,72 @@ def test_compare_fingerprints_requires_baseline_fingerprints() -> None:
 
     assert len(violations) == 1
     assert violations[0].rule is ViolationRule.missing_fingerprint
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: dependency/hook files, fingerprint pairing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "setup.py",
+        "requirements.txt",
+        "requirements-dev.txt",
+        "uv.lock",
+        "sub/poetry.lock",
+        "Pipfile",
+        "Pipfile.lock",
+        "package.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "sitecustomize.py",
+        "src/usercustomize.py",
+        "venv/hook.pth",
+        ".env",
+        ".env.local",
+    ],
+)
+def test_dependency_manifests_and_interpreter_hooks_are_protected(path: str) -> None:
+    """
+    GIVEN a dependency manifest, lockfile, interpreter hook or env file
+    WHEN checked
+    THEN it is protected (installs are approval-gated, hooks run code)
+    """
+    violation = check_path(path)
+
+    assert violation is not None
+    assert violation.rule is ViolationRule.protected_path
+
+
+def test_compare_fingerprints_ignores_rows_without_fingerprints() -> None:
+    """
+    GIVEN measurement rows without a fingerprint listed first (e.g. tests_passed)
+    WHEN compared
+    THEN the fingerprinted rows are paired regardless of order
+    """
+    digest = fingerprint("same output")
+    baseline = (_measurement("w1", None), _measurement("w1", digest))
+    trial = (_measurement("w1", digest), _measurement("w1", None))
+
+    assert compare_fingerprints(baseline, trial) == ()
+
+
+def test_compare_fingerprints_flags_conflicting_rows_on_one_side() -> None:
+    """
+    GIVEN two rows of one workload on the baseline that disagree
+    WHEN compared
+    THEN one fingerprint_mismatch names the inconsistency and nothing else
+    """
+    baseline = (
+        _measurement("w1", fingerprint("a")),
+        _measurement("w1", fingerprint("b")),
+    )
+    trial = (_measurement("w1", fingerprint("a")),)
+
+    violations = compare_fingerprints(baseline, trial)
+
+    assert len(violations) == 1
+    assert violations[0].rule is ViolationRule.fingerprint_mismatch
+    assert "inconsistent" in violations[0].message

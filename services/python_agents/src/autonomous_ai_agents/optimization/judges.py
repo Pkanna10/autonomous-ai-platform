@@ -201,18 +201,22 @@ class MetricGainJudge:
                 details=details,
                 baseline=expected.stats,
             )
-        worst = min(checks, key=lambda c: c.check.gain_rel)
-        if not worst.check.passed:
+        unproven = [c for c in checks if not c.check.passed]
+        if unproven:
+            # Every workload must clear its own floor; report the one with the
+            # thinnest margin, not merely the lowest gain.
+            weakest = min(unproven, key=lambda c: c.check.gain_rel - c.check.floor_rel)
             return self._result(
                 JudgeOutcome.inconclusive,
                 reason=(
-                    f"{self.metric} gain {_percent(worst.check.gain_rel)} is inside "
-                    f"the noise floor {_percent(worst.check.floor_rel)} "
-                    f"(workload {worst.workload_id})"
+                    f"{self.metric} gain {_percent(weakest.check.gain_rel)} is inside "
+                    f"the noise floor {_percent(weakest.check.floor_rel)} "
+                    f"(workload {weakest.workload_id})"
                 ),
                 details=details,
-                worst=worst,
+                worst=weakest,
             )
+        worst = min(checks, key=lambda c: c.check.gain_rel)
         return self._result(
             JudgeOutcome.passed,
             reason=(
@@ -592,14 +596,15 @@ def derive_verdict(
     1. any violation -> reject;
     2. trial failed or rejected -> reject;
     3. any judge failed -> reject;
-    4. any judge inconclusive -> inconclusive;
+    4. the primary objective judge or any guardrail judge inconclusive ->
+       inconclusive (a secondary objective inside its noise floor is neutral);
     5. no objective judge (one carrying a metric) passed -> inconclusive;
     6. all passed: efficiency -> keep, behaviour or novel -> needs_approval.
     """
     results = tuple(judge_results)
     found = tuple(violations)
     change_class = hypothesis.change_class
-    outcome, summary = _decide(trial, change_class, results, found)
+    outcome, summary = _decide(trial, change_class, results, found, primary_metric)
     return Verdict(
         trial_id=trial.id,
         hypothesis_id=hypothesis.id,
@@ -612,11 +617,22 @@ def derive_verdict(
     )
 
 
+def _blocks_when_inconclusive(result: JudgeResult, primary: str | None) -> bool:
+    """Guardrail judges and the primary objective must be conclusive.
+
+    A secondary objective that sits inside its own noise floor is neutral:
+    it neither proves nor disproves anything, and must not veto a primary
+    gain. Regressions beyond noise still fail (rule 3).
+    """
+    return result.metric is None or primary is None or result.metric == primary
+
+
 def _decide(
     trial: Trial,
     change_class: ChangeClass,
     results: tuple[JudgeResult, ...],
     violations: tuple[Violation, ...],
+    primary: str | None,
 ) -> tuple[VerdictOutcome, str]:
     if violations:
         rules = ", ".join(dict.fromkeys(str(v.rule) for v in violations))
@@ -633,7 +649,15 @@ def _decide(
             VerdictOutcome.reject,
             f"reject: judge {failed.judge} failed: {failed.reason}",
         )
-    inconclusive = _first(results, JudgeOutcome.inconclusive)
+    inconclusive = next(
+        (
+            r
+            for r in results
+            if r.outcome is JudgeOutcome.inconclusive
+            and _blocks_when_inconclusive(r, primary)
+        ),
+        None,
+    )
     if inconclusive is not None:
         return (
             VerdictOutcome.inconclusive,
