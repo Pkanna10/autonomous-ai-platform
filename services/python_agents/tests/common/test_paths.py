@@ -11,12 +11,16 @@ from __future__ import annotations
 
 import pytest
 
+from autonomous_ai_agents.common import paths
 from autonomous_ai_agents.common.paths import (
     GIT_METADATA_NAMES,
     READ_DENY_PATTERNS,
+    RESERVED_MODULES,
+    RUNNER_MODULES,
     WRITE_DENY_PATTERNS,
     matches_pattern,
 )
+from autonomous_ai_agents.execution import editor_tools
 from autonomous_ai_agents.optimization import anticheat
 
 
@@ -248,3 +252,75 @@ def test_pattern_constants_are_tuples_of_strings() -> None:
         assert isinstance(constant, tuple)
         assert all(isinstance(item, str) and item for item in constant)
         assert len(set(constant)) == len(constant)
+
+
+# ---------------------------------------------------------------------------
+# Reserved module names (wave 2b: moved here from execution/editor_tools.py)
+# ---------------------------------------------------------------------------
+
+
+def test_runner_modules_are_pytest_and_its_start_up_imports() -> None:
+    """
+    GIVEN the test runner's top-level module names
+    WHEN inspected
+    THEN they are exactly pytest 9, its private package and what it imports
+        at start-up on any supported Python and platform
+    """
+    assert RUNNER_MODULES == frozenset(
+        {
+            "pytest",
+            "_pytest",
+            "py",
+            "pluggy",
+            "iniconfig",
+            "packaging",
+            "pygments",
+            "exceptiongroup",
+            "tomli",
+            "colorama",
+        }
+    )
+
+
+def test_reserved_modules_are_the_stdlib_plus_the_runner() -> None:
+    """
+    GIVEN the names a trial may not newly add at the repo root or under src/
+    WHEN inspected
+    THEN they are an immutable set that holds what python -m unittest and
+        pytest import at start-up, and no ordinary project or package name
+    """
+    start_up = {
+        # python -m unittest and the interpreter's own start-up
+        "unittest",
+        "site",
+        "runpy",
+        "importlib",
+        "encodings",
+        "codecs",
+        "io",
+        "os",
+        "sys",
+        "__future__",
+        "json",
+        "argparse",
+        # pytest 9 and its start-up imports
+        "pytest",
+        "_pytest",
+        "pluggy",
+        "iniconfig",
+        "packaging",
+        "pygments",
+    }
+    assert isinstance(RESERVED_MODULES, frozenset)
+    assert start_up <= RESERVED_MODULES
+    assert not {"numpy", "dedupe", "src", "tests", "scripts"} & RESERVED_MODULES
+
+
+def test_reserved_modules_have_one_definition() -> None:
+    """
+    GIVEN the editor handler and the capture rules, which both refuse shadowing
+    WHEN their reserved-name constants are compared with common/paths.py
+    THEN the editor re-exports the very same objects (one definition)
+    """
+    assert editor_tools.RESERVED_MODULES is paths.RESERVED_MODULES
+    assert editor_tools.RUNNER_MODULES is paths.RUNNER_MODULES

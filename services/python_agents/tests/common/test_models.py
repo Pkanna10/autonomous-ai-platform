@@ -505,7 +505,10 @@ def test_violation_rules_cover_measurement_completeness() -> None:
         "git_metadata",
         "unrecorded_write",
         "process_spawn",
+        # Wave 2b: a new top-level module that shadows the stdlib or the runner
+        "module_shadow",
     }
+    assert ViolationRule("module_shadow").name == "module_shadow"
 
 
 def test_approval_request_error_defaults_to_none_and_round_trips() -> None:

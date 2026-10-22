@@ -182,6 +182,7 @@ class ViolationRule(StrEnum):
     git_metadata = "git_metadata"
     unrecorded_write = "unrecorded_write"
     process_spawn = "process_spawn"
+    module_shadow = "module_shadow"
 
 
 class DeliveryKind(StrEnum):

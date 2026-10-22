@@ -33,7 +33,6 @@ from __future__ import annotations
 import contextlib
 import os
 import stat
-import sys
 import unicodedata
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, fields
@@ -53,20 +52,16 @@ from autonomous_ai_agents.common.paths import (
     normalize_path,
 )
 
+# Top-level names a write may not newly add in /repo or /repo/src: one
+# definition in common/paths.py, shared with the module_shadow capture rule.
+from autonomous_ai_agents.common.paths import RESERVED_MODULES as RESERVED_MODULES
+from autonomous_ai_agents.common.paths import RUNNER_MODULES as RUNNER_MODULES
+
 VIRTUAL_ROOT = "/repo"  # the only root Claude sees
 VIEW_MAX_CHARS = 20_000  # default result cap; the tool's ``max_characters``
 LIST_DEPTH = 2  # a directory view lists this many levels below it
 LIST_MAX_ENTRIES = 500  # ... and stops after this many entries
 SNIPPET_CONTEXT = 4  # lines shown around an edit in its result
-# Top-level names a write may not newly add in /repo or /repo/src, which a
-# trial's sys.path puts ahead of the stdlib and site-packages: pytest 9 and its
-# start-up imports, plus the stdlib. Callers add the target interpreter's own
-# names (importlib.metadata.packages_distributions()).
-RUNNER_MODULES = frozenset(
-    ("pytest", "_pytest", "py", "pluggy", "iniconfig", "packaging", "pygments")
-    + ("exceptiongroup", "tomli", "colorama")
-)
-RESERVED_MODULES: frozenset[str] = frozenset(sys.stdlib_module_names) | RUNNER_MODULES
 
 _Stat = os.stat_result | None
 _GIT_NAMES = frozenset(name.casefold() for name in GIT_METADATA_NAMES)

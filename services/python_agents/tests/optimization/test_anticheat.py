@@ -12,6 +12,7 @@ from __future__ import annotations
 import sys
 import warnings
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 
 import pytest
 
@@ -28,8 +29,10 @@ from autonomous_ai_agents.common.models import (
     Violation,
     ViolationRule,
 )
+from autonomous_ai_agents.common.paths import RESERVED_MODULES
 from autonomous_ai_agents.execution.protocols import Change
 from autonomous_ai_agents.optimization.anticheat import (
+    DEFAULT_MODULE_ROOTS,
     DEFAULT_PROTECTED_PATTERNS,
     PROCESS_SPAWN_METRICS,
     PathTraversalError,
@@ -446,6 +449,95 @@ def test_dependency_manifests_and_interpreter_hooks_are_protected(path: str) -> 
     assert violation.rule is ViolationRule.protected_path
 
 
+PYTEST_CONFIG_FILES: tuple[tuple[str, str], ...] = (
+    # Every file pytest 9 reads, in its precedence order (findpaths.py): the
+    # first two outrank pyproject.toml, tox.ini and setup.cfg.
+    ("pytest.toml", "**/pytest.toml"),
+    (".pytest.toml", "**/.pytest.toml"),
+    ("pytest.ini", "**/pytest.ini"),
+    (".pytest.ini", "**/.pytest.ini"),
+    ("pyproject.toml", "**/pyproject.toml"),
+    ("tox.ini", "**/tox.ini"),
+    ("setup.cfg", "**/setup.cfg"),
+)
+
+
+@pytest.mark.parametrize(("name", "pattern"), PYTEST_CONFIG_FILES)
+@pytest.mark.parametrize("folder", ["", "sub/", "src/pkg/"])
+def test_every_config_file_pytest_reads_is_protected(
+    folder: str, name: str, pattern: str
+) -> None:
+    """
+    GIVEN a config file pytest 9 reads (a new .pytest.ini or pytest.toml can
+        add '--collect-only' and make a failing suite exit 0), at the root or
+        nested (pytest searches every parent of the test paths)
+    WHEN checked against the default patterns, in any case
+    THEN it is a protected_path violation naming its own pattern
+    """
+    for path in (folder + name, (folder + name).upper()):
+        violation = check_path(path)
+
+        assert violation is not None, path
+        assert violation.rule is ViolationRule.protected_path
+        assert violation.pattern == pattern
+        assert pattern in DEFAULT_PROTECTED_PATTERNS
+
+
+TEST_RECIPE_FILES: tuple[tuple[str, str], ...] = (
+    # make, just and coverage read these from the working directory, and make
+    # itself resolves outside the repo, so argv protection never sees them.
+    ("Makefile", "**/Makefile"),
+    ("makefile", "**/Makefile"),
+    ("GNUmakefile", "**/GNUmakefile"),
+    ("rules.mk", "**/*.mk"),
+    ("justfile", "**/justfile"),
+    ("Justfile", "**/justfile"),
+    (".justfile", "**/.justfile"),
+    (".coveragerc", "**/.coveragerc"),
+)
+
+
+@pytest.mark.parametrize(("name", "pattern"), TEST_RECIPE_FILES)
+@pytest.mark.parametrize("folder", ["", "sub/"])
+def test_every_recipe_file_a_test_command_reads_is_protected(
+    folder: str, name: str, pattern: str
+) -> None:
+    """
+    GIVEN a recipe file 'make test' or 'just test' runs, an included make
+        fragment, or coverage's config (a trial could rewrite 'test:' to
+        'true' or lower fail_under and pass the suite)
+    WHEN checked against the default patterns, in any case
+    THEN it is a protected_path violation naming its own pattern
+    """
+    for path in (folder + name, (folder + name).upper()):
+        violation = check_path(path)
+
+        assert violation is not None, path
+        assert violation.rule is ViolationRule.protected_path
+        assert violation.pattern == pattern
+        assert pattern in DEFAULT_PROTECTED_PATTERNS
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "src/makefile_gen.py",
+        "src/coveragerc.py",
+        "docs/justfile.md",
+        "src/mk.py",
+        "data/rules.mkd",
+        "tasks/makefiles/notes.txt",
+    ],
+)
+def test_recipe_file_lookalikes_are_not_protected(path: str) -> None:
+    """
+    GIVEN a source or data path that only resembles a recipe file name
+    WHEN checked
+    THEN no violation is reported
+    """
+    assert check_path(path) is None
+
+
 def test_compare_fingerprints_ignores_rows_without_fingerprints() -> None:
     """
     GIVEN measurement rows without a fingerprint listed first (e.g. tests_passed)
@@ -510,6 +602,9 @@ def _capture(
     blobs: Mapping[str, bytes] | None = None,
     written: Mapping[str, int] | None = None,
     judged: frozenset[str] = WALL_ONLY,
+    reserved_modules: AbstractSet[str] = RESERVED_MODULES,
+    module_roots: AbstractSet[str] = DEFAULT_MODULE_ROOTS,
+    existing_dirs: AbstractSet[str] | None = None,
 ) -> tuple[Violation, ...]:
     """Run ``check_capture`` with honest defaults so only the rule under test fires.
 
@@ -522,7 +617,15 @@ def _capture(
         blobs = {}
     content = {c.path: PLAIN_SOURCE for c in changes if c.status in ("A", "M")}
     content.update(blobs)
-    return check_capture(changes, written, content, judged)
+    return check_capture(
+        changes,
+        written,
+        content,
+        judged,
+        reserved_modules=reserved_modules,
+        module_roots=module_roots,
+        existing_dirs=existing_dirs,
+    )
 
 
 def _only(
@@ -795,11 +898,29 @@ SPAWNING_SOURCES: tuple[str, ...] = (
     "import subprocess as sp\n",
     "import multiprocessing\n",
     "import multiprocessing.pool as mp\n",
-    "import concurrent.futures\n",
+    # Wave 2b: threads are allowed, so only the process pool is flagged here;
+    # 'import concurrent.futures' and 'from concurrent import futures' moved
+    # to NON_SPAWNING_SOURCES.
     "from concurrent.futures import ProcessPoolExecutor\n",
+    "from concurrent.futures import ProcessPoolExecutor as Pool\n",
+    "from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor\n",
     "from concurrent.futures.process import ProcessPoolExecutor\n",
-    "from concurrent import futures\n",
+    "from concurrent.futures.process import _process_worker\n",
+    "from concurrent.futures import process\n",
+    "from concurrent.futures import *\n",
+    "import concurrent.futures.process\n",
+    "import concurrent.futures.process as cfp\n",
     "from concurrent import *\n",
+    "import concurrent.futures\npool = concurrent.futures.ProcessPoolExecutor(2)\n",
+    "import concurrent.futures as cf\nwith cf.ProcessPoolExecutor() as pool:\n"
+    "    pass\n",
+    "import concurrent.futures as cf\nmod = cf.process\n",
+    "import concurrent.futures\nmod = concurrent.futures.process\n",
+    "from concurrent import futures\nmod = futures.process\n",
+    "from concurrent import futures as f\nf.process._process_worker\n",
+    "from concurrent import futures as f\npool = f.ProcessPoolExecutor\n",
+    "import concurrent as c\nmod = c.futures.process\n",
+    "pool = ProcessPoolExecutor(max_workers=4)\n",
     "from subprocess import run as go\n",
     "from multiprocessing import *\n",
     "def helper():\n    import subprocess\n    return subprocess\n",
@@ -840,6 +961,12 @@ SPAWNING_SOURCES: tuple[str, ...] = (
     "import asyncio.subprocess\n",
     "from asyncio import *\n",
     "loop.subprocess_exec(factory, 'true')\n",
+    # The stdlib's own fork+exec primitive and drop-in multiprocessing forks.
+    "import _posixsubprocess\n_posixsubprocess.fork_exec\n",
+    "from _posixsubprocess import fork_exec\n",
+    "import multiprocess\nmultiprocess.Pool()\n",
+    "from multiprocess.pool import Pool\n",
+    "from billiard import Pool\n",
 )
 
 
@@ -885,6 +1012,26 @@ NON_SPAWNING_SOURCES: tuple[str, ...] = (
     "import_module = registry.get\nimport_module('x')\n",
     "import torch.nn as nn\nimport asyncio\nasyncio.run(main())\n",
     "import concurrent\nconcurrent.interpreters = None\n",
+    # Wave 2b: threads share the process, so they cannot fake per-process CPU
+    # or RSS accounting. These two were spawning sources before.
+    "import concurrent.futures\n",
+    "from concurrent import futures\n",
+    "from concurrent.futures import ThreadPoolExecutor\n",
+    "from concurrent.futures import ThreadPoolExecutor, as_completed, wait\n",
+    "from concurrent.futures.thread import ThreadPoolExecutor\n",
+    "import concurrent.futures\n"
+    "with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:\n"
+    "    list(pool.map(str, range(3)))\n",
+    "import concurrent.futures as cf\ndone, _ = cf.wait([cf.Future()])\n",
+    "from concurrent import futures as f\nf.ThreadPoolExecutor().submit(print)\n",
+    "from concurrent import futures\nfutures.as_completed([])\n",
+    "import concurrent.futures as cf\ncf.thread.ThreadPoolExecutor\n",
+    "import asyncio\nloop.run_in_executor(None, print)\n",
+    "worker.process(item)\nself.process = None\n",
+    "self.executor.process(job)\n",
+    # Names that only start like a spawning module.
+    "import multiprocess_utils\nfrom billiards import table\n",
+    "from posixsubprocess_docs import notes\n",
 )
 
 
@@ -901,6 +1048,41 @@ def test_process_spawn_ignores_comments_strings_and_harmless_names(source: str) 
     found = _capture((change,), blobs={change.path: source.encode()}, judged=RSS_JUDGED)
 
     assert found == ()
+
+
+@pytest.mark.parametrize(
+    ("source", "finding"),
+    [
+        ("import concurrent.futures as cf\ncf.process\n", "line 2: uses cf.process"),
+        (
+            "import concurrent.futures\nconcurrent.futures.process\n",
+            "line 2: uses concurrent.futures.process",
+        ),
+        ("pool = ProcessPoolExecutor()\n", "line 1: uses ProcessPoolExecutor"),
+        (
+            "import concurrent.futures as cf\ncf.ProcessPoolExecutor()\n",
+            "line 2: uses .ProcessPoolExecutor",
+        ),
+        (
+            "from concurrent.futures import ProcessPoolExecutor\n",
+            "line 1: imports concurrent.futures.ProcessPoolExecutor",
+        ),
+    ],
+)
+def test_process_spawn_names_the_process_pool_it_found(
+    source: str, finding: str
+) -> None:
+    """
+    GIVEN a file that reaches concurrent.futures' process pool, but no thread pool
+    WHEN the capture rules run with peak RSS judged
+    THEN the violation names the process pool reference and its line
+    """
+    change = _modified("dedupe/core.py")
+
+    found = _capture((change,), blobs={change.path: source.encode()}, judged=RSS_JUDGED)
+
+    message = _only(found, ViolationRule.process_spawn, change.path).message
+    assert finding in message
 
 
 def test_process_spawn_metrics_are_cpu_time_and_peak_rss() -> None:
@@ -1214,3 +1396,468 @@ def test_capture_follows_the_e2e_fixture_shapes() -> None:
         RSS_JUDGED,
     )
     _only(h6_found, ViolationRule.forbidden_file_mode, "dedupe/fast.py")
+
+
+# module_shadow (wave 2b) -------------------------------------------------------
+
+SHADOWING_ADDS: tuple[tuple[str, str], ...] = (
+    # python -m unittest and pytest put the working directory first on
+    # sys.path, so these replace the runner and a failing suite "passes".
+    ("unittest.py", "unittest"),
+    ("pytest.py", "pytest"),
+    ("_pytest/__init__.py", "_pytest"),
+    ("pytest/__main__.py", "pytest"),
+    ("site.py", "site"),
+    ("__future__.py", "__future__"),
+    ("src/unittest.py", "unittest"),
+    ("src/pluggy/__init__.py", "pluggy"),
+    ("src/json/deep/x.py", "json"),
+    # A new reserved directory, whatever it holds, as the editor refuses it.
+    ("json/notes.txt", "json"),
+    # Case-insensitive, because macOS filesystems are.
+    ("PyTest.py", "pytest"),
+    ("SRC/pytest.py", "pytest"),
+    ("Unittest/__init__.py", "unittest"),
+)
+
+
+@pytest.mark.parametrize("judged", [WALL_ONLY, RSS_JUDGED])
+@pytest.mark.parametrize(("path", "name"), SHADOWING_ADDS)
+def test_module_shadow_flags_a_new_reserved_top_level_module(
+    path: str, name: str, judged: frozenset[str]
+) -> None:
+    """
+    GIVEN an added path that creates a top-level module or package, at the
+        repo root or directly under src/, named after a stdlib or test-runner
+        module (the ScriptedEditor bypasses the editor's own refusal)
+    WHEN the capture rules run, whatever metrics are judged
+    THEN one module_shadow violation names the path and the module
+    """
+    found = _capture((_added(path),), judged=judged)
+
+    violation = _only(found, ViolationRule.module_shadow, path)
+    assert violation.pattern == name
+    assert repr(name) in violation.message
+    assert "shadow" in violation.message
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        # The user's own modules named like stdlib ones stay editable.
+        _modified("profile.py"),
+        _modified("src/json/__init__.py"),
+        _deleted("unittest.py"),
+        _deleted("src/pytest/__init__.py"),
+        # Not a top-level module on a trial's sys.path.
+        _added("docs/json.py"),
+        _added("src/pkg/pytest.py"),
+        _added("lib/src/unittest.py"),
+        _added("src/__init__.py"),
+        # Not importable, or not reserved.
+        _added("pytest.txt"),
+        _added("unittest.pyi"),
+        _added("src/json"),
+        _added("src/core_json.py"),
+        _added("numpy.py"),
+        _added("src.py"),
+        _added("dedupe/fast.py"),
+    ],
+)
+def test_module_shadow_ignores_existing_nested_and_unimportable_paths(
+    change: Change,
+) -> None:
+    """
+    GIVEN a change that edits or deletes an existing module, adds a submodule,
+        a path off sys.path, a data file or a module with an unreserved name
+    WHEN the capture rules run
+    THEN nothing is reported
+    """
+    assert _capture((change,)) == ()
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        (_modified("src/json/core.py"), _added("src/json/fast.py")),
+        (_added("src/json/fast.py"), _modified("src/json/core.py")),
+        (_deleted("code/old.py"), _added("code/new.py")),
+        (_modified("JSON/core.py"), _added("json/fast.py")),
+    ],
+)
+def test_module_shadow_allows_new_files_in_a_reserved_directory_the_base_has(
+    changes: tuple[Change, ...],
+) -> None:
+    """
+    GIVEN a reserved-named directory the user's repo already has, proven by a
+        modified or deleted path under it in the same diff (in any order)
+    WHEN the trial adds a module inside it
+    THEN no new top-level package is created, so nothing is reported (the
+        editor allows the same edit)
+    """
+    assert _capture(changes) == ()
+
+
+def test_module_shadow_counts_a_retyped_path_as_proof_too() -> None:
+    """
+    GIVEN a retyped path under json/ next to a module added there
+    WHEN the capture rules run
+    THEN only the retyped path's mode is reported: json/ existed at the base
+    """
+    retyped = Change("T", FILE_MODE, SYMLINK_MODE, "json/link")
+
+    found = _capture((retyped, _added("json/fast.py")))
+
+    assert [(v.rule, v.path) for v in found] == [
+        (ViolationRule.forbidden_file_mode, "json/link")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("changes", "path"),
+    [
+        # A namespace directory turned into a regular package wins the import.
+        ((_modified("json/data.txt"), _added("json/__init__.py")), "json/__init__.py"),
+        (
+            (_modified("src/json/data.txt"), _added("src/json/__init__.py")),
+            "src/json/__init__.py",
+        ),
+        # A file called json is not a json/ directory.
+        ((_deleted("json"), _added("json/util.py")), "json/util.py"),
+        # Proof at the other level does not count.
+        ((_modified("src/json/core.py"), _added("json/x.txt")), "json/x.txt"),
+        ((_modified("json/a.py"), _added("src/json/b.py")), "src/json/b.py"),
+    ],
+)
+def test_module_shadow_needs_proof_that_the_base_had_the_directory(
+    changes: tuple[Change, ...], path: str
+) -> None:
+    """
+    GIVEN an added path under a reserved name whose directory the diff does not
+        prove existed, or an added __init__.py that makes it a regular package
+    WHEN the capture rules run
+    THEN the added path is a module_shadow violation
+    """
+    _only(_capture(changes), ViolationRule.module_shadow, path)
+
+
+def test_module_shadow_flags_every_added_path_of_a_new_reserved_package() -> None:
+    """
+    GIVEN two added files in a new reserved directory (one is no proof for the
+        other)
+    WHEN the capture rules run
+    THEN both are module_shadow violations, in change order
+    """
+    found = _capture((_added("json/a.txt"), _added("JSON/b.txt")))
+
+    assert [(v.rule, v.path, v.pattern) for v in found] == [
+        (ViolationRule.module_shadow, "json/a.txt", "json"),
+        (ViolationRule.module_shadow, "JSON/b.txt", "json"),
+    ]
+
+
+def test_module_shadow_reserved_names_can_be_extended_or_replaced() -> None:
+    """
+    GIVEN the trial runner's own reserved set (the default plus a workload's
+        '-m' target, in any case), or an empty one
+    WHEN the capture rules run
+    THEN the extra name is reserved next to the default ones, and an empty set
+        reserves nothing
+    """
+    numpy_pkg, json_mod = _added("numpy/__init__.py"), _added("json.py")
+
+    extended = _capture(
+        (numpy_pkg, json_mod), reserved_modules=RESERVED_MODULES | {"NumPy"}
+    )
+
+    assert [(v.rule, v.path, v.pattern) for v in extended] == [
+        (ViolationRule.module_shadow, "numpy/__init__.py", "numpy"),
+        (ViolationRule.module_shadow, "json.py", "json"),
+    ]
+    assert _capture((numpy_pkg,)) == ()
+    assert _capture((_added("unittest.py"),), reserved_modules=frozenset()) == ()
+
+
+def test_module_shadow_is_reported_next_to_the_other_rules() -> None:
+    """
+    GIVEN an added symlink called unittest.py, listed twice, that the editor
+        did not report and that has no blob (a link has none)
+    WHEN the capture rules run
+    THEN its mode, the unrecorded write and the shadowing are each reported once
+    """
+    link = _added("unittest.py", SYMLINK_MODE)
+
+    found = check_capture((link, link), {}, {}, RSS_JUDGED)
+
+    assert [(v.rule, v.path) for v in found] == [
+        (ViolationRule.forbidden_file_mode, link.path),
+        (ViolationRule.unrecorded_write, link.path),
+        (ViolationRule.module_shadow, link.path),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("changes", "effect"),
+    [
+        ((_added("unittest.py"),), "which creates the top-level module 'unittest'"),
+        ((_added("json/notes.txt"),), "which creates the top-level package 'json'"),
+        (
+            (_modified("JSON/data.txt"), _added("JSON/__init__.py")),
+            "which makes the existing directory 'JSON' the regular package 'json'",
+        ),
+        (
+            (_modified("src/json/data.txt"), _added("src/json/__init__.py")),
+            "which makes the existing directory 'src/json' the regular package 'json'",
+        ),
+    ],
+)
+def test_module_shadow_says_what_the_added_path_creates(
+    changes: tuple[Change, ...], effect: str
+) -> None:
+    """
+    GIVEN an added module, a file in a new reserved directory, or an
+        __init__.py in a reserved directory the base already had
+    WHEN the capture rules run
+    THEN the message says whether it creates a module, a package, or turns
+        the existing directory into a regular package
+    """
+    path = changes[-1].path
+
+    message = _only(_capture(changes), ViolationRule.module_shadow, path).message
+
+    assert f"trial adds {path!r}, {effect} that would shadow" in message
+
+
+def test_module_shadow_refuses_a_str_for_a_set_of_names() -> None:
+    """
+    GIVEN reserved_modules passed as one str (iterating it would reserve its
+        letters and let unittest.py through)
+    WHEN the capture rules run
+    THEN a TypeError names the keyword; the type: ignore below also fails
+        mypy (warn_unused_ignores) if the signature ever accepts a str again
+    """
+    change = _added("unittest.py")
+
+    with pytest.raises(TypeError, match="reserved_modules"):
+        check_capture(
+            (change,),
+            {change.path: 1},
+            {change.path: PLAIN_SOURCE},
+            WALL_ONLY,
+            reserved_modules="unittest",  # type: ignore[arg-type]
+        )
+
+
+def test_module_shadow_reserves_the_top_level_part_of_a_dotted_name() -> None:
+    """
+    GIVEN a reserved set extended with a dotted '-m' target ('dedupe.main')
+    WHEN the trial adds the package or module that import starts from
+    THEN both are module_shadow violations on the first component
+    """
+    reserved = RESERVED_MODULES | {"dedupe.main"}
+
+    found = _capture(
+        (_added("dedupe/__init__.py"), _added("Dedupe.py")), reserved_modules=reserved
+    )
+
+    assert [(v.rule, v.path, v.pattern) for v in found] == [
+        (ViolationRule.module_shadow, "dedupe/__init__.py", "dedupe"),
+        (ViolationRule.module_shadow, "Dedupe.py", "dedupe"),
+    ]
+    # The user's own package of that name, which the base has, stays editable.
+    own = _capture(
+        (_added("dedupe/fast.py"),),
+        reserved_modules=reserved,
+        existing_dirs=frozenset({"dedupe"}),
+    )
+    assert own == ()
+
+
+# module_shadow: the base tree's directories and extra module roots ------------
+
+BASE_TREE_DIRS = frozenset({"code", "src/email", "Queue", "dedupe"})
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        # The finding's case: nothing else under code/ changes.
+        (_added("code/fast.py"), _modified("main.py")),
+        (_added("code/sub/deep.py"),),
+        (_added("src/email/fast.py"),),
+        # Case-insensitive, because macOS filesystems are.
+        (_added("queue/fast.py"),),
+        (_added("CODE/notes.txt"),),
+    ],
+)
+def test_module_shadow_trusts_the_base_tree_directories_it_is_given(
+    changes: tuple[Change, ...],
+) -> None:
+    """
+    GIVEN the base tree's directories (the trial runner lists them with
+        git ls-tree), holding the user's own code/, src/email/ and Queue/
+    WHEN the trial adds a file inside one, with no other change under it
+    THEN nothing is reported: the WorktreeEditor allows the same write
+    """
+    assert _capture(changes, existing_dirs=BASE_TREE_DIRS) == ()
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        # A regular package beats a namespace portion and the stdlib.
+        "code/__init__.py",
+        "src/email/__init__.py",
+        # A module next to the directory, or a directory the base lacks.
+        "code.py",
+        "json/fast.py",
+        # Listed at the other root only.
+        "email/fast.py",
+        "src/code/fast.py",
+    ],
+)
+def test_module_shadow_still_flags_what_the_base_tree_does_not_have(path: str) -> None:
+    """
+    GIVEN the base tree's directories
+    WHEN the trial adds an __init__.py to one, a reserved module beside it, or
+        a file in a reserved directory the base does not have at that root
+    THEN the added path is a module_shadow violation
+    """
+    _only(
+        _capture((_added(path),), existing_dirs=BASE_TREE_DIRS),
+        ViolationRule.module_shadow,
+        path,
+    )
+
+
+def test_module_shadow_counts_the_diff_proof_next_to_the_base_tree() -> None:
+    """
+    GIVEN an empty base-tree listing (nothing at the roots is a directory)
+    WHEN the diff itself proves json/ existed, or proves nothing
+    THEN the proven directory stays open and the other is flagged
+    """
+    proven = (_modified("json/core.py"), _added("json/fast.py"))
+
+    assert _capture(proven, existing_dirs=frozenset()) == ()
+    _only(
+        _capture((_added("code/fast.py"),), existing_dirs=frozenset()),
+        ViolationRule.module_shadow,
+        "code/fast.py",
+    )
+
+
+def test_default_module_roots_are_the_repo_root_and_src() -> None:
+    """
+    GIVEN the module roots check_capture uses by default
+    WHEN read
+    THEN they are the repo root ('') and src/, which python -m and the
+        engine's PYTHONPATH put first on sys.path
+    """
+    assert frozenset({"", "src"}) == DEFAULT_MODULE_ROOTS
+
+
+SCRIPT_ROOTS = DEFAULT_MODULE_ROOTS | {"scripts", "./Tools/bin/"}
+
+
+@pytest.mark.parametrize(
+    ("path", "name"),
+    [
+        # 'python scripts/run_tests.py' puts scripts/ first on sys.path.
+        ("scripts/unittest.py", "unittest"),
+        ("SCRIPTS/pytest/__init__.py", "pytest"),
+        ("tools/bin/site.py", "site"),
+        ("scripts/json/notes.txt", "json"),
+        # The default roots stay covered.
+        ("unittest.py", "unittest"),
+        ("src/unittest.py", "unittest"),
+    ],
+)
+def test_module_shadow_covers_every_module_root_it_is_given(
+    path: str, name: str
+) -> None:
+    """
+    GIVEN module roots extended with the directories of the test command's
+        scripts (in any case and spelling: './Tools/bin/' is tools/bin)
+    WHEN the trial adds a reserved top-level module or package to any root
+    THEN it is a module_shadow violation naming the module
+    """
+    found = _capture((_added(path),), module_roots=SCRIPT_ROOTS)
+
+    assert _only(found, ViolationRule.module_shadow, path).pattern == name
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        (_added("scripts/sub/unittest.py"),),
+        (_added("tools/unittest.py"),),
+        (_added("scripts/helper.py"),),
+        (_modified("scripts/json/a.py"), _added("scripts/json/b.py")),
+    ],
+)
+def test_module_shadow_ignores_what_no_module_root_imports_first(
+    changes: tuple[Change, ...],
+) -> None:
+    """
+    GIVEN extra module roots
+    WHEN the trial adds a path nested below a root, beside one, unreserved, or
+        inside a reserved directory the diff proves the base had
+    THEN nothing is reported
+    """
+    assert _capture(changes, module_roots=SCRIPT_ROOTS) == ()
+
+
+def test_module_shadow_roots_use_the_base_tree_and_are_the_full_set() -> None:
+    """
+    GIVEN a script root whose reserved-named directory the base tree has, the
+        default roots, and a root set without the repo root
+    WHEN the trial adds files there
+    THEN the base directory stays open, scripts/ is no root by default, and a
+        set without '' does not cover the repo root (callers pass the full set)
+    """
+    in_base = _capture(
+        (_added("scripts/json/x.py"),),
+        module_roots=SCRIPT_ROOTS,
+        existing_dirs=frozenset({"scripts/json"}),
+    )
+
+    assert in_base == ()
+    assert _capture((_added("scripts/unittest.py"),)) == ()
+    assert _capture((_added("unittest.py"),), module_roots=frozenset({"src"})) == ()
+
+
+@pytest.mark.parametrize(
+    ("keyword", "value"),
+    [
+        ("module_roots", frozenset({"../outside"})),
+        ("existing_dirs", frozenset({"/abs"})),
+    ],
+)
+def test_module_shadow_refuses_paths_that_leave_the_repo(
+    keyword: str, value: frozenset[str]
+) -> None:
+    """
+    GIVEN a module root or a base directory that is absolute or uses '..'
+    WHEN the capture rules run
+    THEN PathTraversalError is raised (a caller bug, never a silent pass)
+    """
+    roots = value if keyword == "module_roots" else DEFAULT_MODULE_ROOTS
+    dirs = value if keyword == "existing_dirs" else None
+
+    with pytest.raises(PathTraversalError):
+        _capture((_added("unittest.py"),), module_roots=roots, existing_dirs=dirs)
+
+
+def test_module_shadow_refuses_a_str_for_the_path_sets() -> None:
+    """
+    GIVEN module_roots or existing_dirs passed as one str
+    WHEN the capture rules run
+    THEN a TypeError names the keyword (mypy refuses the call too)
+    """
+    change = _added("scripts/unittest.py")
+    args = ((change,), {change.path: 1}, {change.path: PLAIN_SOURCE}, WALL_ONLY)
+
+    with pytest.raises(TypeError, match="module_roots"):
+        check_capture(*args, module_roots="scripts")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="existing_dirs"):
+        check_capture(*args, existing_dirs="scripts")  # type: ignore[arg-type]

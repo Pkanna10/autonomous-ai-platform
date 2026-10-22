@@ -323,21 +323,14 @@ def test_reserved_modules_can_be_extended_or_replaced(worktree: Path) -> None:
     assert not created.is_error
 
 
-_MISSING_FROM_PROTECTED = pytest.mark.xfail(
-    strict=True,
-    reason="DEFAULT_PROTECTED_PATTERNS (anticheat.py, U9) lacks this name: remove "
-    "this mark when the pattern is added",
-)
-
-
 @pytest.mark.parametrize(
     "name",
     [
         # Every name pytest 9 reads, in its precedence order (findpaths.py).
-        pytest.param("pytest.toml", marks=_MISSING_FROM_PROTECTED),
-        pytest.param(".pytest.toml", marks=_MISSING_FROM_PROTECTED),
+        "pytest.toml",
+        ".pytest.toml",
         "pytest.ini",
-        pytest.param(".pytest.ini", marks=_MISSING_FROM_PROTECTED),
+        ".pytest.ini",
         "pyproject.toml",
         "tox.ini",
         "setup.cfg",

@@ -5,13 +5,14 @@ and must never escape it: no absolute paths, drive letters, ``~`` or ``..``.
 
 ``matches_pattern`` is the one matcher behind the protected-path check, the
 editor's read and write deny lists and the capture rules, and the pattern
-constants below are the one definition the editor handler and the capture
-rules both enforce.
+and reserved-module constants below are the one definition the editor
+handler and the capture rules both enforce.
 """
 
 from __future__ import annotations
 
 import re
+import sys
 from fnmatch import fnmatchcase
 from pathlib import PurePosixPath
 
@@ -94,6 +95,22 @@ files. ``**/`` makes a name match at the root and at any depth.
 merely starts with it (``id_utils/``, ``credentials_loader.py``). SSH keys are
 therefore named by algorithm, and ``credentials`` / ``secrets`` need an exact
 name or a ``.`` right after it."""
+
+RUNNER_MODULES: frozenset[str] = frozenset(
+    ("pytest", "_pytest", "py", "pluggy", "iniconfig", "packaging", "pygments")
+    + ("exceptiongroup", "tomli", "colorama")
+)
+"""pytest 9 and the top-level modules it imports at start-up on any platform."""
+
+RESERVED_MODULES: frozenset[str] = frozenset(sys.stdlib_module_names) | RUNNER_MODULES
+"""Top-level module names a trial may not newly add in the repo root or ``src/``.
+
+A trial's ``sys.path`` puts both ahead of the stdlib and site-packages
+(``python -m`` adds the working directory, the engine's ``PYTHONPATH`` the
+two roots), so an added ``unittest.py`` or ``pytest/`` replaces the test
+runner and can make a failing suite pass. Callers add the target
+interpreter's own names (``importlib.metadata.packages_distributions()``)
+and the workload's ``-m`` targets."""
 
 
 def matches_pattern(path: str, pattern: str) -> bool:
