@@ -3364,6 +3364,66 @@ class TestConnectWithPreflight:
         with pytest.raises(EngineError, match="workloads"):
             make_nodes(make_context(preflight=preflight))["connect"](base_state)
 
+    def test_each_preflight_note_is_a_warning_event_in_order(
+        self, make_context: ContextFactory, base_state: EngineState
+    ) -> None:
+        """
+        GIVEN a preflight that reports two notes (accepted risks it found)
+        WHEN connect runs
+        THEN each note is one preflight_note warning, in the report's order,
+             after the connected event and the isolation event
+        """
+        notes = (
+            "merge=union in .gitattributes: a combine conflict may be hidden",
+            "workload 'train' is not parsed for its Python syntax level",
+        )
+        preflight = FakePreflight(notes=notes)
+
+        delta = make_nodes(make_context(preflight=preflight))["connect"](base_state)
+
+        found = _coded(delta, "preflight_note")
+        assert [event.data for event in found] == [
+            {"code": "preflight_note", "note": note} for note in notes
+        ]
+        assert all(event.level is EventLevel.warning for event in found)
+        assert [event.message for event in found] == [
+            f"preflight_note: {note}" for note in notes
+        ]
+        codes = [event.data.get("code") for event in _events(delta)]
+        assert codes.index("isolation") < codes.index("preflight_note")
+
+    def test_the_engine_python_version_is_an_info_event(
+        self, make_context: ContextFactory, base_state: EngineState
+    ) -> None:
+        """
+        GIVEN a preflight that recorded the engine's interpreter version
+        WHEN connect runs
+        THEN one engine_python info event carries it as text
+        """
+        preflight = FakePreflight(python_version=(3, 11, 9))
+
+        delta = make_nodes(make_context(preflight=preflight))["connect"](base_state)
+
+        (python,) = _coded(delta, "engine_python")
+        assert python.level is EventLevel.info
+        assert python.message == "engine_python: the engine runs Python 3.11.9"
+        assert python.data == {"code": "engine_python", "python_version": "3.11.9"}
+
+    def test_no_note_or_version_events_when_the_report_has_none(
+        self, make_context: ContextFactory, base_state: EngineState
+    ) -> None:
+        """
+        GIVEN a preflight report with no notes and no python version
+        WHEN connect runs
+        THEN neither preflight_note nor engine_python is emitted
+        """
+        delta = make_nodes(make_context(preflight=FakePreflight()))["connect"](
+            base_state
+        )
+
+        assert _coded(delta, "preflight_note") == []
+        assert _coded(delta, "engine_python") == []
+
 
 class TestUnderstandWithUnderstander:
     @pytest.fixture

@@ -452,7 +452,8 @@ def _check_preflight(report: PreflightReport, workloads: Sequence[Workload]) -> 
 
 
 def _connect_events(state: EngineState, report: PreflightReport) -> list[EngineEvent]:
-    """Dirty entries, isolation modes and ignored inputs, as connect reports them."""
+    """Dirty entries, isolation modes, preflight notes (warnings), the engine's
+    Python and ignored inputs, as connect reports them."""
     phase, sha = RunPhase.connect, report.head_commit
     events: list[EngineEvent] = []
     if report.dirty_entries:
@@ -478,6 +479,28 @@ def _connect_events(state: EngineState, report: PreflightReport) -> list[EngineE
             data={"network": report.network, "fs": report.fs},
         )
     )
+    events.extend(
+        _note(
+            state,
+            phase,
+            "preflight_note",
+            note,
+            level=EventLevel.warning,
+            data={"note": note},
+        )
+        for note in report.notes
+    )
+    if report.python_version is not None:
+        version = ".".join(str(part) for part in report.python_version)
+        events.append(
+            _note(
+                state,
+                phase,
+                "engine_python",
+                f"the engine runs Python {version}",
+                data={"python_version": version},
+            )
+        )
     for workload in report.workloads:
         if workload.inputs:
             events.append(
