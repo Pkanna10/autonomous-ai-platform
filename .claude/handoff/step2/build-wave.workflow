@@ -63,7 +63,7 @@ Implement the unit exactly as the spec describes (search the spec for "${u.id}" 
 function reviewPrompt(u, report, lens) {
   return `${COMMON_RULES}
 
-You are the ${lens === 'security' ? 'SECURITY REVIEWER' : 'REVIEWER'} for unit ${u.id} ${u.title}. READ-ONLY: do not edit, format, create or delete any file in the repo (you may write scratch scripts under /tmp/aip-review/${u.id}/, never inside the repo), never run git commands that change state. You did not write this code; review it with fresh eyes.
+You are the ${lens === 'security' ? 'SECURITY REVIEWER' : 'REVIEWER'} for unit ${u.id} ${u.title}. READ-ONLY: do not edit, format, create or delete any file in the repo (you may write scratch files only under /tmp/aip-review/${u.id}-${lens}/, never inside the repo; pass -p no:cacheprovider to pytest, set COVERAGE_FILE=/tmp/aip-review/${u.id}-${lens}/.coverage when you measure coverage, and never run ruff format), never run git commands that change state. You did not write this code; review it with fresh eyes.
 Files under review: ${u.files.concat(u.tests).join(', ')}
 Lead notes given to the Builder:
 ${u.notes}
@@ -120,14 +120,25 @@ const results = await pipeline(
   units,
   u => guarded(buildPrompt(u), { label: 'build:' + u.id, phase: 'Build' }),
   (report, u) => {
-    if (!report) return { report: null, reviews: [] }
-    return parallel((u.security ? ['correctness', 'security'] : ['correctness']).map(lens => () =>
+    if (!report) return { report: null, reviews: [], missing: [] }
+    const lenses = u.security ? ['correctness', 'security'] : ['correctness']
+    return parallel(lenses.map(lens => () =>
       guarded(reviewPrompt(u, report, lens), {
         label: 'review:' + u.id + (lens === 'security' ? ':sec' : ''), phase: 'Review', schema: REVIEW_SCHEMA, model: 'fable',
-      }).then(r => ({ lens, r })))).then(reviews => ({ report, reviews: reviews.filter(x => x && x.r) }))
+      }).then(r => ({ lens, r })))).then(reviews => ({
+        report,
+        reviews: reviews.filter(x => x && x.r),
+        missing: lenses.filter((lens, i) => !reviews[i] || !reviews[i].r),
+      }))
   },
   (prev, u) => {
     if (!prev.report) return { unit: u.id, report: null, findings: [], fix: null, halted }
+    // Missing-review guard: a null review (agent died, model unavailable, ceiling) must never read as "no findings".
+    if (prev.missing.length) {
+      const msg = `MISSING REVIEW(S) for ${u.id}: ${prev.missing.join(', ')}; fixer not started` + (halted ? ` (${halted})` : '')
+      log('HALT: ' + msg)
+      return { unit: u.id, report: prev.report, findings: [], fix: null, halted: msg }
+    }
     const findings = prev.reviews.flatMap(x => (x.r?.findings ?? []).map(f => ({ ...f, lens: x.lens })))
     const actionable = findings.filter(f => f.severity !== 'nit')
     if (!actionable.length) return { unit: u.id, report: prev.report, findings, fix: null, halted }
