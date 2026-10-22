@@ -72,6 +72,8 @@ class CombineRules:
     ``completeness`` is the verdicts node's rule (every objective and
     guardrail metric measured exactly once per workload, objectives over
     enough runs), applied to the B runs and the A runs alike.
+    ``baseline_count`` is the baseline suite's passing-test count: the tip's
+    suite must reach it, as every trial's must.
     """
 
     judges: tuple[Judge, ...]
@@ -79,6 +81,7 @@ class CombineRules:
     guardrails: tuple[Guardrail, ...]
     primary: str | None
     completeness: Callable[[Sequence[Measurement]], tuple[Violation, ...]]
+    baseline_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -197,6 +200,7 @@ def _retest(
         target.base_commit,
         offered,
         target.workloads,
+        baseline_count=rules.baseline_count,
     )
     _check_measured(measured, offered)
     baseline = Baseline(

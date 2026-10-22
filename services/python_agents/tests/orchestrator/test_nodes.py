@@ -4212,6 +4212,46 @@ class TestCombineWithCombiner:
         assert event.data["holds"] is True
         assert event.data["delivered"] == 1
 
+    def test_the_combiner_gets_the_baselines_passing_test_count(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_workload: Workload,
+        h1_cache: Hypothesis,
+    ) -> None:
+        """
+        GIVEN a baseline whose test suite counted 4 passing tests
+        WHEN combine runs
+        THEN the combiner gets baseline_count=4, so the tip's suite must
+             reach the baseline's count, as every trial's must (the fallback
+             goes through the same re-test)
+        """
+        nodes = make_nodes(make_context([h1_cache]))
+        state = _committed(_advance(nodes, base_state, _before("combine")))
+        baseline = state["baseline"]
+        assert baseline is not None
+        counted = [
+            m.model_copy(update={"hardware": {**m.hardware, "tests_counted": 4}})
+            if m.metric == METRIC_TESTS_PASSED
+            else m
+            for m in baseline.measurements
+        ]
+        assert any(m.metric == METRIC_TESTS_PASSED for m in counted)
+        state = cast(
+            EngineState,
+            {
+                **state,
+                "baseline": baseline.model_copy(update={"measurements": counted}),
+            },
+        )
+        trial = _trial_of(state, h1_cache)
+        combiner = FakeCombiner([_measured(sample_workload.id, [trial.id])])
+        nodes = make_nodes(make_context([h1_cache], combiner=combiner))
+
+        nodes["combine"](state)
+
+        assert [call.baseline_count for call in combiner.calls] == [4]
+
     @pytest.mark.parametrize(
         ("combined", "reason"),
         [

@@ -1087,6 +1087,8 @@ class _EchoCombiner:
         base_commit: str,
         kept: Sequence[KeptChange],
         workloads: Sequence[Workload],
+        *,
+        baseline_count: int | None = None,
     ) -> CombineMeasured:
         self.kept.append(tuple(kept))
         ids = [w.id for w in workloads]

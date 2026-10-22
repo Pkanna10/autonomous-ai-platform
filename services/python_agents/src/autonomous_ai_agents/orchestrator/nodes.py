@@ -88,6 +88,7 @@ from autonomous_ai_agents.common.models import (
     Workload,
 )
 from autonomous_ai_agents.common.refnames import refname_problem
+from autonomous_ai_agents.execution.measure import baseline_test_count
 from autonomous_ai_agents.execution.protocols import (
     BranchPublisher,
     Combiner,
@@ -1052,6 +1053,7 @@ def _combine_rules(ctx: NodeContext, baseline: Baseline) -> CombineRules:
         guardrails=baseline.guardrails,
         primary=primary_metric(baseline.objectives),
         completeness=completeness,
+        baseline_count=baseline_test_count(baseline.measurements),
     )
 
 

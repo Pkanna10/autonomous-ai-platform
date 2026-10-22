@@ -33,6 +33,7 @@ from autonomous_ai_agents.common.models import (
 )
 from autonomous_ai_agents.execution.fakes import (
     FAKE_COMMIT,
+    CombineCall,
     FakeCombiner,
     FakeEditor,
     FakePreflight,
@@ -307,7 +308,12 @@ def test_fake_combiner_replays_results_in_order_and_records_kept_lists() -> None
     second = CombineMeasured("tip2", ("t1",), (skip,), (), ())
     fake = FakeCombiner([_measured("tip1"), DeliveryError("merge failed"), second])
 
-    assert fake.combine("r1", PROJECT, "base", kept, [WORKLOAD]).tip_commit == "tip1"
+    assert (
+        fake.combine(
+            "r1", PROJECT, "base", kept, [WORKLOAD], baseline_count=3
+        ).tip_commit
+        == "tip1"
+    )
     with pytest.raises(DeliveryError, match="merge failed"):
         fake.combine("r1", PROJECT, "base", kept, [WORKLOAD])
     assert fake.combine("r1", PROJECT, "base", kept[:0], [WORKLOAD]) is second
@@ -319,7 +325,10 @@ def test_fake_combiner_replays_results_in_order_and_records_kept_lists() -> None
         (),
         tuple(kept),
     ]
-    assert fake.calls[0] == ("r1", PROJECT, "base", tuple(kept), (WORKLOAD,))
+    assert fake.calls[0] == CombineCall(
+        "r1", PROJECT, "base", tuple(kept), (WORKLOAD,), 3
+    )
+    assert [call.baseline_count for call in fake.calls] == [3, None, None, None]
 
 
 def test_fake_publisher_returns_the_scripted_diff_or_raises() -> None:

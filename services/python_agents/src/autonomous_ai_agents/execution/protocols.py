@@ -283,6 +283,8 @@ class Combiner(Protocol):
         base_commit: str,
         kept: Sequence[KeptChange],
         workloads: Sequence[Workload],
+        *,
+        baseline_count: int | None = None,
     ) -> CombineMeasured: ...
 
 

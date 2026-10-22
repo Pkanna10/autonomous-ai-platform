@@ -68,6 +68,7 @@ class CombineCall(NamedTuple):
     base_commit: str
     kept: tuple[KeptChange, ...]
     workloads: tuple[Workload, ...]
+    baseline_count: int | None = None
 
 
 class PublishCall(NamedTuple):
@@ -190,9 +191,18 @@ class FakeCombiner:
         base_commit: str,
         kept: Sequence[KeptChange],
         workloads: Sequence[Workload],
+        *,
+        baseline_count: int | None = None,
     ) -> CombineMeasured:
         self.calls.append(
-            CombineCall(run_id, project, base_commit, tuple(kept), tuple(workloads))
+            CombineCall(
+                run_id,
+                project,
+                base_commit,
+                tuple(kept),
+                tuple(workloads),
+                baseline_count,
+            )
         )
         if len(self.calls) > len(self._results):
             raise IndexError(

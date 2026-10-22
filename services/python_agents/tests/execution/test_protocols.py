@@ -458,6 +458,7 @@ KW = inspect.Parameter.KEYWORD_ONLY
                 ("base_commit", POS),
                 ("kept", POS),
                 ("workloads", POS),
+                ("baseline_count", KW),
             ],
         ),
         (
