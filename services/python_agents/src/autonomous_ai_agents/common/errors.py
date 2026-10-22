@@ -36,7 +36,7 @@ class BudgetExceeded(EngineError):  # noqa: N818 - name fixed by the spec
 
 
 class LLMConfigError(EngineError):
-    """The Claude API refused the credentials or the account (HTTP 401 or 403)."""
+    """The Claude API refused the credentials, billing or account (HTTP 401-403)."""
 
 
 class ProjectConflictError(EngineError):
