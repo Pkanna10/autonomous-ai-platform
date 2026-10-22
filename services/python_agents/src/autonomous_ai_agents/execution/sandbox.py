@@ -6,7 +6,7 @@ closed, ``best_effort`` records, ``off``), the dirs a workload may write
 write (the launcher's self-check) and the platform, injected so the darwin
 path is tested on Linux. ``launcher_argv`` turns it into::
 
-    [unshare -rn -p -f -- | sandbox-exec -p PROFILE]
+    [unshare -rn -p -f --ipc --mount-proc -- | sandbox-exec -p PROFILE]
         python -I -S launcher.py <fd> <spec-json> -- argv...
 
 ``child_env`` builds the environment from an allowlist; deny patterns win
@@ -34,8 +34,24 @@ LAUNCHER_PATH: Path = Path(launcher.__file__).resolve()
 MODES: tuple[str, ...] = get_args(IsolationMode)
 PLATFORMS: tuple[str, ...] = ("linux", "darwin")
 
-UNSHARE_ARGV: tuple[str, ...] = ("unshare", "-rn", "-p", "-f", "--")
-"""User, network and PID namespaces; ``-f`` makes the launcher PID 1 there."""
+UNSHARE_ARGV: tuple[str, ...] = (
+    "unshare",
+    "-rn",
+    "-p",
+    "-f",
+    "--ipc",
+    "--mount-proc",
+    "--",
+)
+"""User, network, PID and IPC namespaces. ``-f`` makes the launcher PID 1
+there; ``--ipc`` gives every run its own SysV IPC and POSIX message queues, so
+a warm-up cannot leave a memoised answer for a timed run; ``--mount-proc``
+gives a private ``/proc`` that lists only this namespace's PIDs (it also hides
+the ``unshare`` process, which still holds the report pipe). The last assumes
+this ``/proc`` is the only procfs the sandbox can see: another procfs of the
+outer PID namespace mounted elsewhere (a ``/host/proc`` bind, say) would show
+the ``unshare`` process again, and the defensive tests walk every procfs mount
+so such a host fails them."""
 
 PASS_THROUGH: tuple[str, ...] = tuple(
     "PATH LANG LC_ALL LC_CTYPE TERM TZ SYSTEMROOT VIRTUAL_ENV CONDA_PREFIX".split()

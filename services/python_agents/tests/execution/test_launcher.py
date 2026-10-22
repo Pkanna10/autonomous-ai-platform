@@ -1,13 +1,14 @@
 """The stdlib-only launcher: in-process with a fake OS, then for real.
 
 In-process tests drive ``launcher.main`` through ``FakeOS``: every OS call
-the launcher makes (syscall, ioctl, prctl, open, connect, fork, execvp,
-wait4, _exit, signal reset) is recorded and scripted, so the isolation
-order, the fail-closed rules and the child's exec path are covered without
-confining or forking the test process. The report fd is a real pipe.
+the launcher makes (syscall, ioctl, prctl, capget/capset, open, connect,
+fork, execvp, wait4, _exit, signal handling) is recorded and scripted, so the
+isolation order, the fail-closed rules and the child's exec path are covered
+without confining or forking the test process. The report fd is a real pipe.
 
-The real tests run ``python -I -S launcher.py`` under ``unshare -rn -p -f``
-with Landlock on this host. They skip when the host cannot sandbox, unless
+The real tests run ``python -I -S launcher.py`` under ``unshare`` (user,
+network, PID and IPC namespaces with a private ``/proc``) with Landlock on
+this host. They skip when the host cannot sandbox, unless
 ``REQUIRE_NETWORK_SANDBOX=1`` or ``REQUIRE_FS_SANDBOX=1`` turns the skip
 into a failure (CI sets both).
 """
@@ -15,6 +16,7 @@ into a failure (CI sets both).
 from __future__ import annotations
 
 import ast
+import ctypes
 import errno
 import json
 import os
@@ -25,6 +27,7 @@ import socket
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 import types
 from collections.abc import Iterator, Sequence
@@ -38,6 +41,7 @@ from autonomous_ai_agents.execution import launcher
 from autonomous_ai_agents.execution.protocols import LaunchReport
 from autonomous_ai_agents.execution.sandbox import (
     LAUNCHER_PATH,
+    UNSHARE_ARGV,
     SandboxPolicy,
     child_env,
     launcher_argv,
@@ -50,6 +54,9 @@ IFREQ = "16sH22x"
 EACCES = OSError(errno.EACCES, "Permission denied")
 ECONNREFUSED = OSError(errno.ECONNREFUSED, "Connection refused")
 ENOENT = OSError(errno.ENOENT, "No such file or directory")
+EPERM = OSError(errno.EPERM, "Operation not permitted")
+USERNS_ROOT = (0x1FF, 0x1FF, 0)  # (effective, permitted, inheritable) as capget
+NO_CAPS = (0, 0, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -90,26 +97,27 @@ def test_landlock_masks_refuse_abi_zero() -> None:
         launcher.handled_access_fs(0)
 
 
-def test_landlock_rules_cover_writable_dirs_shm_and_dev_null(tmp_path: Path) -> None:
+def test_landlock_rules_cover_writable_dirs_and_dev_null(tmp_path: Path) -> None:
     """
-    GIVEN a writable dir, a writable file and /dev/shm present
+    GIVEN a writable dir and a writable file
     WHEN the rules are listed for ABI 3
-    THEN dirs get the full mask, files and /dev/null only write and truncate
+    THEN dirs get the full mask, files and /dev/null only write and truncate,
+        and /dev/shm is never a rule (it is shared across runs)
     """
     target = tmp_path / "out.txt"
     target.write_text("")
     full, file_mask = launcher.handled_access_fs(3), launcher.file_access_fs(3)
 
-    rules = launcher.landlock_rules([str(tmp_path), str(target)], shm="/shm", abi=3)
-    without = launcher.landlock_rules([str(tmp_path)], shm=None, abi=3)
+    rules = launcher.landlock_rules([str(tmp_path), str(target)], abi=3)
+    one = launcher.landlock_rules([str(tmp_path)], abi=3)
 
     assert rules == [
         (str(tmp_path), full),
         (str(target), file_mask),
-        ("/shm", full),
         ("/dev/null", file_mask),
     ]
-    assert without == [(str(tmp_path), full), ("/dev/null", file_mask)]
+    assert one == [(str(tmp_path), full), ("/dev/null", file_mask)]
+    assert not any(path == "/dev/shm" for path, _ in rules)
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +139,15 @@ def rusage(
     return resource.struct_rusage((utime, stime, maxrss, *([0] * 13)))
 
 
+_PRCTL_NAMES = {
+    4: "set_dumpable",
+    38: "no_new_privs",
+    24: "capbset_drop",
+    47: "cap_ambient",
+    28: "securebits",
+}
+
+
 class FakeOS:
     """Records every OS call and replays scripted results."""
 
@@ -139,13 +156,17 @@ class FakeOS:
         *,
         platform: str = "linux",
         abi: int = 7,
-        fail: dict[str, OSError] | None = None,
+        fail: dict[str, Exception] | None = None,
         probe_error: OSError | None = EACCES,
         connect_error: OSError | None = ECONNREFUSED,
         pid: int = 4242,
-        status: int = 3 << 8,
+        status: int = 0,
         exec_error: Exception = ENOENT,
         probe_redirect: Path | None = None,
+        cap_last_cap: int | None = 2,
+        capbset_einval_at: int | None = None,
+        child_error: bytes | None = None,
+        caps: tuple[int, int, int] = USERNS_ROOT,
     ) -> None:
         self.platform = platform
         self.abi = abi
@@ -156,6 +177,11 @@ class FakeOS:
         self.status = status
         self.exec_error = exec_error
         self.probe_redirect = probe_redirect
+        self._cap_last_cap = cap_last_cap
+        self.capbset_einval_at = capbset_einval_at
+        self.child_error = child_error
+        self.caps = caps
+        self.errpipe: tuple[int, int] | None = None
         self.calls: list[tuple[object, ...]] = []
 
     def names(self) -> list[str]:
@@ -184,9 +210,36 @@ class FakeOS:
         return struct.pack(IFREQ, b"lo", 0x48)
 
     def prctl(self, option: int, arg2: int) -> int:
-        self.calls.append(("prctl", option, arg2))
-        self._maybe_fail("prctl")
+        name = _PRCTL_NAMES.get(option, f"prctl_{option}")
+        self.calls.append((name, option, arg2))
+        if name == "capbset_drop" and self.capbset_einval_at is not None:
+            if arg2 >= self.capbset_einval_at:
+                raise OSError(errno.EINVAL, "Invalid argument")
+        self._maybe_fail(name)
         return 0
+
+    def capset(self, header: bytes, data: bytes) -> int:
+        self.calls.append(("capset", header, data))
+        self._maybe_fail("capset")
+        return 0
+
+    def capget(self) -> tuple[int, int, int]:
+        self.calls.append(("capget",))
+        self._maybe_fail("capget")
+        return self.caps
+
+    def cap_last_cap(self) -> int | None:
+        return self._cap_last_cap
+
+    def clear_handlers(self) -> None:
+        self.calls.append(("clear_handlers",))
+
+    def pipe(self) -> tuple[int, int]:
+        read, write = os.pipe()
+        self.errpipe = (read, write)
+        if self.child_error is not None:
+            os.write(write, self.child_error)
+        return read, write
 
     def open(self, path: str, flags: int, mode: int) -> int:
         if not flags & os.O_CREAT:
@@ -229,14 +282,38 @@ class FakeOS:
             syscall=self.syscall,
             ioctl=self.ioctl,
             prctl=self.prctl,
+            capset=self.capset,
+            capget=self.capget,
+            cap_last_cap=self.cap_last_cap,
             open=self.open,
             connect=self.connect,
+            pipe=self.pipe,
             fork=self.fork,
             execvp=self.execvp,
             wait4=self.wait4,
             exit=self.exit,
             reset_signals=self.reset_signals,
+            clear_handlers=self.clear_handlers,
         )
+
+    def errpipe_records(self) -> list[bytes]:
+        """What the child wrote on the error pipe, split into its records."""
+        assert self.errpipe is not None
+        os.close(self.errpipe[1])
+        data = b""
+        while chunk := os.read(self.errpipe[0], 65536):
+            data += chunk
+        os.close(self.errpipe[0])
+        self.errpipe = None
+        return [record for record in data.split(b"\0") if record]
+
+    def close_errpipe(self) -> None:
+        """Close the internal error pipe a child-path test did not drain away."""
+        for fd in self.errpipe or ():
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 class Dirs:
@@ -316,15 +393,19 @@ def test_linux_applies_isolation_in_order_then_runs_and_reports(
     """
     GIVEN a Linux spec with both modes required and Landlock ABI 7
     WHEN the launcher runs a workload that exits 3
-    THEN lo comes up, no_new_privs, Landlock, the write probe and the
-        connect probe run in that order before the fork; the report carries
-        the raw rusage, exit 3 and both flags true; the launcher exits 0
+    THEN the launcher makes itself non-dumpable, lo comes up, no_new_privs,
+        Landlock (writable dirs and /dev/null only, never /dev/shm), the write
+        probe, the connect probe and the clearing of Python's signal handlers
+        (so a workload cannot kill PID 1 with SIGINT) run in that order before
+        the fork; the
+        report carries the raw rusage, exit 3 and both flags true; the launcher
+        exits with the workload's status (3)
     """
-    fake = FakeOS()
+    fake = FakeOS(status=3 << 8)
 
     code, report = run_main(fake, pipe, spec_json(dirs))
 
-    assert code == 0
+    assert code == 3
     assert report == {
         "wall_ns": report["wall_ns"],
         "utime": 0.25,
@@ -336,18 +417,18 @@ def test_linux_applies_isolation_in_order_then_runs_and_reports(
         "error": None,
     }
     assert isinstance(report["wall_ns"], int) and report["wall_ns"] >= 0
-    shm = ["open_path", "add_rule"] if os.path.isdir("/dev/shm") else []
     assert fake.names() == [
+        "set_dumpable",
         "get_flags",
         "set_flags",
-        "prctl",
+        "no_new_privs",
         "abi",
         "create_ruleset",
         *["open_path", "add_rule"] * 3,
-        *shm,
         "restrict_self",
         "probe_write",
         "connect",
+        "clear_handlers",
         "fork",
         "wait4",
     ]
@@ -366,9 +447,10 @@ def test_linux_steps_send_the_spec_values(dirs: Dirs, pipe: tuple[int, int]) -> 
     run_main(fake, pipe, spec_json(dirs, port=40000))
 
     calls = {call[0]: call for call in fake.calls}
+    assert calls["set_dumpable"] == ("set_dumpable", 4, 0)
     assert calls["get_flags"][1] == (b"lo" + b"\0" * 14, 0)
     assert calls["set_flags"][1] == (b"lo" + b"\0" * 14, 0x48 | 1)
-    assert calls["prctl"] == ("prctl", 38, 1)
+    assert calls["no_new_privs"] == ("no_new_privs", 38, 1)
     assert calls["abi"] == ("abi", None, 0, 1)
     assert calls["create_ruleset"][1:] == (struct.pack("=Q", ABI1 | REFER), 8, 0)
     rules = [call for call in fake.calls if call[0] == "add_rule"]
@@ -396,7 +478,7 @@ def test_darwin_runs_only_the_self_checks(dirs: Dirs, pipe: tuple[int, int]) -> 
 
     assert code == 0
     assert (report["fs_isolated"], report["net_isolated"]) == (True, True)
-    assert fake.names() == ["probe_write", "connect", "fork", "wait4"]
+    assert fake.names() == ["probe_write", "connect", "clear_handlers", "fork", "wait4"]
 
 
 @pytest.mark.parametrize("platform", ["linux", "darwin"])
@@ -406,7 +488,8 @@ def test_modes_off_skip_every_isolation_step(
     """
     GIVEN a spec with both modes off
     WHEN the launcher runs
-    THEN it only forks and waits, and both flags are false
+    THEN it only clears the signal handlers, forks and waits (Linux still makes
+        itself non-dumpable first), and both flags are false
     """
     fake = FakeOS(platform=platform)
 
@@ -416,7 +499,8 @@ def test_modes_off_skip_every_isolation_step(
 
     assert code == 0
     assert (report["fs_isolated"], report["net_isolated"]) == (False, False)
-    assert fake.names() == ["fork", "wait4"]
+    dumpable = ["set_dumpable"] if platform == "linux" else []
+    assert fake.names() == [*dumpable, "clear_handlers", "fork", "wait4"]
 
 
 def test_a_signalled_workload_reports_the_negative_signal(
@@ -425,11 +509,12 @@ def test_a_signalled_workload_reports_the_negative_signal(
     """
     GIVEN a workload killed by SIGKILL
     WHEN the launcher reports
-    THEN exit is -9, as os.waitstatus_to_exitcode gives it
+    THEN the report exit is -9 (os.waitstatus_to_exitcode), and the launcher
+        itself exits 128+9 == 137 so the outer wrapper carries the signal
     """
     code, report = run_main(FakeOS(status=signal.SIGKILL), pipe, spec_json(dirs))
 
-    assert (code, report["exit"]) == (0, -9)
+    assert (code, report["exit"]) == (137, -9)
 
 
 def test_report_keys_match_the_launch_report_contract(
@@ -455,7 +540,7 @@ def test_report_keys_match_the_launch_report_contract(
     [
         ("get_flags", "network", "bringing up lo"),
         ("set_flags", "network", "bringing up lo"),
-        ("prctl", "fs", "no_new_privs"),
+        ("no_new_privs", "fs", "no_new_privs"),
         ("abi", "fs", "Landlock"),
         ("create_ruleset", "fs", "Landlock"),
         ("add_rule", "fs", "Landlock"),
@@ -529,7 +614,7 @@ def test_required_network_failure_stops_before_the_fs_steps(
     code, _ = run_main(fake, pipe, spec_json(dirs))
 
     assert code == 125
-    assert fake.names() == ["get_flags"]
+    assert fake.names() == ["set_dumpable", "get_flags"]
 
 
 def test_best_effort_failures_record_false_and_still_run(
@@ -544,7 +629,7 @@ def test_best_effort_failures_record_false_and_still_run(
     fake = FakeOS(
         fail={
             "set_flags": OSError(errno.EPERM, "x"),
-            "prctl": OSError(errno.EINVAL, "y"),
+            "no_new_privs": OSError(errno.EINVAL, "y"),
         }
     )
 
@@ -555,7 +640,15 @@ def test_best_effort_failures_record_false_and_still_run(
     assert code == 0
     assert report["error"] is None
     assert (report["fs_isolated"], report["net_isolated"]) == (False, False)
-    assert fake.names() == ["get_flags", "set_flags", "prctl", "fork", "wait4"]
+    assert fake.names() == [
+        "set_dumpable",
+        "get_flags",
+        "set_flags",
+        "no_new_privs",
+        "clear_handlers",
+        "fork",
+        "wait4",
+    ]
 
 
 def test_a_probe_write_that_succeeds_is_not_isolation(
@@ -721,8 +814,8 @@ def test_the_child_resets_signals_execs_and_exits_127_on_failure(
     """
     GIVEN fork returns 0 (we are the child) and exec fails
     WHEN the launcher continues in the child
-    THEN it resets the signal dispositions, execs argv, says why it failed
-        and exits 127 without writing a report
+    THEN it drops privilege, resets signals, execs argv, says why it failed,
+        tells the parent on the error pipe and exits 127 without a report
     """
     fake = FakeOS(pid=0)
     read, write = pipe
@@ -731,9 +824,13 @@ def test_the_child_resets_signals_execs_and_exits_127_on_failure(
         launcher.main([str(write), spec_json(dirs), "--", "/no/such", "x"], fake.ops())
 
     assert exited.value.code == launcher.EXIT_EXEC_FAILED == 127
-    assert fake.names()[-4:] == ["fork", "reset_signals", "execvp", "exit"]
+    assert fake.names()[-3:] == ["reset_signals", "execvp", "exit"]
+    assert {"fork", "capset", "no_new_privs"} <= set(fake.names())
     assert ("execvp", "/no/such", ("/no/such", "x")) in fake.calls
     assert "cannot execute '/no/such'" in capsys.readouterr().err
+    assert fake.errpipe is not None
+    assert os.read(fake.errpipe[0], 65536).startswith(b"Ecannot execute '/no/such'")
+    fake.close_errpipe()
     os.set_blocking(read, False)
     with pytest.raises(BlockingIOError):
         os.read(read, 1)
@@ -753,6 +850,438 @@ def test_the_child_exits_127_even_when_a_non_os_error_escapes(
         launcher.main([str(pipe[1]), spec_json(dirs), "--", "prog"], fake.ops())
 
     assert exited.value.code == 127
+    fake.close_errpipe()
+
+
+# ---------------------------------------------------------------------------
+# In-process: dropping privilege in the child (anti-forge hardening)
+# ---------------------------------------------------------------------------
+
+
+def test_drop_capabilities_sheds_the_bounding_ambient_securebits_and_caps() -> None:
+    """
+    GIVEN a kernel whose highest capability is 2
+    WHEN the child drops privilege
+    THEN it sets no_new_privs, drops caps 0..2, clears the ambient set, sets the
+        locked securebits and capsets to empty, in that order
+    """
+    fake = FakeOS(cap_last_cap=2)
+
+    launcher.drop_capabilities(fake.ops())
+
+    assert fake.names() == [
+        "no_new_privs",
+        "capbset_drop",
+        "capbset_drop",
+        "capbset_drop",
+        "cap_ambient",
+        "securebits",
+        "capset",
+    ]
+    dropped = [call[2] for call in fake.calls if call[0] == "capbset_drop"]
+    assert dropped == [0, 1, 2]
+    assert ("no_new_privs", 38, 1) in fake.calls
+    assert ("cap_ambient", 47, 4) in fake.calls
+    assert ("securebits", 28, 0x2F) in fake.calls
+    assert ("capset", launcher._CAP_HEADER, launcher._CAP_DATA) in fake.calls
+
+
+def test_drop_capabilities_loops_until_einval_when_cap_last_cap_is_unknown() -> None:
+    """
+    GIVEN cap_last_cap is unreadable and PR_CAPBSET_DROP gives EINVAL at cap 5
+    WHEN the child drops privilege
+    THEN it drops caps 0..4, probes cap 5 (the EINVAL that ends the set) and
+        then finishes with the ambient, securebits and capset steps
+    """
+    fake = FakeOS(cap_last_cap=None, capbset_einval_at=5)
+
+    launcher.drop_capabilities(fake.ops())
+
+    attempted = [call[2] for call in fake.calls if call[0] == "capbset_drop"]
+    assert attempted == [0, 1, 2, 3, 4, 5]
+    assert fake.names()[-3:] == ["cap_ambient", "securebits", "capset"]
+
+
+@pytest.mark.parametrize(
+    ("error", "caps"),
+    [
+        (EPERM, USERNS_ROOT),  # caps held but no CAP_SETPCAP: a real failure
+        (EPERM, (0, 1, 0)),  # one permitted cap is enough to refuse
+        (OSError(errno.EINVAL, "Invalid argument"), NO_CAPS),  # not EPERM
+    ],
+)
+def test_drop_capabilities_reraises_a_real_bounding_set_error(
+    error: OSError, caps: tuple[int, int, int]
+) -> None:
+    """
+    GIVEN PR_CAPBSET_DROP fails while capabilities are held, or fails with
+        anything but EPERM (with a known cap_last_cap)
+    WHEN the child drops privilege
+    THEN the OSError propagates: it is neither an EINVAL end-of-set nor the
+        harmless EPERM of a process that holds no capability
+    """
+    fake = FakeOS(fail={"capbset_drop": error}, caps=caps)
+
+    with pytest.raises(OSError) as raised:
+        launcher.drop_capabilities(fake.ops())
+
+    assert raised.value is error
+    assert ("capget" in fake.names()) is (error.errno == errno.EPERM)
+    assert "capset" not in fake.names()
+
+
+@pytest.mark.parametrize("caps", [NO_CAPS, (0, 0, 0x4)])
+def test_drop_capabilities_accepts_eperm_when_no_capability_is_held(
+    caps: tuple[int, int, int],
+) -> None:
+    """
+    GIVEN an unprivileged launcher outside any user namespace: PR_CAPBSET_DROP
+        gives EPERM (no CAP_SETPCAP) and capget shows no effective or permitted
+        capability (an inheritable bit alone grants nothing under no_new_privs)
+    WHEN the child drops privilege
+    THEN that is not a failure: it skips the bounding set and the securebits
+        (both need CAP_SETPCAP), still clears the ambient set and capsets to
+        empty (which clears the inheritable set), and raises nothing
+    """
+    fake = FakeOS(fail={"capbset_drop": EPERM}, caps=caps)
+
+    launcher.drop_capabilities(fake.ops())
+
+    assert fake.names() == [
+        "no_new_privs",
+        "capbset_drop",
+        "capget",
+        "cap_ambient",
+        "capset",
+    ]
+    assert ("capset", launcher._CAP_HEADER, launcher._CAP_DATA) in fake.calls
+
+
+@pytest.mark.parametrize(
+    ("fs", "net"),
+    [
+        ("required", "required"),
+        ("off", "required"),
+        ("off", "best_effort"),
+        ("best_effort", "off"),
+        ("off", "off"),
+    ],
+)
+def test_the_linux_child_drops_privilege_before_exec_in_every_mode(
+    dirs: Dirs, pipe: tuple[int, int], fs: str, net: str
+) -> None:
+    """
+    GIVEN fork returns 0 on Linux, in any combination of modes (the drop guards
+        the report channel, which every mode relies on, not the filesystem)
+    WHEN the launcher continues in the child
+    THEN it sheds the bounding set and capsets to empty before it execs
+    """
+    fake = FakeOS(pid=0)
+
+    with pytest.raises(ExitedError):
+        launcher.main(
+            [str(pipe[1]), spec_json(dirs, fs=fs, net=net), "--", "prog"], fake.ops()
+        )
+
+    names = fake.names()
+    assert "capbset_drop" in names
+    assert names.index("capset") < names.index("execvp")
+    fake.close_errpipe()
+
+
+@pytest.mark.parametrize(
+    ("fs", "net"),
+    [
+        ("required", "required"),
+        ("off", "required"),
+        ("required", "off"),
+        ("best_effort", "required"),
+        ("required", "best_effort"),
+    ],
+)
+def test_the_child_refuses_without_exec_when_a_required_drop_fails(
+    dirs: Dirs,
+    pipe: tuple[int, int],
+    capsys: pytest.CaptureFixture[str],
+    fs: str,
+    net: str,
+) -> None:
+    """
+    GIVEN fork returns 0, capset fails, and either part is required (a required
+        flag attested by a forgeable report would prove nothing)
+    WHEN the launcher continues in the child
+    THEN it never execs, sends one R record on the error pipe and exits 125
+    """
+    fake = FakeOS(pid=0, fail={"capset": EPERM})
+
+    with pytest.raises(ExitedError) as exited:
+        launcher.main(
+            [str(pipe[1]), spec_json(dirs, fs=fs, net=net), "--", "prog"], fake.ops()
+        )
+
+    assert exited.value.code == launcher.EXIT_REFUSED == 125
+    assert "execvp" not in fake.names()
+    assert "reset_signals" not in fake.names()
+    assert "cannot execute" not in capsys.readouterr().err
+    records = fake.errpipe_records()
+    assert len(records) == 1
+    assert records[0].startswith(b"Risolation is required but dropping privileges")
+
+
+@pytest.mark.parametrize(
+    ("fs", "net"),
+    [
+        ("best_effort", "off"),
+        ("off", "best_effort"),
+        ("best_effort", "best_effort"),
+        ("off", "off"),
+    ],
+)
+def test_the_child_records_and_continues_when_a_best_effort_drop_fails(
+    dirs: Dirs, pipe: tuple[int, int], fs: str, net: str
+) -> None:
+    """
+    GIVEN fork returns 0, the bounding-set drop fails while capabilities are
+        held, and no part is required
+    WHEN the launcher continues in the child
+    THEN it sends a W record (so the parent can record it) and still resets
+        signals and execs; the failed exec then adds its own E record
+    """
+    fake = FakeOS(pid=0, fail={"capbset_drop": EPERM})
+
+    with pytest.raises(ExitedError) as exited:
+        launcher.main(
+            [str(pipe[1]), spec_json(dirs, fs=fs, net=net), "--", "prog"], fake.ops()
+        )
+
+    assert exited.value.code == 127
+    assert fake.names()[-3:] == ["reset_signals", "execvp", "exit"]
+    records = fake.errpipe_records()
+    assert [record[:1] for record in records] == [b"W", b"E"]
+    assert records[0].startswith(b"Wdropping privileges failed: PermissionError")
+
+
+def test_an_unprivileged_child_without_capabilities_runs_under_required(
+    dirs: Dirs, pipe: tuple[int, int]
+) -> None:
+    """
+    GIVEN a non-root launcher with the network off (no user namespace), so
+        PR_CAPBSET_DROP gives EPERM and capget shows no capability, fs required
+    WHEN the launcher continues in the child
+    THEN the run is not refused: the child execs and only the exec's own
+        record reaches the error pipe (no R, no W)
+    """
+    fake = FakeOS(pid=0, fail={"capbset_drop": EPERM}, caps=NO_CAPS)
+
+    with pytest.raises(ExitedError) as exited:
+        launcher.main(
+            [str(pipe[1]), spec_json(dirs, net="off"), "--", "prog"], fake.ops()
+        )
+
+    assert exited.value.code == 127
+    assert "execvp" in fake.names()
+    assert [record[:1] for record in fake.errpipe_records()] == [b"E"]
+
+
+def test_a_drop_that_raises_a_non_os_error_still_refuses_without_exec(
+    dirs: Dirs, pipe: tuple[int, int]
+) -> None:
+    """
+    GIVEN fork returns 0, both modes required, and the privilege drop raises
+        something other than OSError
+    WHEN the launcher continues in the child
+    THEN that is a failed drop too: an R record naming it, exit 125, no exec,
+        and the child never returns into the parent's code (no wait4, no
+        second report)
+    """
+    fake = FakeOS(pid=0, fail={"capset": RuntimeError("unexpected")})
+
+    with pytest.raises(ExitedError) as exited:
+        launcher.main([str(pipe[1]), spec_json(dirs), "--", "prog"], fake.ops())
+
+    assert exited.value.code == 125
+    assert {"execvp", "wait4"}.isdisjoint(fake.names())
+    records = fake.errpipe_records()
+    assert len(records) == 1
+    assert records[0].startswith(b"R") and b"RuntimeError: unexpected" in records[0]
+
+
+def test_the_darwin_child_skips_the_privilege_drop(
+    dirs: Dirs, pipe: tuple[int, int]
+) -> None:
+    """
+    GIVEN a darwin child (no /proc, no capabilities to drop)
+    WHEN the launcher continues in the child
+    THEN it resets signals and execs without any capability syscall
+    """
+    fake = FakeOS(platform="darwin", pid=0)
+
+    with pytest.raises(ExitedError) as exited:
+        launcher.main(
+            [str(pipe[1]), spec_json(dirs, platform="darwin"), "--", "prog"], fake.ops()
+        )
+
+    assert exited.value.code == 127
+    assert {"capset", "capbset_drop", "no_new_privs"}.isdisjoint(fake.names())
+    assert fake.names()[-3:] == ["reset_signals", "execvp", "exit"]
+    fake.close_errpipe()
+
+
+def test_a_child_that_cannot_drop_privilege_refuses_the_run(
+    dirs: Dirs, pipe: tuple[int, int]
+) -> None:
+    """
+    GIVEN the error pipe already holds an R record from a failed required drop
+    WHEN the parent reads it after the child exits
+    THEN the run is refused: exit 125, the reason in error, both flags false
+    """
+    fake = FakeOS(
+        child_error=b"Risolation is required but dropping privileges failed: x\0"
+    )
+
+    code, report = run_main(fake, pipe, spec_json(dirs))
+
+    assert code == 125
+    assert report["exit"] == 125
+    assert (report["fs_isolated"], report["net_isolated"]) == (False, False)
+    assert "dropping privileges failed" in str(report["error"])
+    assert "execvp" not in fake.names()
+
+
+def test_a_best_effort_drop_failure_turns_both_flags_false(
+    dirs: Dirs, pipe: tuple[int, int], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """
+    GIVEN both modes best_effort, isolation applied, and a W record from the
+        child (its privilege drop failed, so the report could be forged)
+    WHEN the parent reads it
+    THEN the workload's status stands, both flags are false (no new key, no
+        error), and stderr says why
+    """
+    fake = FakeOS(child_error=b"Wdropping privileges failed: OSError: x\0")
+
+    code, report = run_main(
+        fake, pipe, spec_json(dirs, fs="best_effort", net="best_effort")
+    )
+
+    assert code == 0
+    assert (report["exit"], report["error"]) == (0, None)
+    assert (report["fs_isolated"], report["net_isolated"]) == (False, False)
+    assert "dropping privileges failed" in capsys.readouterr().err
+
+
+def test_a_weakened_drop_then_an_exec_failure_reports_both(
+    dirs: Dirs, pipe: tuple[int, int]
+) -> None:
+    """
+    GIVEN a W record followed by an E record, and the child exited 127
+    WHEN the parent reads them
+    THEN the flags are false and the exec failure is the error, exit 127
+    """
+    fake = FakeOS(
+        status=127 << 8,
+        child_error=b"Wdropping privileges failed: x\0Ecannot execute 'prog': nope\0",
+    )
+
+    code, report = run_main(
+        fake, pipe, spec_json(dirs, fs="best_effort", net="best_effort")
+    )
+
+    assert (code, report["exit"]) == (127, 127)
+    assert report["error"] == "cannot execute 'prog': nope"
+    assert (report["fs_isolated"], report["net_isolated"]) == (False, False)
+
+
+def test_a_child_exec_failure_is_reported_with_its_message_and_exit(
+    dirs: Dirs, pipe: tuple[int, int]
+) -> None:
+    """
+    GIVEN the error pipe holds an E<reason> and the child exited 127
+    WHEN the parent reads it
+    THEN the report carries that error and exit 127 (not a 125 refusal)
+    """
+    fake = FakeOS(
+        status=127 << 8,
+        child_error=b"Ecannot execute 'prog': No such file or directory\0",
+    )
+
+    code, report = run_main(fake, pipe, spec_json(dirs, fs="off", net="off", port=None))
+
+    assert code == 127
+    assert report["exit"] == 127
+    assert report["error"] == "cannot execute 'prog': No such file or directory"
+
+
+def test_a_workload_that_exits_125_is_not_a_refusal(
+    dirs: Dirs, pipe: tuple[int, int]
+) -> None:
+    """
+    GIVEN a fully isolated workload that itself exits 125
+    WHEN the launcher reports
+    THEN the launcher also exits 125 (it carries the workload's status), but the
+        report is a normal one: error null, both flags true, exit 125. A
+        refusal is told apart by its error, never by the status alone
+    """
+    code, report = run_main(FakeOS(status=125 << 8), pipe, spec_json(dirs))
+
+    assert code == 125
+    assert (report["exit"], report["error"]) == (125, None)
+    assert (report["fs_isolated"], report["net_isolated"]) == (True, True)
+
+
+@pytest.mark.parametrize(
+    "tag", [launcher._CHILD_REFUSE, launcher._CHILD_WEAKENED, launcher._CHILD_EXEC]
+)
+def test_child_fail_writes_a_tagged_record_to_the_error_pipe(tag: bytes) -> None:
+    """
+    GIVEN an open error pipe
+    WHEN the child announces a failure
+    THEN the tag, the message and a NUL record terminator land on it
+    """
+    read, write = os.pipe()
+    try:
+        launcher._child_fail(write, tag, "something broke")
+        os.close(write)
+        assert os.read(read, 65536) == tag + b"something broke\0"
+    finally:
+        os.close(read)
+
+
+def test_child_fail_swallows_a_broken_error_pipe() -> None:
+    """
+    GIVEN an error-pipe fd that is already closed
+    WHEN the child tries to announce a failure
+    THEN it does not raise (the exit code still carries the failure)
+    """
+    read, write = os.pipe()
+    os.close(read)
+    os.close(write)
+
+    launcher._child_fail(write, launcher._CHILD_EXEC, "broke")
+
+
+def test_clear_signal_handlers_resets_only_python_level_handlers() -> None:
+    """
+    GIVEN Python's SIGINT handler (a callable), an ignored SIGTERM, a SIGHUP
+        with no Python-visible handler and every other signal at SIG_DFL
+    WHEN the parent clears its handlers before the fork
+    THEN only SIGINT is set to SIG_DFL: PID 1 of a namespace receives a signal
+        from inside it only when a handler is installed, so with none left a
+        workload cannot kill the launcher before it reports
+    """
+    handlers: dict[int, object] = {
+        signal.SIGINT: signal.default_int_handler,
+        signal.SIGTERM: signal.SIG_IGN,
+        signal.SIGHUP: None,
+    }
+    seen: list[tuple[int, object]] = []
+
+    launcher.clear_signal_handlers(
+        getsignal=lambda signum: handlers.get(signum, signal.SIG_DFL),
+        set_handler=lambda signum, handler: seen.append((signum, handler)),
+    )
+
+    assert seen == [(signal.SIGINT, signal.SIG_DFL)]
 
 
 # ---------------------------------------------------------------------------
@@ -908,6 +1437,11 @@ def test_default_ops_are_the_real_os_calls() -> None:
         os._exit,
     )
     assert ops.open is os.open
+    assert ops.pipe is os.pipe
+    assert ops.capset is launcher.real_capset
+    assert ops.capget is launcher.real_capget
+    assert ops.cap_last_cap is launcher.real_cap_last_cap
+    assert ops.clear_handlers is launcher.clear_signal_handlers
 
 
 linux_only = pytest.mark.skipif(sys.platform != "linux", reason="Linux syscalls")
@@ -938,6 +1472,63 @@ def test_real_syscall_queries_landlock_and_maps_errors() -> None:
     with pytest.raises(OSError) as invalid:
         syscall(444, (None, 0, 0xFFFF))
     assert invalid.value.errno in (errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP)
+
+
+@linux_only
+def test_real_capset_rejects_an_invalid_request() -> None:
+    """
+    GIVEN the ctypes capset wrapper and a header with an unsupported version
+    WHEN it is called
+    THEN capset refuses it (no capability is changed) and OSError is raised
+    """
+    with pytest.raises(OSError):
+        launcher.real_capset(struct.pack("=II", 0, 0), b"\0" * 24)
+
+
+@linux_only
+def test_real_capget_matches_proc_self_status() -> None:
+    """
+    GIVEN the ctypes capget wrapper (read-only: it changes nothing)
+    WHEN it reads this process's capability sets
+    THEN effective, permitted and inheritable match /proc/self/status
+    """
+    status = dict(
+        line.split(":", 1)
+        for line in Path("/proc/self/status").read_text().splitlines()
+        if ":" in line
+    )
+
+    effective, permitted, inheritable = launcher.real_capget()
+
+    assert effective == int(status["CapEff"], 16)
+    assert permitted == int(status["CapPrm"], 16)
+    assert inheritable == int(status["CapInh"], 16)
+
+
+@linux_only
+def test_real_cap_last_cap_reads_the_kernel_value() -> None:
+    """
+    GIVEN this Linux host exposes /proc/sys/kernel/cap_last_cap
+    WHEN the helper reads it
+    THEN it returns a non-negative capability number
+    """
+    last = launcher.real_cap_last_cap()
+
+    assert isinstance(last, int)
+    assert last >= 0
+
+
+def test_real_cap_last_cap_returns_none_when_unreadable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    GIVEN the cap_last_cap file cannot be read
+    WHEN the helper reads it
+    THEN it returns None so the drop falls back to looping until EINVAL
+    """
+    monkeypatch.setattr(launcher, "_CAP_LAST_CAP_PATH", "/no/such/cap_last_cap")
+
+    assert launcher.real_cap_last_cap() is None
 
 
 @linux_only
@@ -1076,13 +1667,11 @@ def _linux_sandbox_problem() -> str | None:
     if shutil.which("unshare") is None:
         return "unshare is not installed"
     probe = subprocess.run(
-        ["unshare", "-rn", "-p", "-f", "--", "true"],
-        capture_output=True,
-        timeout=30,
-        check=False,
+        [*UNSHARE_ARGV, "true"], capture_output=True, timeout=30, check=False
     )
     if probe.returncode != 0:
-        return f"unshare -rn -p -f failed: {probe.stderr.decode(errors='replace')}"
+        detail = probe.stderr.decode(errors="replace")
+        return f"{' '.join(UNSHARE_ARGV)} true failed: {detail}"
     try:
         launcher.default_ops().syscall(444, (None, 0, 1))
     except OSError as error:
@@ -1125,6 +1714,8 @@ def launch(
     fs: IsolationMode,
     port: int | None = None,
     writable: Sequence[Path] | None = None,
+    prefix: Sequence[str] = (),
+    python: str = sys.executable,
 ) -> Launch:
     built = SandboxPolicy(
         network=network,
@@ -1137,7 +1728,12 @@ def launch(
     read, write = os.pipe()
     try:
         proc = subprocess.Popen(
-            launcher_argv(built, fd=write, report_port=port, argv=argv),
+            [
+                *prefix,
+                *launcher_argv(
+                    built, fd=write, report_port=port, argv=argv, python=python
+                ),
+            ],
             cwd=dirs.wt,
             env=env,
             stdin=subprocess.DEVNULL,
@@ -1218,9 +1814,10 @@ def test_real_launcher_confines_writes_and_network(
     GIVEN the real launcher under unshare with both modes required
     WHEN the workload writes inside and outside, and connects out and to
         its own loopback
-    THEN outside is EACCES, inside, HOME, /dev/null (with O_TRUNC) and
-        /dev/shm work, the parent's listener is unreachable, its own lo
-        works, and the report says both are isolated
+    THEN outside is EACCES, inside, HOME and /dev/null (with O_TRUNC) work,
+        /dev/shm is now denied (shared across runs, removed from the rules),
+        the parent's listener is unreachable, its own lo works, and the report
+        says both are isolated
     """
     run = launch(
         dirs,
@@ -1235,7 +1832,7 @@ def test_real_launcher_confines_writes_and_network(
     assert results["outside"] == "EACCES"
     assert not (tmp_path / "outside.txt").exists()
     assert results["inside"] == results["home"] == results["devnull"] == "ok"
-    assert results.get("shm", "ok") == "ok"
+    assert results.get("shm", "EACCES") in ("EACCES", "EPERM")
     assert results["parent"] in ("ECONNREFUSED", "ENETUNREACH")
     assert results["own_loopback"] == "ok"
     assert run.report is not None
@@ -1349,8 +1946,9 @@ def test_real_launcher_reports_exec_failure_exit_codes_and_a_low_floor(
     GIVEN a missing command, a workload exiting 3 and /bin/true, all fully
         isolated
     WHEN each runs under the real launcher
-    THEN the reports say 127, 3 and 0, and /bin/true's raw maxrss (KiB) is
-        under 50 MiB: the launcher keeps the RSS floor low
+    THEN the reports say 127, 3 and 0, the outer wrapper now carries the same
+        status (the launcher exits with the workload's), and /bin/true's raw
+        maxrss (KiB) is under 50 MiB: the launcher keeps the RSS floor low
     """
     runs = [
         launch(dirs, argv, network="required", fs="required", port=listener)
@@ -1361,13 +1959,421 @@ def test_real_launcher_reports_exec_failure_exit_codes_and_a_low_floor(
         )
     ]
 
-    assert [run.code for run in runs] == [0, 0, 0]
+    assert [run.code for run in runs] == [127, 3, 0]
     reports = [run.report for run in runs]
     assert [r["exit"] if r else None for r in reports] == [127, 3, 0]
     assert "cannot execute" in runs[0].err
     floor = reports[2]
     assert floor is not None and isinstance(floor["maxrss"], int)
     assert 0 < floor["maxrss"] * 1024 < 50 * 1024 * 1024
+
+
+# ---------------------------------------------------------------------------
+# Defensive regression tests: the sandbox holds against a hostile workload.
+# These verify the anti-forge controls the way a firewall test verifies a
+# firewall; they never escape the sandbox or write a forged report.
+# ---------------------------------------------------------------------------
+
+
+PROC_FD_WALK = r"""
+import json, os, re
+def unescape(field):
+    return re.sub(r"\\([0-7]{3})", lambda match: chr(int(match.group(1), 8)), field)
+mounts = set()
+with open("/proc/self/mountinfo") as handle:
+    for line in handle:
+        left, _, right = line.partition(" - ")
+        if right.split(" ", 1)[0] == "proc":
+            mounts.add(unescape(left.split(" ")[4]))
+opened_foreign = []
+for mount in sorted(mounts):
+    try:
+        own = os.readlink(mount + "/self")
+    except OSError:
+        own = None
+    try:
+        entries = os.listdir(mount)
+    except OSError:
+        continue
+    for entry in entries:
+        if not entry.isdigit() or entry == own:
+            continue
+        fd_dir = "%s/%s/fd" % (mount, entry)
+        try:
+            names = os.listdir(fd_dir)
+        except OSError:
+            continue
+        for name in names:
+            path = fd_dir + "/" + name
+            try:
+                fd = os.open(path, os.O_WRONLY)
+            except OSError:
+                continue
+            os.close(fd)
+            opened_foreign.append(path)
+print(json.dumps({"procfs_mounts": sorted(mounts), "opened_foreign": opened_foreign}))
+"""
+"""Walks every procfs mount (not only ``/proc``), so a host where another
+procfs of the outer PID namespace is visible fails loudly instead of passing."""
+
+DEFENDED = [
+    ("required", "required"),
+    ("required", "best_effort"),
+    ("required", "off"),
+    ("off", "required"),
+]
+"""``(network, fs)``: every mode in which a user namespace exists, plus fs-only."""
+
+
+@linux_only
+@pytest.mark.usefixtures("linux_sandbox")
+@pytest.mark.parametrize(("network", "fs"), DEFENDED)
+def test_real_launcher_report_pipe_cannot_be_forged_through_proc(
+    dirs: Dirs, listener: int, network: IsolationMode, fs: IsolationMode
+) -> None:
+    """
+    GIVEN a hostile workload that walks every <procfs>/<pid>/fd and tries to
+        open each entry for writing
+    WHEN it runs under each defended mode, fs=off included (the privilege drop
+        guards the report channel whatever the fs mode)
+    THEN it can open nothing outside its own process, and the parent receives
+        exactly one report, the launcher's genuine one
+    """
+    run = launch(
+        dirs,
+        [sys.executable, "-c", PROC_FD_WALK],
+        network=network,
+        fs=fs,
+        port=listener,
+    )
+
+    assert run.code == 0, run.err
+    results = run.results()
+    mounts = results["procfs_mounts"]
+    assert isinstance(mounts, list) and "/proc" in mounts
+    assert results["opened_foreign"] == []
+    assert run.report is not None  # launch() parses the pipe: a second object fails
+    assert (run.report["exit"], run.report["error"]) == (0, None)
+    assert run.report["net_isolated"] is (network != "off")
+    assert run.report["fs_isolated"] is (fs != "off")
+
+
+PTRACE_WORKLOAD = r"""
+import ctypes, json, os
+libc = ctypes.CDLL(None, use_errno=True)
+libc.ptrace.restype = ctypes.c_long
+libc.ptrace.argtypes = [ctypes.c_long, ctypes.c_long, ctypes.c_void_p, ctypes.c_void_p]
+PTRACE_ATTACH, PTRACE_DETACH, WALL = 16, 17, 0x40000000
+target = os.getppid()
+ctypes.set_errno(0)
+rc = libc.ptrace(PTRACE_ATTACH, target, None, None)
+err = ctypes.get_errno()
+if rc == 0:  # the control failed: release the launcher at once
+    os.waitpid(target, WALL)
+    libc.ptrace(PTRACE_DETACH, target, None, None)
+print(json.dumps({"target": target, "rc": rc, "errno": err}))
+"""
+
+
+@linux_only
+@pytest.mark.usefixtures("linux_sandbox")
+@pytest.mark.parametrize(("network", "fs"), DEFENDED)
+def test_real_launcher_workload_cannot_ptrace_the_launcher(
+    dirs: Dirs, listener: int, network: IsolationMode, fs: IsolationMode
+) -> None:
+    """
+    GIVEN a hostile workload that tries ptrace(PTRACE_ATTACH) on the launcher,
+        its parent (PID 1 inside the namespace)
+    WHEN it runs under each defended mode
+    THEN the attach is refused
+    """
+    run = launch(
+        dirs,
+        [sys.executable, "-c", PTRACE_WORKLOAD],
+        network=network,
+        fs=fs,
+        port=listener,
+    )
+
+    assert run.code == 0, run.err
+    results = run.results()
+    assert results["rc"] == -1
+    assert results["errno"] in (errno.EPERM, errno.EACCES)
+    if network != "off":
+        assert results["target"] == 1
+
+
+PROC_PIDS_WORKLOAD = r"""
+import json, os
+print(json.dumps({"pids": sorted(int(e) for e in os.listdir("/proc") if e.isdigit())}))
+"""
+
+
+@linux_only
+@pytest.mark.usefixtures("linux_sandbox")
+def test_real_launcher_proc_lists_only_namespace_pids(
+    dirs: Dirs, listener: int
+) -> None:
+    """
+    GIVEN --mount-proc gives the namespace its own /proc
+    WHEN a workload lists it
+    THEN only this namespace's PIDs are there (the launcher is PID 1, the host's
+        PIDs are hidden)
+    """
+    run = launch(
+        dirs,
+        [sys.executable, "-c", PROC_PIDS_WORKLOAD],
+        network="required",
+        fs="required",
+        port=listener,
+    )
+
+    assert run.code == 0, run.err
+    pids = run.results()["pids"]
+    assert isinstance(pids, list)
+    assert 1 in pids
+    assert len(pids) <= 8
+
+
+PROC_STATUS_CAPS_WORKLOAD = r"""
+import json
+wanted = {"CapEff", "CapPrm", "CapInh", "CapBnd", "CapAmb", "NoNewPrivs"}
+found = {}
+with open("/proc/self/status") as handle:
+    for line in handle:
+        key, _, value = line.partition(":")
+        if key in wanted:
+            found[key] = value.strip()
+print(json.dumps(found))
+"""
+ZERO_CAPS = "0000000000000000"
+
+
+@linux_only
+@pytest.mark.usefixtures("linux_sandbox")
+@pytest.mark.parametrize("fs", ["required", "best_effort", "off"])
+def test_real_launcher_workload_runs_with_no_capabilities(
+    dirs: Dirs, listener: int, fs: IsolationMode
+) -> None:
+    """
+    GIVEN a user namespace (network required) and any fs mode
+    WHEN the workload reads /proc/self/status
+    THEN all five capability masks are empty and NoNewPrivs is 1: the child
+        dropped every capability before exec, fs=off included
+    """
+    run = launch(
+        dirs,
+        [sys.executable, "-c", PROC_STATUS_CAPS_WORKLOAD],
+        network="required",
+        fs=fs,
+        port=listener,
+    )
+
+    assert run.code == 0, run.err
+    status = run.results()
+    for key in ("CapEff", "CapPrm", "CapInh", "CapBnd", "CapAmb"):
+        assert status[key] == ZERO_CAPS, key
+    assert status["NoNewPrivs"] == "1"
+
+
+SIGINT_LAUNCHER_WORKLOAD = r"""
+import json, os, signal, time
+target = os.getppid()
+os.kill(target, signal.SIGINT)
+time.sleep(0.2)
+print(json.dumps({"target": target}))
+"""
+
+
+@linux_only
+@pytest.mark.usefixtures("linux_sandbox")
+@pytest.mark.parametrize("fs", ["required", "off"])
+def test_real_launcher_survives_a_sigint_from_the_workload(
+    dirs: Dirs, listener: int, fs: IsolationMode
+) -> None:
+    """
+    GIVEN a hostile workload that sends SIGINT to the launcher, PID 1 of its
+        namespace
+    WHEN it runs
+    THEN the signal is discarded (the launcher left no handler installed), the
+        workload finishes, and the parent receives exactly one genuine report
+    """
+    run = launch(
+        dirs,
+        [sys.executable, "-c", SIGINT_LAUNCHER_WORKLOAD],
+        network="required",
+        fs=fs,
+        port=listener,
+    )
+
+    assert run.code == 0, run.err
+    assert run.results() == {"target": 1}
+    assert run.report is not None
+    assert (run.report["exit"], run.report["error"]) == (0, None)
+
+
+SYSV_WORKLOAD = r"""
+import ctypes, json, sys
+libc = ctypes.CDLL(None, use_errno=True)
+libc.shmget.argtypes = [ctypes.c_int, ctypes.c_size_t, ctypes.c_int]
+key, mode = int(sys.argv[1]), sys.argv[2]
+IPC_CREAT, IPC_EXCL = 0o1000, 0o2000
+if mode == "store":
+    shmid = libc.shmget(key, 4096, IPC_CREAT | IPC_EXCL | 0o600)
+else:
+    shmid = libc.shmget(key, 0, 0)
+print(json.dumps({"shmid": shmid, "errno": ctypes.get_errno()}))
+"""
+
+
+def _host_shm_remove(key: int) -> bool:
+    """Remove a SysV segment with ``key`` from this (the host's) IPC namespace."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.shmget.argtypes = [ctypes.c_int, ctypes.c_size_t, ctypes.c_int]
+    shmid = int(libc.shmget(key, 0, 0))
+    if shmid < 0:
+        return False
+    libc.shmctl(shmid, 0, None)  # IPC_RMID
+    return True
+
+
+@linux_only
+@pytest.mark.usefixtures("linux_sandbox")
+def test_real_launcher_sysv_ipc_does_not_survive_into_the_next_run(
+    dirs: Dirs, listener: int
+) -> None:
+    """
+    GIVEN a workload that creates a SysV shared memory segment in one run (as a
+        warm-up could, to memoise an answer) and looks for it in the next
+    WHEN both run in the namespace
+    THEN the second run cannot find it, and it never reached the host: each run
+        has its own IPC namespace, which dies with the run
+    """
+    key = 0x41490000 | ((os.getpid() ^ time.monotonic_ns()) & 0xFFFF)
+    try:
+        runs = [
+            launch(
+                dirs,
+                [sys.executable, "-c", SYSV_WORKLOAD, str(key), mode],
+                network="required",
+                fs="required",
+                port=listener,
+            )
+            for mode in ("store", "read")
+        ]
+    finally:
+        leaked = _host_shm_remove(key)
+
+    assert [run.code for run in runs] == [0, 0], [run.err for run in runs]
+    stored = runs[0].results()["shmid"]
+    assert isinstance(stored, int) and stored >= 0
+    assert runs[1].results() == {"shmid": -1, "errno": errno.ENOENT}
+    assert not leaked
+
+
+@pytest.fixture
+def shared_dirs() -> Iterator[Dirs]:
+    """Dirs a non-root user can reach: pytest's base temp dir is 0700."""
+    root = Path(tempfile.mkdtemp(prefix="aip-launcher-"))
+    try:
+        root.chmod(0o755)
+        made = Dirs(root)
+        for path in (made.wt, made.scratch, made.probe):
+            path.chmod(0o777)  # the probe too, so only Landlock can deny it
+        yield made
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def non_root_prefix(python: str) -> list[str]:
+    """Nothing when this process is not root (CI); else setpriv down to nobody.
+
+    Skips when root cannot hand the run to uid 65534: no setpriv, or nobody
+    cannot run ``python`` on the launcher (it must exit 125 with its usage).
+    """
+    if os.geteuid() != 0:
+        return []
+    setpriv = shutil.which("setpriv")
+    if setpriv is None:
+        pytest.skip("running as root without setpriv to drop to a non-root user")
+    prefix = [setpriv, "--reuid=65534", "--regid=65534", "--clear-groups", "--"]
+    probe = subprocess.run(
+        [*prefix, python, "-I", "-S", str(LAUNCHER_PATH)],
+        capture_output=True,
+        cwd="/",
+        timeout=30,
+        check=False,
+    )
+    if probe.returncode != launcher.EXIT_REFUSED:
+        pytest.skip(f"uid 65534 cannot run {python} on the launcher: {probe.stderr!r}")
+    return prefix
+
+
+@linux_only
+@pytest.mark.usefixtures("linux_sandbox")
+def test_real_launcher_confines_writes_as_non_root_without_a_user_namespace(
+    shared_dirs: Dirs,
+) -> None:
+    """
+    GIVEN a non-root launcher (this process on CI, else setpriv to nobody) with
+        the network off, so there is no user namespace and PR_CAPBSET_DROP has
+        no CAP_SETPCAP, and fs required
+    WHEN /bin/true, the capability reader and the /proc fd walk run
+    THEN none is refused (no 125): each exits 0 with fs_isolated true, the
+        workload holds no effective, permitted, inheritable or ambient
+        capability under no_new_privs (the bounding set stays, and execve can
+        grant nothing), and it can open no other process's fd
+    """
+    python = os.path.realpath(sys.executable)  # a venv may sit in a 0700 dir
+    prefix = non_root_prefix(python)
+
+    runs = [
+        launch(
+            shared_dirs,
+            argv,
+            network="off",
+            fs="required",
+            prefix=prefix,
+            python=python,
+        )
+        for argv in (
+            ["/bin/true"],
+            [python, "-c", PROC_STATUS_CAPS_WORKLOAD],
+            [python, "-c", PROC_FD_WALK],
+        )
+    ]
+
+    for run in runs:
+        assert run.code == 0, run.err
+        assert run.report is not None
+        assert (run.report["error"], run.report["fs_isolated"]) == (None, True)
+    status = runs[1].results()
+    for key in ("CapEff", "CapPrm", "CapInh", "CapAmb"):
+        assert status[key] == ZERO_CAPS, key
+    assert status["NoNewPrivs"] == "1"
+    assert runs[2].results()["opened_foreign"] == []
+
+
+def test_real_launcher_exits_with_the_workloads_own_status(dirs: Dirs) -> None:
+    """
+    GIVEN a workload that exits 3, and one that kills itself with SIGKILL
+    WHEN each runs under the real launcher
+    THEN the wrapper's exit status is the workload's: 3, and 128+9 == 137 for
+        the signal, while the report keeps the raw -9
+    """
+    three = launch(
+        dirs,
+        [sys.executable, "-c", "raise SystemExit(3)"],
+        network="off",
+        fs="off",
+    )
+    assert three.code == 3
+    assert three.report is not None and three.report["exit"] == 3
+
+    killer = "import os, signal\nos.kill(os.getpid(), signal.SIGKILL)"
+    killed = launch(dirs, [sys.executable, "-c", killer], network="off", fs="off")
+    assert killed.code == 137
+    assert killed.report is not None and killed.report["exit"] == -9
 
 
 darwin_only = pytest.mark.skipif(sys.platform != "darwin", reason="sandbox-exec")

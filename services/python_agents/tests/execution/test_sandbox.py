@@ -32,7 +32,7 @@ from autonomous_ai_agents.execution.sandbox import (
     wrapper_argv,
 )
 
-UNSHARE = ["unshare", "-rn", "-p", "-f", "--"]
+UNSHARE = ["unshare", "-rn", "-p", "-f", "--ipc", "--mount-proc", "--"]
 
 
 def policy(
@@ -415,7 +415,8 @@ def test_linux_wrapper_is_unshare_when_the_network_is_isolated(
     """
     GIVEN a Linux policy whose network mode is not off
     WHEN the wrapper is built
-    THEN it is unshare with user, network and PID namespaces and a fork
+    THEN it is unshare with user, network, PID and IPC namespaces, a fork and
+        a private /proc
     """
     assert wrapper_argv(policy(tmp_path, network=network, fs=fs)) == UNSHARE
 
@@ -560,11 +561,12 @@ def test_launcher_argv_layout_and_spec_on_linux(tmp_path: Path) -> None:
         built, fd=7, report_port=40001, argv=["/usr/bin/python3", "bench.py"]
     )
 
-    assert argv[:5] == UNSHARE
-    assert argv[5:9] == [sys.executable, "-I", "-S", str(LAUNCHER_PATH)]
-    assert argv[9] == "7"
-    assert argv[11:] == ["--", "/usr/bin/python3", "bench.py"]
-    assert json.loads(argv[10]) == {
+    wrap = len(UNSHARE)
+    assert argv[:wrap] == UNSHARE
+    assert argv[wrap : wrap + 4] == [sys.executable, "-I", "-S", str(LAUNCHER_PATH)]
+    assert argv[wrap + 4] == "7"
+    assert argv[wrap + 6 :] == ["--", "/usr/bin/python3", "bench.py"]
+    assert json.loads(argv[wrap + 5]) == {
         "version": 1,
         "platform": "linux",
         "fs": "required",
