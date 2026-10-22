@@ -6,10 +6,51 @@
 
 ## Current Step
 
-**Build step:** 1 of 5 (Engine design) **Branch:**
-`claude/adoring-clarke-xpo1py` **Vision:** a self-improving optimization engine
-that uses research findings and novel ideas to provably improve existing code,
-or build something new and then improve it (see `CLAUDE.md`).
+**Build step:** 2 of 5 (Core loop), building units **Branch:**
+`claude/adoring-clarke-xpo1py` (draft PR
+[#12](https://github.com/Pkanna10/autonomous-ai-platform/pull/12)) **Vision:** a
+self-improving optimization engine that uses research findings and novel ideas
+to provably improve existing code, or build something new and then improve it
+(see `CLAUDE.md`).
+
+### Resume here (handoff, 2026-10-22)
+
+A new session picks up Step 2 from this section. Everything it needs is in the
+repo; nothing lives only in the old session.
+
+- **Read first:** `.claude/handoff/step2/spec.md` (the approved Step 2 spec: 44
+  decisions, interfaces, behaviour, security, test plan, 20 units),
+  `.claude/handoff/step2/lead-notes.md` (Lead decisions and per-unit handovers
+  that override or extend the spec; read the section for every unit you build),
+  then `research-*.md` there for the unit's topic.
+- **Units committed** (one commit each, every one reviewed for correctness and
+  security on a different model, then fixed test-first): U1-U12, U13 preflight,
+  U14 measure, U16 editor loop, plus Lead fixes (`normalize_path` fixed point,
+  `ENGINE_API_BASE_URL` pin, unittest `test*.py` protected).
+- **U15 profiler** was built without review at the user's request (see its
+  commit message). Review it before wave 5 relies on it.
+- **Next, in order:** U17 understand (`orchestrator/understand.py`); wave 5: U18
+  trial and baseline runners, U19 combine and publish; then U20 Lead integration
+  (factory, CI incl. macOS and the Postgres service, E2E-A/B/C, docs), the
+  Verifier, the stage gate, `/security-review`, CI green, the Step 2 report. The
+  user approves each phase before it starts.
+- **How a unit is built:** run the Workflow tool with
+  `scriptPath: .claude/handoff/step2/build-wave.workflow` (absolute path) and
+  `args: {maxOutputTokens: 800000, units: [{id, title, files, tests, security, notes}]}`,
+  one unit per run. It runs Builder (tests first) -> correctness and security
+  Reviewers (Fable) -> fixer. The guard logs output tokens after each agent. The
+  Lead then verifies, commits one unit per commit and pushes.
+- **Lead verification before every commit** (from `services/python_agents`):
+  `uv run ruff check . && uv run ruff format --check . && uv run mypy src tests`,
+  `uv run bandit -q -r src -c pyproject.toml`,
+  `TEST_DATABASE_URL=postgresql://dev:devpass@localhost:5432/postgres uv run pytest -q`
+  (100 % coverage today), and the suite on a Python 3.11 venv with
+  `-o addopts="-n auto --no-cov -m 'not live'"`.
+- **Never run live tests**: always pass `-m "not live"` when overriding
+  `addopts`. Cloud containers set `ANTHROPIC_BASE_URL` for their own use; the
+  engine follows only `ENGINE_API_BASE_URL`.
+- **Before merging Step 2**, delete `.claude/handoff/` (the decisions it holds
+  belong in this file's Decisions section by then).
 
 ---
 
