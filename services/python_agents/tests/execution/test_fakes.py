@@ -14,6 +14,7 @@ import os
 import shutil
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -185,7 +186,35 @@ def test_fake_preflight_echoes_the_inputs_by_default() -> None:
         test_command=PROJECT.test_command,
         extra_protected=(),
     )
+    assert (report.notes, report.python_version) == ((), None)
     assert preflight.calls == [(PROJECT, (WORKLOAD,), (GUARDRAIL,))]
+
+
+def test_fake_preflight_echo_carries_scripted_notes_and_python_version() -> None:
+    """
+    GIVEN a FakePreflight scripted with notes and a Python version
+    WHEN it checks a project
+    THEN the echo report carries both, the notes as a tuple
+    """
+    preflight = FakePreflight(
+        notes=["merge=union in .gitattributes"], python_version=(3, 11, 9)
+    )
+
+    report = preflight.check(PROJECT, [WORKLOAD], [])
+
+    assert report.notes == ("merge=union in .gitattributes",)
+    assert report.python_version == (3, 11, 9)
+    assert report.head_commit == FAKE_COMMIT
+
+
+def test_fake_preflight_refuses_a_bare_string_as_notes() -> None:
+    """
+    GIVEN notes given as one str (a str is a Sequence[str])
+    WHEN a FakePreflight is built
+    THEN a TypeError is raised instead of one note per character
+    """
+    with pytest.raises(TypeError, match="notes must be a sequence of notes"):
+        FakePreflight(notes="merge=union")
 
 
 def test_fake_preflight_returns_a_scripted_report_or_raises_an_error() -> None:
@@ -214,6 +243,23 @@ def test_fake_preflight_refuses_both_a_report_and_an_error() -> None:
 
     with pytest.raises(ValueError, match="report or an error"):
         FakePreflight(report, error=PreflightError("x"))
+
+
+@pytest.mark.parametrize(
+    "echo",
+    [{"notes": ("n",)}, {"python_version": (3, 12, 0)}],
+    ids=["notes", "python_version"],
+)
+def test_fake_preflight_refuses_echo_fields_beside_a_report(echo: Any) -> None:
+    """
+    GIVEN a scripted report and echo notes or an echo Python version
+    WHEN a FakePreflight is built
+    THEN a ValueError is raised: the report already carries its own
+    """
+    report = FakePreflight().check(PROJECT, [], [])
+
+    with pytest.raises(ValueError, match="on the report"):
+        FakePreflight(report, **echo)
 
 
 # ---------------------------------------------------------------------------

@@ -145,6 +145,8 @@ def test_carriers_have_the_spec_fields_in_order() -> None:
             "workloads",
             "test_command",
             "extra_protected",
+            "notes",
+            "python_version",
         ),
         EditTask: ("hypothesis", "brief", "boundary"),
         EditResult: ("written", "cost_usd", "tokens_used", "stop", "error"),
@@ -355,6 +357,33 @@ def test_edit_result_refuses_negative_tokens() -> None:
 # ---------------------------------------------------------------------------
 # UnderstandResult and EditTask
 # ---------------------------------------------------------------------------
+
+
+def test_preflight_report_notes_and_python_version_default_to_empty() -> None:
+    """
+    GIVEN a PreflightReport built with only the original eight fields
+    WHEN its notes and python_version are read
+    THEN they default to no notes and an unknown Python, so every existing
+        construction keeps working; both can be set by keyword
+    """
+    report = PreflightReport(
+        head_commit="a" * 40,
+        dirty_entries=(),
+        git_version=(2, 43, 0),
+        network="required",
+        fs="required",
+        workloads=(WORKLOAD,),
+        test_command=None,
+        extra_protected=(),
+    )
+    noted = dataclasses.replace(
+        report, notes=("merge=union in .gitattributes",), python_version=(3, 11, 9)
+    )
+
+    assert (report.notes, report.python_version) == ((), None)
+    assert noted.notes == ("merge=union in .gitattributes",)
+    assert noted.python_version == (3, 11, 9)
+    assert noted != report
 
 
 def test_understand_result_defaults_and_money_rules() -> None:

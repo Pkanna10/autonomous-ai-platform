@@ -12,6 +12,7 @@ real git cannot be made old or suspicious.
 from __future__ import annotations
 
 import ast
+import dataclasses
 import hashlib
 import math
 import os
@@ -19,6 +20,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +40,7 @@ from autonomous_ai_agents.common.paths import matches_pattern
 from autonomous_ai_agents.execution import launcher, preflight
 from autonomous_ai_agents.execution.git import (
     ATTR_SOURCE_SINCE,
+    GitError,
     GitWorkspace,
     repo_fingerprint,
 )
@@ -309,6 +312,25 @@ def test_preflight_satisfies_the_protocol(make: Factory) -> None:
     assert isinstance(make(), Preflight)
     assert issubclass(GitPreflightReport, PreflightReport)
     assert MIN_GIT_VERSION == (2, 38, 0)
+
+
+def test_git_preflight_report_narrows_the_protocol_report() -> None:
+    """
+    GIVEN the protocol's PreflightReport (notes, python_version optional)
+    WHEN GitPreflightReport's fields are listed
+    THEN they are the protocol's, in order, with notes and python_version
+        required: GitPreflight always fills both
+    """
+    names = [f.name for f in dataclasses.fields(GitPreflightReport)]
+    required = [
+        f.name
+        for f in dataclasses.fields(GitPreflightReport)
+        if f.default is dataclasses.MISSING
+    ]
+
+    assert names == [f.name for f in dataclasses.fields(PreflightReport)]
+    assert names[-2:] == ["notes", "python_version"]
+    assert required == names
 
 
 def test_happy_path_pins_head_and_reports_everything(
@@ -696,6 +718,670 @@ def test_attributes_without_lfs_are_accepted(
     write(repo / ".git" / "info" / "attributes", "*.md diff=markdown\n")
 
     assert check(make(), project).notes == ()
+
+
+# ---------------------------------------------------------------------------
+# merge= attributes: every source the engine's git reads for a combine
+# ---------------------------------------------------------------------------
+
+
+def merge_notes(report: PreflightReport) -> list[str]:
+    return [note for note in report.notes if "merge" in note]
+
+
+def info_attributes(repo: Path) -> Path:
+    return repo / ".git" / "info" / "attributes"
+
+
+def old_git(tmp_path: Path) -> str:
+    """Real git reporting 2.39.0, so the engine passes no ``--attr-source``."""
+    body = 'if [ "$1" = version ]; then echo "git version 2.39.0"; exit 0; fi\n'
+    return fake_git(tmp_path, body + 'exec git "$@"\n')
+
+
+def _arm_merge_driver(repo: Path, name: str, marker: Path) -> None:
+    run_git(repo, "config", f"merge.{name}.driver", f"touch {marker}; false")
+
+
+def _diverged(repo: Path) -> tuple[str, str]:
+    """Commit the checkout with f.txt, then two commits changing its middle
+    line differently (a 3-way conflict); HEAD is the second."""
+    write(repo / "f.txt", "a\nb\nc\n")
+    base = commit_all(repo)
+    write(repo / "f.txt", "a\nX\nc\n")
+    left = commit_all(repo)
+    run_git(repo, "reset", "-q", "--hard", base)
+    write(repo / "f.txt", "a\nY\nc\n")
+    return left, commit_all(repo)
+
+
+def _needs_attr_source(repo: Path) -> None:
+    if GitWorkspace(repo).version() < ATTR_SOURCE_SINCE:
+        pytest.skip("the real git has no --attr-source")
+
+
+@pytest.mark.parametrize(
+    "where",
+    [".gitattributes", "a/b/.gitattributes", "assets/.GitAttributes", "info"],
+)
+def test_merge_union_in_any_attribute_source_is_a_note(
+    make: Factory, project: Project, repo: Path, tmp_path: Path, where: str
+) -> None:
+    """
+    GIVEN merge=union in a committed .gitattributes at any depth (any case)
+        or in info/attributes, on a git without --attr-source (2.39: its
+        merge-tree reads the committed files through the checkout)
+    WHEN preflight checks the repository
+    THEN it is accepted with one note naming the source and the pattern and
+        saying the combined tip is still re-tested
+    """
+    if where == "info":
+        write(info_attributes(repo), "*.txt merge=union\n")
+        label = str(info_attributes(repo))
+    else:
+        write(repo / where, "*.txt merge=union\n")
+        commit_all(repo)
+        label = where
+
+    (note,) = merge_notes(check(make(executable=old_git(tmp_path)), project))
+
+    assert "merge=union" in note
+    assert f"{label} (*.txt)" in note
+    assert "re-tested" in note
+
+
+def test_union_ours_and_binary_produce_one_note_each(
+    make: Factory, project: Project, repo: Path, tmp_path: Path
+) -> None:
+    """
+    GIVEN on git 2.39 union on two patterns, ours on one, and binary through
+        merge=binary, -merge, -merge=x (git drops the value of a - token)
+        and the built-in binary macro
+    WHEN preflight checks the repository
+    THEN there is one note per kind, each naming its patterns
+    """
+    write(
+        repo / ".gitattributes",
+        "*.a merge=union\n*.b\tmerge=union\n*.c merge=ours\n"
+        "*.d merge=binary\n*.e -merge\n*.png binary\n*.f -merge=x\n",
+    )
+    commit_all(repo)
+
+    notes = merge_notes(check(make(executable=old_git(tmp_path)), project))
+
+    assert len(notes) == 3
+    union, ours, binary = notes
+    assert "merge=union" in union
+    assert "(*.a)" in union
+    assert "(*.b)" in union
+    assert "merge=ours" in ours
+    assert "(*.c)" in ours
+    assert "3-way" in ours
+    assert all(f"(*.{p})" in binary for p in ("d", "e", "png"))
+    assert "conflict" in binary
+    assert "and 9 more" in binary  # *.f, then the checkout's and index's copies
+
+
+def test_a_long_list_of_sources_is_capped_in_the_note(
+    make: Factory, project: Project, repo: Path
+) -> None:
+    lines = "".join(f"*.u{i} merge=union\n" for i in range(5))
+    write(info_attributes(repo), lines)
+
+    (note,) = merge_notes(check(make(), project))
+
+    assert "(*.u0)" in note
+    assert "(*.u2)" in note
+    assert "(*.u3)" not in note
+    assert note.count("(*.u") == 3
+    assert "and 2 more" in note
+
+
+def test_merge_values_that_change_nothing_are_not_noted(
+    make: Factory, project: Project, repo: Path, tmp_path: Path
+) -> None:
+    """
+    GIVEN on git 2.39 merge set, unspecified, =text, a name with no driver, a
+        commented line, an unused macro, an unset or valued binary macro,
+        !merge=union (unspecified), a value that only starts with union, and
+        lines git drops whole: an invalid attribute name beside merge=union
+        (bad$name, --x, !-x, a bare - or =x) and a line of 2048 bytes or more
+    WHEN preflight checks the repository
+    THEN no merge note is produced and it is accepted
+    """
+    long_line = "*.p" + " " * 2045 + "merge=union\n"
+    write(
+        repo / ".gitattributes",
+        "*.a merge\n*.b !merge\n*.c merge=text\n*.d merge=nodriver\n"
+        "# *.e merge=union\n   \n[attr]unused merge=union\n*.f -binary\n"
+        "*.g binary=x\n*.h !merge=union\n*.i merge=unionx\n"
+        "*.j merge=union bad$name\n*.k merge=union --x\n*.l merge=union !-x\n"
+        "*.m merge=union -\n*.n merge=union =x\n[attr]bad merge=union b@d\n"
+        "*.o bad\n" + long_line,
+    )
+    commit_all(repo)
+
+    assert merge_notes(check(make(executable=old_git(tmp_path)), project)) == []
+
+
+def test_macros_expand_across_sources_through_chains_and_loops(
+    make: Factory, project: Project, repo: Path, tmp_path: Path
+) -> None:
+    """
+    GIVEN on git 2.39, a macro chain with a loop defined in a root .gitattributes that
+        starts with a UTF-8 BOM, used under quoted patterns (one with an
+        escape) in info/attributes, a macro whose quoted name is spelled with
+        an octal escape, and an invalid quoted pattern git splits at blanks
+    WHEN preflight checks the repository
+    THEN the union, ours and binary they expand to are noted with the lines
+    """
+    write(
+        repo / ".gitattributes",
+        "\ufeff[attr]keep merge=union\n[attr]outer keep loop\n[attr]loop outer\n"
+        '"\\133attr]esc" merge=ours\n',
+    )
+    commit_all(repo)
+    info = '"sub dir/*.txt" loop\n*.z esc\n"bad\\q" binary\n"t\\tab" keep\n'
+    write(info_attributes(repo), info)
+
+    union, ours, binary = merge_notes(
+        check(make(executable=old_git(tmp_path)), project)
+    )
+
+    assert '("sub dir/*.txt")' in union
+    assert '("t\\tab")' in union
+    assert '("bad\\q")' in binary  # invalid quoting: git splits at blanks
+    assert "(*.z)" in ours
+
+
+def test_info_attributes_of_a_linked_worktree_are_read_from_the_common_dir(
+    make: Factory, project: Project, repo: Path, tmp_path: Path
+) -> None:
+    """
+    GIVEN root_path is a linked worktree and merge=union in the main
+        repository's info/attributes (git reads info/ from the common dir)
+    WHEN preflight checks the linked worktree
+    THEN the note names the common dir's info/attributes
+    """
+    linked = tmp_path / "linked"
+    run_git(repo, "worktree", "add", "-q", "--detach", str(linked), "HEAD")
+    write(info_attributes(repo), "*.txt merge=union\n")
+    project = project.model_copy(update={"root_path": str(linked.resolve())})
+
+    (note,) = merge_notes(check(make(), project))
+
+    assert str(info_attributes(repo)) in note
+
+
+@pytest.mark.parametrize("where", [".gitattributes", "deep/er/.gitattributes", "info"])
+def test_a_custom_merge_driver_is_refused_naming_the_file_and_the_fix(
+    make: Factory, project: Project, repo: Path, tmp_path: Path, where: str
+) -> None:
+    """
+    GIVEN merge=mine in an attribute source and merge.mine.driver configured,
+        on git 2.39 (its merge-tree reads the committed files)
+    WHEN preflight checks the repository
+    THEN it refuses, naming the source, the attribute, the driver key and
+        the fix, and the driver never ran
+    """
+    if where == "info":
+        write(info_attributes(repo), "*.txt merge=mine\n")
+        label = str(info_attributes(repo))
+    else:
+        write(repo / where, "*.txt merge=mine\n")
+        commit_all(repo)
+        label = where
+    marker = tmp_path / "driver-ran"
+    _arm_merge_driver(repo, "mine", marker)
+
+    message = refused(make(executable=old_git(tmp_path)), project)
+
+    assert f"{label} (*.txt)" in message
+    assert "merge=mine" in message
+    assert "merge.mine.driver" in message
+    assert "remove" in message
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("name", ["union", "my.drv"])
+def test_a_driver_under_a_builtin_name_or_in_a_macro_is_refused(
+    make: Factory, project: Project, repo: Path, tmp_path: Path, name: str
+) -> None:
+    """
+    GIVEN a macro that sets merge=<name>, and merge.<name>.driver configured
+        under a built-in name (a user driver beats the built-in union) or a
+        subsection with a dot
+    WHEN preflight checks the repository
+    THEN it refuses on git 2.39, naming the line that uses the macro
+    """
+    write(repo / ".gitattributes", f"[attr]joined merge={name}\n*.txt joined\n")
+    commit_all(repo)
+    _arm_merge_driver(repo, name, tmp_path / "ran")
+
+    message = refused(make(executable=old_git(tmp_path)), project)
+
+    assert ".gitattributes (*.txt)" in message
+    assert f"merge.{name}.driver" in message
+
+
+@pytest.mark.parametrize("key", ["name", "recursive"])
+def test_any_key_under_a_merge_subsection_makes_a_shadowing_driver(
+    make: Factory, project: Project, repo: Path, key: str
+) -> None:
+    # info/attributes: the engine's merge-tree reads it on every git version
+    """
+    GIVEN merge=union and only merge.union.<key> configured (no driver
+        command: git then dies with 'lacks command line' instead of merging)
+    WHEN preflight checks the repository
+    THEN it refuses, naming that key
+    """
+    write(info_attributes(repo), "*.txt merge=union\n")
+    run_git(repo, "config", f"merge.union.{key}", "text")
+
+    message = refused(make(), project)
+
+    assert f"merge.union.{key}" in message
+
+
+def test_unset_merge_uses_the_builtin_binary_even_with_a_binary_driver(
+    make: Factory, project: Project, repo: Path, tmp_path: Path
+) -> None:
+    """
+    GIVEN -merge (and the binary macro) with merge.binary.driver configured
+    WHEN preflight checks the repository
+    THEN it is a note, not a refusal: git never looks up a driver for an
+        unset merge attribute
+    """
+    write(info_attributes(repo), "*.e -merge\n*.png binary\n")
+    _arm_merge_driver(repo, "binary", tmp_path / "ran")
+
+    (note,) = merge_notes(check(make(), project))
+
+    assert "(*.e)" in note
+    assert "(*.png)" in note
+
+
+def test_a_configured_driver_no_attribute_names_is_accepted(
+    make: Factory, project: Project, repo: Path, tmp_path: Path
+) -> None:
+    _arm_merge_driver(repo, "mine", tmp_path / "ran")
+    run_git(repo, "config", "--bool", "merge.flag.driver", "true")
+
+    assert merge_notes(check(make(), project)) == []
+
+
+def test_merge_default_union_is_a_note_and_a_default_driver_is_refused(
+    make: Factory, project: Project, repo: Path, tmp_path: Path
+) -> None:
+    """
+    GIVEN merge.default=union, then merge.default=mine with merge.mine.driver
+    WHEN preflight checks the repository each time
+    THEN the first is a note naming merge.default, the second a refusal
+    """
+    run_git(repo, "config", "merge.default", "union")
+
+    (note,) = merge_notes(check(make(), project))
+
+    assert "merge.default" in note
+    run_git(repo, "config", "merge.default", "mine")
+    _arm_merge_driver(repo, "mine", tmp_path / "ran")
+    message = refused(make(), project)
+    assert "merge.default" in message
+    assert "merge.mine.driver" in message
+
+
+@pytest.mark.parametrize(
+    ("section", "key"),
+    [
+        ("[merge]", "merge.default"),
+        ('[merge "mine"]', "merge.mine.driver"),
+        ('[merge "mine"]', "merge.mine.name"),
+        ('[merge "mine"]', "merge.mine.recursive"),
+    ],
+)
+def test_a_valueless_merge_key_git_dies_on_is_refused(
+    make: Factory, project: Project, repo: Path, section: str, key: str
+) -> None:
+    """
+    GIVEN a valueless merge.default, merge.<name>.driver, .name or .recursive
+        in the repository config (no attribute names the driver)
+    WHEN the engine's git merges, and preflight checks the repository
+    THEN git dies ('bad config variable'), so preflight refuses, naming the
+        key and the fix
+    """
+    left, right = _diverged(repo)
+    with (repo / ".git" / "config").open("a") as config:
+        config.write(f"{section}\n\t{key.rpartition('.')[2]}\n")
+    with pytest.raises(GitError, match="bad config variable"):
+        GitWorkspace(repo).merge(left, right)
+
+    message = refused(make(), project)
+
+    assert f"{key} in the repository config has no value" in message
+    assert "set a value or remove it" in message
+
+
+def test_a_valued_unknown_key_under_a_merge_subsection_is_accepted(
+    make: Factory, project: Project, repo: Path
+) -> None:
+    with (repo / ".git" / "config").open("a") as config:
+        config.write('[merge "mine"]\n\tother\n')
+
+    assert merge_notes(check(make(), project)) == []
+
+
+@pytest.mark.parametrize("select", ["attribute", "default"])
+def test_a_driver_in_the_empty_merge_subsection_is_refused(
+    make: Factory, project: Project, repo: Path, tmp_path: Path, select: str
+) -> None:
+    """
+    GIVEN [merge ""] driver = ... in the repository config, selected by an
+        empty merge= attribute in info/attributes or by merge.default = ""
+    WHEN preflight checks the repository
+    THEN it refuses, naming merge..driver (git runs that driver)
+    """
+    with (repo / ".git" / "config").open("a") as config:
+        config.write(f'[merge ""]\n\tdriver = touch {tmp_path / "ran"}\n')
+    if select == "attribute":
+        write(info_attributes(repo), "*.txt merge=\n")
+    else:
+        run_git(repo, "config", "merge.default", "")
+
+    message = refused(make(), project)
+
+    assert "merge..driver" in message
+    assert 'selects merge="", a custom merge driver' in message
+
+
+def test_the_repo_core_attributes_file_is_overridden_like_the_engine_git(
+    make: Factory, project: Project, repo: Path, tmp_path: Path
+) -> None:
+    """
+    GIVEN core.attributesFile in the repository config naming a union file
+    WHEN preflight checks the repository
+    THEN no note: the engine's git pins core.attributesFile=/dev/null, so
+        its merge-tree never reads that file either
+    """
+    attributes = write(tmp_path / "global-attributes", "*.txt merge=union\n")
+    run_git(repo, "config", "core.attributesFile", str(attributes))
+
+    assert merge_notes(check(make(), project)) == []
+
+
+@pytest.mark.parametrize("relative", [False, True], ids=["absolute", "relative"])
+def test_the_attributes_file_the_engine_git_reports_is_read(
+    make: Factory, project: Project, repo: Path, tmp_path: Path, relative: bool
+) -> None:
+    """
+    GIVEN a git whose effective core.attributesFile (absolute, or relative
+        to the repository) holds merge=union
+    WHEN preflight checks the repository
+    THEN the note names core.attributesFile and the file
+    """
+    attributes = write(repo / "attrs.txt", "*.txt merge=union\n")
+    value = "attrs.txt" if relative else str(attributes)
+    body = (
+        'case " $* " in *" --get core.attributesFile "*)'
+        f" printf '%s\\0' '{value}'; exit 0;; esac\n"
+    )
+    git = fake_git(tmp_path, body + 'exec git "$@"\n')
+
+    (note,) = merge_notes(check(make(executable=git), project))
+
+    assert f"core.attributesFile {attributes}" in note
+
+
+def test_an_unset_attributes_file_reads_nothing(
+    make: Factory, project: Project, tmp_path: Path
+) -> None:
+    body = 'case " $* " in *" --get core.attributesFile "*) exit 1;; esac\n'
+    git = fake_git(tmp_path, body + 'exec git "$@"\n')
+
+    assert merge_notes(check(make(executable=git), project)) == []
+
+
+def test_old_git_reads_the_checkout_and_index_attributes(
+    make: Factory, project: Project, repo: Path, tmp_path: Path
+) -> None:
+    """
+    GIVEN an untracked root .gitattributes with union and a staged nested
+        one with ours deleted from the checkout, on a git without
+        --attr-source (2.39) and on the real git
+    WHEN preflight checks the repository with each
+    THEN the old git notes both (its merge-tree reads the checkout, then the
+        index), the real git notes neither (--attr-source hides them)
+    """
+    write(repo / ".gitattributes", "*.txt merge=union\n")
+    write(repo / "n" / ".gitattributes", "*.c merge=ours\n")
+    run_git(repo, "add", "n/.gitattributes")
+    (repo / "n" / ".gitattributes").unlink()
+    if GitWorkspace(repo).version() < ATTR_SOURCE_SINCE:
+        pytest.skip("the real git has no --attr-source")
+
+    union, ours = merge_notes(check(make(executable=old_git(tmp_path)), project))
+
+    assert "the checkout's .gitattributes (*.txt)" in union
+    assert "the index's n/.gitattributes (*.c)" in ours
+    assert merge_notes(check(make(), project)) == []
+
+
+def test_old_git_reads_through_a_directory_link_but_not_a_file_link(
+    make: Factory, project: Project, repo: Path, tmp_path: Path
+) -> None:
+    """
+    GIVEN on git 2.39 a tracked d/.gitattributes whose directory became a
+        link out of the repository, and an untracked e/.gitattributes that is
+        itself a link, both reaching union attributes outside it
+    WHEN preflight checks the repository
+    THEN the d file is noted and labelled as read through a directory link
+        (git's open follows a directory link), the e link is not read (git
+        opens the last component with O_NOFOLLOW)
+    """
+    outside = tmp_path / "outside"
+    write(outside / ".gitattributes", "*.txt merge=union\n")
+    write(repo / "d" / ".gitattributes", "*.x text\n")
+    commit_all(repo)
+    shutil.rmtree(repo / "d")
+    os.symlink(outside, repo / "d")
+    write(repo / "e" / "keep", "")
+    os.symlink(outside / ".gitattributes", repo / "e" / ".gitattributes")
+
+    (note,) = merge_notes(check(make(executable=old_git(tmp_path)), project))
+
+    assert "the checkout's d/.gitattributes (through a directory link) (*.txt)" in note
+    assert "e/.gitattributes" not in note
+
+
+def test_old_git_index_entries_with_a_bad_object_id_are_a_preflight_error(
+    make: Factory, project: Project, repo: Path, tmp_path: Path
+) -> None:
+    body = (
+        'case " $* " in *" ls-files -z -s "*)'
+        " printf '100644 zz 0\\t.gitattributes\\0'; exit 0;; esac\n"
+        'if [ "$1" = version ]; then echo "git version 2.39.0"; exit 0; fi\n'
+    )
+    git = fake_git(tmp_path, body + 'exec git "$@"\n')
+
+    message = refused(make(executable=git), project)
+
+    assert "object id" in message
+
+
+def test_merge_note_text_is_printable(
+    make: Factory, project: Project, repo: Path
+) -> None:
+    write(info_attributes(repo), b"\x1b[31m*.txt merge=union\n")
+
+    (note,) = merge_notes(check(make(), project))
+
+    assert "\x1b" not in note
+    assert "?[31m*.txt" in note
+    assert note.isprintable()
+
+
+def test_the_engine_merge_tree_really_honours_info_attributes_union(
+    repo: Path,
+) -> None:
+    """
+    GIVEN two commits changing one line differently and merge=union in
+        info/attributes
+    WHEN the engine's own GitWorkspace.merge combines them
+    THEN merge-tree reports no conflict: the case the note warns about
+    """
+    left, right = _diverged(repo)
+    git = GitWorkspace(repo)
+
+    assert git.merge(left, right).tree is None
+    write(info_attributes(repo), "*.txt merge=union\n")
+    assert git.merge(left, right).tree is not None
+
+
+def test_the_engine_merge_tree_ignores_a_committed_union_on_git_with_attr_source(
+    repo: Path,
+) -> None:
+    """
+    GIVEN on git >= 2.40 a committed *.txt merge=union and two commits
+        changing one line differently
+    WHEN the user's plain git merge-tree and the engine's GitWorkspace.merge
+        combine them
+    THEN the user's merge unions (exit 0), the engine's conflicts: why a
+        committed file is a note there, not a refusal
+    """
+    _needs_attr_source(repo)
+    write(repo / ".gitattributes", "*.txt merge=union\n")
+    left, right = _diverged(repo)
+
+    run_git(repo, "merge-tree", "--write-tree", left, right)  # exit 0 asserted
+    assert GitWorkspace(repo).merge(left, right).conflicts == ("f.txt",)
+
+
+def test_committed_merge_attributes_are_one_note_where_the_engine_ignores_them(
+    make: Factory, project: Project, repo: Path, tmp_path: Path
+) -> None:
+    """
+    GIVEN on git >= 2.40 committed .gitattributes (root and nested) with a
+        custom driver (merge.mine.driver configured), union, -merge, ours
+        with no ours driver, and a macro defined there that info/attributes
+        uses
+    WHEN preflight checks the repository
+    THEN it is accepted with one note naming the committed places of the
+        driver, union and binary merges (not ours: both gits 3-way merge it)
+        and saying the engine's combines do not read them; the info line
+        using the committed macro is not noted (the engine's git does not
+        read the macro either) and the driver never ran
+    """
+    _needs_attr_source(repo)
+    write(
+        repo / ".gitattributes",
+        "[attr]joined merge=union\n*.txt merge=mine\n*.c merge=ours\n",
+    )
+    write(repo / "n" / ".gitattributes", "*.a merge=union\n*.b -merge\n")
+    commit_all(repo)
+    write(info_attributes(repo), "*.m joined\n")
+    _arm_merge_driver(repo, "mine", tmp_path / "ran")
+
+    (note,) = merge_notes(check(make(), project))
+
+    assert note.startswith("merge=mine, merge=union, -merge in .gitattributes (*.txt)")
+    assert "n/.gitattributes (*.a), n/.gitattributes (*.b):" in note
+    assert "(*.c)" not in note
+    assert "(*.m)" not in note
+    assert "do not read committed .gitattributes" in note
+    assert not (tmp_path / "ran").exists()
+
+
+def test_a_nul_ends_a_committed_blob_but_only_its_line_in_a_file(
+    make: Factory, project: Project, repo: Path
+) -> None:
+    """
+    GIVEN on git >= 2.40 a committed .gitattributes with a NUL after its
+        first line, and an info/attributes with a NUL inside its first line
+    WHEN preflight checks the repository
+    THEN as git: the blob is read up to the NUL (*.b ignored), the file's
+        first line up to the NUL and its later lines in full
+    """
+    _needs_attr_source(repo)
+    write(repo / ".gitattributes", b"*.a merge=union\0\n*.b merge=union\n")
+    commit_all(repo)
+    write(info_attributes(repo), b"*.c merge=union\0junk\n*.d merge=union\n")
+
+    union, committed = merge_notes(check(make(), project))
+
+    assert "(*.c)" in union
+    assert "(*.d)" in union
+    assert "(*.a)" in committed
+    assert "(*.b)" not in committed
+
+
+def test_macro_fan_out_and_long_chains_are_checked_in_linear_time(
+    make: Factory, project: Project, repo: Path
+) -> None:
+    """
+    GIVEN info/attributes defining one macro 2,000 times (22,000 attributes,
+        merge=union among them; lines stay under git's 2048 bytes) used on
+        8,000 lines, and a chain of 5,000 macros ending in merge=union used on
+        5,000 lines (expanding each use again took over 30 s; a recursive walk
+        would overflow the stack)
+    WHEN preflight checks the repository
+    THEN it finishes well within 5 s and notes every line
+    """
+    names = " ".join(f"t{i}" for i in range(10))
+    definitions = f"[attr]a merge=union {names}\n" * 2_000
+    chain = "".join(f"[attr]c{i} c{i + 1}\n" for i in range(5_000))
+    lines = "p a\n" * 8_000 + "".join(f"q{i} c{i}\n" for i in range(5_000))
+    text = f"{definitions}{chain}[attr]c5000 merge=union\n{lines}"
+    write(info_attributes(repo), text)
+
+    start = time.monotonic()
+    (note,) = merge_notes(check(make(), project))
+
+    assert time.monotonic() - start < 5
+    assert "and 12997 more" in note
+
+
+@pytest.mark.parametrize("where", ["committed", "info"])
+def test_an_attribute_file_over_the_read_cap_is_refused(
+    make: Factory,
+    project: Project,
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    where: str,
+) -> None:
+    """
+    GIVEN a committed .gitattributes or an info/attributes larger than the
+        bytes preflight reads (git reads attribute files up to 100 MB)
+    WHEN preflight checks the repository
+    THEN it refuses, naming the file and the cap, instead of checking a part
+    """
+    monkeypatch.setattr(preflight, "_MAX_ATTRIBUTES_BYTES", 64)
+    text = "*.txt text\n" * 10
+    if where == "committed":
+        write(repo / "d" / ".gitattributes", text)
+        commit_all(repo)
+        name = "d/.gitattributes"
+    else:
+        write(info_attributes(repo), text)
+        name = str(info_attributes(repo))
+
+    message = refused(make(), project)
+
+    assert f"{name} is larger than the 64 bytes preflight reads" in message
+
+
+def test_old_git_refuses_an_index_attribute_blob_over_the_read_cap(
+    make: Factory,
+    project: Project,
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(preflight, "_MAX_ATTRIBUTES_BYTES", 64)
+    write(repo / "n" / ".gitattributes", "*.txt text\n" * 10)
+    run_git(repo, "add", "n/.gitattributes")
+
+    message = refused(make(executable=old_git(tmp_path)), project)
+
+    assert "the index's n/.gitattributes is larger than the 64 bytes" in message
 
 
 # ---------------------------------------------------------------------------

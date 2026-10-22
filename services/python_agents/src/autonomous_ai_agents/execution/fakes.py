@@ -89,16 +89,26 @@ class FakePreflight:
     """Returns ``report``, raises ``error``, or (neither) echoes its inputs.
 
     The echo report pins ``FAKE_COMMIT``, keeps the workloads and the
-    project's test command, has no dirty entries and both isolation modes
-    ``required``.
+    project's test command, has no dirty entries, both isolation modes
+    ``required``, and the scripted ``notes`` and ``python_version``.
     """
 
     def __init__(
-        self, report: PreflightReport | None = None, *, error: Exception | None = None
+        self,
+        report: PreflightReport | None = None,
+        *,
+        error: Exception | None = None,
+        notes: Sequence[str] = (),
+        python_version: tuple[int, int, int] | None = None,
     ) -> None:
         if report is not None and error is not None:
             raise ValueError("script a report or an error, not both")
+        if isinstance(notes, str):
+            raise TypeError("notes must be a sequence of notes, not one str")
+        if report is not None and (notes or python_version is not None):
+            raise ValueError("script notes and python_version on the report")
         self._report, self._error = report, error
+        self._notes, self._python = tuple(notes), python_version
         self.calls: list[PreflightCall] = []
 
     def check(
@@ -121,6 +131,8 @@ class FakePreflight:
             workloads=tuple(workloads),
             test_command=project.test_command,
             extra_protected=(),
+            notes=self._notes,
+            python_version=self._python,
         )
 
 

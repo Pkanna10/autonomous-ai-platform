@@ -8,7 +8,10 @@ problem and the fix: ``tests_pass`` without ``project.test_command``; git
 of a work tree, without a commit, or holding ``WORKTREE_ROOT``; a partial
 clone; a crafted tree path, ``.gitmodules`` or a gitlink; LFS (``filter=lfs`` in
 any ``.gitattributes`` blob read with ``cat-file``, in ``info/attributes``, or a
-root ``.lfsconfig``; no filter runs); an editable ``.py`` blob the engine's
+root ``.lfsconfig``; no filter runs); a custom merge driver (any
+``merge.<name>.*`` key) a ``merge=`` attribute or ``merge.default`` selects
+(``union``, ``ours`` and binary merges are notes: the combined tip is re-tested
+anyway); an editable ``.py`` blob the engine's
 Python cannot parse (a protected one is a note); an unresolvable command; or a
 failed isolation probe (``true`` once through ``run_once`` and the launcher's
 write and connect self-checks, in a fresh ``WORKTREE_ROOT/preflight-*``).
@@ -19,12 +22,33 @@ requires). Arguments naming base-tree files (``--opt=`` values, node ids, ``-m``
 targets, through links, in any case) are protected, as is a directory the test
 command names (not the root or ``src``). A tracked path given absolutely (the
 run would use the checkout's copy) and inline shell or Python code are refused.
+
+Merge attributes are parsed here, never through ``check-attr`` (the engine's
+``--attr-source`` hides blobs from it), as git does: comments, a UTF-8 BOM,
+quoted patterns, a NUL ending a blob (a file's line), lines of 2048 bytes or
+an invalid attribute name dropped, ``-merge=x`` read as ``-merge``, and
+``[attr]`` macros (the built-in ``binary`` too) resolved once each through
+chains and loops (Tarjan's components: linear, never recursive). The engine's
+``merge-tree`` reads ``<common-dir>/info/attributes`` (shared by linked
+worktrees), the ``core.attributesFile`` its git reports (its ``-c`` pins
+``/dev/null``) and ``merge.default``; on git < 2.40 (no ``--attr-source``) also
+the checkout's ``.gitattributes`` (a directory link is followed, a link as the
+file is not, as git opens them) and the index's, and there the base tree's
+blobs count with them. Those sources refuse or note. On git >= 2.40 the base
+tree's blobs (any depth, any case) are never read by a combine: what they set
+is one note (the user's own merges differ). Macros count from any source read,
+not only the top level as git does: that can only add a note or a refusal.
+Valueless ``merge.default`` or ``merge.<name>.driver``/``name``/``recursive``
+keys are refused: git dies on them in every content merge. Attribute files
+over ``_MAX_ATTRIBUTES_BYTES`` are refused rather than checked in part.
 """
 
 from __future__ import annotations
 
 import ast
+import codecs
 import glob
+import itertools
 import os
 import posixpath
 import re
@@ -32,7 +56,7 @@ import shutil
 import sys
 import tempfile
 import warnings
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -49,7 +73,11 @@ from autonomous_ai_agents.common.paths import (
     matches_pattern,
     normalize_path,
 )
-from autonomous_ai_agents.execution.git import GitError, GitWorkspace
+from autonomous_ai_agents.execution.git import (
+    ATTR_SOURCE_SINCE,
+    GitError,
+    GitWorkspace,
+)
 from autonomous_ai_agents.execution.measure import RunOnce
 from autonomous_ai_agents.execution.procrun import (
     WRAPPER_PATH,
@@ -88,14 +116,76 @@ _PYTHON = re.compile(r"(python|pypy)[0-9.]*t?")
 _LONG_VALUE = frozenset({"--rcfile", "--init-file", "--check-hash-based-pycs"})
 _UNPROTECTED_DIRS = frozenset({".", "src"})
 """Test-command directories left to the default patterns: they hold the code."""
+_ATTRIBUTES_SPEC = ":(glob,icase)**/.gitattributes"
+_OID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+_ATTR_WORD = re.compile(rb"[^ \t\r\n]+")
+_ATTR_QUOTED = re.compile(rb'"(?:[^"\\]|\\.)*"')
+_OCTAL = re.compile(rb"[0-3][0-7]{2}")
+_C_ESCAPES = dict(zip(b'\\"abfnrtv', b'\\"\a\b\f\n\r\t\v', strict=True))
+_MACRO = b"[attr]"
+_BINARY = (b"-diff", b"-merge", b"-text")
+"""git's built-in ``binary`` macro."""
+_ATTR_TOKEN = re.compile(rb"[!-]?[A-Za-z0-9_.][-A-Za-z0-9_.]*(=.*)?", re.DOTALL)
+"""A token git accepts; one invalid name drops the whole line."""
+_MAX_LINE = 2048
+"""git ignores an attributes line of this many bytes or more."""
+_MERGE_KEYS = r"^merge\.(default|.*\..+)$"
+"""``merge.default`` and every ``merge.<name>.<var>`` (``<name>`` may be empty):
+any such key makes ``<name>`` a user driver that shadows a built-in (git dies
+without a command)."""
+_NEEDS_VALUE = frozenset({"driver", "name", "recursive"})
+"""``merge.<name>.<var>`` keys git dies on when valueless (as ``merge.default``)."""
+_MERGE_NOTES = {
+    "union": (
+        "merge=union",
+        "git merge-tree keeps both sides' lines instead of reporting a conflict,"
+        " so a combine can join two kept changes into code no trial ran alone;"
+        " the combined tip is still fully re-tested",
+    ),
+    "ours": (
+        "merge=ours",
+        "git has no built-in ours driver and none is configured, so git"
+        " merge-tree uses its 3-way text merge for these paths",
+    ),
+    "binary": (
+        "a binary merge (merge=binary, -merge)",
+        "git merge-tree reports a conflict whenever two kept changes touch"
+        " these paths, so the combine keeps only one of them",
+    ),
+}
+_COMMITTED_NOTE = (
+    "the engine's combines do not read committed .gitattributes (its git"
+    " >= 2.40 runs merge-tree with --attr-source=<empty tree>), so a combine"
+    " 3-way merges these paths and may conflict where your own merges would"
+    " not, and the delivered branch may merge differently under your git"
+)
+_SHOWN = 3
+"""Places a merge note lists before 'and N more'."""
+
+_Setting = tuple[bool, str]
+"""One merge setting: ``(True, "")`` for ``-merge``, else ``(False, value)``."""
 
 
 @dataclass(frozen=True)
 class GitPreflightReport(PreflightReport):
-    """The protocol's report plus the engine's Python and the notes for events."""
+    """The protocol's report with ``notes`` and ``python_version`` required."""
 
-    python_version: tuple[int, int, int]
-    notes: tuple[str, ...]
+    notes: tuple[str, ...] = field()  # field(): no default inherited from the base
+    python_version: tuple[int, int, int] = field()
+
+
+@dataclass
+class _Places:
+    """Where one merge setting is made: the first places read, and how many."""
+
+    first: list[tuple[tuple[int, int], str, str]] = field(default_factory=list)
+    """``(order read, source, "source (pattern)")``."""
+    count: int = 0
+
+    def add(self, order: tuple[int, int], source: str, shown: str) -> None:
+        self.count += 1
+        if len(self.first) < _SHOWN:
+            self.first.append((order, source, shown))
 
 
 @dataclass(frozen=True)
@@ -140,6 +230,36 @@ class _RepoGit(GitWorkspace):
             entries[path] = _Entry(mode, kind, oid, 0 if size == "-" else int(size))
         return entries
 
+    def attributes_file(self) -> Path:
+        """The ``core.attributesFile`` this git reads (``/dev/null`` if unset)."""
+        argv = ("config", "-z", "--type=path", "--get", "core.attributesFile")
+        value = os.fsdecode(self._run(*argv, ok=(0, 1)).rstrip(b"\0"))
+        return Path(self.repo, value or os.devnull)
+
+    def checkout_attributes(self) -> Iterator[tuple[str, bytes]]:
+        """The index's and the checkout's ``.gitattributes`` (old git reads them)."""
+        listing = self._run("ls-files", "-z", "-s", "--", _ATTRIBUTES_SPEC)
+        for record in filter(None, listing.split(b"\0")):
+            meta, _, raw = record.partition(b"\t")
+            oid = (meta.split(b" ")[1:2] or [b""])[0].decode("ascii", "replace")
+            if _OID.fullmatch(oid) is None:
+                raise GitError(f"unexpected object id in ls-files output: {oid!r}")
+            label = f"the index's {os.fsdecode(raw)}"
+            if int(self._run("cat-file", "-s", oid)) > _MAX_ATTRIBUTES_BYTES:
+                raise _too_large(label)
+            yield label, self._run("cat-file", "blob", oid).partition(b"\0")[0]
+        listing = self._run(
+            "ls-files", "-z", "--cached", "--others", "--", _ATTRIBUTES_SPEC
+        )
+        for raw in filter(None, listing.split(b"\0")):
+            label, path = (
+                f"the checkout's {os.fsdecode(raw)}",
+                self.repo / os.fsdecode(raw),
+            )
+            if not Path(os.path.realpath(path.parent)).is_relative_to(self.repo):
+                label += " (through a directory link)"  # git's open follows it
+            yield label, _read_head(path, False)
+
     def contents(self, sizes: Mapping[str, int]) -> Iterator[dict[str, bytes]]:
         """Blob bytes by id, one ``git show`` (no textconv) per batch of ids."""
         batches: list[list[str]] = [[]]
@@ -173,16 +293,28 @@ def _has_lfs(data: bytes) -> bool:
     return any(_LFS.search(line) for line in lines)
 
 
-def _read_head(path: Path) -> bytes:
-    """Up to 16 MiB of a file git would read; nothing when it cannot be read."""
+def _read_head(path: Path, follow: bool = True) -> bytes:
+    """A file git would read (``O_NOFOLLOW`` on the last component unless
+    ``follow``); nothing when it cannot be read, refused past the cap."""
+    flags = os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        fd = os.open(path, flags if follow else flags | os.O_NOFOLLOW)
         try:
-            return os.read(fd, _MAX_ATTRIBUTES_BYTES)
+            data = os.read(fd, _MAX_ATTRIBUTES_BYTES + 1)
         finally:
             os.close(fd)
     except OSError:
         return b""
+    if len(data) > _MAX_ATTRIBUTES_BYTES:
+        raise _too_large(str(path))
+    return data
+
+
+def _too_large(source: str) -> PreflightError:
+    return PreflightError(
+        f"{source} is larger than the {_MAX_ATTRIBUTES_BYTES} bytes preflight"
+        " reads (git reads attribute files up to 100 MB): shrink it to connect"
+    )
 
 
 def _parse_problem(source: bytes, path: str) -> str | None:
@@ -213,8 +345,11 @@ def _git_refusal(repo: Path, error: Exception) -> PreflightError:
     return PreflightError(f"cannot read the git repository at {repo}: {error}")
 
 
-def _check_repository(git: _RepoGit) -> tuple[str, dict[str, _Entry]]:
-    """Version, shape, partial clone, submodules and LFS; the head and its tree."""
+def _check_repository(
+    git: _RepoGit,
+) -> tuple[str, dict[str, _Entry], list[tuple[str, bytes]]]:
+    """Version, shape, partial clone, submodules and LFS: the head, its tree,
+    and the attribute files read (``(label, bytes)``)."""
     if (version := git.version()) < MIN_GIT_VERSION:
         raise PreflightError(
             f"git {_dotted(version)} is older than 2.38 (merge-tree --write-tree):"
@@ -242,18 +377,23 @@ def _check_repository(git: _RepoGit) -> tuple[str, dict[str, _Entry]]:
     except GitError as error:
         raise PreflightError(f"{git.repo} has no commit at HEAD yet: {error}") from None
     tree = git.tree(head)
+    attributes: list[tuple[str, bytes]] = []
     for path, entry in tree.items():
         if entry.kind == "commit" or path.casefold() == ".gitmodules":
             raise PreflightError(f"{path} at {head}: submodules are not supported yet")
-        attributes = posixpath.basename(path).casefold() == ".gitattributes"
-        if path.casefold() == ".lfsconfig" or (
-            attributes and _has_lfs(git.read_blob(head, path))
-        ):
+        if path.casefold() == ".lfsconfig":
             raise _lfs_refusal(path)
+        if posixpath.basename(path).casefold() == ".gitattributes":
+            if entry.size > _MAX_ATTRIBUTES_BYTES:
+                raise _too_large(path)
+            data = git.read_blob(head, path, limit=_MAX_ATTRIBUTES_BYTES)
+            if _has_lfs(data):
+                raise _lfs_refusal(path)
+            attributes.append((path, data.partition(b"\0")[0]))  # git stops there
     info = git.common_dir() / "info" / "attributes"
-    if _has_lfs(_read_head(info)):
+    if _has_lfs(data := _read_head(info)):
         raise _lfs_refusal(str(info))
-    return head, tree
+    return head, tree, [*attributes, (str(info), data)]
 
 
 def _lfs_refusal(source: str) -> PreflightError:
@@ -261,6 +401,214 @@ def _lfs_refusal(source: str) -> PreflightError:
         f"LFS is configured in {source}: LFS repositories are not supported yet"
         " (the engine never runs the LFS filter)"
     )
+
+
+def _unquote(quoted: bytes) -> bytes | None:
+    """git's C-style unquoting of a ``"..."`` pattern; ``None`` when invalid."""
+    body, out, index = quoted[1:-1], bytearray(), 0
+    while index < len(body):
+        if body[index] != ord("\\"):
+            out.append(body[index])
+            index += 1
+        elif _OCTAL.fullmatch(body, index + 1, index + 4):
+            out.append(int(body[index + 1 : index + 4], 8))
+            index += 4
+        elif (escaped := _C_ESCAPES.get(body[index + 1])) is not None:
+            out.append(escaped)
+            index += 2
+        else:
+            return None
+    return bytes(out)
+
+
+def _attribute_lines(
+    data: bytes,
+) -> Iterator[tuple[bytes, bytes | None, list[bytes]]]:
+    """``(pattern, macro name or None, tokens)`` per line git keeps."""
+    for line in data.removeprefix(codecs.BOM_UTF8).split(b"\n"):
+        line = line.partition(b"\0")[0]  # a file's line ends at a NUL (strlen)
+        if len(line.removesuffix(b"\r")) >= _MAX_LINE:
+            continue
+        line = line.lstrip(b" \t\r")
+        if not line or line.startswith(b"#"):
+            continue
+        quoted = _ATTR_QUOTED.match(line)
+        name = None if quoted is None else _unquote(quoted.group())
+        if quoted is not None and name is not None:
+            pattern, tokens = quoted.group(), _ATTR_WORD.findall(line[quoted.end() :])
+        else:  # git's fallback when the quoting is invalid: split at blanks
+            words = _ATTR_WORD.findall(line)
+            pattern = name = words[0]
+            tokens = words[1:]
+        if all(_ATTR_TOKEN.fullmatch(token) for token in tokens):
+            macro = name[len(_MACRO) :] if name.startswith(_MACRO) else None
+            yield pattern, macro or None, tokens
+
+
+def _token(token: bytes) -> tuple[_Setting | None, bytes | None]:
+    """The merge setting a valid token makes, or the macro it may name."""
+    if token[:1] in (b"-", b"!"):  # git drops a value after - or !
+        merge = token[1:].partition(b"=")[0] == b"merge" and token[:1] == b"-"
+        return ((True, "") if merge else None), None
+    name, equals, value = token.partition(b"=")
+    if equals:
+        return ((False, os.fsdecode(value)) if name == b"merge" else None), None
+    return None, token  # only a set macro expands
+
+
+def _expand(
+    macros: Mapping[bytes, Sequence[Sequence[bytes]]],
+    relevant: Callable[[_Setting], bool],
+) -> dict[bytes, frozenset[_Setting]]:
+    """The relevant settings each macro reaches through all its definitions,
+    by Tarjan's components (iterative): linear in the definitions."""
+    own: dict[bytes, set[_Setting]] = {}
+    edges: dict[bytes, list[bytes]] = {}
+    for macro, definitions in macros.items():
+        own[macro], edges[macro] = set(), []
+        for setting, name in map(_token, itertools.chain.from_iterable(definitions)):
+            if setting is not None and relevant(setting):
+                own[macro].add(setting)
+            elif name is not None and name in macros:
+                edges[macro].append(name)
+    done: dict[bytes, frozenset[_Setting]] = {}
+    index: dict[bytes, int] = {}
+    low: dict[bytes, int] = {}
+    stack: list[bytes] = []
+    for root in macros:
+        work = [] if root in index else [(root, 0)]
+        while work:
+            node, at = work.pop()
+            if at == 0:
+                index[node] = low[node] = len(index)
+                stack.append(node)
+            if at < len(edges[node]):
+                work.append((node, at + 1))
+                if (succ := edges[node][at]) not in index:
+                    work.append((succ, 0))
+                elif succ not in done:  # still on the stack: one component
+                    low[node] = min(low[node], index[succ])
+                continue
+            if low[node] == index[node]:
+                members = [stack.pop()]
+                while members[-1] != node:
+                    members.append(stack.pop())
+                reached = set().union(*(own[member] for member in members))
+                for succ in itertools.chain.from_iterable(edges[m] for m in members):
+                    reached.update(done.get(succ, ()))
+                done.update(dict.fromkeys(members, frozenset(reached)))
+            if work:
+                parent = work[-1][0]
+                low[parent] = min(low[parent], low[node])
+    return done
+
+
+def _merge_places(
+    sources: Sequence[tuple[str, bytes]],
+    macro_sources: Sequence[tuple[str, bytes]],
+    relevant: Callable[[_Setting], bool],
+) -> dict[_Setting, _Places]:
+    """Where ``sources`` make each relevant setting, with the macros
+    ``macro_sources`` define."""
+    macros: dict[bytes, list[Sequence[bytes]]] = {b"binary": [_BINARY]}
+    for _, data in macro_sources:
+        for _, macro, tokens in _attribute_lines(data):
+            if macro is not None:
+                macros.setdefault(macro, []).append(tokens)
+    expanded = _expand(macros, relevant)
+    places: dict[_Setting, _Places] = {}
+    for at, (label, data) in enumerate(sources):
+        for line, (pattern, macro, tokens) in enumerate(_attribute_lines(data)):
+            if macro is not None:
+                continue  # a definition sets nothing by itself
+            found: set[_Setting] = set()
+            for setting, name in map(_token, tokens):
+                if setting is not None and relevant(setting):
+                    found.add(setting)
+                elif name is not None:
+                    found.update(expanded.get(name, ()))
+            text = pattern.decode("utf-8", "backslashreplace") if found else ""
+            shown = f"{label} ({text})"
+            for setting in sorted(found):
+                places.setdefault(setting, _Places()).add((at, line), label, shown)
+    return places
+
+
+def _merge_config(git: _RepoGit) -> tuple[dict[str, str], list[str]]:
+    """The user drivers (name -> the first key defining it) and the
+    ``merge.default`` values; a valueless key git dies on is refused."""
+    drivers: dict[str, str] = {}
+    defaults: list[str] = []
+    for key, value in git.config_entries(_MERGE_KEYS):
+        default = key == "merge.default"
+        if not default:
+            drivers.setdefault(key.removeprefix("merge.").rpartition(".")[0], key)
+        if value is None and (default or key.rpartition(".")[2] in _NEEDS_VALUE):
+            raise PreflightError(
+                f"{key} in the repository config has no value: git stops every"
+                " content merge with 'bad config variable'. To connect, set a"
+                " value or remove it"
+            )
+        if default and value is not None:
+            defaults.append(value)
+    return drivers, defaults
+
+
+def _check_merge(
+    git: _RepoGit,
+    committed: Sequence[tuple[str, bytes]],
+    info: tuple[str, bytes],
+) -> list[str]:
+    """Refuse a custom merge driver that a source the engine's merge-tree reads
+    selects; notes for union, ours and binary merges, and for what committed
+    files set where the engine's git never reads them."""
+    drivers, defaults = _merge_config(git)
+    path = git.attributes_file()
+    read = [info, (f"core.attributesFile {path}", _read_head(path))]
+    old = git.version() < ATTR_SOURCE_SINCE  # no --attr-source: the checkout counts
+    if old:
+        read = [*committed, *read, *git.checkout_attributes()]
+    places = _merge_places(
+        read, read, lambda s: s[0] or s[1] in drivers or s[1] in _MERGE_NOTES
+    )
+    where = "the repository config's merge.default"
+    for value in defaults:
+        places.setdefault((False, value), _Places()).add((len(read), 0), where, where)
+    kinds: dict[str, list[_Places]] = {}
+    for (unset, value), found in sorted(places.items()):
+        if not unset and value in drivers:
+            _, source, shown = found.first[0]
+            named = value or '""'
+            raise PreflightError(
+                f"{shown} selects merge={named}, a custom merge driver"
+                f" ({drivers[value]} in the repository config): the engine never"
+                " runs merge drivers, so its combines would differ from your"
+                f" merges. To connect, remove merge={value} from {source} or the"
+                f" merge.{value}.* keys from the repository config"
+            )
+        kinds.setdefault("binary" if unset else value, []).append(found)
+    notes = [
+        f"{label} in {_listing(kinds[kind])}: {effect}"
+        for kind, (label, effect) in _MERGE_NOTES.items()
+        if kind in kinds
+    ]
+    if old:
+        return notes
+    changes = {"union", "binary", *drivers}  # ours: both gits 3-way merge it
+    sources = [*committed, *read]
+    ignored = _merge_places(committed, sources, lambda s: s[0] or s[1] in changes)
+    if ignored:
+        names = ", ".join("-merge" if u else f"merge={v}" for u, v in sorted(ignored))
+        notes.append(f"{names} in {_listing(ignored.values())}: {_COMMITTED_NOTE}")
+    return notes
+
+
+def _listing(groups: Iterable[_Places]) -> str:
+    groups = list(groups)
+    first = sorted(itertools.chain.from_iterable(group.first for group in groups))
+    total = sum(group.count for group in groups)
+    more = f" and {total - _SHOWN} more" if total > _SHOWN else ""
+    return ", ".join(shown for _, _, shown in first[:_SHOWN]) + more
 
 
 def _check_syntax(
@@ -537,7 +885,8 @@ class GitPreflight:
             Path(project.root_path), executable=self._executable, timeout_s=timeout
         )
         try:
-            head, tree = _check_repository(git)
+            head, tree, attributes = _check_repository(git)
+            notes = _check_merge(git, attributes[:-1], attributes[-1])
             resolver = _Resolver(git, head, tree, self._search())
             resolved = tuple(resolver.workload(work) for work in workloads)
             test_command = project.test_command
@@ -546,7 +895,7 @@ class GitPreflight:
                     test_command, ".", "test_command", suite=True
                 )
             protected = (*self._protected, *resolver.protected)
-            notes = _check_syntax(git, head, tree, self._max_parse_bytes, protected)
+            notes += _check_syntax(git, head, tree, self._max_parse_bytes, protected)
             dirty = git.dirty_entries()
             notes += self._probe(network, fs)
             git.prune()
@@ -561,8 +910,8 @@ class GitPreflight:
             workloads=resolved,
             test_command=test_command,
             extra_protected=tuple(sorted(resolver.protected)),
+            notes=tuple(_quote(note) for note in notes),
             python_version=_engine_python(),
-            notes=tuple(notes),
         )
 
     def _search(self) -> str:

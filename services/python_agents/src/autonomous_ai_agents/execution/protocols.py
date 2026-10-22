@@ -114,7 +114,12 @@ class WorktreeHandle:
 
 @dataclass(frozen=True)
 class PreflightReport:
-    """What connect learned: the pinned commit, the resolved inputs, isolation."""
+    """What connect learned: the pinned commit, the resolved inputs, isolation.
+
+    ``notes`` are printable lines for connect events (accepted risks such as
+    a ``merge=union`` attribute, skipped parses, isolation not applied);
+    ``python_version`` is the engine's interpreter, ``None`` when unknown.
+    """
 
     head_commit: str
     dirty_entries: tuple[str, ...]
@@ -124,6 +129,8 @@ class PreflightReport:
     workloads: tuple[Workload, ...]
     test_command: tuple[str, ...] | None
     extra_protected: tuple[str, ...]
+    notes: tuple[str, ...] = ()
+    python_version: tuple[int, int, int] | None = None
 
 
 @dataclass(frozen=True)
