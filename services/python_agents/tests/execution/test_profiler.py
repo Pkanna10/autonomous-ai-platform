@@ -14,6 +14,7 @@ skip into a failure, as in ``test_procrun.py``).
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -24,6 +25,7 @@ import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import NamedTuple
 
 import pytest
@@ -40,8 +42,10 @@ from autonomous_ai_agents.execution.procrun import (
     run_once,
 )
 from autonomous_ai_agents.execution.profiler import (
+    GUARD_SKIPPED,
     MAX_SYMBOL_CHARS,
     PROFILE_NAME,
+    PROFILE_TIMEOUT_FACTOR,
     SHIM_PATH,
     CProfiler,
     NotProfiledError,
@@ -68,7 +72,6 @@ RUN_ID = "run1"
 COMMIT = "c" * 40
 OWN = _profile_shim.__file__
 OUT = Path("/scratch/profile.json")
-PY311 = shutil.which("python3.11")
 linux_only = pytest.mark.skipif(sys.platform != "linux", reason="Linux sandbox")
 
 
@@ -321,9 +324,124 @@ def test_the_shim_writes_the_profile_even_when_the_target_raises(
     out = tmp_path / "out.json"
 
     with pytest.raises(ValueError, match="boom"):
-        _profile_shim.main(["shim", str(out), "script", str(script)], safe_path=False)
+        _profile_shim.main(["shim", str(out), "script", str(script)])
 
     assert any(e.function == "hot" for e in parse_profile(out.read_bytes()).entries)
+
+
+CHDIR_PROBE = """import json, os, pathlib, sys
+
+
+def hot():
+    return sum(i * i for i in range(3000))
+
+
+hot()
+os.chdir("/")
+seen = {"name": __name__, "argv": sys.argv, "path": sys.path, "file": __file__}
+pathlib.Path(__file__).with_name("seen.json").write_text(json.dumps(seen))
+"""
+
+
+@pytest.mark.usefixtures("isolated_sys")
+def test_a_relative_script_gets_an_absolute_file_as_under_cpython(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    GIVEN a script named relative to the working directory (``python
+        bench.py``, the usual workload) that changes directory and then
+        opens a file next to ``__file__``
+    WHEN the shim runs it
+    THEN ``__file__`` is absolute (as CPython >= 3.9 makes it), so the script
+        works as it does natively, and its frames carry the absolute path
+    """
+    (tmp_path / "bench.py").write_text(CHDIR_PROBE)
+    monkeypatch.chdir(tmp_path)
+    out = tmp_path / "out.json"
+
+    _profile_shim.main(["shim", str(out), "script", "bench.py"], safe_path=False)
+
+    raw = json.loads((tmp_path / "seen.json").read_text())
+    script = os.path.join(os.path.realpath(tmp_path), "bench.py")
+    assert (raw["name"], raw["file"], raw["path"][0]) == (
+        "__main__",
+        script,
+        os.path.realpath(tmp_path),
+    )
+    hot = [e for e in parse_profile(out.read_bytes()).entries if e.function == "hot"]
+    assert [e.file for e in hot] == [script]
+
+
+@pytest.mark.parametrize("zipped", [False, True], ids=["directory", "zipapp"])
+def test_a_directory_or_zip_target_is_on_sys_path_without_its_parent(
+    tmp_path: Path, isolated_sys: list[str], zipped: bool
+) -> None:
+    """
+    GIVEN a directory with a ``__main__.py`` and the same as a zipapp
+    WHEN the shim runs it
+    THEN sys.path starts with the target itself and nothing else is added,
+        exactly as ``python <dir|zip>`` does: its parent is not importable
+    """
+    apps = tmp_path / "apps"
+    (apps / "tool").mkdir(parents=True)
+    seen = tmp_path / "seen.json"
+    (apps / "tool" / "__main__.py").write_text(
+        "import json, pathlib, sys\n"
+        f"pathlib.Path({str(seen)!r}).write_text(json.dumps(sys.path))\n"
+    )
+    target = apps / "tool"
+    if zipped:
+        target = Path(shutil.make_archive(str(apps / "tool"), "zip", apps / "tool"))
+
+    _profile_shim.main(
+        ["shim", str(tmp_path / "out.json"), "script", str(target)], safe_path=False
+    )
+
+    assert json.loads(seen.read_text()) == [str(target), *isolated_sys]
+
+
+@pytest.mark.parametrize(
+    ("version", "problem"),
+    [
+        ((3, 7, 17), "needs Python 3.8 or later; this is Python 3.7"),
+        ((3, 8, 0), None),
+        ((3, 14, 0), None),
+    ],
+)
+def test_the_shim_names_an_interpreter_older_than_its_floor(
+    version: tuple[int, int, int], problem: str | None
+) -> None:
+    found = _profile_shim.interpreter_problem(version)
+
+    if problem is None:
+        assert found is None
+    else:
+        assert found is not None and problem in found
+
+
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    [
+        (SimpleNamespace(safe_path=True, isolated=0), True),
+        (SimpleNamespace(safe_path=False, isolated=1), False),
+        (SimpleNamespace(isolated=1), True),  # Python < 3.11: -I has no safe_path
+        (SimpleNamespace(isolated=0), False),
+    ],
+)
+def test_safe_path_falls_back_to_isolated_mode_before_python_3_11(
+    flags: SimpleNamespace, expected: bool
+) -> None:
+    assert _profile_shim.path_is_safe(flags) is expected
+
+
+def test_the_shim_parses_with_the_oldest_supported_grammar() -> None:
+    """The shim runs in the workload's interpreter, which may be older than
+    the engine's: its source must parse with the floor's grammar."""
+    source = Path(_profile_shim.__file__).read_text()
+
+    ast.parse(source, feature_version=_profile_shim.MIN_PYTHON[:2])
+    assert _profile_shim.MIN_PYTHON == (3, 8)
+    assert "from __future__ import annotations" in source
 
 
 @pytest.mark.parametrize(
@@ -358,12 +476,21 @@ print(json.dumps({"path": sys.path, "name": __name__}))
 raise SystemExit(7)
 """
 
+
+OLD_INTERPRETERS = ["python3.8", "python3.9", "python3.10"]
+"""Older than the engine's floor, but a workload may use them (the shim's)."""
+FOUND = {
+    name: shutil.which(name) for name in [*OLD_INTERPRETERS, "python3.11", "python3.12"]
+}
 INTERPRETERS = [
     pytest.param(sys.executable, id="engine-python"),
-    pytest.param(
-        PY311 or "python3.11",
-        id="python3.11",
-        marks=pytest.mark.skipif(PY311 is None, reason="python3.11 not installed"),
+    *(
+        pytest.param(
+            path or name,
+            id=name,
+            marks=pytest.mark.skipif(path is None, reason=f"{name} not installed"),
+        )
+        for name, path in FOUND.items()
     ),
 ]
 
@@ -418,8 +545,14 @@ def test_the_real_shim_drops_its_own_directory_from_sys_path(
     assert seen["path"][0] == first
     assert str(SHIM_PATH.parent) not in seen["path"]
     assert os.path.realpath(elsewhere) not in seen["path"][1:]
-    hot = [e for e in parse_profile(out.read_bytes()).entries if e.function == "hot"]
+    entries = parse_profile(out.read_bytes()).entries
+    hot = [e for e in entries if e.function == "hot"]
     assert len(hot) == 1 and hot[0].file.endswith("shimprobe.py")
+    # runpy's lazy import of pkgutil (and typing) runs before profiling starts
+    lazy = ("pkgutil.py", "typing.py")
+    assert not [
+        e for e in entries if e.file.endswith(lazy) and e.function == "<module>"
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -586,12 +719,18 @@ def test_other_commands_are_not_profiled(command: tuple[str, ...], reason: str) 
 
 @pytest.fixture
 def tree(tmp_path: Path) -> Path:
-    """A worktree with a tracked file, a tracked link to it and one escaping."""
+    """A worktree with a tracked file, a tracked link to it, one escaping, a
+    directory link escaping (``ext``) and an alias of the worktree outside."""
     wt = Path(os.path.realpath(tmp_path)) / "wt"
     (wt / "pkg").mkdir(parents=True)
     (wt / "pkg" / "core.py").write_text("")
     os.symlink("core.py", wt / "pkg" / "link.py")
     os.symlink(tmp_path / "outside.py", wt / "out.py")
+    (tmp_path / "elsewhere" / "sub").mkdir(parents=True)
+    (tmp_path / "elsewhere" / "pkg").mkdir()
+    (tmp_path / "elsewhere" / "pkg" / "core.py").write_text("")
+    os.symlink(tmp_path / "elsewhere" / "sub", wt / "ext")
+    os.symlink(wt, tmp_path / "wtalias")
     return wt
 
 
@@ -608,6 +747,9 @@ TRACKED = frozenset(
         ("core.py", "pkg", "pkg/core.py"),
         ("{wt}/pkg/link.py", ".", "pkg/core.py"),
         ("{wt}/pkg/../pkg/core.py", ".", "pkg/core.py"),
+        ("{alias}/pkg/core.py", ".", "pkg/core.py"),
+        ("{wt}/ext/../pkg/core.py", ".", None),
+        ("ext/../pkg/core.py", ".", None),
         ("{wt}/untracked.py", ".", None),
         ("{wt}/out.py", ".", None),
         ("../outside.py", ".", None),
@@ -622,9 +764,12 @@ TRACKED = frozenset(
 def test_project_file_maps_only_tracked_files_inside_the_worktree(
     tree: Path, file: str, cwd: str, expected: str | None
 ) -> None:
-    found = project_file(
-        file.replace("{wt}", str(tree)), cwd=tree / cwd, worktree=tree, tracked=TRACKED
+    path = file.replace("{wt}", str(tree)).replace(
+        "{alias}", str(tree.parent / "wtalias")
     )
+
+    found = project_file(path, cwd=tree / cwd, worktree=tree, tracked=TRACKED)
+
     assert found == expected
 
 
@@ -666,6 +811,52 @@ def test_checkout_file_finds_tracked_files_of_the_users_checkout(
 
     expected = os.path.normpath(os.path.join(root, path)) if found else None
     assert named == expected
+
+
+@pytest.fixture
+def linked(checkout: tuple[Path, Path]) -> Path:
+    """Outside the checkout: a symlinked install (``flit install --symlink``)
+    of its package and of an untracked file, and a link to unrelated code."""
+    root, _ = checkout
+    site = root.parent / "venv" / "site-packages"
+    site.mkdir(parents=True)
+    os.symlink(root / "pkg", site / "pkg")
+    (root / "pkg" / "scratch.py").write_text("")
+    os.symlink(root / "pkg" / "scratch.py", site / "scratch.py")
+    (root.parent / "other").mkdir()
+    (root.parent / "other" / "core.py").write_text("")
+    os.symlink(root.parent / "other", site / "other")
+    return site
+
+
+@pytest.mark.parametrize(
+    ("file", "found"),
+    [
+        ("{alias}/pkg/core.py", True),
+        ("{site}/pkg/core.py", True),
+        ("{site}/pkg/../pkg/core.py", True),
+        ("{site}/scratch.py", False),
+        ("{site}/other/core.py", False),
+    ],
+)
+def test_checkout_file_follows_links_from_outside_into_the_checkout(
+    checkout: tuple[Path, Path], linked: Path, file: str, found: bool
+) -> None:
+    """
+    GIVEN roots that hold only the checkout's real path, an alias directory
+        link outside it and a symlinked site-packages install of its package
+    WHEN a frame reaches a tracked checkout file through either link
+    THEN it is found (the frame's path is named); an untracked checkout file
+        or a link to unrelated code is not
+    """
+    root, alias = checkout
+    path = file.replace("{alias}", str(alias)).replace("{site}", str(linked))
+
+    named = checkout_file(
+        path, cwd=root, roots=(root, root), tracked=frozenset({"pkg/core.py"})
+    )
+
+    assert named == (os.path.normpath(path) if found else None)
 
 
 @pytest.mark.parametrize(
@@ -902,8 +1093,9 @@ def test_each_python_workload_runs_once_under_the_shim_in_the_profile_worktree(
     WHEN it is profiled at a commit
     THEN F0, the <run>/profile worktree at that commit, one reset run under
         the phase's sandbox with fresh scratch (the shim writing into the
-        scratch root, the workload's own timeout), a reset, F1 and the
-        cleanup happen in that order, and nothing of the run is left
+        scratch root, the workload's timeout times the cProfile overhead
+        allowance), a reset, F1 and the cleanup happen in that order, and
+        nothing of the run is left
     """
     workload = rig.workload(working_dir="pkg")
 
@@ -914,7 +1106,11 @@ def test_each_python_workload_runs_once_under_the_shim_in_the_profile_worktree(
     [call] = rig.run.calls
     out = rig.scratch / PROFILE_NAME
     assert call.argv == (PY, SHIM, str(out), "module", "pkg.main")
-    assert (call.cwd, call.timeout_s) == (rig.worktree / "pkg", 42.0)
+    assert (call.cwd, call.timeout_s) == (
+        rig.worktree / "pkg",
+        42.0 * PROFILE_TIMEOUT_FACTOR,
+    )
+    assert PROFILE_TIMEOUT_FACTOR == 3.0
     assert call.sandbox == SandboxPolicy(
         network="required",
         fs="required",
@@ -1035,8 +1231,14 @@ def test_commands_that_cannot_be_profiled_are_notes_and_never_run(rig: Rig) -> N
     result = rig.profile(shell, inline, rig.workload("py"))
 
     assert result.notes == (
-        "workload 'shell' is not profiled: '/bin/sh' is not a Python interpreter",
-        "workload 'inline' is not profiled: inline code (-c) has no file to profile",
+        "workload 'shell' is not profiled: '/bin/sh' is not a Python interpreter"
+        + GUARD_SKIPPED,
+        "workload 'inline' is not profiled: inline code (-c) has no file to profile"
+        + GUARD_SKIPPED,
+    )
+    assert GUARD_SKIPPED == (
+        "; the editable-install check did not run for it, so make sure the"
+        " project is not installed with -e"
     )
     assert len(rig.run.calls) == 1
     assert len(result.hotspots) == 1
@@ -1075,7 +1277,7 @@ def test_a_failed_run_is_a_note_and_the_next_workload_still_runs(rig: Rig) -> No
 
     assert result.notes == (
         "workload 'bad' is not profiled: the profile run: the command ended with"
-        " exit status 1: ValueError: boom",
+        " exit status 1: ValueError: boom" + GUARD_SKIPPED,
     )
     assert len(result.hotspots) == 1
     assert rig.events == [
@@ -1106,7 +1308,8 @@ def test_a_run_failure_and_every_run_note_become_notes(rig: Rig) -> None:
 
     assert result.notes == (
         "workload 'slow': the profile run: the group drained late",
-        "workload 'slow' is not profiled: the profile run: timed out after 42 s",
+        "workload 'slow' is not profiled: the profile run: timed out after 42 s"
+        + GUARD_SKIPPED,
         "workload 'weak': the profile run: network isolation was not applied",
     )
     assert len(result.hotspots) == 1
@@ -1139,7 +1342,7 @@ def test_unusable_profile_output_is_a_note(
     assert result.hotspots == ()
     [note] = result.notes
     assert note.startswith("workload 'bench' is not profiled: ")
-    assert reason in note
+    assert reason in note and note.endswith(GUARD_SKIPPED)
 
 
 def test_an_editable_install_raises_naming_the_path_after_f1_and_cleanup(
@@ -1161,6 +1364,29 @@ def test_an_editable_install_raises_naming_the_path_after_f1_and_cleanup(
     assert "editable install" in str(raised.value)
     assert not isinstance(raised.value, RepoTamperedError)
     assert rig.events == ONE_RUN
+    assert not rig.run_dir.exists()
+
+
+def test_a_symlinked_install_of_the_checkout_raises_naming_the_frame(
+    rig: Rig,
+) -> None:
+    """
+    GIVEN a hot frame in site-packages whose package directory is a link
+        into the user's checkout (``flit install --symlink``)
+    WHEN it is profiled
+    THEN EngineError names the site-packages path: the frame ran checkout code
+    """
+    (rig.user / "pkg").mkdir()
+    (rig.user / "pkg" / "core.py").write_text("")
+    site = rig.root / "venv" / "site-packages"
+    site.mkdir(parents=True)
+    os.symlink(rig.user / "pkg", site / "pkg")
+    frame = str(site / "pkg" / "core.py")
+    rig.run.respond = writes(document(entry(frame, "unique_in_order")))
+
+    with pytest.raises(EngineError, match=re.escape(frame)):
+        rig.profile(rig.workload())
+
     assert not rig.run_dir.exists()
 
 
@@ -1277,10 +1503,105 @@ def test_cleanup_unlinks_a_planted_scratch_link_and_keeps_a_busy_run_dir(
     result = rig.profile(rig.workload())
 
     assert result.notes == (
-        "workload 'bench' is not profiled: the profile output is missing",
+        "workload 'bench' is not profiled: the profile output is missing"
+        + GUARD_SKIPPED,
     )
     assert (outside / "keep.txt").read_text() == "keep"
     assert sorted(os.listdir(rig.run_dir)) == ["baseline"]
+
+
+def test_cleanup_unlinks_a_planted_link_in_place_of_the_scratch_parent(
+    rig: Rig, tmp_path: Path
+) -> None:
+    """
+    GIVEN a run that replaces <run>/_scratch (the parent of the scratch
+        root) with a link to a directory outside (possible with fs=off)
+    WHEN the profile is cleaned up
+    THEN the link is unlinked without following it, <run>/_probe is still
+        removed, and nothing of the run is left
+    """
+    outside = tmp_path / "outside"
+    (outside / "profile").mkdir(parents=True)
+    (outside / "profile" / "keep.txt").write_text("keep")
+
+    def respond(call: Call) -> RunSample:
+        parent = call.sandbox.writable[1].parent
+        shutil.rmtree(parent)
+        os.symlink(outside, parent)
+        return sample()
+
+    rig.run.respond = respond
+
+    result = rig.profile(rig.workload())
+
+    [note] = result.notes
+    assert note.startswith("workload 'bench' is not profiled: the profile output")
+    assert (outside / "profile" / "keep.txt").read_text() == "keep"
+    assert rig.events[-2:] == ["remove profile", "prune"]
+    assert not rig.run_dir.exists()
+
+
+def test_a_dir_that_cannot_be_removed_safely_is_an_engine_error_after_cleanup(
+    rig: Rig, tmp_path: Path
+) -> None:
+    """
+    GIVEN a run that moves <run> outside WORKTREE_ROOT and leaves a link in
+        its place, so neither scratch nor probe is inside WORKTREE_ROOT
+    WHEN the profile is cleaned up
+    THEN every step is still attempted (both dirs, prune), nothing outside
+        is removed through the link, and EngineError names both dirs
+    """
+    outside = tmp_path / "moved"
+
+    def respond(call: Call) -> RunSample:
+        shutil.move(rig.run_dir, outside)
+        os.symlink(outside, rig.run_dir)
+        return sample()
+
+    rig.run.respond = respond
+
+    with pytest.raises(EngineError, match="could not clean up") as raised:
+        rig.profile(rig.workload())
+
+    message = str(raised.value)
+    assert str(rig.scratch) in message and str(rig.probe) in message
+    assert rig.events[-2:] == ["remove profile", "prune"]
+    assert (outside / "_scratch" / "profile").is_dir()
+    assert (outside / "_probe" / "profile").is_dir()
+
+
+def test_cleanup_never_removes_an_empty_dir_through_a_planted_run_link(
+    rig: Rig, tmp_path: Path
+) -> None:
+    outside = tmp_path / "moved"
+
+    def respond(call: Call) -> RunSample:
+        shutil.rmtree(rig.run_dir)
+        for name in ("_scratch", "_probe"):
+            (outside / name).mkdir(parents=True)
+        os.symlink(outside, rig.run_dir)
+        return sample()
+
+    rig.run.respond = respond
+
+    with pytest.raises(EngineError, match="could not clean up"):
+        rig.profile(rig.workload())
+
+    assert sorted(os.listdir(outside)) == ["_probe", "_scratch"]
+
+
+def test_a_cleanup_problem_never_hides_the_error_already_raised(rig: Rig) -> None:
+    rig.git.prints = ["F0", "F1"]
+
+    def respond(call: Call) -> RunSample:
+        shutil.move(rig.run_dir, rig.root / "moved")
+        os.symlink(rig.root / "moved", rig.run_dir)
+        return sample()
+
+    rig.run.respond = respond
+
+    with pytest.raises(RepoTamperedError):
+        rig.profile(rig.workload())
 
 
 @pytest.mark.parametrize("run_id", ["", "../x", "a/b", "x..y", "-x", "x.lock"])
@@ -1370,6 +1691,10 @@ def real(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Real:
     repo = root / "user"
     shutil.copytree(DEDUPE_REPO, repo, ignore=shutil.ignore_patterns("__pycache__"))
     (repo / "bench_checkout.py").write_text(CHECKOUT_BENCH.format(root=str(repo)))
+    site = root / "site"
+    site.mkdir()
+    os.symlink(repo / "dedupe", site / "dedupe")
+    (repo / "bench_linked.py").write_text(CHECKOUT_BENCH.format(root=str(site)))
     git(root, "init", "-q", "-b", "main", str(repo))
     git(repo, "add", "-A")
     git(repo, "commit", "-q", "-m", "base")
@@ -1465,20 +1790,27 @@ def test_real_sandboxed_profile_finds_the_dedupe_hotspot(real: Real) -> None:
     profile_dedupe(real, "required")
 
 
+@pytest.mark.parametrize(
+    ("bench", "where"),
+    [("bench_checkout.py", "user"), ("bench_linked.py", "site")],
+    ids=["sys-path-entry", "symlinked-install"],
+)
 def test_real_editable_install_is_refused_naming_the_checkout_file(
-    real: Real,
+    real: Real, bench: str, where: str
 ) -> None:
     """
     GIVEN a workload that puts the user's checkout first on sys.path (what an
-        editable install does) before importing the hot module
+        editable install does), or a directory outside it whose package is a
+        link into it (a symlinked install), before importing the hot module
     WHEN it is profiled
-    THEN EngineError names the checkout's dedupe/core.py, and the user's
+    THEN EngineError names the dedupe/core.py frame it ran, and the user's
         repo and WORKTREE_ROOT/<run> are as before
     """
     before = real.state()
-    workload = real.workload("bench_checkout.py")
+    workload = real.workload(bench)
+    frame = str(real.repo.parent / where / "dedupe/core.py")
 
-    with pytest.raises(EngineError, match=re.escape(str(real.repo / "dedupe/core.py"))):
+    with pytest.raises(EngineError, match=re.escape(frame)):
         CProfiler(real.project, network="off", fs="off").profile(
             [workload], run_id=RUN_ID, commit=real.commit
         )

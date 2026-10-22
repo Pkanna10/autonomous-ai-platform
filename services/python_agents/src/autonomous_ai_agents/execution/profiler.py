@@ -9,31 +9,45 @@ removal of all three, ``prune`` and an ``rmdir`` of ``<run>`` when empty.
 
 Each run is ``python [options] _profile_shim.py OUT module|script TARGET``
 (``profiled_argv``) from the working dir, right after a reset, with the
-workload's timeout; ``PYTHONPATH`` starts with the worktree (and its
+workload's timeout times ``PROFILE_TIMEOUT_FACTOR`` (cProfile's overhead; the
+run is not timed); ``PYTHONPATH`` starts with the worktree (and its
 ``src``). A non-Python command, ``-c``, ``-``, ``-x``, a non-zero exit, a
-``RunFailure`` or unusable output is a note (the node's ``profile_skipped``),
-as is every ``RunSample`` and ``RunFailure`` note.
+``RunFailure`` or unusable output is a note (the node's ``profile_skipped``)
+that ends with ``GUARD_SKIPPED``, as is every ``RunSample`` and
+``RunFailure`` note.
 
 The workload runs in the shim's interpreter, so its output is untrusted: the
 engine never unmarshals pstats data; it reads the shim's JSON (size-capped,
 never through a final link) and parses it strictly (``parse_profile``).
 After a reset (only committed links remain) a frame is a hotspot only when
-its file resolves to a tracked file inside the worktree (``project_file``);
+its file, links resolved first, is a tracked file inside the worktree
+(``project_file``);
 symbols are cleaned and capped. Hotspots rank by self time; share is self
 time over the larger of the reported total and the summed self times (a
 forged total cannot inflate it); at most ``HOTSPOTS_PER_WORKLOAD`` per
 workload and ``MAX_HOTSPOTS`` in all, largest share first.
 
-Editable installs: a frame in a tracked file of the user's checkout
-(``checkout_file``) means the workload imported the checkout, not the commit,
-so measurements would time the wrong code: ``EngineError`` naming the path,
-after F1 (tampering wins) and the cleanup. Untracked files there (an in-tree
-``.venv``) do not count, nor does a file elsewhere that links into it. This
-guards against misconfiguration; a hostile workload can forge its profile.
+Editable installs: a frame that is, or links to, a tracked file of the
+user's checkout (``checkout_file``: a ``.pth`` or ``sys.path`` entry, an
+alias directory, a symlinked install such as ``flit install --symlink``)
+means the workload imported the checkout, not the commit, so measurements
+would time the wrong code: ``EngineError`` naming the frame's path, after F1
+(tampering wins) and the cleanup. Untracked files there (an in-tree
+``.venv``) do not count. This guards against misconfiguration; a hostile
+workload can forge its profile, and a workload that is not profiled is not
+checked (its note says so).
+
+Cleanup never follows a link the workload planted in place of an engine dir
+or of its parent; a dir it cannot remove safely is an ``EngineError`` after
+every other step ran, unless an error is already on its way.
 
 Known limits: time in C builtins and the stdlib stays with them; child
-processes are not profiled; cProfile's overhead can push a workload near its
-timeout over it (a note); ``-I`` and ``-E`` ignore ``PYTHONPATH``.
+processes are not profiled; ``-I`` and ``-E`` ignore ``PYTHONPATH``; the
+shim imports a few stdlib modules (``json``, ``runpy``, ``cProfile``...) with
+``PYTHONPATH`` on ``sys.path``, so a repository module of the same name at
+the top of the worktree breaks the profile run only (a note); a checkout on a
+case-insensitive file system reached through a differently cased path is not
+recognised (``realpath`` keeps the case it was given).
 """
 
 from __future__ import annotations
@@ -84,6 +98,14 @@ MAX_LINE = 2**31 - 1
 MAX_COUNT = 2**53
 MAX_SECONDS = 1e7
 _QUOTE_CHARS = 300
+PROFILE_TIMEOUT_FACTOR = 3.0
+"""The profile run's timeout is the workload's times this: cProfile's
+overhead is commonly 2-3x on call-heavy code, and the run is not timed."""
+GUARD_SKIPPED = (
+    "; the editable-install check did not run for it, so make sure the"
+    " project is not installed with -e"
+)
+"""Ends every ``is not profiled`` note: only a profile can run the check."""
 
 
 class ProfileFormatError(Exception):
@@ -269,29 +291,31 @@ def _quote(text: str) -> str:
     return _printable(text[:_QUOTE_CHARS], "?")
 
 
-def _lexical(file: str, cwd: Path) -> Path | None:
-    """``file`` (relative to ``cwd``) normalised, or ``None``: NUL, not UTF-8."""
+def _joined(file: str, cwd: Path) -> str | None:
+    """``file`` joined to ``cwd`` (not normalised), or ``None``: NUL, not UTF-8."""
     try:
         file.encode("utf-8")
     except UnicodeEncodeError:  # a lone surrogate (undecodable file name bytes)
         return None
     if "\0" in file:
         return None
-    return Path(os.path.normpath(os.path.join(cwd, file)))
+    return os.path.join(cwd, file)
 
 
 def project_file(
     file: str, *, cwd: Path, worktree: Path, tracked: frozenset[str]
 ) -> str | None:
     """The tracked project-relative file that ``file`` resolves to inside
-    ``worktree`` (reset first: only committed links are followed), or ``None``."""
-    path = _lexical(file, cwd)
-    if path is None or not path.is_relative_to(worktree):
+    ``worktree`` (reset first: only committed links are followed), or ``None``.
+    Links resolve before ``..``, as the kernel does: ``link/../x`` is not
+    ``x`` when ``link`` points elsewhere."""
+    joined = _joined(file, cwd)
+    if joined is None:
         return None
-    real = Path(os.path.realpath(path))
-    if not real.is_relative_to(worktree):
+    real, root = Path(os.path.realpath(joined)), Path(os.path.realpath(worktree))
+    if not real.is_relative_to(root):
         return None
-    rel = real.relative_to(worktree).as_posix()
+    rel = real.relative_to(root).as_posix()
     try:
         clean = normalize_path(rel)
     except ValueError:  # a tracked '~x' or 'c:x' name
@@ -302,14 +326,16 @@ def project_file(
 def checkout_file(
     file: str, *, cwd: Path, roots: Sequence[Path], tracked: frozenset[str]
 ) -> str | None:
-    """``file`` normalised when it is, or resolves to, a tracked file of the
-    user's checkout (any of ``roots``), else ``None``."""
-    path = _lexical(file, cwd)
-    if path is None or not any(path.is_relative_to(root) for root in roots):
+    """``file`` normalised when it, or what its links resolve to, is a tracked
+    file of the user's checkout (any of ``roots``), else ``None``. Either
+    form counts, wherever the frame's own path is (a symlinked install)."""
+    joined = _joined(file, cwd)
+    if joined is None:
         return None
+    path = Path(os.path.normpath(joined))
     hit = any(
         candidate.relative_to(root).as_posix() in tracked
-        for candidate in (path, Path(os.path.realpath(path)))
+        for candidate in (path, Path(os.path.realpath(joined)))
         for root in roots
         if candidate.is_relative_to(root)
     )
@@ -317,7 +343,14 @@ def checkout_file(
 
 
 def _remove(path: Path) -> None:
-    """Remove an engine dir the workload could write; a planted link is unlinked."""
+    """Remove an engine dir the workload could write. A link planted in its
+    place or in its parent's (``<run>/_scratch``) is unlinked, never
+    followed; ``ValueError`` when ``<run>`` itself no longer resolves inside
+    ``WORKTREE_ROOT``."""
+    parent = _contained(path.parent)
+    if os.path.islink(parent):
+        os.unlink(parent)
+        return
     target = _contained(path)
     if os.path.isdir(target) and not os.path.islink(target):
         _rmtree(target)
@@ -380,7 +413,8 @@ class CProfiler:
             try:
                 planned.append((workload, _split(workload.command)))
             except NotProfiledError as reason:
-                notes.append(f"workload {workload.name!r} is not profiled: {reason}")
+                label = f"workload {workload.name!r}"
+                notes.append(f"{label} is not profiled: {reason}{GUARD_SKIPPED}")
         if not planned:
             return ProfileResult((), tuple(notes))
         run_dir = settings.WORKTREE_ROOT / run_id
@@ -388,6 +422,7 @@ class CProfiler:
         scratch, probe = run_dir / "_scratch" / PHASE, run_dir / "_probe" / PHASE
         hotspots: list[Hotspot] = []
         checkout: tuple[Workload, str] | None = None
+        left: list[str] = []
         before = self._fingerprint()
         try:
             handle = self._git.add_worktree(worktree, commit)
@@ -407,7 +442,14 @@ class CProfiler:
                     " config or hooks differ from before the run"
                 )
         finally:
-            self._cleanup(run_dir, worktree, scratch, probe)
+            left = self._cleanup(run_dir, worktree, scratch, probe)
+        if left:  # only when nothing else was raised: that error wins
+            raise EngineError(
+                "the profiler could not clean up "
+                + ", ".join(_quote(path) for path in left)
+                + ": it no longer resolves inside WORKTREE_ROOT (a link was"
+                " planted in place of the run directory); remove it by hand"
+            )
         if checkout is not None:
             raise self._editable(*checkout)
         hotspots.sort(key=lambda hotspot: -hotspot.share)
@@ -429,14 +471,13 @@ class CProfiler:
         failed: str | None = None
         try:
             where = "the profile run"
-            _launch(
-                phase, argv, workload.working_dir, workload.timeout_s, where, run_notes
-            )
+            timeout_s = workload.timeout_s * PROFILE_TIMEOUT_FACTOR
+            _launch(phase, argv, workload.working_dir, timeout_s, where, run_notes)
         except RunFailure as failure:
             failed = failure.reason
         notes.extend(f"{label}: {note}" for note in run_notes)
         if failed is not None:
-            notes.append(f"{label} is not profiled: {failed}")
+            notes.append(f"{label} is not profiled: {failed}{GUARD_SKIPPED}")
             return [], None
         phase.reset()
         data = bytearray()
@@ -444,7 +485,9 @@ class CProfiler:
             _read_regular(out, _profile_shim.MAX_DOC_BYTES, data.extend)
             doc = parse_profile(bytes(data))
         except (_UnusableError, ProfileFormatError) as problem:
-            notes.append(f"{label} is not profiled: the profile output {problem}")
+            notes.append(
+                f"{label} is not profiled: the profile output {problem}{GUARD_SKIPPED}"
+            )
             return [], None
         cwd = phase.worktree / workload.working_dir
         return self._hotspots(doc, workload, cwd, phase.worktree, tracked)
@@ -494,21 +537,29 @@ class CProfiler:
         return EngineError(
             f"workload {workload.name!r} ran {_quote(path)} from the project"
             f" checkout {_quote(self._project.root_path)} instead of the profile"
-            " worktree: an editable install (or a sys.path entry) points at the"
-            " checkout, so every measurement would time the checkout, not the"
-            " commit; install the project without -e, or remove that entry"
+            " worktree: an editable install, a symlinked install or a sys.path"
+            " entry points at the checkout, so every measurement would time the"
+            " checkout, not the commit; install the project without -e or"
+            " --symlink, or remove that entry"
         )
 
-    def _cleanup(self, run_dir: Path, worktree: Path, *dirs: Path) -> None:
-        """Remove the worktree, then each dir, then prune; every step runs."""
+    def _cleanup(self, run_dir: Path, worktree: Path, *dirs: Path) -> list[str]:
+        """Remove the worktree, then each dir, then prune; every step runs.
+        Returns the dirs it could not remove safely (``_remove``)."""
+        left: list[str] = []
         try:
             self._git.remove_worktree(worktree)
         finally:
             try:
                 for path in dirs:
-                    _remove(path)
+                    try:
+                        _remove(path)
+                    except ValueError:
+                        left.append(str(path))
             finally:
                 self._git.prune()
                 for path in (run_dir / "_scratch", run_dir / "_probe", run_dir):
-                    with contextlib.suppress(OSError):  # not empty: another owner
-                        os.rmdir(path)
+                    # not empty (another owner), or <run> is a planted link
+                    with contextlib.suppress(OSError, ValueError):
+                        os.rmdir(_contained(path))
+        return left
