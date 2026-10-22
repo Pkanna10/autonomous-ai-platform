@@ -25,21 +25,25 @@ repo; nothing lives only in the old session.
   then `research-*.md` there for the unit's topic.
 - **Units committed** (one commit each, every one reviewed for correctness and
   security on a different model, then fixed test-first): U1-U12, U13 preflight,
-  U14 measure, U16 editor loop, plus Lead fixes (`normalize_path` fixed point,
-  `ENGINE_API_BASE_URL` pin, unittest `test*.py` protected).
+  U14 measure, U16 editor loop, U17 understand, plus Lead fixes
+  (`normalize_path` fixed point, `ENGINE_API_BASE_URL` pin, unittest `test*.py`
+  protected, the `-P` shim test case limited to Python >= 3.11).
+- **Environment:** the database tests need Postgres 16 with pgvector and a
+  `dev`/`devpass` superuser; the profiler tests exercise every `python3.N` on
+  PATH (`uv python install 3.8 3.9 3.10 3.11 3.12` puts them in `~/.local/bin`).
+  CI's runner has 3.10, so an untested old interpreter turns CI red.
 - **U15 profiler** was built without review at the user's request, then reviewed
   afterwards (correctness and security, Fable) and fixed test-first: 4
   should-fix, 7 nits; 10 fixed, 1 documented (a repo module shadowing the shim's
   stdlib imports gives a loud "not profiled" note). The editable-install guard
   now follows symlinks into the checkout; the shim runs on workload
-  interpreters >= 3.8 (only 3.11+ exercised here); the profile run gets
+  interpreters >= 3.8 (exercised on 3.8 to 3.13); the profile run gets
   `PROFILE_TIMEOUT_FACTOR` (3x) the workload timeout; every "not profiled" note
   says the editable-install check did not run for that workload.
-- **Next, in order:** U17 understand (`orchestrator/understand.py`); wave 5: U18
-  trial and baseline runners, U19 combine and publish; then U20 Lead integration
-  (factory, CI incl. macOS and the Postgres service, E2E-A/B/C, docs), the
-  Verifier, the stage gate, `/security-review`, CI green, the Step 2 report. The
-  user approves each phase before it starts.
+- **Next, in order:** wave 5: U18 trial and baseline runners, U19 combine and
+  publish; then U20 Lead integration (factory, CI incl. macOS and the Postgres
+  service, E2E-A/B/C, docs), the Verifier, the stage gate, `/security-review`,
+  CI green, the Step 2 report. The user approves each phase before it starts.
 - **How a unit is built:** run the Workflow tool with
   `scriptPath: .claude/handoff/step2/build-wave.workflow` (absolute path) and
   `args: {maxOutputTokens: 800000, units: [{id, title, files, tests, security, notes}]}`,

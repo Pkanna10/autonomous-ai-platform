@@ -84,3 +84,19 @@ U13 preflight (committed 05ea510; 4 agents, ~385k output tokens) + Lead fix (uni
 - U20 docs: a test command naming the package dir (pytest mypkg) protects the whole dir, so no trial can edit it: point the
   test command at the test folder. pytest python_files patterns set in config are not protected unless a test dir is named.
 - Accepted: preflight.py 654 lines; no commands.py split.
+U15 profiler review (reviewed after the fact; fixes dbec415, CI fix cd0a3e6):
+- The shim runs on workload interpreters >= 3.8; tests run every python3.N on PATH. -P exists only on >= 3.11, so
+  safe-path cases are generated only there. Install 3.8-3.12 with uv before running the suite locally.
+- Accepted: a repo module named like a stdlib module the shim imports (json.py, ...) makes that workload "not profiled".
+U17 understand (Builder, Fable correctness + security reviews, fixer; 4 agents, ~754k subagent tokens):
+- Default effort (the spec names none). One structured-output request, UNDERSTAND_MAX_TOKENS, no tools, cache=False
+  (one request per run), PROMPT_ALLOWANCE_TOKENS = 2000 on the pre-send bound.
+- workload_notes travels as an array of {workload_id, note} in the schema (structured outputs need
+  additionalProperties false) and becomes the model's dict. Length caps beyond the spec (language 64, entrypoints
+  20 soft / 200 hard, paths 1024, notes 500) live in the validator; reply text with control or bidi characters
+  rejects the whole reply.
+- READ_DENY files are neither listed nor read (one count note). Reads are bounded by ReadLimits (files, bytes per
+  file, total bytes, read attempts); only the head of a file is decoded and scanned for the boundary.
+- U20 / U4 follow-up: GitWorkspace.read_blob has no size limit, so one huge tracked file is held in memory (up to
+  MAX_OUTPUT_BYTES) before the understander truncates it. Add read_blob(..., limit=) or a sized ls-tree -l in U20.
+- Accepted: understand.py 656 lines (precedent: procrun 664, preflight 654, measure 604).
