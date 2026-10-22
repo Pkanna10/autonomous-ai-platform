@@ -1,0 +1,60 @@
+{
+  "description": "Claude ends its turn without editing a file. The editor sends one nudge notice; Claude ends its turn again without an edit, so the edit stops with a no-edits error after exactly two requests. Usage is priced at claude-opus-5-5 rates.",
+  "replies": [
+    {
+      "id": "msg_01NoEditsFirst000000000001",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-opus-5-5",
+      "content": [
+        {
+          "type": "thinking",
+          "thinking": "The function looks fine for small inputs.",
+          "signature": "EqQBCkYIBxgCKkDh1NoEditsSignatureForTheFixtureOnlyNotAValidOneKKKKLLLLMMMM=="
+        },
+        {
+          "type": "text",
+          "text": "unique_in_order is already simple and correct; I do not think a change is needed."
+        }
+      ],
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "usage": {
+        "input_tokens": 4,
+        "cache_creation_input_tokens": 2908,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2908,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 188,
+        "service_tier": "standard"
+      }
+    },
+    {
+      "id": "msg_01NoEditsSecond00000000002",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-opus-5-5",
+      "content": [
+        {
+          "type": "text",
+          "text": "I could not find a change that keeps the output identical, so I am leaving the code as it is."
+        }
+      ],
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "usage": {
+        "input_tokens": 4,
+        "cache_creation_input_tokens": 172,
+        "cache_read_input_tokens": 2908,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 172,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 41,
+        "service_tier": "standard"
+      }
+    }
+  ]
+}

@@ -1,0 +1,102 @@
+{
+  "description": "Turn 1 hits max_tokens (8000, the default EDITOR_MAX_TOKENS) in the middle of a create that would rewrite dedupe/core.py; its input is cut off, so the editor must not run it and answers it with an is_error result plus a notice. Turn 2 makes the h1 str_replace instead; turn 3 ends the turn. Usage is priced at claude-opus-5-5 rates.",
+  "replies": [
+    {
+      "id": "msg_01MaxTokensCut000000000001",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-opus-5-5",
+      "content": [
+        {
+          "type": "thinking",
+          "thinking": "Rewrite the whole module with a seen set, a fast path for sorted input, a cache of previous calls, and a long docstring explaining each case in detail.",
+          "signature": "EqQBCkYIBxgCKkDh1MaxTokensSignatureForTheFixtureOnlyNotAValidOneIIIIJJJJ=="
+        },
+        {
+          "type": "text",
+          "text": "I will rewrite dedupe/core.py in full."
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_01MaxCut00000000000000001",
+          "name": "str_replace_based_edit_tool",
+          "input": {
+            "command": "create",
+            "path": "/repo/dedupe/core.py",
+            "file_text": "\"\"\"The hot path: order-preserving de-duplication.\"\"\"\n\nfrom collections.abc import Iterable\n\n\ndef unique_in_order(items: Iterable[int]) -> list[int]:\n    seen = set()\n    res"
+          }
+        }
+      ],
+      "stop_reason": "max_tokens",
+      "stop_sequence": null,
+      "usage": {
+        "input_tokens": 4,
+        "cache_creation_input_tokens": 2908,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 2908,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 8000,
+        "service_tier": "standard"
+      }
+    },
+    {
+      "id": "msg_01MaxTokensRetry00000000002",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-opus-5-5",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_01MaxReplace0000000000002",
+          "name": "str_replace_based_edit_tool",
+          "input": {
+            "command": "str_replace",
+            "path": "/repo/dedupe/core.py",
+            "old_str": "    result: list[int] = []\n    for item in items:\n        if item not in result:\n            result.append(item)\n",
+            "new_str": "    seen: set[int] = set()\n    result: list[int] = []\n    for item in items:\n        if item not in seen:\n            seen.add(item)\n            result.append(item)\n"
+          }
+        }
+      ],
+      "stop_reason": "tool_use",
+      "stop_sequence": null,
+      "usage": {
+        "input_tokens": 4,
+        "cache_creation_input_tokens": 8216,
+        "cache_read_input_tokens": 2908,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 8216,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 233,
+        "service_tier": "standard"
+      }
+    },
+    {
+      "id": "msg_01MaxTokensDone000000000003",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-opus-5-5",
+      "content": [
+        {
+          "type": "text",
+          "text": "Replaced the list membership test with a set of seen values."
+        }
+      ],
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "usage": {
+        "input_tokens": 4,
+        "cache_creation_input_tokens": 391,
+        "cache_read_input_tokens": 11124,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 391,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 54,
+        "service_tier": "standard"
+      }
+    }
+  ]
+}

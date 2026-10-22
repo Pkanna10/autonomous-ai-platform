@@ -8,20 +8,22 @@ sees as ``/repo``; the real path never appears in a result. Rules, in code:
   ``undo_edit`` (retired by the tool version) is refused.
 - Paths are absolute under ``/repo/``, free of ``C*`` (control, format,
   surrogate, unassigned) characters, line and paragraph separators and
-  backslashes, then NFC and ``normalize_path``.
+  backslashes, then NFC and ``repo_relative`` (``normalize_path``, refusing
+  ``./~x`` and ``./c:x``, which only collapse into names it refuses).
 - Every command refuses a ``GIT_METADATA_NAMES`` component (case-insensitive:
   APFS folds case, and ``.git`` names the user's real git dir) and a path that
   is or lies inside a ``READ_DENY_PATTERNS`` match (reads reach the API;
   ``str_replace`` match counts are an oracle). Writes also refuse
   ``WRITE_DENY_PATTERNS``, the trial's protected patterns, and a new top-level
-  module or package in ``/repo`` or ``/repo/src`` (first on a trial's
-  ``sys.path``) named after a reserved module: shadowing the stdlib or the
-  test runner can make a failing suite pass.
+  module or package under any module root (by default ``/repo`` and
+  ``/repo/src``, first on a trial's ``sys.path``) named after a reserved
+  module, as the ``module_shadow`` capture rule has it: shadowing the stdlib
+  or the test runner can make a failing suite pass.
 - Each existing component is ``lstat``-ed: a symlink is refused, never
   resolved, and files open with ``O_NOFOLLOW``. Only regular files with one
   hard link are read or written (another link may live outside the root).
   Writes go to a new temporary file that then replaces the target, so a
-  failed write keeps the old content.
+  failed write keeps the old content and records nothing.
 - Per-file, file-count and total-byte limits from settings; results capped.
 
 No trial code runs while the editor works, so nothing races these checks;
@@ -34,7 +36,8 @@ import contextlib
 import os
 import stat
 import unicodedata
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, fields
 from pathlib import Path
 from types import MappingProxyType
@@ -56,6 +59,11 @@ from autonomous_ai_agents.common.paths import (
 # definition in common/paths.py, shared with the module_shadow capture rule.
 from autonomous_ai_agents.common.paths import RESERVED_MODULES as RESERVED_MODULES
 from autonomous_ai_agents.common.paths import RUNNER_MODULES as RUNNER_MODULES
+
+# The directories whose top-level names are guarded, as module_shadow has them.
+from autonomous_ai_agents.optimization.anticheat import (
+    DEFAULT_MODULE_ROOTS as DEFAULT_MODULE_ROOTS,
+)
 
 VIRTUAL_ROOT = "/repo"  # the only root Claude sees
 VIEW_MAX_CHARS = 20_000  # default result cap; the tool's ``max_characters``
@@ -143,10 +151,14 @@ class _EditError(Exception):
 class WorktreeEditor:
     """Executes text editor tool commands inside one worktree, seen as ``/repo``.
 
-    ``protected`` are the trial's protected patterns, enforced on writes, and
-    ``reserved_modules`` the full set of top-level module names a write may
-    not add (see ``RESERVED_MODULES``). ``written`` maps each repo-relative
-    path to the bytes written to it so far, for the ``unrecorded_write`` rule.
+    ``protected`` are the trial's protected patterns, enforced on writes.
+    ``reserved_modules`` (see ``RESERVED_MODULES``; a dotted name reserves
+    its first component) and ``module_roots`` (repo-relative directories,
+    ``""`` is the root) are full sets, not additions, exactly as the trial
+    runner passes them to ``check_capture``; a ``str`` for either raises
+    ``TypeError`` and a root outside the repo ``PathTraversalError``.
+    ``written`` maps each repo-relative path to the bytes written to it so
+    far, for the ``unrecorded_write`` rule.
     """
 
     def __init__(
@@ -155,14 +167,18 @@ class WorktreeEditor:
         *,
         protected: Sequence[str],
         limits: EditorLimits | None = None,
-        reserved_modules: Collection[str] = RESERVED_MODULES,
+        reserved_modules: AbstractSet[str] = RESERVED_MODULES,
+        module_roots: AbstractSet[str] = DEFAULT_MODULE_ROOTS,
     ) -> None:
+        reserved = _members(reserved_modules, "reserved_modules")
+        roots = _members(module_roots, "module_roots")
         real = Path(os.path.realpath(root, strict=True))
         if not real.is_dir():
             raise ValueError(f"editor root {root} is not a directory")
         self._root = real
         self._protected = tuple(protected)
-        self._reserved = frozenset(name.casefold() for name in reserved_modules)
+        self._reserved = frozenset(n.casefold().split(".", 1)[0] for n in reserved)
+        self._roots = tuple(sorted({_root_parts(directory) for directory in roots}))
         self._limits = EditorLimits.from_settings() if limits is None else limits
         self._written: dict[str, int] = {}
 
@@ -217,9 +233,12 @@ class WorktreeEditor:
         if text != VIRTUAL_ROOT and not text.startswith(VIRTUAL_ROOT + "/"):
             raise _EditError(f"path {raw!r} must be absolute under {VIRTUAL_ROOT}/")
         try:
-            rel = normalize_path(text[len(VIRTUAL_ROOT) + 1 :])
+            rel = repo_relative(text[len(VIRTUAL_ROOT) + 1 :])
         except PathTraversalError as exc:
-            raise _EditError(f"path {raw!r} leaves {VIRTUAL_ROOT} ('..', '~')") from exc
+            raise _EditError(
+                f"path {raw!r} leaves {VIRTUAL_ROOT} ('..') or names, right after "
+                f"{VIRTUAL_ROOT}/, something starting with '~' or a drive letter"
+            ) from exc
         parts = rel.split("/")
         for depth, part in enumerate(parts, 1):
             if part.casefold() in _GIT_NAMES:
@@ -240,27 +259,41 @@ class WorktreeEditor:
                 f"{_show(rel)} is protected ({rule}): tests, benchmarks, config "
                 "and the harness are off limits"
             )
-        if (name := self._shadowed(parts)) is not None:
+        if (effect := self._shadowed(parts)) is not None:
             raise _EditError(
-                f"{_show(rel)} would add a top-level module {name!r} that shadows "
-                "the standard library or the test runner: choose another name"
+                f"{_show(rel)} would {effect} that shadows the standard library, "
+                "the test runner or a command's module: choose another name"
             )
         return rel
 
     def _shadowed(self, parts: Sequence[str]) -> str | None:
-        """The reserved module a write would newly add at ``.`` or ``src``."""
-        nested = len(parts) > 1 and parts[0].casefold() == "src"
-        for start in (0, 1) if nested else (0,):
-            top = parts[start].casefold()
-            if start + 1 < len(parts):
-                name = top  # a directory: a package or a namespace portion
-            elif top.endswith(".py"):
+        """How a write would newly shadow a reserved module, or ``None``.
+
+        ``check_capture``'s ``module_shadow`` rule, read from the worktree:
+        under each module root a ``.py`` file is a module and a directory is
+        a package or a namespace portion whatever it holds (so a data file
+        counts), and an ``__init__.py`` added to an existing directory makes
+        it a regular package, which wins the import. An entry the user's
+        repo already has stays editable.
+        """
+        folded = tuple(part.casefold() for part in parts)
+        for root in self._roots:
+            depth = len(root)
+            if len(parts) <= depth or folded[:depth] != root:
+                continue
+            top, entry = folded[depth], self._root.joinpath(*parts[: depth + 1])
+            if len(parts) == depth + 1:  # a file directly in the root
                 name = top.removesuffix(".py")
-            else:
-                continue  # a data file is not importable
-            entry = self._root.joinpath(*parts[: start + 1])
-            if name in self._reserved and not os.path.lexists(entry):
-                return name  # an entry the user's repo already has stays editable
+                module = top.endswith(".py") and name in self._reserved
+                if module and not os.path.lexists(entry):
+                    return f"add the top-level module {name!r}"
+            elif top in self._reserved:
+                if not os.path.lexists(entry):
+                    return f"add the top-level package {top!r}"
+                init = folded[depth + 1 :] == ("__init__.py",)
+                if init and not os.path.lexists(self._root.joinpath(*parts)):
+                    shown = _show("/".join(parts[: depth + 1]))
+                    return f"make {shown} the regular package {top!r}"
         return None
 
     def _walk(self, rel: str) -> _Stat:
@@ -376,7 +409,6 @@ class WorktreeEditor:
                 os.mkdir(node, 0o755)
         temp = node / f".engine-edit-{os.urandom(8).hex()}.tmp"
         mode = 0o644 if info is None else stat.S_IMODE(info.st_mode) & 0o777
-        self._written[rel] = self._written.get(rel, 0)  # before any side effect
         descriptor = os.open(temp, _TEMP_FLAGS, 0o600)
         try:
             with os.fdopen(descriptor, "wb") as handle:
@@ -387,7 +419,9 @@ class WorktreeEditor:
             with contextlib.suppress(OSError):
                 os.unlink(temp)
             raise
-        self._written[rel] += len(data)
+        # Recorded only once the atomic replace changed the file: a failed
+        # write is no edit, takes no file slot and is never read as a deletion.
+        self._written[rel] = self._written.get(rel, 0) + len(data)
 
     def _listing(self, rel: str) -> str:
         entries: list[str] = []
@@ -428,6 +462,29 @@ class WorktreeEditor:
             f"{text[:limit]}\n[output truncated: {len(text) - limit} more characters; "
             "use view_range to read a smaller part]"
         )
+
+
+def _members(values: Iterable[str], keyword: str) -> Iterable[str]:
+    """``values``, refused when it is one ``str`` (iterating yields its letters)."""
+    if isinstance(values, str):
+        raise TypeError(f"{keyword} must be a set of str, not a str")
+    return values
+
+
+def repo_relative(path: str) -> str:
+    """``normalize_path(path)``, refused unless the result is its own fixed point.
+
+    ``normalize_path`` collapses ``./`` after checking for ``~`` and drive
+    letters, so ``./~x`` becomes ``~x`` and ``./c:x`` becomes ``c:x``: names
+    it refuses itself, and so does ``EditResult``. Raises ``PathTraversalError``.
+    """
+    return normalize_path(normalize_path(path))
+
+
+def _root_parts(directory: str) -> tuple[str, ...]:
+    """Case-folded components of a repo-relative module root; ``()`` is the root."""
+    clean = repo_relative(directory)
+    return () if clean == "." else tuple(clean.casefold().split("/"))
 
 
 def _unprintable(text: str) -> bool:

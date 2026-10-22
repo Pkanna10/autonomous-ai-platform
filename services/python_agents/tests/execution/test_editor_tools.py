@@ -17,11 +17,15 @@ import stat
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from types import MappingProxyType
+from typing import cast
 
 import pytest
 
 from autonomous_ai_agents.common.config import Settings
+from autonomous_ai_agents.common.models import ViolationRule
+from autonomous_ai_agents.common.paths import PathTraversalError
 from autonomous_ai_agents.execution.editor_tools import (
+    DEFAULT_MODULE_ROOTS,
     LIST_DEPTH,
     LIST_MAX_ENTRIES,
     RESERVED_MODULES,
@@ -31,7 +35,11 @@ from autonomous_ai_agents.execution.editor_tools import (
     ToolOutcome,
     WorktreeEditor,
 )
-from autonomous_ai_agents.optimization.anticheat import DEFAULT_PROTECTED_PATTERNS
+from autonomous_ai_agents.execution.protocols import Change, EditResult
+from autonomous_ai_agents.optimization.anticheat import (
+    DEFAULT_PROTECTED_PATTERNS,
+    check_capture,
+)
 
 KIB = 1024
 CORE = "def unique(xs):\n    out = []\n    for x in xs:\n        out.append(x)\n    return out\n"
@@ -120,6 +128,12 @@ WRITE_ATTACKS: list[tuple[str, str]] = [
     ("prefix-confusion", "/repository/x.py"),
     ("home", "~/.ssh/id_rsa"),
     ("home-inside", "/repo/~/x"),
+    # "./" collapses away, so these would become the names "~x" and "c:x",
+    # which no EditResult can carry (normalize_path refuses them).
+    ("dot-home", "/repo/./~x"),
+    ("dot-slash-home", "/repo/.//~x"),
+    ("dot-drive", "/repo/./c:x"),
+    ("dot-dot-drive-upper", "/repo/././C:x.py"),
     ("symlinked-dir", "/repo/link/file"),
     ("symlinked-file", "/repo/alias.py"),
     ("protected-test", "/repo/tests/test_core.py"),
@@ -179,6 +193,8 @@ def test_create_attack_is_refused_and_nothing_changes(
 EDIT_ATTACKS: list[tuple[str, str]] = [
     ("git-link-file", "/repo/.git"),
     ("dotdot", "/repo/../outside/file"),
+    ("dot-home", "/repo/./~x"),
+    ("dot-drive", "/repo/./c:x"),
     ("symlinked-dir", "/repo/link/file"),
     ("symlinked-file", "/repo/alias.py"),
     ("protected-test", "/repo/tests/test_core.py"),
@@ -228,6 +244,8 @@ READ_ATTACKS: list[tuple[str, str]] = [
     ("symlinked-dir", "/repo/link"),
     ("through-symlinked-dir", "/repo/link/secret.txt"),
     ("dotdot", "/repo/../outside/secret.txt"),
+    ("dot-home", "/repo/./~x"),
+    ("dot-drive", "/repo/./c:x"),
     ("absolute-outside", "/etc/passwd"),
     ("nul-byte", "/repo/src/core.py\x00"),
     ("windows-separator", "/repo/src\\core.py"),
@@ -244,6 +262,50 @@ def test_view_attack_is_refused_without_leaking(
     assert_refused(outcome)
     for leak in ("TOP SECRET", "sk-123", "abc", "gitdir", str(tmp_path)):
         assert leak not in outcome.content
+
+
+SMUGGLED_NAMES = [
+    "/repo/./~notes.py",
+    "/repo/.//~notes.py",
+    "/repo/./c:notes.py",
+    "/repo/././C:notes.py",
+]
+
+
+@pytest.mark.parametrize("path", SMUGGLED_NAMES)
+def test_a_dot_prefix_cannot_smuggle_a_home_or_drive_name(
+    worktree: Path, tmp_path: Path, path: str
+) -> None:
+    """``./~notes.py`` normalises to ``~notes.py``, which ``EditResult`` refuses.
+
+    The files exist, so each command would succeed if the path got through;
+    a write recorded under such a name would make ``EditResult`` raise.
+    """
+    for name in ("~notes.py", "c:notes.py", "C:notes.py"):
+        (worktree / name).write_text("x = 1\n")
+    editor = WorktreeEditor(worktree, protected=())
+    before = snapshot(tmp_path)
+    outcomes = (
+        run(editor, command="view", path=path),
+        run(editor, command="create", path=path, file_text="y = 2\n"),
+        run(editor, command="str_replace", path=path, old_str="1", new_str="2"),
+        run(editor, command="insert", path=path, insert_line=0, insert_text="z\n"),
+    )
+    for outcome in outcomes:
+        assert_refused(outcome, "'~'", "drive")
+        assert "x = 1" not in outcome.content
+    assert snapshot(tmp_path) == before
+    assert dict(editor.written) == {}
+
+
+def test_every_written_key_is_one_an_edit_result_accepts(
+    worktree: Path, editor: WorktreeEditor
+) -> None:
+    for path in ("/repo/./src/a.py", "/repo/src//b.py", "/repo/x/~y.py", "/repo/c.py"):
+        outcome = run(editor, command="create", path=path, file_text="v = 1\n")
+        assert not outcome.is_error, (path, outcome.content)
+    result = EditResult(written=editor.written)
+    assert set(result.written) == {"src/a.py", "src/b.py", "x/~y.py", "c.py"}
 
 
 def test_git_metadata_refusal_names_the_rule(editor: WorktreeEditor) -> None:
@@ -318,9 +380,193 @@ def test_reserved_modules_can_be_extended_or_replaced(worktree: Path) -> None:
     assert not run(
         default, command="create", path="/repo/numpy.py", file_text=""
     ).is_error
-    replaced = WorktreeEditor(worktree, protected=(), reserved_modules=())
+    replaced = WorktreeEditor(worktree, protected=(), reserved_modules=frozenset())
     created = run(replaced, command="create", path="/repo/unittest.py", file_text="")
     assert not created.is_error
+
+
+# --------------------------------------------------------------------------
+# Module roots: the editor refuses what check_capture's module_shadow rejects.
+# --------------------------------------------------------------------------
+
+ROOTS = frozenset({"", "src", "scripts", "tools/bench"})
+
+
+@pytest.mark.parametrize(
+    ("path", "name"),
+    [
+        ("/repo/scripts/json.py", "json"),
+        ("/repo/scripts/pytest/__init__.py", "pytest"),
+        ("/repo/scripts/json/data.txt", "json"),
+        ("/repo/Scripts/JSON.py", "json"),
+        ("/repo/tools/bench/site.py", "site"),
+        ("/repo/unittest.py", "unittest"),
+        ("/repo/src/unittest.py", "unittest"),
+    ],
+)
+def test_every_module_root_refuses_new_reserved_modules(
+    worktree: Path, path: str, name: str
+) -> None:
+    editor = WorktreeEditor(worktree, protected=(), module_roots=ROOTS)
+    before = snapshot(worktree)
+    outcome = run(editor, command="create", path=path, file_text="x\n")
+    assert_refused(outcome, f"'{name}'", "shadow")
+    assert snapshot(worktree) == before
+    assert dict(editor.written) == {}
+
+
+def test_module_roots_replace_the_defaults(worktree: Path) -> None:
+    editor = WorktreeEditor(worktree, protected=(), module_roots=frozenset({"scripts"}))
+    outside_roots = run(
+        editor, command="create", path="/repo/unittest.py", file_text=""
+    )
+    assert not outside_roots.is_error, outside_roots.content
+    inside = run(editor, command="create", path="/repo/scripts/site.py", file_text="")
+    assert_refused(inside, "'site'")
+
+
+def test_default_module_roots_are_the_capture_rule_defaults(worktree: Path) -> None:
+    assert DEFAULT_MODULE_ROOTS == frozenset({"", "src"})
+    editor = WorktreeEditor(worktree, protected=())
+    for path in ("/repo/json.py", "/repo/src/json.py"):
+        assert_refused(run(editor, command="create", path=path, file_text=""), "json")
+    deeper = run(editor, command="create", path="/repo/scripts/json.py", file_text="")
+    assert not deeper.is_error, deeper.content
+
+
+def test_init_turning_a_reserved_directory_into_a_package_is_refused(
+    worktree: Path,
+) -> None:
+    (worktree / "src" / "json").mkdir()
+    (worktree / "src" / "json" / "notes.txt").write_text("x\n")
+    editor = WorktreeEditor(worktree, protected=())
+    outcome = run(
+        editor, command="create", path="/repo/src/json/__init__.py", file_text=""
+    )
+    assert_refused(outcome, "'json'", "regular package")
+    assert not (worktree / "src" / "json" / "__init__.py").exists()
+    sibling = run(editor, command="create", path="/repo/src/json/fast.py", file_text="")
+    assert not sibling.is_error, sibling.content
+    nested = run(
+        editor, command="create", path="/repo/src/json/sub/__init__.py", file_text=""
+    )
+    assert not nested.is_error, nested.content
+
+
+def test_existing_init_of_a_reserved_package_stays_editable(worktree: Path) -> None:
+    (worktree / "json").mkdir()
+    (worktree / "json" / "__init__.py").write_text("x = 1\n")
+    editor = WorktreeEditor(worktree, protected=())
+    outcome = run(
+        editor,
+        command="str_replace",
+        path="/repo/json/__init__.py",
+        old_str="1",
+        new_str="2",
+    )
+    assert not outcome.is_error, outcome.content
+
+
+def test_dotted_reserved_names_reserve_their_first_component(worktree: Path) -> None:
+    editor = WorktreeEditor(
+        worktree, protected=(), reserved_modules=frozenset({"MyPkg.cli"})
+    )
+    for path in ("/repo/mypkg/__init__.py", "/repo/src/mypkg.py"):
+        assert_refused(
+            run(editor, command="create", path=path, file_text=""), "'mypkg'"
+        )
+    other = run(editor, command="create", path="/repo/cli.py", file_text="")
+    assert not other.is_error, other.content
+
+
+def test_a_str_for_reserved_modules_is_a_type_error(worktree: Path) -> None:
+    bad = cast("frozenset[str]", "json")
+    with pytest.raises(TypeError, match="reserved_modules"):
+        WorktreeEditor(worktree, protected=(), reserved_modules=bad)
+
+
+def test_a_str_for_module_roots_is_a_type_error(worktree: Path) -> None:
+    bad = cast("frozenset[str]", "src")
+    with pytest.raises(TypeError, match="module_roots"):
+        WorktreeEditor(worktree, protected=(), module_roots=bad)
+
+
+@pytest.mark.parametrize("root", ["../x", "/abs", "~/x", "./~x", "./c:x"])
+def test_a_module_root_outside_the_repo_is_refused(worktree: Path, root: str) -> None:
+    with pytest.raises(PathTraversalError):
+        WorktreeEditor(worktree, protected=(), module_roots=frozenset({root}))
+
+
+PARITY_RESERVED = RESERVED_MODULES | {"mypkg"}
+PARITY_ROOTS = frozenset({"", "src", "scripts"})
+PARITY_PATHS = [
+    "unittest.py",
+    "src/unittest.py",
+    "scripts/json.py",
+    "scripts/json/x.txt",
+    "json/x.txt",
+    "src/json/__init__.py",  # src/json exists without an __init__.py
+    "src/json/fast.py",
+    "docs/json.py",
+    "pytest.txt",
+    "SRC/PyTest.py",
+    "src/pkg/pytest.py",
+    "mypkg/__init__.py",
+    "src/fast_json.py",
+    "pkg/json.py",
+    "src/JSON/__init__.py",  # a case variant both refuse: it makes a package
+]
+CASE_VARIANTS = [
+    # src/json exists in the base. Capture folds case against the base's
+    # directories and allows these; the editor asks the disk, so on a
+    # case-sensitive one (Linux) it refuses them as a new package: stricter.
+    "SRC/JSON/x.txt",
+    "Src/Json/fast.py",
+]
+
+
+def _directories(base: Path) -> frozenset[str]:
+    found: set[str] = set()
+    for dirpath, dirnames, _ in os.walk(base):
+        for name in dirnames:
+            path = Path(dirpath) / name
+            if not path.is_symlink():
+                found.add(path.relative_to(base).as_posix())
+    return frozenset(found)
+
+
+@pytest.mark.parametrize("path", [*PARITY_PATHS, *CASE_VARIANTS])
+def test_editor_refuses_at_least_what_the_capture_rule_rejects(
+    worktree: Path, path: str
+) -> None:
+    """Never looser than ``module_shadow``; exactly as strict unless the case differs."""
+    (worktree / "src" / "json").mkdir()
+    (worktree / "src" / "json" / "notes.txt").write_text("x\n")
+    existing = _directories(worktree)
+    editor = WorktreeEditor(
+        worktree,
+        protected=(),
+        reserved_modules=PARITY_RESERVED,
+        module_roots=PARITY_ROOTS,
+    )
+    outcome = run(editor, command="create", path=f"/repo/{path}", file_text="x\n")
+    found = check_capture(
+        [Change("A", "000000", "100644", path)],
+        {path: 2},
+        {path: b"x\n"},
+        frozenset(),
+        reserved_modules=PARITY_RESERVED,
+        module_roots=PARITY_ROOTS,
+        existing_dirs=existing,
+    )
+    shadowed = any(v.rule is ViolationRule.module_shadow for v in found)
+    assert outcome.is_error >= shadowed, (outcome.content, found)  # never looser
+    if path in CASE_VARIANTS:
+        assert not shadowed, found
+        spelled = worktree.joinpath(*path.split("/")[:2])
+        assert outcome.is_error is not os.path.lexists(spelled), outcome.content
+    else:
+        assert outcome.is_error == shadowed, (outcome.content, found)
 
 
 @pytest.mark.parametrize(
@@ -815,7 +1061,7 @@ class _FullDisk:
         raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
 
 
-def test_failed_write_keeps_the_old_content_and_records_the_path(
+def test_failed_write_keeps_the_old_content_and_records_nothing(
     worktree: Path,
     tmp_path: Path,
     editor: WorktreeEditor,
@@ -835,7 +1081,9 @@ def test_failed_write_keeps_the_old_content_and_records_the_path(
     assert_refused(failed, "/repo/src/core.py", os.strerror(errno.ENOSPC))
     assert str(tmp_path) not in failed.content
     assert snapshot(tmp_path) == before  # old content kept, no temporary file
-    assert dict(editor.written) == {"src/core.py": 0}  # unrecorded_write stays sound
+    # Nothing changed, so nothing is recorded: 0 would read as a deletion, and
+    # the replace is atomic, so no partial write can escape unrecorded_write.
+    assert dict(editor.written) == {}
     retried = run(
         editor,
         command="str_replace",
@@ -845,6 +1093,27 @@ def test_failed_write_keeps_the_old_content_and_records_the_path(
     )
     assert not retried.is_error, retried.content
     assert os.listdir(worktree / "src") == ["core.py"]
+
+
+def test_a_failed_replace_records_nothing_and_keeps_the_file_slot(
+    worktree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    limits = EditorLimits(max_files=1, max_file_bytes=KIB, max_total_bytes=KIB)
+    editor = WorktreeEditor(worktree, protected=(), limits=limits)
+
+    def full_disk(source: object, target: object) -> None:
+        raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", full_disk)
+        failed = run(editor, command="create", path="/repo/src/new.py", file_text="x\n")
+    assert_refused(failed, os.strerror(errno.ENOSPC))
+    assert not (worktree / "src" / "new.py").exists()
+    assert [p.name for p in (worktree / "src").iterdir()] == ["core.py"]
+    assert dict(editor.written) == {}
+    other = run(editor, command="create", path="/repo/src/other.py", file_text="y\n")
+    assert not other.is_error, other.content  # the failed write used no file slot
+    assert dict(editor.written) == {"src/other.py": 2}
 
 
 def test_root_given_through_a_symlink_is_resolved(
