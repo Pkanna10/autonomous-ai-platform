@@ -495,8 +495,21 @@ INTERPRETERS = [
 ]
 
 
-@pytest.mark.parametrize("python", INTERPRETERS)
-@pytest.mark.parametrize("mode", ["script", "module", "module-safe-path"])
+SHIM_RUNS = [
+    pytest.param(
+        *interpreter.values,
+        mode,
+        id=f"{mode}-{interpreter.id}",
+        marks=interpreter.marks,
+    )
+    for mode in ["script", "module", "module-safe-path"]
+    for interpreter in INTERPRETERS
+    # -P (safe_path) is new in Python 3.11: older interpreters have no such mode
+    if not (mode == "module-safe-path" and interpreter.id in OLD_INTERPRETERS)
+]
+
+
+@pytest.mark.parametrize(("python", "mode"), SHIM_RUNS)
 def test_the_real_shim_drops_its_own_directory_from_sys_path(
     tmp_path: Path, python: str, mode: str
 ) -> None:
