@@ -1,13 +1,13 @@
 # Project Status - Autonomous AI Platform
 
-**Last Updated:** 2026-10-21
+**Last Updated:** 2026-10-22
 
 ---
 
 ## Current Step
 
-**Build step:** 2 of 5 (Core loop), building units **Branch:**
-`claude/adoring-clarke-xpo1py` (draft PR
+**Build step:** 2 of 5 (Core loop), units U1-U20 committed; Verifier and stage
+gate next **Branch:** `claude/adoring-clarke-xpo1py` (draft PR
 [#12](https://github.com/Pkanna10/autonomous-ai-platform/pull/12)) **Vision:** a
 self-improving optimization engine that uses research findings and novel ideas
 to provably improve existing code, or build something new and then improve it
@@ -18,51 +18,45 @@ to provably improve existing code, or build something new and then improve it
 A new session picks up Step 2 from this section. Everything it needs is in the
 repo; nothing lives only in the old session.
 
-- **Read first:** `.claude/handoff/step2/spec.md` (the approved Step 2 spec: 44
-  decisions, interfaces, behaviour, security, test plan, 20 units),
-  `.claude/handoff/step2/lead-notes.md` (Lead decisions and per-unit handovers
-  that override or extend the spec; read the section for every unit you build),
-  then `research-*.md` there for the unit's topic.
-- **Units committed** (one commit each, every one reviewed for correctness and
-  security on a different model, then fixed test-first): U1-U12, U13 preflight,
-  U14 measure, U16 editor loop, U17 understand, U18 trial and baseline runners,
-  U19 combine and publish, plus Lead fixes (`normalize_path` fixed point,
-  `ENGINE_API_BASE_URL` pin, unittest `test*.py` protected, the `-P` shim test
-  case limited to Python >= 3.11, the baseline test count passed to the
-  combiner).
-- **Environment:** the database tests need Postgres 16 with pgvector and a
-  `dev`/`devpass` superuser; the profiler tests exercise every `python3.N` on
-  PATH (`uv python install 3.8 3.9 3.10 3.11 3.12` puts them in `~/.local/bin`).
-  CI's runner has 3.10, so an untested old interpreter turns CI red.
-- **U15 profiler** was built without review at the user's request, then reviewed
-  afterwards (correctness and security, Fable) and fixed test-first: 4
-  should-fix, 7 nits; 10 fixed, 1 documented (a repo module shadowing the shim's
-  stdlib imports gives a loud "not profiled" note). The editable-install guard
-  now follows symlinks into the checkout; the shim runs on workload
-  interpreters >= 3.8 (exercised on 3.8 to 3.13); the profile run gets
-  `PROFILE_TIMEOUT_FACTOR` (3x) the workload timeout; every "not profiled" note
-  says the editable-install check did not run for that workload.
-- **Next, in order:** U20 Lead integration (factory, CI incl. macOS and the
-  Postgres service, E2E-A/B/C, docs, and the U20 follow-ups in `lead-notes.md`),
-  the Verifier, the stage gate, `/security-review`, CI green, the Step 2 report.
-  The user approves each phase before it starts.
-- **How a unit is built:** run the Workflow tool with
+- **Built:** every Step 2 unit, U1-U20, is committed (one commit each, each
+  reviewed for correctness and security on a different model and fixed
+  test-first; U15 was reviewed after it was committed). The list is in "Step 2
+  summary" below; the decisions behind them are in "Decisions".
+- **Next, in order** (the user approves each before it starts):
+  1. the **Verifier** (spec section 6: E2E-A to E2E-C, attack repos, `kill -9`
+     in the middle of a trial, resume after approval, a dirty user tree, a
+     second run on the same repo);
+  2. the **stage gate** (`pnpm stage-gate`), with upgrades and audits;
+  3. **`/security-review`** of the branch;
+  4. **CI green**, then remove `continue-on-error` from the `python-macos` job
+     so the macOS job is blocking;
+  5. the Step 2 report, docs final, the draft PR marked ready.
+- **Read first** while `.claude/handoff/step2/` still exists: `spec.md` (44
+  decisions, interfaces, behaviour, security, test plan) and `lead-notes.md`
+  (Lead decisions and per-unit handovers). Both are summarised under "Decisions"
+  below, so nothing is lost when the folder goes.
+- **Environment:** the database tests need Postgres 16 with pgvector and a role
+  that may create databases (`TEST_DATABASE_URL`; the Docker Compose database
+  works). The profiler tests also run `python3.8` to `python3.12`
+  (`uv python install 3.8 3.9 3.10 3.11 3.12` puts them in `~/.local/bin`); a
+  missing one skips locally but runs in CI. Check both before a long run; do not
+  assume an environment setup script ran.
+- **How a unit was built:** the Workflow tool with
   `scriptPath: .claude/handoff/step2/build-wave.workflow` (absolute path) and
   `args: {maxOutputTokens: 800000, units: [{id, title, files, tests, security, notes}]}`,
-  one unit per run. It runs Builder (tests first) -> correctness and security
-  Reviewers (Fable) -> fixer. The guard logs output tokens after each agent. The
-  Lead then verifies, commits one unit per commit and pushes.
+  one unit per run: Builder (tests first), correctness and security Reviewers
+  (Fable), fixer. The run halts when a review is missing. The Lead then
+  verifies, commits one unit per commit and pushes.
 - **Lead verification before every commit** (from `services/python_agents`):
   `uv run ruff check . && uv run ruff format --check . && uv run mypy src tests`,
   `uv run bandit -q -r src -c pyproject.toml`,
   `TEST_DATABASE_URL=postgresql://dev:devpass@localhost:5432/postgres uv run pytest -q`
-  (100 % coverage today), and the suite on a Python 3.11 venv with
-  `-o addopts="-n auto --no-cov -m 'not live'"`.
+  (100 % line and branch coverage today), and the suite on a Python 3.11 venv
+  with `-o addopts="-n auto --no-cov -m 'not live'"`.
 - **Never run live tests**: always pass `-m "not live"` when overriding
   `addopts`. Cloud containers set `ANTHROPIC_BASE_URL` for their own use; the
   engine follows only `ENGINE_API_BASE_URL`.
-- **Before merging Step 2**, delete `.claude/handoff/` (the decisions it holds
-  belong in this file's Decisions section by then).
+- **Before merging Step 2**, delete `.claude/handoff/`.
 
 ---
 
@@ -75,7 +69,7 @@ the step.
 | ---- | --------------------------------------------------------------- | ---------- | ---------- | ---------- | ----------------------------------------------------------------- | ------- |
 | 0    | Repair & upgrade (DB init, deps, models, docs, stage gate)      | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed  |
 | 1    | Engine design (typed state, data model, judges, migration 003)  | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed  |
-| 2    | Core loop end to end on CPU Python workloads + E2E fixture test | 2026-10-21 | 2026-10-21 |            |                                                                   | pending |
+| 2    | Core loop end to end on CPU Python workloads + E2E fixture test | 2026-10-21 | 2026-10-21 |            | [#12](https://github.com/Pkanna10/autonomous-ai-platform/pull/12) | pending |
 | 3    | Research: arXiv, PDF, playbook, claim extraction, matcher       |            |            |            |                                                                   |         |
 | 4    | Interfaces + runner: live CLI, hardware detection, `--goal`     |            |            |            |                                                                   |         |
 | 5    | Dogfood: fixtures, OSS repos, real ML training pipeline         |            |            |            |                                                                   |         |
@@ -173,27 +167,342 @@ verification pass on the wave-2 fixes) plus a `/security-review`; every blocking
 finding was fixed test-first in a follow-up commit before the gate. Stage gate:
 passed (2 warnings: outdated majors left to Renovate).
 
+### Step 2 summary (2026-10-21 to 2026-10-22, stage gate pending)
+
+The loop now runs for real on CPU-bound Python workloads: preflight at connect,
+one Claude understand request, a measured baseline and a cProfile profile, one
+Claude-edited trial per hypothesis in its own sandboxed git worktree, the frozen
+judges, a combine re-tested ABAB against a fresh baseline with the test suite on
+its tip, and delivery to a local `engine/run-<id>` branch. Research, the CLI and
+hardware detection do not exist yet; hypotheses are supplied by the caller
+(`NodeContext.candidates`).
+
+```
+connect     GitPreflight: git >= 2.38, no submodules / LFS / partial clone,
+            merge drivers, commands resolved and protected, sandbox probe
+understand  ClaudeUnderstander: git objects at the base commit, one request
+baseline    GitBaselineRunner: F0 -> worktree -> warm-ups + N runs + tests -> F1
+profile     CProfiler: untimed cProfile run in its own worktree, hotspots
+trials      GitTrialRunner (serial, running cost total): F0* -> worktree ->
+            ClaudeEditor + WorktreeEditor -> capture + anti-cheat -> commit ->
+            own trial ref -> measure + tests -> F1* (* own ref excluded)
+combine     GitCombiner: merge-tree greedy -> ABAB + tests on the tip -> judged
+            with derive_verdict; else best single change; else report only
+deliver     GitBranchPublisher: create-only update-ref, never pushed
+every run   unshare -rn -p -f --ipc --mount-proc | sandbox-exec, then the
+            launcher: lo up, no_new_privs, Landlock, self-check, exec, report
+```
+
+By layer, with the commits (all on this branch):
+
+- **Foundations:** models, settings, errors, budget (`7b00c38`, U1); the
+  `dedupe_repo` fixture and its edit sets (`defe5a8`, U2); the protocols, fakes
+  and `ScriptedEditor` (`c331a68`, U3).
+- **L5 execution:** hardened `GitWorkspace` (`3cf619e`, U4); sandbox policy and
+  launcher (`20824ee`, U5) and the report-forgery fixes (`11c116e`, U5b);
+  worktree-confined editor tool handler (`b5d6c98`, U7); sandboxed process
+  runner (`3bfb28c`, U11); connect-time preflight (`05ea510`, U13); measurement
+  and the test-suite pass mark (`3a92c15`, U14); cProfile profiler (`90b08fd`,
+  U15, reviewed after commit; fixes `dbec415`, `cd0a3e6`); Claude editor loop
+  (`897aa2c`, U16); git trial and baseline runners (`a22d142`, U18); combiner
+  and publisher (`fefe698`, U19; `1f5c131`); shared phase cleanup and branch
+  guard (`783bf8b`, U20a); merge attributes at connect (`7989626`, U20b); macOS
+  EPERM on `killpg` (`ecb24aa`).
+- **L6 optimization:** capture rules for what a trial changed (`4b9fb3b`, U9)
+  and the module-shadow and recipe-file fixes (`1febcaf`, U9b); unittest's
+  `test*.py` protected (`56cb594`); `normalize_path` refuses `./~x` and `./c:x`
+  (`d917f30`).
+- **Claude clients:** worst-case cost model (`5e7c556`, U6); transport and retry
+  loop (`708f288`, U12); one fallback model and 8,000-token editor turns by
+  default (`1a862dc`); the API address pinned to `ENGINE_API_BASE_URL`
+  (`a17c54a`).
+- **L2 orchestrator:** Step 2 behaviour in the nodes (`54e1eb2`, U10); the
+  Claude understand node (`d15fc52`, U17); the factory that wires the real
+  engine, and the E2E (`4818abf`, U20d).
+- **Persistence:** `PostgresRepository`, `orchestrator/serde.py` and migration
+  004 (`3adab53`, U8).
+- **CI:** the Postgres service, the sandbox probe, the macOS and live-smoke
+  jobs, Schema Apply 001-004 (`7e8a4b5`, U20c); pytest 9 floor (`4037201`).
+- **Docs and handoff:** `6610603`, `a1717c3`, `dd1c99c`, `a938f3b`, `80c1a8d`,
+  `c3fd7d8`.
+
+The three E2E scenarios (`tests/e2e/test_step2.py`, about 20-40 s here) run on
+the `dedupe_repo` fixture with real git, sandbox and measurement and scripted
+Claude replies:
+
+- **E2E-A, the Claude path:** the editor's attempts on `.GIT/hooks`, `../x`, a
+  symlinked path and a test file come back as tool errors; h1 is kept, h3
+  (`sorted(set)`) is rejected by the equivalence judge, the profiler finds
+  `unique_in_order`, the combination holds and the tip is base + h1.
+- **E2E-B, the git-side defence** (on Postgres when `TEST_DATABASE_URL` is set):
+  h2 (deletes a test) and h6 (adds a symlink) are rejected and never run, h5 is
+  kept and then skipped as a conflict, one `Engine-Trial` commit is delivered.
+- **E2E-C, the budget:** the second trial never starts, the router goes to
+  combine, and `cost_usd <= max_cost_usd`.
+
+Each also asserts that the user's HEAD, index, status, config, refs, hooks and
+`info/` are untouched, that only the expected refs exist, that no worktree is
+left, and that every phase that ran repository code was sandboxed.
+
+Tests on 2026-10-22 (Python 3.13, `TEST_DATABASE_URL` set): 3,363 passed, 3
+skipped (two macOS-only cases, one that cannot run as root), 100 % line and
+branch coverage of 7,297 statements and 2,000 branches.
+
 ---
 
 ## What Exists Today
 
-| Component                                                                            | State                              |
-| ------------------------------------------------------------------------------------ | ---------------------------------- |
-| Docker Compose: Postgres 16 + pgvector, Redis, Qdrant                                | Working                            |
-| Schema `001_initial.sql` + `002_fix_critical_issues.sql` + `003_engine.sql`          | Working; applied in CI on every PR |
-| CI: lint, typecheck, tests, coverage, Python CI                                      | Working                            |
-| Security: OSV, Trivy, Docker Scout, pip-audit, bandit, safety, secret scan, Renovate | Working                            |
-| `packages/agent-core` Claude client + shutdown                                       | Working (33 Vitest tests)          |
-| `services/python_agents` settings                                                    | Working                            |
-| LangGraph orchestrator (`EngineState`, 15 nodes, router, `Orchestrator`)             | Walking skeleton on stub data      |
-| `research/arxiv_monitor.py`, `pdf_parser.py`                                         | Placeholders                       |
-| `packages/research-engine`, `execution-engine`                                       | TypeScript placeholders            |
-| Data model, anti-cheating, judges, ranking, lessons, repository protocol             | Working (Step 1)                   |
-| Real runners, profiler, research matcher, Postgres repository, CLI, web console      | Not started                        |
+| Component                                                                            | State                                    |
+| ------------------------------------------------------------------------------------ | ---------------------------------------- |
+| Docker Compose: Postgres 16 + pgvector, Redis, Qdrant                                | Working                                  |
+| Schema `001` to `004_engine_repository.sql`                                          | Working; applied in CI on every PR       |
+| CI: lint, typecheck, tests, coverage, Python CI (Linux, macOS), live smoke (manual)  | Working; the macOS job not blocking yet  |
+| Security: OSV, Trivy, Docker Scout, pip-audit, bandit, safety, secret scan, Renovate | Working                                  |
+| `packages/agent-core` Claude client + shutdown                                       | Working (33 Vitest tests)                |
+| `services/python_agents` settings                                                    | Working                                  |
+| LangGraph orchestrator (`EngineState`, 15 nodes, router, `Orchestrator`, factory)    | Working on CPU Python workloads (Step 2) |
+| Preflight, understand, baseline, profiler, trial runner, editor, combine, publisher  | Working (Step 2)                         |
+| Data model, anti-cheating, judges, ranking, lessons, `PostgresRepository`            | Working (Steps 1 and 2)                  |
+| `research/arxiv_monitor.py`, `pdf_parser.py`; the `research` and `watch` nodes       | Placeholders / stubs (Step 3)            |
+| `packages/research-engine`, `execution-engine`                                       | TypeScript placeholders                  |
+| Research matcher, CLI, live log, hardware detection, web console                     | Not started                              |
 
 ---
 
 ## Decisions
+
+### 2026-10-22 (Step 2: the spec's 44 decisions)
+
+The approved Step 2 spec (`.claude/handoff/step2/spec.md`, deleted before merge)
+opened with 44 decisions. Each is summarised here with its reason, under its
+spec number; later changes are marked.
+
+1. **Every external effect behind a Protocol with a deterministic fake.** The
+   whole loop must be provable in CI with no key and no network; this design
+   scored highest with both judges (39 and 40 of 50).
+2. **Writes confined in the launcher** under `FS_ISOLATION=required`: Landlock
+   (ABI 1 or later, through `ctypes` syscalls) on Linux, a `sandbox-exec`
+   file-write deny on macOS. Claude-steered code would otherwise run with the
+   user's write access; a fresh HOME is not a sandbox, and the worktree's `.git`
+   file names the user's git dir.
+3. **Network: `unshare -rn -p -f`** with the launcher bringing `lo` up
+   (`--ipc --mount-proc` added in U5b), `(deny network*)` on macOS, no Landlock
+   TCP rules. The namespace already blocks TCP and UDP; Landlock TCP needs ABI 4
+   (kernel 6.7).
+4. **A PID namespace with the launcher as PID 1.** `setsid` orphans then die
+   with the launcher (verified: 0 survivors).
+5. **The launcher is a real stdlib-only module run as `python -I -S`.** It is
+   lintable, typed and testable in-process, and a fresh interpreter keeps the
+   RSS floor of every measurement at a few MiB instead of the engine's size.
+6. **The macOS wrapper is built now and runs in a `macos-latest` job against
+   `/usr/bin/git`.** maxrss units, Apple git 2.39 and SBPL semantics are caught
+   before the M4 dogfood (the first run caught `killpg` EPERM).
+7. **Combine with plain `merge-tree --write-tree ACC X` and a single-parent
+   `commit-tree`.** `--merge-base` needs git 2.40 and Apple ships 2.39; every
+   trial's parent is the base, so the natural merge base is the base. History
+   stays linear, one revertable commit per change.
+8. **git 2.38 floor; `--attr-source=<empty tree>` only on git 2.40 and later,
+   and an empty override for every driver key.** The user's config and
+   attributes are untrusted input, and this works on Apple git.
+9. **SDK `max_retries=0` and the engine's own retry loop**: only 429, 529, 500,
+   502, 503, 504, timeouts and connection errors retry, at most
+   `LLM_MAX_RETRIES` times, backoff `min(30 s, 2^k s)` with `retry-after` as a
+   floor (above 60 s it gives up); `Budget.check` before every attempt; a
+   timeout is charged the full estimate, an HTTP error 0; 400/404/413 raise
+   `LLMRequestError`, 401/403 `LLMConfigError`. The SDK retries timeouts
+   silently, so the cap would not be a bound.
+10. **`budget_usd` is required and the trials node keeps a running total**,
+    stopping before a trial when the remainder is below `min_trial_budget_usd`
+    (one worst-case editor request). A total computed after the loop let each of
+    three trials spend the full remainder; a trial that cannot afford one
+    request would only fail at its first check.
+11. **`budget_exhausted` sends the router straight to combine.** Otherwise the
+    `proposed` hypotheses left behind spin empty rounds.
+12. **Capture violations go into `Trial.violations` with status `failed`.** The
+    runner statuses stay `{measured, failed}`, so the Step 1 contract holds and
+    verdict rule 1 still rejects.
+13. **Capture rules `forbidden_file_mode`, `forbidden_file`, `git_metadata`,
+    `unrecorded_write`, `process_spawn`** (`module_shadow` added in U9b). The
+    engine never trusts what the editor says it changed. No LFS rule: LFS is
+    refused at connect.
+14. **`process_spawn` is an AST scan of the changed `.py` files**, applied when
+    CPU time or peak RSS is judged. Splitting work across processes fakes a
+    per-process win; a regex would flag comments and miss `posix_spawn`. It
+    guards against honest mistakes, it is not a defence.
+15. **No judge changes.** Nondeterministic output under an equivalence guardrail
+    and a failing baseline suite fail closed at the baseline: the judges stay
+    frozen and failing before the trials spends no money.
+16. **User-repo fingerprint F0/F1** of `config`, `config.worktree`, `hooks/`,
+    `info/`, the HEAD symref and the `refs/heads` and `refs/tags` refs, around
+    every phase that runs repo code (widened in U4: the effective config and
+    every ref under `refs/` except `refs/remotes/` and `refs/prefetch/`, because
+    `refs/replace` rewrites what the user's git shows and `refs/stash` what
+    `stash pop` applies); a trial excludes only its own ref, which must then be
+    absent or at `Trial.commit`. The index, status, remotes and logs are left
+    out: IDEs rewrite the index and fetch remotes, while tampering shows in
+    refs, config and hooks.
+17. **Worktree git calls pass `--git-dir`/`--work-tree` from a `WorktreeHandle`
+    read right after `worktree add`**, and the `.git` file is compared after
+    every run. Sandboxed code can rewrite that link (it sits in the writable
+    worktree) to aim a later `clean -ffdx` elsewhere, and git renames admin dirs
+    on a collision, so nothing may be assumed.
+18. **`engine/trial-<run>-<hyp>` refs are kept** for committed trials, with ids
+    `uuid5(branch@round)`; an existing ref moves only when its commit's
+    `Engine-Trial:` trailer matches. Trial commits stay alive for combine and
+    inspection, and a re-executed node is idempotent.
+19. **Commit identity and dates come from the base commit**, so a resumed run
+    reproduces the same SHAs.
+20. **`Project.test_command` on the model and in `projects.test_command`**; a
+    `tests_pass` guardrail without one is a `PreflightError`. It survives a
+    resume, and without it the test-suite judge would be inconclusive on every
+    trial and the run would silently yield nothing.
+21. **Harness paths inside the repo are protected** (`command[0]`,
+    `test_command[0]`; later every argument naming a repo file). A harness is
+    not the code under optimisation.
+22. **The measured worktree is reset before every run**, identically for the
+    baseline and each trial, so a workload cannot memoise across runs.
+23. **The cProfile profiler ships in Step 2**, in its own worktree, with an
+    engine-owned `PYTHONPATH` prefix and an editable-install check. It was the
+    last stub on the measurement path, and without the check a trial can
+    silently measure the user's checkout.
+24. **Trials run serially.** Overlapping measurements disturb each other.
+25. **The combination is always re-tested ABAB, even with one change, and the
+    suite runs on its tip.** It holds iff `derive_verdict` says keep; else the
+    best single kept change (highest gain, then hypothesis id) is re-tested
+    once; else the run delivers a report only. Only what reproduced against an
+    interleaved baseline, with its tests run, is delivered.
+26. **A two-change combine is proven in integration tests, not the E2E.** On the
+    fixture's one workload two independent changes cannot both clear the noise
+    floor.
+27. **`orchestrator/serde.py` with one `TypeAdapter` per state key.**
+    `TypeAdapter(EngineState)` fails on Python 3.11, and Step 4 needs this to
+    re-type `PostgresSaver` values.
+28. **`save_run(initial)` runs before the graph starts**; a `root_path` clash
+    becomes `ProjectConflictError`. This fixes the lessons foreign-key
+    violation, leaves an audit row if a run crashes, and the caller sees an
+    engine error, not a psycopg one.
+29. **Trials and verdicts stay in the 003 JSONB arrays; migration 004 adds no
+    tables.** One source of truth per run; 004 is idempotent.
+30. **Postgres tests use an env-gated skip and `addopts` adds only
+    `-m "not live"`.** CI always runs them, so coverage counts them.
+31. **Operator notices are nonce-tagged text blocks after the tool results.**
+    `role: system` mid-loop waits until the live smoke test confirms the wire
+    shape; the caps are enforced in code anyway.
+32. **`httpx2.MockTransport` is the transport test seam.** anthropic 1.17 is
+    built on httpx2 2.16, which exports it (verified in `.venv`).
+33. **`Hotspot.tags` stays free-form.** Existing tests and lessons use other
+    tags; a fixed vocabulary belongs to the Step 3 matcher.
+34. **`BaselineRunner.measure` still returns a tuple.** Node-level checks report
+    noise and nondeterminism, and the Step 1 tests stay unchanged.
+35. **The open item "judged trials state key" is closed**: `round_trials`
+    already does that job.
+36. **CI stays on ubuntu-22.04, behind a probe that fails loudly** without
+    `unshare` or Landlock; the fallback is 24.04 with the AppArmor sysctl, and
+    `REQUIRE_*` is never weakened. A sandbox test that silently skips proves
+    nothing.
+37. **Every engine error class lives in `common/errors.py`.** `clients/`,
+    `execution/` and `persistence/` cannot import `orchestrator/nodes.py`
+    without a cycle, and the errors had to exist before the units that raise and
+    map them.
+38. **Each phase owns its worktree, `_scratch` and `_probe` dirs and removes
+    them in `finally`** (shared as `execution/phase.py` in U20a). One owner per
+    path: nothing is guessed and nothing leaks; the E2E asserts it.
+39. **The fallback chain is sent explicitly** (`fallbacks=[{"model": m}]`) and
+    the estimate prices the worst model in it times its length. The priced chain
+    must equal the billed chain or the estimate is not a bound. Changed in
+    `1a862dc`: one fallback (`claude-opus-4-8`) and `EDITOR_MAX_TOKENS` 8,000 by
+    default, so one request's empty-prompt worst case is $0.40.
+40. **`ScriptedEditor` is keyed by hypothesis title, candidate ids stay uuid4,
+    and `PostgresRepository` refuses a non-UUID id before any SQL**
+    (`InvalidRecordIdError`). The UUID columns would reject it mid-run;
+    `InMemoryRepository` keeps accepting any id for the Step 1 tests.
+41. **The LFS refusal reads attribute sources directly, never `check-attr`.**
+    The engine's own `core.attributesFile=/dev/null` and `--attr-source` hide
+    `.gitattributes` from `check-attr`.
+42. **The launcher self-checks isolation on every run**: a write in
+    `_probe/<phase>` and a connect to the parent's 127.0.0.1 listener must both
+    fail, and `LaunchReport` carries `fs_isolated`, `net_isolated` and `error`.
+    The connect-time probe proves the host can isolate; only a per-run check
+    proves this run was isolated.
+43. **`Workload.warmup_runs` is honoured (0 allowed); `Workload.inputs` is not
+    passed** and connect warns. No input channel exists yet, and baseline and
+    trial ignore inputs alike, so the comparison stays valid.
+44. **Path patterns and the matcher live in `common/paths.py`.** The editor
+    handler and the capture rules must enforce one definition.
+
+### 2026-10-22 (Step 2: Lead decisions and accepted trade-offs)
+
+From the per-unit reviews and handovers (`lead-notes.md`, deleted before merge).
+Where a decision changed the spec, the code follows the decision.
+
+- **The launcher's report is parsed strictly and cross-checked against the
+  kernel's accounting** (the wrapper's `wait4` rusage and procrun's own wall
+  clock); exit status 125 alone never means a refusal. Inside `unshare -r` the
+  workload is root in its own user namespace, so the report must be bounded by
+  numbers it cannot touch.
+- **A privilege drop that fails under `best_effort` is recorded as isolation not
+  applied, never as a failure**, and a non-root launcher that cannot clear its
+  bounding set is accepted when it holds no effective or permitted capability:
+  with `no_new_privs` set, `execve` cannot gain any.
+- **The whole scratch root (HOME, TMPDIR) is fresh before every run**, not per
+  phase: a warm-up could otherwise leave an answer for the timed runs.
+- **The pass mark of the test suite comes from the runner's own summary**
+  (unittest's `Ran N tests` + `OK`, or pytest's JUnit XML written into the
+  scratch root), and fewer passing tests than the baseline is 0.0. A suite can
+  exit 0 after a trial deletes tests. The worktree is also reset right before
+  the suite, so a module a workload dropped cannot shadow the runner.
+- **Preflight refuses partial clones** (fix: `git fetch --refetch` or a full
+  clone): a lazy fetch would reach the network. **It protects every argument of
+  the workload and test commands that names a repo file**, and **refuses an
+  editable `.py` file the engine's Python cannot parse**, because the AST checks
+  must fail closed.
+- **Fallbacks use the `server-side-fallback-2026-06-01` beta**, and an empty
+  `ENGINE_FALLBACK_MODELS` sends no field. **Input tokens are counted with the
+  free `count_tokens` endpoint per model in the chain, plus a margin**, with the
+  byte bound on any failure: a tighter estimate that is still a bound.
+  `LLMResult.unpriced_models` names a billing model missing from the table.
+- **HTTP 402 is `LLMConfigError`** (billing: the account must act); 409, 422 and
+  501 stay `LLMRequestError`. Neither kind is retried.
+- **The engine sends the key only to `ENGINE_API_BASE_URL`** and keeps the
+  `anthropic` logger at INFO or stricter. The SDK follows `ANTHROPIC_BASE_URL`
+  (this container sets it) and its DEBUG log prints request options.
+- **Understand is one structured-output request** with no tools, no caching, the
+  API's default effort and a 2,000-token allowance for the system prompt the API
+  adds. `workload_notes` travels as an array (structured outputs need
+  `additionalProperties: false`); reply text with control or bidi characters
+  rejects the whole reply; `READ_DENY_PATTERNS` files are neither listed nor
+  read.
+- **The engine never unmarshals a profile the workload wrote.** `marshal` is
+  unsafe on hostile data, so pstats are converted to JSON inside the sandbox and
+  parsed strictly with a size cap; hotspots are untrusted hints.
+- **Trial runner rules:** a `GitError` during capture fails the trial while
+  `RepoTamperedError` propagates; reserved module names include each `-m`
+  target, and module roots include each workload's `working_dir` and script
+  directory; invoke's `tasks.py` and config are protected when a command runs
+  invoke; a foreign `engine/trial-*` ref (no matching trailer) stops the trial
+  before any worktree; a re-run that commits nothing deletes its stale ref; an
+  own ref that is checked out is never moved.
+- **Publisher rules:** the ref is read before anything is checked out, a default
+  branch that is a symref to the new engine ref is detected and the create
+  undone (`DeliveryError`), and the combiner takes the baseline's passing-test
+  count (both reviewers found that the tip's suite only had to pass one test).
+- **One shared phase cleanup** (`execution/phase.py`) runs every step in its own
+  `finally`, never follows a planted link and never hides an error already on
+  its way: a failing removal must not mask tampering.
+- **Merge attributes are checked at connect, per git version** (U20b): on git
+  2.40 and later only `info/attributes`, `core.attributesFile` and
+  `merge.default` reach a combine, so committed `.gitattributes` become one
+  note; on older git committed and checked-out copies count too. A custom driver
+  is refused; `union` and binary merges are notes, because the tip is re-tested
+  anyway.
+- **The factory** builds the real context from settings, rebinds both runners to
+  the test command connect resolved, refuses a `WORKTREE_ROOT` that overlaps the
+  checkout, and sends runner notes to the live stream as `runner_note` warnings.
+- **`NETWORK_ISOLATION=off` keeps no namespaces on Linux** (wave 2b, below).
+- **Modules above the ~400-line Builder cap were accepted at review** rather
+  than split mid-step, which would have reopened reviewed code: `procrun.py`,
+  `transport.py`, `measure.py`, `editor.py`, `editor_tools.py`, `preflight.py`,
+  `understand.py`, `trial_runner.py` (sizes under "Technical Debt").
 
 ### 2026-10-22 (Step 2, wave 2b review fixes)
 
@@ -432,49 +741,85 @@ blockers and 12 should-fixes were closed before building.
 
 ---
 
-## Next: Step 2 (Core loop on CPU Python workloads)
+## Next: finish Step 2, then Step 3
 
-Recommended session setting: **Opus 5.5, Ultracode** (Fable 5.1 for the briefing
-and the review of the runner's isolation).
+Step 2's build list is done: real baseline and trial runners in git worktrees
+(argv, warm-ups, N >= 5 timed runs, peak RSS, output fingerprints, timeouts,
+network off), the understand node under the cost cap, Claude trial edits with
+the diff captured by git, combine with a re-test, delivery to a real
+`engine/run-<id>` branch, the Postgres repository, the E2E fixture in CI, and
+the judged-trials key question (closed by decision 35). Left:
 
-- [ ] Real `BaselineRunner` and `TrialRunner`: git worktree per trial,
-      subprocess runs of `Workload.command` (argv, no shell) with warm-up and
-      N >= 5 timed runs, peak RSS, output fingerprints, timeouts, network off.
-- [ ] `understand` node on `ENGINE_MODEL` with the `--max-cost` cap and token
-      accounting into `cost_usd` / `tokens_used`.
-- [ ] Trial edits by Claude inside the worktree; diff capture into `Trial.diff`
-      and `touched_paths` (the anti-cheating input).
-- [ ] `combine` re-tests the combined diff; `deliver` creates the real
-      `engine/<run>` branch (never the default branch).
-- [ ] Postgres `Repository` with `psycopg` and parameterised SQL
-      (`task_executions.user_intent` is `NOT NULL`; fill it from the goal).
-- [ ] E2E fixture: a small CPU Python repo with a known win, run through the
-      whole loop in CI.
-- [ ] Decide whether judged trials get their own state key (see Decisions).
-- [ ] Stage gate, development log row, PR, report.
+- [ ] Verifier, stage gate, `/security-review`, CI green with the macOS job
+      blocking, the Step 2 report, development-log row, PR ready.
+
+### Known gaps carried to later steps
+
+- **Runner notes reach the live stream only.** `RunNotes` emits them as
+  `runner_note` events, but they are not appended to `state["events"]` or the
+  audit row. Step 4's CLI live log is the place to keep them.
+- **`EditResult` has no notes**, so the editor's fallback and unpriced-model
+  notes are not surfaced.
+- **Profiler shadowing:** a repository module named like a stdlib module the
+  profiler shim imports (`json.py`, `runpy.py`, ...) leaves that workload "not
+  profiled", and its editable-install check does not run (the note says so).
+- **A context serves one run at a time**: connect rebinds the runners of the
+  context `build_context` returned.
+- From the spec, deferred by design: research and LLM-generated candidates (Step
+  3); the CLI, `--max-cost`/`--goal`/`--test-command`, test-command inference,
+  the live log, hardware detection, `PostgresSaver` resume and a `clean` command
+  for trial refs (Step 4); M4 dogfood, submodules, LFS, held-out inputs,
+  `Workload.inputs`, `metrics_file`, process-tree RSS and a per-run tmpfs for
+  `/dev/shm` (Step 5); PR creation and package installs (later).
 
 ---
 
-## Metrics Snapshot (2026-10-21)
+## Metrics Snapshot (2026-10-22)
 
-| Metric                         | Value                                                      |
-| ------------------------------ | ---------------------------------------------------------- |
-| Python tests                   | 560 passed                                                 |
-| Python coverage                | 100% of 1,431 statements (placeholders excluded)           |
-| TypeScript tests               | 33 passed                                                  |
-| Product code (non-placeholder) | ~3,200 lines Python + 450 lines SQL; ~8,000 lines of tests |
-| Engine features shipped        | Walking skeleton of the full loop (stub runners)           |
+| Metric                         | Value                                                                                      |
+| ------------------------------ | ------------------------------------------------------------------------------------------ |
+| Python tests                   | 3,363 passed, 3 skipped (macOS-only or root-only)                                          |
+| Python coverage                | 100% of 7,297 statements and 2,000 branches (placeholders excluded)                        |
+| TypeScript tests               | 33 passed                                                                                  |
+| Product code (non-placeholder) | ~16,000 lines Python in `src` + ~930 lines SQL; ~44,000 lines of tests (fixtures excluded) |
+| Engine features shipped        | The full loop on CPU Python workloads; research and CLI not yet                            |
 
 ---
 
 ## Delivery Metrics (DORA-style, per step)
 
-| Step | Lead time | CI-red pushes                | Rework commits        | Reverts |
-| ---- | --------- | ---------------------------- | --------------------- | ------- |
-| 0    | ~2 h      | 0                            | 0                     | 0       |
-| 1    | ~4.5 h    | 2 (GHA cache; README format) | 6 (regroup, 5 review) | 0       |
+| Step | Lead time                     | CI-red pushes                                                                                | Rework commits        | Reverts |
+| ---- | ----------------------------- | -------------------------------------------------------------------------------------------- | --------------------- | ------- |
+| 0    | ~2 h                          | 0                                                                                            | 0                     | 0       |
+| 1    | ~4.5 h                        | 2 (GHA cache; README format)                                                                 | 6 (regroup, 5 review) | 0       |
+| 2    | ~23.5 h so far (gate pending) | 1 (Python 3.10 on the runner, `dbec415`); the non-blocking macOS job failed once (`7e8a4b5`) | 10 `fix` commits      | 0       |
 
 ## Lessons (retro per step)
+
+### Step 2
+
+- **Real runners find what local runs cannot.** CI's runner had Python 3.10,
+  whose missing `-P` broke a profiler test (`cd0a3e6`), and the first macOS run
+  found that `killpg` answers EPERM there once the group has exited (`ecb24aa`).
+  Install the CI interpreters locally and push early to every platform job.
+- **Do not assume the environment is set up.** In this cloud container the
+  environment setup script had not run (the Lead's observation), so Postgres and
+  the old interpreters had to be installed by hand, and a missing one only skips
+  locally. Check `pg_isready` and `python3.8 --version` before relying on a
+  green local suite.
+- **Reviewers on a different model found real defects in every unit they
+  reviewed**, security bugs among them: report forgery through `/proc` in the
+  launcher, test-runner shadowing with an added `unittest.py`, the API address
+  following a stray `ANTHROPIC_BASE_URL`, planted links reaching git's worktree
+  removal, an ungated paid key in CI. Keep two lenses (correctness, security) on
+  every unit.
+- **A review that returns nothing must halt the workflow.** A reviewer that died
+  returned null, which read as "no findings" and skipped the fixer;
+  `build-wave.workflow` now stops the unit and names the missing lens
+  (`80c1a8d`).
+- **Write the decisions down where they will survive.** The spec and the Lead
+  notes lived in `.claude/handoff/`, which is deleted before merge; the
+  Decisions section above now carries them.
 
 ### Step 1
 
@@ -510,12 +855,22 @@ and the review of the runner's isolation).
 - `packages/research-engine` (TypeScript) duplicates the Python research
   module's purpose. Decision (Step 1): it stays a placeholder until TypeScript
   workloads exist; research is built in Python.
-- `StubTrialRunner._unit_for` labels `throughput_per_s` as seconds; fix when the
-  real runner lands.
+- `StubTrialRunner._unit_for` labels `throughput_per_s` as seconds; the real
+  runner never produces that metric.
 - Both pgvector and Qdrant are configured. Pick one when embeddings land (Step
   3).
 - `services/python_agents/Dockerfile` installs with pip while CI uses uv.
 - Local development may run on Python 3.13 while CI pins 3.11.
+- Source modules above the ~400-line cap (lines on 2026-10-22): `nodes.py`
+  1,728, `preflight.py` 1,003, `git.py` 843, `models.py` 760, `launcher.py` 709,
+  `judges.py` 682, `anticheat.py` 675, `procrun.py` 664, `understand.py` 661,
+  `measure.py` 605, `trial_runner.py` 575, `editor_tools.py` 550, `editor.py`
+  524, `profiler.py` 511, `transport.py` 491, `postgres.py` 430, `fakes.py` 402.
+  Split when a later step touches them.
+- The report's trial-ref cleanup command pipes into
+  `xargs -n1 git update-ref -d`; run with nothing left to delete, GNU `xargs`
+  still calls `git update-ref -d` once and it prints its usage. The README's
+  `update-ref --stdin` form is a no-op then, and deletes in one transaction.
 
 ---
 

@@ -1,8 +1,9 @@
 # Python Agents Service - Claude Code Configuration
 
-**Service:** `python_agents` **Version:** 4.1.0 **Primary Language:** Python
+**Service:** `python_agents` **Version:** 4.2.0 **Primary Language:** Python
 3.11+ **Framework:** LangGraph 1.x **Testing:** pytest **Key Libraries:**
-langgraph, langchain, anthropic (1.x), pydantic 2, pydantic-settings, structlog
+langgraph, langchain, anthropic (1.x), pydantic 2, pydantic-settings, structlog,
+psycopg 3 (the `database` extra)
 
 The root `CLAUDE.md` holds the vision, the build order and the stage gate. This
 file holds what is specific to the Python engine: its design, its conventions
@@ -16,17 +17,26 @@ Home of the improvement engine: the LangGraph orchestrator loop (L2), research
 (L4), the local execution layer (L5), optimization judges (L6) and the lessons
 store (L7). Persistence talks to PostgreSQL through `infrastructure/schema/`.
 
-**Current state (Step 1, walking skeleton):** every node of the engine loop is
-wired and runs end to end on deterministic stub data. Data models, anti-cheating
-rules, judges, the verdict order, ranking, lessons, the approval interrupt and
-durable resume are final. The runner, profiler, research and LLM understanding
-are stubs that Steps 2 to 4 replace behind interfaces that do not change.
+**Current state (Step 2 built, stage gate pending):** the loop runs for real on
+CPU-bound Python workloads. `orchestrator/factory.py` wires the real preflight,
+Claude understander, cProfile profiler, git baseline and trial runners (each
+trial edited by Claude in its own sandboxed worktree), combiner and branch
+publisher; the Postgres repository persists runs. Research (`research` node,
+candidates supplied through `NodeContext.candidates`) and `watch` are still
+stubs (Step 3), and there is no CLI (Step 4). `default_context()` and the
+`langgraph.json` entry point still use the Step 1 stubs.
 
 Models come from settings, never from string literals: `settings.ENGINE_MODEL`
 (default `claude-opus-5-5`) and `settings.TRIAGE_MODEL` (default
 `claude-haiku-5-5`). Engine knobs live next to them: `MIN_RUNS=5`,
 `NOISE_MULTIPLIER=2.0`, `MIN_RELATIVE_GAIN=0.02`, `MAX_TRIAL_ROUNDS=3`,
-`MAX_COST_USD=5.0`, `TRIAL_BRANCH_PREFIX="engine/"`.
+`MAX_COST_USD=5.0`, `TRIAL_BRANCH_PREFIX="engine/"`. Step 2 added the isolation
+modes (`NETWORK_ISOLATION`, `FS_ISOLATION`, default `required`),
+`WORKTREE_ROOT`, `ENGINE_API_BASE_URL`, the fallback chain and `MODEL_PRICING`,
+the git, test and output limits, the editor and understand limits and the retry
+policy; the README's "Environment Variables" lists them with their defaults. All
+are validated at startup (`MODEL_PRICING` must price every model the engine may
+bill).
 
 ---
 
@@ -59,15 +69,16 @@ and an untrialled candidate remains. A gate decision always proceeds to
 
 ### Package map
 
-| Package         | Layer | What it holds                                                     |
-| --------------- | ----- | ----------------------------------------------------------------- |
-| `common/`       | all   | `config.py` settings, `models.py` data model, `paths.py` helpers  |
-| `orchestrator/` | L2    | `state.py`, `nodes.py`, `main.py` (graph, `Orchestrator`), events |
-| `research/`     | L4    | arXiv monitor and PDF parser (placeholders until Step 3)          |
-| `execution/`    | L5    | `TrialRunner` protocol, `StubTrialRunner`                         |
-| `optimization/` | L6    | `anticheat.py`, `judges.py`, `ranking.py`                         |
-| `learning/`     | L7    | `lessons.py` (verdict -> lesson)                                  |
-| `persistence/`  | DB    | `Repository` protocol, `InMemoryRepository`                       |
+| Package         | Layer | What it holds                                                                                                                                                                                                                                            |
+| --------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `common/`       | all   | `config.py` settings, `models.py` data model, `errors.py` every engine error, `paths.py` path rules and pattern constants, `refnames.py` branch rules                                                                                                    |
+| `clients/`      | L2/L5 | `transport.py` (the only SDK client, `call()` retry loop, `ScriptedTransport`), `cost.py` (worst-case estimate, response cost), `budget.py` (`Budget`)                                                                                                   |
+| `orchestrator/` | L2    | `state.py`, `nodes.py`, `main.py` (graph, `Orchestrator`), `factory.py` (`build_context`), `understand.py`, `combine_node.py`, `serde.py`, `events.py`                                                                                                   |
+| `research/`     | L4    | arXiv monitor and PDF parser (placeholders until Step 3)                                                                                                                                                                                                 |
+| `execution/`    | L5    | `runner.py` and `protocols.py` (seams), `fakes.py`, `git.py`, `sandbox.py`, `launcher.py`, `procrun.py`, `measure.py`, `phase.py`, `profiler.py` (+ `_profile_shim.py`), `editor.py`, `editor_tools.py`, `preflight.py`, `trial_runner.py`, `combine.py` |
+| `optimization/` | L6    | `anticheat.py` (protected paths, capture rules), `judges.py`, `ranking.py`                                                                                                                                                                               |
+| `learning/`     | L7    | `lessons.py` (verdict -> lesson)                                                                                                                                                                                                                         |
+| `persistence/`  | DB    | `Repository` protocol, `InMemoryRepository`, `postgres.py` (`PostgresRepository`)                                                                                                                                                                        |
 
 ### State (`orchestrator/state.py`)
 
@@ -86,6 +97,16 @@ every node follows:
    unjudged, `judges` writes the judged copies there and appends them to the
    `trials` channel, `verdicts` reads them. The `Repository` is an audit sink;
    the only node that reads from it is `hypotheses` (lessons).
+
+Step 2 keys, all set by `initial_state(..., max_cost_usd=None)` (default
+`settings.MAX_COST_USD`; below 0 is a `ValueError`): `base_commit` (the measured
+SHA, set at connect), `understanding`, `max_cost_usd`, `combination`,
+`budget_exhausted` (the router then goes straight to combine) and
+`extra_protected` (repo files the commands name). A node that spends money
+rebuilds `Budget(state["max_cost_usd"], state["cost_usd"])`, so the budget
+survives a checkpoint. `orchestrator/serde.py` (`dump_state`, `load_state`)
+round-trips the state through JSON with one `TypeAdapter` per key, because
+`TypeAdapter(EngineState)` fails on Python 3.11.
 
 ### Data model (`common/models.py`)
 
@@ -130,6 +151,15 @@ test fails when a new model is not added.
   duplicate first.
 - `fingerprint` is sha256 of the workload output; `compare_fingerprints` pairs
   baseline and trial by workload and flags mismatches.
+- Capture rules (Step 2, `check_capture`) judge what git says a trial changed,
+  never what the editor reports: `forbidden_file_mode` (symlink, gitlink,
+  unusual mode, mode change), `forbidden_file` (`WRITE_DENY_PATTERNS` such as
+  `*.pyc` and `*.so`, or a binary blob), `git_metadata` (`.git`,
+  `.gitattributes`, `.gitmodules`, `.lfsconfig`), `unrecorded_write`,
+  `module_shadow` (a new top-level module named after the stdlib or the test
+  runner under a module root) and `process_spawn` (an AST scan, when CPU time or
+  memory is judged). A trial with a violation is `failed` with
+  `Trial.violations` set and is never executed.
 
 ### Judges and the verdict order (`optimization/judges.py`)
 
@@ -171,30 +201,58 @@ approved verdicts count as keeps, rejected ones as rejects.
 
 Nodes come from `make_nodes(ctx: NodeContext)`. `NodeContext` is a frozen
 dataclass carrying the `TrialRunner`, the `BaselineRunner`, the judges, the
-`Repository` and, until the research layer exists, the candidate hypotheses.
-`default_context()` wires the stubs; tests build their own with scripted
-outcomes, so every external effect is scripted:
+`Repository`, the protected patterns, the branch prefix, the rigour knobs and,
+until the research layer exists, the candidate hypotheses. Step 2 added five
+seams, each defaulting to `None` (the node then keeps its Step 1 behaviour):
+`preflight`, `understander`, `profiler`, `combiner` and `publisher`, plus
+`min_trial_budget_usd` (default 0; the trials node starts no trial that cannot
+afford it).
 
+- `orchestrator/factory.py`: `build_context(project, *, candidates, ...)` builds
+  the real context: `GitPreflight`, `ClaudeUnderstander`, `CProfiler`,
+  `GitBaselineRunner`, `GitTrialRunner` (with `ClaudeEditor` over
+  `WorktreeEditor`), `GitCombiner` and `GitBranchPublisher` on one
+  `GitWorkspace`, one pair of isolation modes and one launcher, and
+  `min_trial_budget_usd` = one worst-case editor request. Connect rebinds the
+  runners to the test command preflight resolved, so a context serves one run at
+  a time. Without `ANTHROPIC_API_KEY` there is no transport: understand keeps
+  its stub and the trials need an injected `editor`, else `LLMConfigError`.
+  Keyword overrides (`transport`, `editor`, `run`, `network`, `fs`, `sleep`)
+  exist for tests.
 - `execution/runner.py`:
-  `TrialRunner.run(hypothesis, workloads, baseline, *, round, branch) -> Trial`
-  and `BaselineRunner.measure(workloads) -> tuple[Measurement, ...]`.
+  `TrialRunner.run(hypothesis, workloads, baseline, *, round, branch, budget_usd, brief) -> Trial`
+  and
+  `BaselineRunner.measure(workloads, *, run_id, commit) -> tuple[Measurement, ...]`.
   `StubTrialRunner` replays `ScriptedOutcome`s looked up by hypothesis id, then
   title, then a default; `StubBaselineRunner` replays one outcome.
+- `execution/protocols.py`: `Preflight`, `Profiler`, `CodeEditor`,
+  `ProjectUnderstander`, `Combiner`, `BranchPublisher` and their frozen carriers
+  (`TrialBrief`, `WorktreeHandle`, `PreflightReport`, `EditTask`, `EditResult`,
+  `KeptChange`, `CombineMeasured`, `LaunchReport`). `execution/fakes.py` has a
+  deterministic double for each, plus `ScriptedEditor` (edit sets from disk,
+  keyed by hypothesis title).
+- `clients/transport.py`: `LLMTransport.send`; `AnthropicTransport` is the only
+  code that builds an SDK client, `ScriptedTransport` replays responses. Every
+  paid request goes through `call(transport, request, budget, ...)`.
 - `persistence/repository.py`: `Repository` protocol (`save_run`, `get_run`,
   `save_trial`, `save_verdict`, `save_lesson`, `list_lessons`, `list_trials`,
-  `list_verdicts`) and `InMemoryRepository`. The Step 2 PostgreSQL class uses
-  `psycopg` with parameterised SQL and `model_dump_json()` into JSONB columns;
-  there is no ORM and no second migration system.
+  `list_verdicts`) and `InMemoryRepository`. `persistence/postgres.py`:
+  `PostgresRepository(dsn)`, psycopg with literal SQL and `%(name)s` parameters,
+  state through `serde`, trials and verdicts in the 003 JSONB arrays; there is
+  no ORM and no second migration system.
 
 `Orchestrator(context=..., checkpointer=...)` exposes
-`run(project, workloads, objectives, guardrails, *, run_id=None, max_rounds=None) -> EngineRunResult`
+`run(project, workloads, objectives, guardrails, *, run_id=None, max_rounds=None, max_cost_usd=None) -> EngineRunResult`
 (`run_id`, `status` of `done | needs_approval | failed`, final `state`,
 `approval_request`), `resume(run_id, decision)` and `stream(...)`, which yields
 each `EngineEvent` as the node emits it and ends with a `paused` event when the
-run waits at the gate. `run` refuses a `run_id` that already has a thread,
-`resume` refuses a run that is not waiting at the gate, and every result is
-saved to the repository. An invalid approval payload re-interrupts with the
-error on the request instead of failing the run.
+run waits at the gate. `run` and `stream` call `save_run` on the initial state
+before the graph starts, so an `EngineError` from the repository
+(`ProjectConflictError`, `InvalidRecordIdError`) propagates before any node
+runs. `run` refuses a `run_id` that already has a thread, `resume` refuses a run
+that is not waiting at the gate, and every result is saved to the repository. An
+invalid approval payload re-interrupts with the error on the request instead of
+failing the run.
 
 ### Live log (`orchestrator/events.py`)
 
@@ -254,6 +312,66 @@ engine until the step that needs them; the vision documents in
   `JsonPlusSerializer` deserialisation can execute code for allowlisted types.
 - No secrets in code; `.env` only. Run `bandit -r src -c pyproject.toml`.
 
+Step 2 (repository code now runs on the user's machine):
+
+- **Sandbox, fail closed.** Every launch (preflight probe, baseline, profile,
+  trials, combine, test suites) goes through `procrun.run_once`: on Linux
+  `unshare -rn -p -f --ipc --mount-proc` around `python -I -S launcher.py`,
+  which brings `lo` up, sets `no_new_privs`, applies Landlock (writes only to
+  the worktree, its `_scratch` dir and `/dev/null`; `/dev/shm` is not writable),
+  drops every capability in the child and self-checks before exec (a write in
+  `_probe` and a connect to the parent's 127.0.0.1 listener must fail). macOS
+  uses `sandbox-exec` with `(deny network*)` and a write allowlist. Under
+  `required` a failed step refuses the run; procrun parses the report strictly
+  and cross-checks it against the wrapper's `wait4` accounting.
+  `NETWORK_ISOLATION=off` on Linux runs without namespaces.
+- **Child environment** (`sandbox.child_env`): an allowlist (`PATH` with
+  relative entries dropped, locale, `TZ`, venv vars) plus deny patterns that win
+  over explicit extras; forced `PYTHONHASHSEED=0`, `PYTHONDONTWRITEBYTECODE=1`,
+  a fresh `HOME`/`TMPDIR` per run and an engine-owned `PYTHONPATH` of the
+  worktree (and its `src`).
+- **Worktree ownership** (`execution/phase.py`): each phase owns
+  `<WORKTREE_ROOT>/<run>/<phase>`, `_scratch/<phase>` and `_probe/<phase>` and
+  removes them in `finally`; planted links are unlinked, never followed; a
+  cleanup failure never hides an error already raised. `WORKTREE_ROOT` may not
+  overlap the checkout.
+- **Git is untrusted input** (`execution/git.py`): a scratch environment, no
+  hooks, fsmonitor, signing, network or credential helpers, every
+  `filter`/`diff`/`merge` driver key emptied, `--attr-source=<empty tree>` on
+  git 2.40 and later, `--git-dir`/`--work-tree` from the `WorktreeHandle` (the
+  `.git` link is compared after every run), `--` before paths, capped output.
+  Preflight refuses submodules, LFS, partial clones, dubious ownership and
+  custom merge drivers.
+- **Fingerprint.** `repo_fingerprint` (config, `config.worktree`, `hooks/`,
+  `info/`, the effective config, the HEAD symref, and every ref under `refs/`
+  except remote-tracking and prefetch refs, so `refs/replace`, `refs/stash` and
+  `refs/notes` count) is taken before and after every phase that runs repo code;
+  a trial excludes only its own ref, which must be absent or at `Trial.commit`.
+  A difference is `RepoTamperedError`.
+- **Editor confinement** (`execution/editor_tools.py`): Claude sees only
+  `/repo`; `GIT_METADATA_NAMES` (case-insensitive), symlinks on any component,
+  `READ_DENY_PATTERNS` (secrets: `.env*`, keys, `.netrc`, ...; never viewed,
+  since a view reaches the API), `WRITE_DENY_PATTERNS`, protected patterns and
+  reserved module names are refused. Repository text travels inside
+  `<untrusted_repo_content boundary=TOKEN>` with a per-trial token; content
+  holding the token is refused. The understander reads git objects at the base
+  commit only and skips `READ_DENY_PATTERNS` files.
+- **Capture before execution**: the capture rules above run on git's view of the
+  change (`--no-renames`, strict UTF-8); a violating trial never runs.
+- **Claude API.** The key is a `SecretStr` unwrapped only in
+  `AnthropicTransport`, sent only to `ENGINE_API_BASE_URL` (https, never the
+  SDK's `ANTHROPIC_BASE_URL`); SDK retries and redirects are off; the
+  `anthropic` logger stays at INFO or stricter; mapped errors keep status, type
+  and request id only. Every attempt passes `Budget.check` with a worst-case
+  estimate over the whole fallback chain first.
+- **Profiles are untrusted**: workload-written pstats are never unmarshalled in
+  the engine; the shim emits JSON that is parsed strictly with a size cap.
+- **Postgres**: literal SQL with parameters only; ids bound for UUID columns are
+  validated before any SQL (`InvalidRecordIdError`); U+0000 in stored text is
+  escaped as U+E000 + `0` and restored on read.
+- **Delivery**: create-only `update-ref` under the prefix, never on a
+  checked-out or default branch (or one it symrefs to), never pushed.
+
 ---
 
 ## Testing Conventions
@@ -262,19 +380,41 @@ engine until the step that needs them; the vision documents in
   (`mypy src tests` from this directory; from the repo root pass
   `--config-file services/python_agents/pyproject.toml` or the pydantic plugin
   and strict settings are lost).
-- Layout mirrors `src/`: `tests/common`, `tests/orchestrator`,
+- Layout mirrors `src/`: `tests/common`, `tests/clients`, `tests/orchestrator`,
   `tests/optimization`, `tests/execution`, `tests/learning`,
-  `tests/persistence`. Shared fixtures live in `tests/conftest.py`
-  (`sample_project`, `sample_workload`, `sample_objective`, `sample_guardrails`,
-  `sample_state`, `scripted_runner`, `in_memory_repo`, `engine_graph`).
-- Coverage threshold is 90% (`--cov-fail-under=90`); `__init__.py` files and the
-  research placeholders are omitted, so package inits stay re-export only.
-- `pytest` runs with xdist (`-n auto`). To run serially use
-  `uv run pytest -o addopts=""` rather than `-p no:xdist`.
-- Graph tests use `InMemorySaver` and a unique `thread_id` per test; the E2E
-  suite in `tests/orchestrator/test_graph_e2e.py` covers clean keep, protected
-  path, below-noise retry, approval approve and reject, durable resume across
-  graph instances and the no-checkpointer error.
+  `tests/persistence`, plus `tests/e2e`. Shared fixtures live in
+  `tests/conftest.py` (`sample_project`, `sample_workload`, `sample_objective`,
+  `sample_guardrails`, `sample_state`, `scripted_runner`, `in_memory_repo`,
+  `engine_graph`); `tests/fixtures/` holds the `dedupe_repo` fixture, its edit
+  sets and scripted transcripts (excluded from collection and from mypy).
+- Coverage threshold is 90% (`--cov-fail-under=90`; 100% line and branch today,
+  no `pragma: no cover`); `__init__.py` files and the research placeholders are
+  omitted, so package inits stay re-export only.
+- `addopts` runs xdist (`-n auto`) and adds `-m "not live"`. A `-m` you pass
+  replaces it, and `-o addopts=""` drops it: always keep `-m "not live"` then.
+  To run serially use `uv run pytest -o addopts="" -m "not live"` rather than
+  `-p no:xdist`.
+- **Live tests** (`live` marker) call the real API and cost money. Each one also
+  checks that the run selected `-m live` explicitly (the `_live_selected`
+  pattern in `tests/execution/test_editor.py`) and skips without
+  `ANTHROPIC_API_KEY`; CI runs them only in the manual `live-smoke` job.
+- **Postgres tests** (`postgres` marker) skip when `TEST_DATABASE_URL` is unset;
+  CI always sets it. Each pytest process creates its own database from
+  `infrastructure/schema/*.sql` and drops it at the end, so the role must be
+  allowed to create databases. The repository contract tests run on both
+  backends.
+- **Sandbox tests** skip when the host cannot isolate;
+  `REQUIRE_NETWORK_SANDBOX=1` / `REQUIRE_FS_SANDBOX=1` (CI) make them fail
+  instead. The launcher's setup runs in-process with injected `Ops`, and the
+  darwin branches are tested on Linux through an injected `platform`.
+- **Profiler tests** run the shim under `python3.8` to `python3.12` when they
+  are on `PATH` (`uv python install 3.8 3.9 3.10 3.11 3.12`); `-P` cases are
+  generated only for 3.11 and later.
+- **E2E** (`tests/e2e/test_step2.py`, marker `slow`): E2E-A to E2E-C on the
+  `dedupe_repo` fixture with real git, sandbox and measurement and scripted
+  Claude replies; Postgres when `TEST_DATABASE_URL` is set. The Step 1 graph
+  scenarios on stubs stay in `tests/orchestrator/test_graph_e2e.py`. Graph tests
+  use `InMemorySaver` and a unique `thread_id` per test.
 
 ---
 
@@ -283,50 +423,77 @@ engine until the step that needs them; the vision documents in
 Paths are relative to `src/autonomous_ai_agents/` unless they start with
 `tests/`.
 
-| File                                   | Status      | Purpose                                          |
-| -------------------------------------- | ----------- | ------------------------------------------------ |
-| `common/config.py`                     | real        | pydantic-settings: models, DB, engine knobs      |
-| `common/models.py`                     | real        | Data model, enums, serde allowlist               |
-| `common/paths.py`                      | real        | `normalize_path`, `PathTraversalError`           |
-| `common/refnames.py`                   | real        | Git refname rules for branches and the prefix    |
-| `orchestrator/state.py`                | real        | `EngineState`, `initial_state`, `REDUCER_KEYS`   |
-| `orchestrator/nodes.py`                | skeleton    | One function per loop node, `after_verdicts`     |
-| `orchestrator/main.py`                 | skeleton    | `create_graph`, `Orchestrator.run/resume/stream` |
-| `orchestrator/events.py`               | real        | `make_event`, `emit`                             |
-| `optimization/anticheat.py`            | real        | Protected paths, noise rule, fingerprints        |
-| `optimization/judges.py`               | real        | Judge protocol, five judges, `derive_verdict`    |
-| `optimization/ranking.py`              | real        | Hypothesis score with lesson boost               |
-| `learning/lessons.py`                  | real        | Verdict -> `Lesson`                              |
-| `execution/runner.py`                  | stub        | `TrialRunner` protocol, `StubTrialRunner`        |
-| `persistence/repository.py`            | in-memory   | `Repository` protocol, `InMemoryRepository`      |
-| `research/arxiv_monitor.py`            | placeholder | arXiv monitoring (Step 3)                        |
-| `research/pdf_parser.py`               | placeholder | PDF parsing (Step 3)                             |
-| `tests/orchestrator/test_graph_e2e.py` | real        | Seven end-to-end scenarios                       |
-| `tests/conftest.py`                    | real        | Shared fixtures                                  |
+| File                                        | Status      | Purpose                                                           |
+| ------------------------------------------- | ----------- | ----------------------------------------------------------------- |
+| `common/config.py`                          | real        | pydantic-settings: models, pricing, isolation, limits, DB         |
+| `common/models.py`                          | real        | Data model, enums, serde allowlist                                |
+| `common/errors.py`                          | real        | Every engine error class                                          |
+| `common/paths.py`                           | real        | `normalize_path`, `matches_pattern`, deny lists, reserved modules |
+| `common/refnames.py`                        | real        | Git refname rules, `assert_safe_branch`                           |
+| `clients/transport.py`                      | real        | `AnthropicTransport`, `ScriptedTransport`, `call()` retry loop    |
+| `clients/cost.py`, `clients/budget.py`      | real        | Worst-case estimate, response cost, `Budget`                      |
+| `orchestrator/state.py`                     | real        | `EngineState`, `initial_state`, `REDUCER_KEYS`                    |
+| `orchestrator/nodes.py`                     | real        | One function per node, `after_verdicts`; `research`, `watch` stub |
+| `orchestrator/main.py`                      | real        | `create_graph`, `Orchestrator`; `default_context()` uses stubs    |
+| `orchestrator/factory.py`                   | real        | `build_context`: the real engine for one project                  |
+| `orchestrator/understand.py`                | real        | `ClaudeUnderstander`                                              |
+| `orchestrator/combine_node.py`              | real        | Re-judge the combination, fall back once                          |
+| `orchestrator/serde.py`                     | real        | Typed JSON round trip of `EngineState`                            |
+| `orchestrator/events.py`                    | real        | `make_event`, `emit`                                              |
+| `execution/runner.py`                       | stub        | `TrialRunner`, `BaselineRunner` protocols and their stubs         |
+| `execution/protocols.py`                    | real        | The Step 2 seams and carriers                                     |
+| `execution/fakes.py`                        | test double | Fakes for every seam, `ScriptedEditor`                            |
+| `execution/git.py`                          | real        | Hardened `GitWorkspace`, `repo_fingerprint`                       |
+| `execution/sandbox.py`, `launcher.py`       | real        | Sandbox policy and environment; the measuring launcher            |
+| `execution/procrun.py`                      | real        | `run_once`: one sandboxed, measured run                           |
+| `execution/measure.py`                      | real        | Warm-ups, timed runs, fingerprints, ABAB, the test suite          |
+| `execution/phase.py`                        | real        | Phase dirs and their shared cleanup                               |
+| `execution/profiler.py`, `_profile_shim.py` | real        | `CProfiler` and the shim it runs in the workload's interpreter    |
+| `execution/editor.py`, `editor_tools.py`    | real        | `ClaudeEditor` loop; `WorktreeEditor` tool handler                |
+| `execution/preflight.py`                    | real        | `GitPreflight`                                                    |
+| `execution/trial_runner.py`                 | real        | `GitTrialRunner`, `GitBaselineRunner`                             |
+| `execution/combine.py`                      | real        | `GitCombiner`, `GitBranchPublisher`                               |
+| `optimization/anticheat.py`                 | real        | Protected paths, capture rules, noise rule, fingerprints          |
+| `optimization/judges.py`                    | real        | Judge protocol, five judges, `derive_verdict`                     |
+| `optimization/ranking.py`                   | real        | Hypothesis score with lesson boost                                |
+| `learning/lessons.py`                       | real        | Verdict -> `Lesson`                                               |
+| `persistence/repository.py`                 | real        | `Repository` protocol, `InMemoryRepository`                       |
+| `persistence/postgres.py`                   | real        | `PostgresRepository` (003 + 004 schema)                           |
+| `research/arxiv_monitor.py`                 | placeholder | arXiv monitoring (Step 3)                                         |
+| `research/pdf_parser.py`                    | placeholder | PDF parsing (Step 3)                                              |
+| `tests/e2e/test_step2.py`                   | real        | E2E-A, E2E-B, E2E-C on the `dedupe_repo` fixture                  |
+| `tests/orchestrator/test_graph_e2e.py`      | real        | The Step 1 graph scenarios on stubs (11 tests)                    |
+| `tests/conftest.py`                         | real        | Shared fixtures                                                   |
 
-"skeleton" means the control flow is final and the behaviour inside is a
-deterministic stub; "stub" means the whole module is replaced in a later step
-behind the same interface.
+"stub" means the module holds a deterministic stand-in kept for tests and the
+default context; "test double" means it exists for tests only.
 
 ---
 
 ## Commands
 
 ```bash
-uv sync --extra dev
+uv sync --extra dev --extra database
 uv run ruff check . && uv run ruff format --check .
 uv run mypy src tests
-uv run pytest                                   # coverage >= 90% enforced
-uv run pytest tests/orchestrator/test_graph_e2e.py -v
+TEST_DATABASE_URL=postgresql://dev:devpass@localhost:5432/ai_platform uv run pytest
+uv run pytest tests/e2e --no-cov                # the Step 2 E2E only
+uv run pytest -o addopts="" -m "not live" -n 2  # without coverage, keeps live off
 uv run pip-audit && uv run bandit -q -r src -c pyproject.toml
 ```
 
 ---
 
-**Version:** 4.1.0 **Last Updated:** 2026-10-21
+**Version:** 4.2.0 **Last Updated:** 2026-10-22
 
 **Changelog:**
 
+- **4.2.0 (2026-10-22):** Step 2 core loop: current state, package map (clients,
+  the execution modules, factory, understand, combine node, serde, Postgres),
+  Step 2 state keys, capture rules, `NodeContext` seams and the factory, Step 2
+  security notes (sandbox, worktree ownership, git hardening, fingerprint,
+  editor confinement, API key handling), test conventions (Postgres, live,
+  sandbox, profiler interpreters, E2E), key-file statuses
 - **4.1.0 (2026-10-21):** Step 1 engine design: loop graph, state rules, data
   model, anti-cheating, judges and verdict order, injection points, verified
   LangGraph 1.x conventions, security notes; removed the generic

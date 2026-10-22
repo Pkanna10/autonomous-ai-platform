@@ -1,7 +1,7 @@
 # Autonomous AI Platform - Claude Code Configuration
 
-**Version:** 4.1.0 **Last Updated:** 2026-10-21 **Status:** Engine rebuild, Step
-1 (engine design) delivered in PR #11; Step 2 next
+**Version:** 4.2.0 **Last Updated:** 2026-10-22 **Status:** Engine rebuild, Step
+2 (core loop) built on PR #12; Verifier and stage gate next
 
 ---
 
@@ -57,38 +57,43 @@ CONNECT -> UNDERSTAND -> DEFINE "BETTER" -> BASELINE -> PROFILE -> RESEARCH
 
 ### The 7 layers and where they live
 
-| Layer                     | Repo home                                                     | Decision                                                     |
-| ------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------ |
-| L1 Interfaces             | `services/python_agents` CLI (planned), `apps/` (later)       | Integrate: CLI first, then web console, GitHub App, plugin   |
-| L2 Orchestrator           | `services/python_agents/.../orchestrator/`                    | Build on LangGraph 1.x (checkpointing, interrupts, retries)  |
-| L3 Capability acquisition | `capabilities/` (planned) + `packages` table                  | Vet and approval-gate any package a trial needs              |
-| L4 Research               | `services/python_agents/.../research/`                        | **Build**: playbook, paper search, claim extraction, matcher |
-| L5 Execution              | `execution/` (planned), `packages/execution-engine` (TS)      | Local runner on the user's hardware; cloud sandbox later     |
-| L6 Optimization           | `optimization/` (planned)                                     | **Build**: hypotheses, trials, judges, verdicts, combine     |
-| L7 Self-improvement       | `learning/` (planned) + `user_feedback` table                 | **Build**: lessons store; evaluator-gated, no fine-tuning    |
-| Persistence               | `infrastructure/schema/` (Postgres + pgvector), Redis, Qdrant | Existing tables reused and extended via new migrations       |
+| Layer                     | Repo home                                                                                   | Decision                                                     |
+| ------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| L1 Interfaces             | `services/python_agents` CLI (planned), `apps/` (later)                                     | Integrate: CLI first, then web console, GitHub App, plugin   |
+| L2 Orchestrator           | `services/python_agents/.../orchestrator/`                                                  | Build on LangGraph 1.x (checkpointing, interrupts, retries)  |
+| L3 Capability acquisition | `capabilities/` (planned) + `packages` table                                                | Vet and approval-gate any package a trial needs              |
+| L4 Research               | `services/python_agents/.../research/`                                                      | **Build**: playbook, paper search, claim extraction, matcher |
+| L5 Execution              | `services/python_agents/.../execution/` (built, Step 2)                                     | Local runner on the user's hardware; cloud sandbox later     |
+| L6 Optimization           | `services/python_agents/.../optimization/` (Steps 1-2)                                      | **Build**: hypotheses, trials, judges, verdicts, combine     |
+| L7 Self-improvement       | `services/python_agents/.../learning/` + `lessons` table (`user_feedback` table unused yet) | **Build**: lessons store; evaluator-gated, no fine-tuning    |
+| Persistence               | `infrastructure/schema/` (Postgres + pgvector), Redis, Qdrant                               | Existing tables reused and extended via new migrations       |
 
 ---
 
 ## Project Status and Build Order
 
-**Reality check (2026-10-21, after Step 1):** the repository contains working
-infrastructure (Docker, CI incl. a schema-apply job, security scanning, schema
-001-003), a working TypeScript Claude client, and the engine's walking skeleton
-in `services/python_agents`: the full loop wired in LangGraph with a final data
-model, anti-cheating rules, judges, verdict order, approval interrupt and
-lessons, running on stub runners. Real runners, the profiler, research and the
-CLI do not exist yet. Treat anything else described in older docs as a plan, not
-a feature.
+**Reality check (2026-10-22, Step 2 built, stage gate pending):** the repository
+contains working infrastructure (Docker, CI with a Postgres service, a sandbox
+probe, a macOS job and a manual live smoke test, security scanning, schema
+001-004), a working TypeScript Claude client, and the engine's core loop in
+`services/python_agents`, running for real on CPU-bound Python workloads:
+preflight at connect, one Claude understand request, baseline, cProfile profile
+and Claude-edited trials in sandboxed git worktrees (network and write
+isolation, checked on every run), git-side anti-cheating, the frozen judges, a
+combine re-tested ABAB with the test suite on its tip, delivery to a local
+`engine/run-<id>` branch, and a Postgres repository, all under a hard per-run
+cost cap. Research, the CLI, the live log and hardware detection do not exist
+yet; hypotheses are supplied by the caller. Treat anything else described in
+older docs as a plan, not a feature.
 
-| Step | Deliverable                                                                                    | Model / setting to select               |
-| ---- | ---------------------------------------------------------------------------------------------- | --------------------------------------- |
-| 0    | Repair & upgrade: DB init fix, dependency bumps, current model IDs, truthful docs (PR #11)     | Opus 5.5, High                          |
-| 1    | Engine design: typed state, data models, judges, anti-cheating, migration 003 (PR #11)         | Fable 5.1, Extra                        |
-| 2    | Core loop end to end on CPU Python workloads, with an E2E fixture test                         | Opus 5.5, Ultracode                     |
-| 3    | Research: arXiv monitor, PDF parser, playbook, claim/precondition extraction, matcher          | Opus 5.5, Ultracode (Fable for matcher) |
-| 4    | Interfaces + runner: live CLI log, hardware detection (CPU/CUDA/MPS), `--goal` English parsing | Opus 5.5, Ultracode                     |
-| 5    | Dogfood on fixtures, OSS repos, then the user's VLM bridge on an M4 Pro                        | Opus 5.5, High                          |
+| Step | Deliverable                                                                                          | Model / setting to select               |
+| ---- | ---------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| 0    | Repair & upgrade: DB init fix, dependency bumps, current model IDs, truthful docs (PR #11)           | Opus 5.5, High                          |
+| 1    | Engine design: typed state, data models, judges, anti-cheating, migration 003 (PR #11)               | Fable 5.1, Extra                        |
+| 2    | Core loop end to end on CPU Python workloads, with an E2E fixture test (built; gate pending, PR #12) | Opus 5.5, Ultracode                     |
+| 3    | Research: arXiv monitor, PDF parser, playbook, claim/precondition extraction, matcher                | Opus 5.5, Ultracode (Fable for matcher) |
+| 4    | Interfaces + runner: live CLI log, hardware detection (CPU/CUDA/MPS), `--goal` English parsing       | Opus 5.5, Ultracode                     |
+| 5    | Dogfood on fixtures, OSS repos, then the user's VLM bridge on an M4 Pro                              | Opus 5.5, High                          |
 
 Runtime models called by the engine itself (`services/python_agents` settings):
 `ENGINE_MODEL=claude-opus-5-5` for understanding, extraction and trial edits;
@@ -363,6 +368,9 @@ directory:
 
 ## Changelog
 
+- **4.2.0 (2026-10-22):** Step 2 built: reality check updated to the real core
+  loop on CPU Python workloads; build-order row 2 marks the pending gate and PR
+  #12; the layer table points L5-L7 at the built service packages.
 - **4.1.0 (2026-10-21):** Step 1 delivered: reality check updated to the walking
   skeleton; `mypy` covers tests in the gate; build-order rows point at PR #11.
 - **4.0.0 (2026-10-21):** Vision clarified as the improvement engine; 7-layer
