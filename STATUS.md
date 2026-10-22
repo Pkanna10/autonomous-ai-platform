@@ -142,6 +142,28 @@ passed (2 warnings: outdated majors left to Renovate).
 
 ## Decisions
 
+### 2026-10-22 (Step 2, wave 2b review fixes)
+
+- **A failed privilege drop is never silent**: the workload drops every
+  capability before exec in every isolation mode. If the drop fails, a
+  `required` mode refuses the run and `best_effort` records isolation as not
+  applied. Before this, a gap between modes let the workload forge the report.
+- **Each run gets its own SysV IPC namespace**: shared-memory segments survive
+  between runs otherwise, so a warm-up could leave a memoised answer for the
+  timed runs.
+- **`NETWORK_ISOLATION=off` also drops the PID and IPC namespaces on Linux**: an
+  open network is already a channel between runs, so the namespaces would not
+  restore trust in the numbers, and they would make write confinement depend on
+  user namespaces. Turning the network sandbox off weakens measurement
+  integrity, and the docs say so.
+- **Test-runner shadowing is checked under every import root, and recipe files
+  are protected**: a trial adding `scripts/unittest.py` is rejected when
+  `scripts` is on the test command's path, and `Makefile`, `*.mk`, `justfile`
+  and `.coveragerc` are protected because a test command reads them.
+- **The test suite's pass mark will come from the runner's own summary, not its
+  exit code** (lands with the measurement unit): a suite that exits 0 after
+  running fewer tests than the baseline does not pass.
+
 ### 2026-10-21 (Step 2)
 
 Designed by a research-and-design workflow: four research tracks verified in the
