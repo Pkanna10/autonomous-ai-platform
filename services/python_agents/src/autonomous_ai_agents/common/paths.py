@@ -27,15 +27,21 @@ def normalize_path(path: str) -> str:
     """Return ``path`` as a clean POSIX path relative to the project root.
 
     Backslashes become slashes, ``./`` prefixes and doubled slashes are
-    collapsed. Absolute, drive-letter, ``~`` and ``..`` paths are refused.
+    collapsed. Absolute, drive-letter, ``~`` and ``..`` paths are refused,
+    before and after collapsing, so ``./~x`` cannot become ``~x``: the
+    result is always a fixed point (normalising it again returns it).
     """
     candidate = path.replace("\\", "/")
-    if candidate.startswith(("/", "~")) or _WINDOWS_DRIVE.match(candidate):
-        raise PathTraversalError(f"path must be relative to the project root: {path!r}")
     posix = PurePosixPath(candidate)
+    clean = posix.as_posix()
+    for form in (candidate, clean):
+        if form.startswith(("/", "~")) or _WINDOWS_DRIVE.match(form):
+            raise PathTraversalError(
+                f"path must be relative to the project root: {path!r}"
+            )
     if ".." in posix.parts:
         raise PathTraversalError(f"path must not contain '..': {path!r}")
-    return posix.as_posix()
+    return clean
 
 
 GIT_METADATA_NAMES: tuple[str, ...] = (

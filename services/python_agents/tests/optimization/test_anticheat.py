@@ -93,7 +93,20 @@ def test_normalize_path_returns_posix_relative_paths(raw: str, expected: str) ->
 
 @pytest.mark.parametrize(
     "raw",
-    ["../x.py", "src/../../etc/passwd", "/etc/passwd", "C:\\Windows\\x.py", "~/x.py"],
+    [
+        "../x.py",
+        "src/../../etc/passwd",
+        "/etc/passwd",
+        "C:\\Windows\\x.py",
+        "~/x.py",
+        # A ./ prefix or doubled slash must not hide a ~ or a drive letter
+        # that only appears once the prefix is collapsed.
+        "./~x.py",
+        ".//~/x.py",
+        "./c:x.py",
+        ".\\C:\\x.py",
+        "././~notes.py",
+    ],
 )
 def test_normalize_path_rejects_traversal_and_absolute_paths(raw: str) -> None:
     """
