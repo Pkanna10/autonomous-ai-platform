@@ -47,7 +47,7 @@ from typing import IO, cast
 
 from autonomous_ai_agents.common.config import settings
 from autonomous_ai_agents.common.errors import EngineError, RepoTamperedError
-from autonomous_ai_agents.common.refnames import refname_problem
+from autonomous_ai_agents.common.refnames import branch_prefix_problem, refname_problem
 from autonomous_ai_agents.execution.protocols import Change, WorktreeHandle
 
 ENGINE_NAME = "aip-engine"
@@ -87,7 +87,7 @@ _STATUS = (
     "status --porcelain=v1 -z --untracked-files=normal --no-renames "
     "--ignore-submodules=none"
 ).split()
-_DIFF = "diff --cached --no-renames --no-relative --ignore-submodules=none".split()
+_DIFF = "diff --no-renames --no-relative --ignore-submodules=none".split()
 # No --binary: a deleted 1 GiB blob would otherwise be 1.3 GiB of patch.
 _PATCH = (
     "--full-index --no-color --no-ext-diff --no-textconv "
@@ -121,6 +121,10 @@ class GitDecodeError(GitError):
     """Output that must be UTF-8 text (a diff) is not."""
 
 
+class _Full(Exception):  # noqa: N818 - control flow, never escapes read_blob
+    """``read_blob`` holds ``limit`` bytes: stop reading."""
+
+
 @dataclass(frozen=True)
 class MergeResult:
     """``merge-tree`` outcome: the merged tree, or ``None`` and the conflicts."""
@@ -147,9 +151,20 @@ def _require_ref(ref: str, prefix: str = "refs/") -> str:
     return ref
 
 
-def _engine_ref(ref: str) -> str:
-    """Only the engine's own branches may be created, moved or deleted."""
-    return _require_ref(ref, "refs/heads/" + settings.TRIAL_BRANCH_PREFIX)
+def _engine_ref(ref: str, prefix: str | None) -> str:
+    """Only the engine's own branches may be created, moved or deleted: those
+    under the caller's branch ``prefix`` (``None``: the setting's)."""
+    chosen = settings.TRIAL_BRANCH_PREFIX if prefix is None else prefix
+    problem = branch_prefix_problem(chosen)
+    if problem is not None:
+        raise ValueError(f"branch prefix {chosen[:300]!r} {problem}")
+    return _require_ref(ref, "refs/heads/" + chosen)
+
+
+def _require_symref_name(name: str) -> str:
+    if name != "HEAD":
+        _require_ref(name)
+    return name
 
 
 def _oid(out: bytes) -> str:
@@ -192,8 +207,9 @@ def _read_regular(path: Path) -> bytes | None:
         os.close(fd)
 
 
-def _contained(path: Path) -> Path:
-    """``path`` with its parent resolved, strictly inside ``WORKTREE_ROOT``."""
+def contained(path: Path) -> Path:
+    """``path`` with its parent resolved, strictly inside ``WORKTREE_ROOT``;
+    ``ValueError`` otherwise. The last component is never resolved."""
     root = Path(os.path.realpath(settings.WORKTREE_ROOT))
     if not path.is_absolute() or path.name in ("", ".."):
         raise ValueError(f"{path} is not an absolute path inside WORKTREE_ROOT")
@@ -201,6 +217,18 @@ def _contained(path: Path) -> Path:
     if resolved == root or not resolved.is_relative_to(root):
         raise ValueError(f"{path} is not inside WORKTREE_ROOT {root}")
     return resolved
+
+
+def remove_contained(path: Path) -> None:
+    """Remove an engine path strictly inside ``WORKTREE_ROOT`` (``contained``):
+    a directory tree (read-only subdirectories made removable first), or a
+    file or link, unlinked and never followed; a missing path is fine.
+    ``ValueError`` when ``path`` is not inside, ``OSError`` when it cannot go."""
+    target = contained(path)
+    if os.path.isdir(target) and not os.path.islink(target):
+        _rmtree(target)
+    elif os.path.lexists(target):
+        os.unlink(target)
 
 
 def _rmtree(path: Path) -> None:
@@ -459,13 +487,35 @@ class GitWorkspace:
                 paths.append(os.fsdecode(path))
         return tuple(paths)
 
-    def read_blob(self, commit: str, path: str) -> bytes:
+    def read_blob(self, commit: str, path: str, *, limit: int | None = None) -> bytes:
+        """The blob at ``commit:path``. With no ``limit``, all of it (``GitError``
+        past ``MAX_OUTPUT_BYTES``); with one, its first ``limit`` bytes at
+        most: the blob streams into a buffer that never grows past ``limit``
+        and git is stopped as soon as it is full."""
         spec = f"{_require_oid(commit)}:{_require_path(path)}"
-        return self._run("cat-file", "blob", spec)
+        if limit is None:
+            return self._run("cat-file", "blob", spec)
+        if limit < 1:
+            raise ValueError(f"limit must be at least 1, got {limit}")
+        head = bytearray()
+
+        def keep(chunk: bytes) -> None:
+            head.extend(chunk[: limit - len(head)])
+            if len(head) >= limit:
+                raise _Full
+
+        with contextlib.suppress(_Full):  # _spawn kills git on the way out
+            self._git(None, "cat-file", "blob", spec, limit=0, sink=keep)
+        return bytes(head)
+
+    def commit_message(self, commit: str) -> bytes:
+        """``commit``'s raw message (everything after the header), as stored."""
+        raw = self._run("cat-file", "commit", _require_oid(commit))
+        return raw.partition(b"\n\n")[2]
 
     def add_worktree(self, path: Path, commit: str) -> WorktreeHandle:
         """A detached worktree at ``commit``; whatever was at ``path`` goes first."""
-        target = _contained(path)
+        target = contained(path)
         _require_oid(commit)
         self.remove_worktree(target)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -497,12 +547,9 @@ class GitWorkspace:
 
     def remove_worktree(self, target: WorktreeHandle | Path) -> None:
         """``worktree remove --force``, then a contained ``rmtree`` and a prune."""
-        path = _contained(target.path if isinstance(target, WorktreeHandle) else target)
+        path = contained(target.path if isinstance(target, WorktreeHandle) else target)
         code, _ = self._git(None, *_FORCE_REMOVE, str(path), ok=None)
-        if os.path.isdir(path) and not os.path.islink(path):
-            _rmtree(path)
-        elif os.path.lexists(path):
-            os.unlink(path)
+        remove_contained(path)
         if code != 0:
             self.prune()
 
@@ -569,7 +616,8 @@ class GitWorkspace:
 
     def changes(self, handle: WorktreeHandle, base: str) -> tuple[Change, ...]:
         """The staged entries against ``base``; a rename is a D plus an A."""
-        argv = [*_DIFF, "--raw", "-z", "--no-abbrev", _require_oid(base), "--"]
+        argv = [*_DIFF, "--cached", "--raw", "-z", "--no-abbrev", _require_oid(base)]
+        argv.append("--")
         fields = self._git(handle, *argv)[1].split(b"\0")
         try:  # strict=False: the output ends with a NUL, so one field is left over
             pairs = zip(fields[::2], fields[1::2], strict=False)
@@ -589,6 +637,24 @@ class GitWorkspace:
         Streamed: only the first ``max_bytes`` are kept, the rest is checked
         as it passes. A binary file is git's one-line notice, never a payload.
         """
+        argv = ("--cached", _require_oid(base))
+        return self._patch(handle, argv, base, max_bytes)
+
+    def diff_commits(
+        self, base: str, tip: str, *, max_bytes: int = settings.MAX_DIFF_BYTES
+    ) -> str:
+        """``base..tip`` as ``diff`` prints it, read from the objects: no
+        worktree, the same flags, strict UTF-8 and cap."""
+        argv = (_require_oid(base), _require_oid(tip))
+        return self._patch(None, argv, base, max_bytes)
+
+    def _patch(
+        self,
+        where: WorktreeHandle | None,
+        revisions: Sequence[str],
+        base: str,
+        max_bytes: int,
+    ) -> str:
         if max_bytes < 1:
             raise ValueError(f"max_bytes must be at least 1, got {max_bytes}")
         decoder = codecs.getincrementaldecoder("utf-8")()
@@ -599,9 +665,9 @@ class GitWorkspace:
             total += len(chunk)
             decoder.decode(chunk)
 
-        argv = (*_DIFF, *_PATCH, _require_oid(base), "--")
+        argv = (*_DIFF, *_PATCH, *revisions, "--")
         try:
-            out = self._git(handle, *argv, limit=max_bytes, sink=check)[1]
+            out = self._git(where, *argv, limit=max_bytes, sink=check)[1]
             decoder.decode(b"", final=True)
         except UnicodeDecodeError as exc:
             message = f"the diff against {base} is not UTF-8 text"
@@ -677,20 +743,40 @@ class GitWorkspace:
             records[os.fsdecode(name)] = (oid.decode("ascii"), os.fsdecode(symref))
         return records
 
+    def is_ancestor(self, base: str, tip: str) -> bool:
+        """``merge-base --is-ancestor``: exit 0 is yes, 1 no, anything else raises."""
+        argv = ("merge-base", "--is-ancestor", _require_oid(base), _require_oid(tip))
+        return self._git(None, *argv, ok=(0, 1))[0] == 0
+
+    def symbolic_ref(self, name: str) -> str | None:
+        """The ref ``name`` (``HEAD`` or under ``refs/``) finally points at, through
+        every git symref, or ``None`` when it is no symref (or missing).
+        ``GitError`` when git cannot resolve it (exit 128: a chain deeper than
+        git follows, or one ending at a name git cannot parse). A loose ref
+        file that is a filesystem link (git's legacy symref form) is not seen:
+        ``None``."""
+        argv = ("symbolic-ref", "-q", _require_symref_name(name))
+        code, out = self._git(None, *argv, ok=(0, 1))
+        return os.fsdecode(out.rstrip(b"\n")) if code == 0 else None
+
     def ref_value(self, ref: str) -> str | None:
         record = self._refs(_require_ref(ref)).get(ref)
         return None if record is None else record[0]
 
-    def update_ref(self, ref: str, new: str, old: str | None) -> None:
+    def update_ref(
+        self, ref: str, new: str, old: str | None, *, prefix: str | None = None
+    ) -> None:
         """Move an engine ref from ``old`` to ``new``; ``old=None`` is create-only.
-        ``--no-deref``: a symref planted at an engine name (pointing at a user
-        branch, say) is replaced, never written through."""
-        _engine_ref(ref)
+        Only a ref under ``refs/heads/<prefix>`` (``None``: the setting's
+        prefix). ``--no-deref``: a symref planted at an engine name (pointing
+        at a user branch, say) is replaced, never written through."""
+        _engine_ref(ref, prefix)
         expected = "0" * len(_require_oid(new)) if old is None else _require_oid(old)
         self._run(*_UPDATE_REF, ref, new, expected)
 
-    def delete_ref(self, ref: str, old: str) -> None:
-        _engine_ref(ref)
+    def delete_ref(self, ref: str, old: str, *, prefix: str | None = None) -> None:
+        """Delete an engine ref at ``old``; the prefix rule of ``update_ref``."""
+        _engine_ref(ref, prefix)
         expected = _require_oid(old)
         self._run(*_UPDATE_REF, "-d", ref, expected)
 

@@ -13,56 +13,50 @@ Only objects are written, never a ref. When something applied, the tip is
 checked out in ``<run>/combine`` and a fresh ``<run>/combine-base`` at the
 base, every workload is measured A/B interleaved (``measure_abab``) and the
 suite runs once on the tip, against the baseline's passing-test count; then
-F1 (``RepoTamperedError`` when it differs). ``finally`` removes both
-worktrees, their ``_scratch`` and ``_probe`` dirs, prunes and ``rmdir``s an
-empty ``<run>``. Every call is self-contained: the node's fallback is a
-second call. A ``RunFailure`` returns the applied changes with no rows, so
+F1 (``RepoTamperedError`` when it differs). The shared
+``phase.owned_phases`` cleanup removes both worktrees, their ``_scratch``
+and ``_probe`` dirs, prunes and ``rmdir``s an empty ``<run>``. Every call is
+self-contained: the node's fallback is a second call. A ``RunFailure`` returns the applied changes with no rows, so
 the node's completeness rule refuses the combination; its reason is a note.
 Notes go to ``last_notes`` (``CombineMeasured`` has no field for them).
 
-``GitBranchPublisher.publish`` refuses an unsafe branch (outside the engine
-prefix, the default branch, a bad refname) and a branch checked out in any
-worktree, compared case-insensitively (a case-insensitive file system shares
-one loose ref file), and an existing ref at another commit (before any
-checkout); computes the capped ``base..tip`` diff in a throwaway worktree,
-then creates the ref create-only: a ref already at ``tip`` is a no-op, a
-racing writer at any other value is a ``DeliveryError``. A default branch
-that only now resolves to ``tip`` was a dangling symref to the new ref, so
-the ref is deleted again and the publish refused. Never ``branch -f``, never
-a push, never HEAD or the default branch.
+``GitBranchPublisher.publish`` refuses an unsafe branch
+(``refnames.assert_safe_branch`` with the publisher's prefix: outside it, the
+default branch, a bad refname), a tip that does not descend from the base, a
+branch checked out in any worktree, compared case-insensitively (a
+case-insensitive file system shares one loose ref file), an existing ref at
+another commit, and a default branch that is a symref (through any chain)
+to the branch; computes the capped ``base..tip`` diff from the objects
+(``diff_commits``, no worktree), then creates the ref create-only: a ref
+already at ``tip`` is a no-op, a racing writer at any other value is a
+``DeliveryError``. A default branch that only now resolves to ``tip`` was a
+dangling symref to the new ref the pre-check missed, so the ref is deleted
+again and the publish refused. Never ``branch -f``, never a push, never HEAD
+or the default branch.
 """
 
 from __future__ import annotations
 
-import contextlib
 import functools
-import os
 import re
 import sys
-import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from autonomous_ai_agents.common.config import IsolationMode, settings
-from autonomous_ai_agents.common.errors import (
-    DeliveryError,
-    EngineError,
-    RepoTamperedError,
-)
+from autonomous_ai_agents.common.errors import DeliveryError, RepoTamperedError
 from autonomous_ai_agents.common.models import (
     CombineSkip,
     Measurement,
     Project,
     Workload,
 )
-from autonomous_ai_agents.common.refnames import refname_problem
-from autonomous_ai_agents.execution.git import (
-    GitError,
-    GitWorkspace,
-    _contained,
-    _rmtree,
-    repo_fingerprint,
+from autonomous_ai_agents.common.refnames import (
+    assert_safe_branch,
+    branch_prefix_problem,
+    refname_problem,
 )
+from autonomous_ai_agents.execution.git import GitError, GitWorkspace, repo_fingerprint
 from autonomous_ai_agents.execution.measure import (
     Phase,
     RunOnce,
@@ -70,6 +64,7 @@ from autonomous_ai_agents.execution.measure import (
     measure_abab,
     run_tests,
 )
+from autonomous_ai_agents.execution.phase import owned_phases, phase_dirs
 from autonomous_ai_agents.execution.procrun import RunFailure, run_once
 from autonomous_ai_agents.execution.protocols import CombineMeasured, KeptChange
 
@@ -81,7 +76,6 @@ NOTHING_LEFT = "nothing left to apply"
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 _OID = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 _QUOTE = 300
-_DIRS = ("_scratch", "_probe")
 
 
 def _quote(text: str) -> str:
@@ -93,29 +87,6 @@ def _require_id(what: str, value: str) -> None:
     problem = "it contains '/'" if "/" in value else refname_problem(value)
     if _ID.fullmatch(value) is None or problem is not None:
         raise ValueError(f"{what} {_quote(value)!r} is not a safe id: {problem}")
-
-
-def _remove(path: Path) -> None:
-    """Remove an engine dir the workload could write. A link planted in its
-    place or in its parent's (``<run>/_scratch``) is unlinked, never
-    followed; ``ValueError`` when ``<run>`` itself no longer resolves inside
-    ``WORKTREE_ROOT``. (Copied from the profiler until U20 factors it out.)"""
-    parent = _contained(path.parent)
-    if os.path.islink(parent):
-        os.unlink(parent)
-        return
-    target = _contained(path)
-    if os.path.isdir(target) and not os.path.islink(target):
-        _rmtree(target)
-    elif os.path.lexists(target):
-        os.unlink(target)
-
-
-def _rmdir_empty(run_dir: Path) -> None:
-    for path in (run_dir / "_scratch", run_dir / "_probe", run_dir):
-        # not empty (another owner), or <run> is a planted link
-        with contextlib.suppress(OSError, ValueError):
-            os.rmdir(_contained(path))
 
 
 class GitCombiner:
@@ -175,30 +146,31 @@ class GitCombiner:
         tip, applied, skipped = self._merge(git, base_commit, kept)
         if not applied:
             return CombineMeasured(base_commit, (), skipped, (), ())
-        run_dir = settings.WORKTREE_ROOT / run_id
-        worktrees = (run_dir / TIP, run_dir / BASE)
-        dirs = [run_dir / kind / side for side in (TIP, BASE) for kind in _DIRS]
-        left: list[str] = []
-        try:
-            tip_wt = git.add_worktree(worktrees[0], tip)
-            base_wt = git.add_worktree(worktrees[1], base_commit)
-            b = self._phase(git, tip_wt, scratch=dirs[0], probe=dirs[1], run=self._run)
-            a = self._phase(git, base_wt, scratch=dirs[2], probe=dirs[3], run=self._run)
+        sides = phase_dirs(run_id, TIP), phase_dirs(run_id, BASE)
+        with owned_phases(git, "the combine", *sides):
+            tip_wt = git.add_worktree(sides[0].worktree, tip)
+            base_wt = git.add_worktree(sides[1].worktree, base_commit)
+            tip_dirs, base_dirs = sides
+            b = self._phase(
+                git,
+                tip_wt,
+                scratch=tip_dirs.scratch,
+                probe=tip_dirs.probe,
+                run=self._run,
+            )
+            a = self._phase(
+                git,
+                base_wt,
+                scratch=base_dirs.scratch,
+                probe=base_dirs.probe,
+                run=self._run,
+            )
             rows = self._measure(a, b, project, workloads, baseline_count)
             if repo_fingerprint(git) != before:
                 raise RepoTamperedError(
                     "the repository changed while the combine re-test ran: its"
                     " refs, config or hooks differ from before the run"
                 )
-        finally:
-            left = self._cleanup(git, run_dir, worktrees, dirs)
-        if left:  # only when nothing else was raised: that error wins
-            raise EngineError(
-                "the combine could not clean up "
-                + ", ".join(_quote(path) for path in left)
-                + ": it no longer resolves inside WORKTREE_ROOT (a link was"
-                " planted in place of the run directory); remove it by hand"
-            )
         return CombineMeasured(tip, tuple(applied), skipped, *rows)
 
     def _merge(
@@ -263,32 +235,6 @@ class GitCombiner:
         self._notes = tuple(dict.fromkeys(notes))
         return tuple(baseline), tuple(combined)
 
-    @staticmethod
-    def _cleanup(
-        git: GitWorkspace,
-        run_dir: Path,
-        worktrees: Sequence[Path],
-        dirs: Sequence[Path],
-    ) -> list[str]:
-        """Remove both worktrees, then each dir, then prune and ``rmdir``;
-        every step runs. Returns the paths it could not remove safely."""
-        left: list[str] = []
-
-        def remove(step: Callable[[Path], None], path: Path) -> None:
-            try:
-                step(path)
-            except ValueError:  # resolves outside WORKTREE_ROOT now
-                left.append(str(path))
-
-        with contextlib.ExitStack() as stack:  # callbacks run last-in, first-out
-            stack.callback(_rmdir_empty, run_dir)
-            stack.callback(git.prune)
-            for path in reversed(dirs):
-                stack.callback(remove, _remove, path)
-            for path in reversed(worktrees):
-                stack.callback(remove, git.remove_worktree, path)
-        return left
-
 
 def _resolves_to(git: GitWorkspace, rev: str) -> str | None:
     try:
@@ -306,50 +252,48 @@ def _unfit(git: GitWorkspace, base: str, commit: str) -> str | None:
     return None
 
 
-def _require_safe_branch(branch: str, project: Project) -> None:
-    """``nodes.assert_safe_branch``'s rules (execution/ cannot import the
-    nodes), with the default branch compared case-insensitively."""
-    prefix = settings.TRIAL_BRANCH_PREFIX
-    if branch.casefold() == project.default_branch.casefold():
-        raise DeliveryError(f"refusing to touch the default branch {branch!r}")
-    if not branch.startswith(prefix):
-        raise DeliveryError(
-            f"branch {_quote(branch)!r} is outside the engine prefix {prefix!r}"
-        )
-    problem = refname_problem(branch)
-    if problem is not None:
-        raise DeliveryError(
-            f"branch {_quote(branch)!r} is not a safe git refname: {problem}"
-        )
-
-
 class GitBranchPublisher:
-    """The real ``BranchPublisher``; ``git`` defaults to the project's."""
+    """The real ``BranchPublisher``; ``git`` defaults to the project's, and
+    ``prefix`` (the engine branch prefix, default the setting's) bounds what
+    it may create."""
 
-    def __init__(self, *, git: GitWorkspace | None = None) -> None:
+    def __init__(
+        self, *, git: GitWorkspace | None = None, prefix: str | None = None
+    ) -> None:
         self._git = git
+        self._prefix = settings.TRIAL_BRANCH_PREFIX if prefix is None else prefix
+        problem = branch_prefix_problem(self._prefix)
+        if problem is not None:
+            raise ValueError(f"branch prefix {_quote(self._prefix)!r} {problem}")
 
     def publish(self, project: Project, branch: str, tip: str, base: str) -> str:
         """Create ``branch`` at ``tip`` (create-only); the capped base..tip diff."""
-        _require_safe_branch(branch, project)
+        assert_safe_branch(branch, project, self._prefix)
         git = self._git or GitWorkspace(Path(project.root_path))
         for what, value in (("tip", tip), ("base", base)):
             if _OID.fullmatch(value) is None or _resolves_to(git, value) != value:
                 raise DeliveryError(f"{what} {_quote(value)!r} is not a commit id")
+        if not git.is_ancestor(base, tip):
+            raise DeliveryError(
+                f"the tip {tip} does not descend from the base {base}: its diff"
+                " would not be the delivered change"
+            )
         ref = "refs/heads/" + branch
         if ref.casefold() in {b.casefold() for b in git.checked_out_branches()}:
             raise DeliveryError(
                 f"refusing to write branch {branch!r}: it is checked out in a worktree"
             )
         current = git.ref_value(ref)
-        if current not in (None, tip):  # refused before any checkout
+        if current not in (None, tip):
             raise _exists(branch, current, tip)
-        diff = _diff(git, tip, base)
+        default = "refs/heads/" + project.default_branch
         if current is None:
-            default = "refs/heads/" + project.default_branch
+            _refuse_symref(git, ref, default)
+        diff = git.diff_commits(base, tip, max_bytes=settings.MAX_DIFF_BYTES)
+        if current is None:
             was = _resolves_to(git, default)
             try:
-                git.update_ref(ref, tip, None)
+                git.update_ref(ref, tip, None, prefix=self._prefix)
             except GitError as error:
                 current = git.ref_value(ref)  # a racing writer, or none
                 if current is None:
@@ -360,7 +304,7 @@ class GitBranchPublisher:
                     raise _exists(branch, current, tip) from error
             else:
                 if was != tip and _resolves_to(git, default) == tip:
-                    _undo(git, ref, tip, project.default_branch)
+                    _undo(git, ref, tip, project.default_branch, self._prefix)
         return diff
 
 
@@ -371,31 +315,40 @@ def _exists(branch: str, current: str | None, tip: str) -> DeliveryError:
     )
 
 
-def _undo(git: GitWorkspace, ref: str, tip: str, default: str) -> None:
-    """``default`` moved with ``ref``: a symref to it. Delete ``ref`` again."""
-    problem = (
-        f"the default branch {default!r} is a symbolic ref to {ref!r}: creating"
-        " it moved the default branch"
-    )
+def _symref_problem(default: str, ref: str) -> str:
+    return f"the default branch {default!r} is a symbolic ref to {ref!r}"
+
+
+def _refuse_symref(git: GitWorkspace, ref: str, default_ref: str) -> None:
+    """Creating ``ref`` must not move the default branch: refuse when it is a
+    symref (through any chain, in any case) to ``ref``, or one git cannot
+    resolve (a chain deeper than git follows). A default name the engine
+    cannot validate, and a loose ref file that is a filesystem link (git's
+    legacy symref, invisible to ``symbolic-ref``), are left to the check
+    after the create."""
+    default = default_ref.removeprefix("refs/heads/")
     try:
-        git.delete_ref(ref, tip)
+        target = git.symbolic_ref(default_ref)
+    except ValueError:
+        return
+    except GitError as error:
+        raise DeliveryError(
+            f"the default branch {default!r} could not be resolved, so creating"
+            f" {ref!r} might move it: {error}"
+        ) from error
+    if target is not None and target.casefold() == ref.casefold():
+        raise DeliveryError(
+            f"{_symref_problem(default, target)}: creating it would move the"
+            " default branch"
+        )
+
+
+def _undo(git: GitWorkspace, ref: str, tip: str, default: str, prefix: str) -> None:
+    """``default`` moved with ``ref``: a symref to it. Delete ``ref`` again."""
+    problem = f"{_symref_problem(default, ref)}: creating it moved the default branch"
+    try:
+        git.delete_ref(ref, tip, prefix=prefix)
     except GitError as error:
         message = f"{problem}, and the branch could not be undone: {error}"
         raise DeliveryError(message) from error
     raise DeliveryError(f"{problem}; it was deleted again")
-
-
-def _diff(git: GitWorkspace, tip: str, base: str) -> str:
-    """``GitWorkspace.diff`` in a throwaway worktree at ``tip``: base..tip."""
-    root = Path(os.path.realpath(settings.WORKTREE_ROOT))
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    # "_" never starts a run id, so this cannot collide with a run's dir.
-    path = Path(tempfile.mkdtemp(prefix="_publish-", dir=root))
-    try:
-        handle = git.add_worktree(path, tip)
-        return git.diff(handle, base, max_bytes=settings.MAX_DIFF_BYTES)
-    finally:
-        try:
-            git.remove_worktree(path)
-        finally:
-            git.prune()

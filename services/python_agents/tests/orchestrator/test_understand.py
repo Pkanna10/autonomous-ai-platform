@@ -31,7 +31,7 @@ from autonomous_ai_agents.clients.transport import (
     ScriptedReply,
     ScriptedTransport,
 )
-from autonomous_ai_agents.common.config import Settings
+from autonomous_ai_agents.common.config import Settings, settings
 from autonomous_ai_agents.common.errors import (
     BudgetExceeded,
     LLMConfigError,
@@ -46,6 +46,7 @@ from autonomous_ai_agents.execution.protocols import (
 )
 from autonomous_ai_agents.orchestrator import understand as understand_module
 from autonomous_ai_agents.orchestrator.understand import (
+    BINARY_SNIFF_BYTES,
     MAX_ENTRYPOINT_ITEMS,
     MAX_ENTRYPOINTS,
     MAX_LANGUAGE_CHARS,
@@ -320,8 +321,12 @@ def fixed_token(monkeypatch: pytest.MonkeyPatch) -> str:
     return TOKEN
 
 
-def _spying(read: list[str]) -> Callable[[Project], RepoReader]:
-    """A git reader that records every path it is asked to read."""
+def _spying(
+    read: list[str], limits: list[int | None] | None = None
+) -> Callable[[Project], RepoReader]:
+    """A git reader that records every path it is asked to read (and the
+    limit it is read with)."""
+    asked: list[int | None] = [] if limits is None else limits
 
     def build(project: Project) -> RepoReader:
         git = GitWorkspace(Path(project.root_path))
@@ -330,9 +335,12 @@ def _spying(read: list[str]) -> Callable[[Project], RepoReader]:
             def ls_tree(self, commit: str) -> tuple[str, ...]:
                 return git.ls_tree(commit)
 
-            def read_blob(self, commit: str, path: str) -> bytes:
+            def read_blob(
+                self, commit: str, path: str, *, limit: int | None = None
+            ) -> bytes:
                 read.append(path)
-                return git.read_blob(commit, path)
+                asked.append(limit)
+                return git.read_blob(commit, path, limit=limit)
 
         return Spy()
 
@@ -700,6 +708,47 @@ def test_only_the_head_of_a_large_file_is_decoded_and_checked(
     assert any("truncated" in n and "dedupe/core.py" in n for n in run.result.notes)
 
 
+@pytest.mark.parametrize(
+    ("max_file_bytes", "expected"), [(1000, BINARY_SNIFF_BYTES), (9000, 9001)]
+)
+def test_every_blob_is_read_with_the_per_file_cap(
+    repo: Repo, max_file_bytes: int, expected: int
+) -> None:
+    """
+    GIVEN a per-file cap below and above git's 8000-byte binary sniff
+    THEN every blob is asked of git with a limit of one byte past the cap
+         (so a cut is seen), never less than the sniff
+    """
+    read: list[str] = []
+    limits: list[int | None] = []
+    caps = ReadLimits(max_file_bytes=max_file_bytes)
+
+    _run(repo, [_ok()], reader=_spying(read, limits), limits=caps)
+
+    assert read and limits == [expected] * len(read)
+
+
+def test_a_huge_tracked_file_is_never_loaded_whole(
+    repo: Repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    GIVEN a tracked file far larger than git's output cap
+    WHEN the real reader reads it
+    THEN only its head is held (no "printed more than" failure) and the head
+         is sent truncated
+    """
+    repo = add(repo, {"dedupe/core.py": "x = 1  # HEAD-MARK\n" * 20_000})
+    monkeypatch.setattr(settings, "MAX_OUTPUT_BYTES", 16 * 1024)
+    workload = _workload(_project(repo), entrypoint="dedupe/core.py")
+
+    run = _run(repo, [_ok()], workloads=[workload])
+
+    text = _user_text(run.transport.requests[0])
+    assert "=== dedupe/core.py ===" in text and "HEAD-MARK" in text
+    notes = "\n".join(run.result.notes)
+    assert "truncated" in notes and "unreadable" not in notes
+
+
 def test_the_listing_is_capped(repo: Repo) -> None:
     repo = add(repo, {f"many/m{index:02}.txt": "x\n" for index in range(30)})
     run = _run(repo, [_ok()], limits=ReadLimits(max_tree_entries=5))
@@ -750,10 +799,12 @@ def test_a_git_failure_reading_a_file_skips_it(repo: Repo) -> None:
             def ls_tree(self, commit: str) -> tuple[str, ...]:
                 return git.ls_tree(commit)
 
-            def read_blob(self, commit: str, path: str) -> bytes:
+            def read_blob(
+                self, commit: str, path: str, *, limit: int | None = None
+            ) -> bytes:
                 if path == "dedupe/core.py":
                     raise GitError("git cat-file printed more than 268435456 bytes")
-                return git.read_blob(commit, path)
+                return git.read_blob(commit, path, limit=limit)
 
         return Flaky()
 
@@ -768,7 +819,9 @@ def test_a_git_failure_listing_the_tree_is_a_soft_failure(repo: Repo) -> None:
         def ls_tree(self, commit: str) -> tuple[str, ...]:
             raise GitError("git ls-tree failed (exit 128): bad object")
 
-        def read_blob(self, commit: str, path: str) -> bytes:
+        def read_blob(
+            self, commit: str, path: str, *, limit: int | None = None
+        ) -> bytes:
             raise AssertionError("never read")
 
     run = _run(repo, [_ok()], reader=lambda project: Broken())

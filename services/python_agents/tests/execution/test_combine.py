@@ -648,58 +648,6 @@ def test_a_failed_worktree_add_still_cleans_up(rig: Rig) -> None:
     assert_cleaned(rig)
 
 
-def test_cleanup_keeps_a_busy_run_dir_and_unlinks_a_planted_scratch_link(
-    rig: Rig,
-) -> None:
-    """
-    GIVEN another phase's dir in <run> and a run that replaces its scratch
-        root with a link to a directory outside (possible with fs=off)
-    WHEN the combine is cleaned up
-    THEN the link is unlinked (its target untouched), the combine's own
-        dirs are gone and <run> stays for its other owner
-    """
-    outside = rig.root / "outside"
-    outside.mkdir()
-    (outside / "keep.txt").write_text("keep")
-    (rig.run_dir / "baseline").mkdir(parents=True)
-
-    def respond(call: Call) -> RunSample:
-        scratch = call.sandbox.writable[1]
-        if not scratch.is_symlink():
-            shutil.rmtree(scratch)
-            os.symlink(outside, scratch)
-        return sample()
-
-    rig.run.respond = respond
-
-    rig.combine(kept("t1", rig.t1))
-
-    assert (outside / "keep.txt").read_text() == "keep"
-    assert sorted(os.listdir(rig.run_dir)) == ["baseline"]
-
-
-def test_cleanup_unlinks_a_planted_link_in_place_of_the_scratch_parent(
-    rig: Rig,
-) -> None:
-    outside = rig.root / "outside"
-    (outside / "combine").mkdir(parents=True)
-    (outside / "combine" / "keep.txt").write_text("keep")
-
-    def respond(call: Call) -> RunSample:
-        parent = call.sandbox.writable[1].parent
-        if not parent.is_symlink():
-            shutil.rmtree(parent)
-            os.symlink(outside, parent)
-        return sample()
-
-    rig.run.respond = respond
-
-    rig.combine(kept("t1", rig.t1))
-
-    assert (outside / "combine" / "keep.txt").read_text() == "keep"
-    assert_cleaned(rig)
-
-
 def move_run_dir(rig: Rig) -> Path:
     moved = rig.root / "moved"
     shutil.move(rig.run_dir, moved)
@@ -743,6 +691,46 @@ def test_a_cleanup_problem_never_hides_the_error_already_raised(rig: Rig) -> Non
 
     with pytest.raises(RepoTamperedError):
         rig.combine(kept("t1", rig.t1))
+
+
+class FailingRemove(GitWorkspace):
+    """``remove_worktree`` of the tip worktree times out once it exists."""
+
+    def remove_worktree(self, target: WorktreeHandle | Path) -> None:
+        path = target.path if isinstance(target, WorktreeHandle) else target
+        if path.name == "combine" and path.is_dir():
+            raise GitError("git worktree remove timed out")
+        super().remove_worktree(target)
+
+
+def test_a_failing_worktree_removal_is_an_engine_error_after_every_step(
+    rig: Rig,
+) -> None:
+    """
+    GIVEN the tip worktree's removal timing out
+    WHEN the combine is cleaned up
+    THEN the base worktree, every scratch and probe dir still go, and the
+        failure is an EngineError naming the tip worktree
+    """
+    with pytest.raises(EngineError, match="the combine could not clean up") as raised:
+        rig.combine(kept("t1", rig.t1), combiner=rig.combiner(FailingRemove(rig.repo)))
+
+    assert str(rig.run_dir / "combine") in str(raised.value)
+    assert "timed out" in str(raised.value)
+    assert os.listdir(rig.run_dir) == ["combine"]
+
+
+def test_a_failing_worktree_removal_never_hides_tampering(rig: Rig) -> None:
+    def respond(call: Call) -> RunSample:
+        run_git(rig.repo, "update-ref", "refs/heads/planted", rig.base)
+        return sample()
+
+    rig.run.respond = respond
+
+    with pytest.raises(RepoTamperedError):
+        rig.combine(kept("t1", rig.t1), combiner=rig.combiner(FailingRemove(rig.repo)))
+
+    assert os.listdir(rig.run_dir) == ["combine"]
 
 
 @pytest.mark.parametrize("run_id", ["", "../x", "a/b", "x..y", "-x", "x.lock"])
@@ -872,6 +860,31 @@ def test_publish_creates_the_branch_and_returns_the_base_to_tip_diff(
     assert run_git(rig.repo, "log", "-g", "--format=%gs", REF) == "aip-engine"
 
 
+def test_publish_reads_the_diff_from_the_objects_without_a_worktree(
+    rig: Rig,
+) -> None:
+    tip = combined_tip(rig)
+    git = _Counting(rig.repo)
+
+    diff = GitBranchPublisher(git=git).publish(rig.project, BRANCH, tip, rig.base)
+
+    assert git.added == []
+    assert diff == GitWorkspace(rig.repo).diff_commits(rig.base, tip)
+    assert run_git(rig.repo, "rev-parse", REF) == tip
+
+
+@pytest.mark.parametrize("pair", ["sibling", "reversed"])
+def test_a_tip_that_does_not_descend_from_the_base_is_refused(
+    rig: Rig, pair: str
+) -> None:
+    tip, base = (rig.t1, rig.t3) if pair == "sibling" else (rig.base, rig.t1)
+
+    with pytest.raises(DeliveryError, match="does not descend from the base"):
+        GitBranchPublisher().publish(rig.project, BRANCH, tip, base)
+
+    assert run_git(rig.repo, "for-each-ref", REF) == ""
+
+
 def test_publishing_again_at_the_same_tip_is_a_no_op(rig: Rig) -> None:
     tip = combined_tip(rig)
     publisher = GitBranchPublisher()
@@ -895,15 +908,23 @@ def test_an_existing_branch_at_another_commit_is_refused_and_kept(rig: Rig) -> N
 
 
 class _Counting(GitWorkspace):
-    """Counts the worktrees added (the publisher's diff checks one out)."""
+    """Records the worktrees added and the refs written (neither may happen
+    on a refused publish; no worktree on any publish)."""
 
     def __init__(self, repo: Path) -> None:
         super().__init__(repo)
         self.added: list[Path] = []
+        self.updated: list[str] = []
 
     def add_worktree(self, path: Path, commit: str) -> WorktreeHandle:
         self.added.append(path)
         return super().add_worktree(path, commit)
+
+    def update_ref(
+        self, ref: str, new: str, old: str | None, *, prefix: str | None = None
+    ) -> None:
+        self.updated.append(ref)
+        super().update_ref(ref, new, old, prefix=prefix)
 
 
 def test_a_refused_publish_checks_nothing_out(rig: Rig) -> None:
@@ -932,9 +953,12 @@ def test_a_default_branch_that_is_a_symref_to_the_engine_branch_is_not_moved(
     run_git(rig.repo, "symbolic-ref", "refs/heads/main", REF)
     before = rig.user_state()
 
-    with pytest.raises(DeliveryError, match="default branch 'main'"):
-        GitBranchPublisher().publish(rig.project, BRANCH, tip, rig.base)
+    git = _Counting(rig.repo)
 
+    with pytest.raises(DeliveryError, match="default branch 'main'"):
+        GitBranchPublisher(git=git).publish(rig.project, BRANCH, tip, rig.base)
+
+    assert git.updated == []  # refused before the create: the pre-check
     assert run_git(rig.repo, "symbolic-ref", "refs/heads/main") == REF
     assert os.path.lexists(rig.repo / ".git" / "refs" / "heads" / "main")
     assert not os.path.lexists(rig.repo / ".git" / "refs" / "heads" / BRANCH)
@@ -953,10 +977,86 @@ def test_a_default_branch_that_does_not_exist_does_not_block_publishing(
     assert run_git(rig.repo, "rev-parse", REF) == tip
 
 
-class _Stuck(GitWorkspace):
-    """``update-ref -d`` fails, as if another writer moved the ref meanwhile."""
+@pytest.mark.parametrize("target", ["refs/heads/alias", "refs/heads/engine/RUN-run1"])
+def test_a_default_branch_symref_by_chain_or_case_is_refused_first(
+    rig: Rig, target: str
+) -> None:
+    tip = combined_tip(rig)
+    run_git(rig.repo, "checkout", "-q", "-b", "dev")
+    run_git(rig.repo, "symbolic-ref", "refs/heads/main", target)
+    if target == "refs/heads/alias":
+        run_git(rig.repo, "symbolic-ref", target, REF)
+    git = _Counting(rig.repo)
 
-    def delete_ref(self, ref: str, old: str) -> None:
+    with pytest.raises(DeliveryError, match="symbolic ref"):
+        GitBranchPublisher(git=git).publish(rig.project, BRANCH, tip, rig.base)
+
+    assert git.updated == []
+
+
+def test_a_default_branch_name_the_engine_cannot_validate_skips_the_pre_check(
+    rig: Rig,
+) -> None:
+    tip = combined_tip(rig)
+    project = rig.project.model_copy(update={"default_branch": "my main"})
+
+    GitBranchPublisher().publish(project, BRANCH, tip, rig.base)
+
+    assert run_git(rig.repo, "rev-parse", REF) == tip
+
+
+def test_a_default_branch_git_cannot_resolve_is_refused_before_creating(
+    rig: Rig,
+) -> None:
+    """
+    GIVEN refs/heads/main is a symref chain deeper than git resolves (it
+        ends at the delivery branch)
+    WHEN the delivery branch is published
+    THEN it is a DeliveryError naming the default branch, before anything is
+        created
+    """
+    tip = combined_tip(rig)
+    run_git(rig.repo, "checkout", "-q", "-b", "dev")
+    chain = ["refs/heads/main", *(f"refs/heads/s{i}" for i in range(1, 7)), REF]
+    for source, target in zip(chain, chain[1:], strict=False):
+        run_git(rig.repo, "symbolic-ref", source, target)
+    git = _Counting(rig.repo)
+
+    with pytest.raises(DeliveryError, match="default branch 'main' could not"):
+        GitBranchPublisher(git=git).publish(rig.project, BRANCH, tip, rig.base)
+
+    assert git.updated == []
+    assert not os.path.lexists(rig.repo / ".git" / "refs" / "heads" / BRANCH)
+
+
+class _Blind(GitWorkspace):
+    """Never reports a symref, so only the post-create check can catch one."""
+
+    def symbolic_ref(self, name: str) -> str | None:
+        return None
+
+
+def test_the_post_create_undo_still_catches_a_symref_the_pre_check_missed(
+    rig: Rig,
+) -> None:
+    tip = combined_tip(rig)
+    run_git(rig.repo, "checkout", "-q", "-b", "dev")
+    run_git(rig.repo, "symbolic-ref", "refs/heads/main", REF)
+
+    with pytest.raises(DeliveryError, match="it was deleted again"):
+        GitBranchPublisher(git=_Blind(rig.repo)).publish(
+            rig.project, BRANCH, tip, rig.base
+        )
+
+    assert not os.path.lexists(rig.repo / ".git" / "refs" / "heads" / BRANCH)
+    assert run_git(rig.repo, "symbolic-ref", "refs/heads/main") == REF
+
+
+class _Stuck(_Blind):
+    """``update-ref -d`` fails, as if another writer moved the ref meanwhile
+    (the pre-check is blinded so the undo runs)."""
+
+    def delete_ref(self, ref: str, old: str, *, prefix: str | None = None) -> None:
         raise GitError("cannot lock ref")
 
 
@@ -1071,7 +1171,9 @@ def test_a_racing_writer_at_the_same_tip_is_fine(rig: Rig) -> None:
 class _Refusing(GitWorkspace):
     """``update-ref`` fails while the ref stays absent (a case collision)."""
 
-    def update_ref(self, ref: str, new: str, old: str | None) -> None:
+    def update_ref(
+        self, ref: str, new: str, old: str | None, *, prefix: str | None = None
+    ) -> None:
         raise GitError("cannot lock ref")
 
 
@@ -1122,3 +1224,25 @@ def test_a_diff_that_fails_leaves_no_branch_and_no_worktree(rig: Rig) -> None:
 
     assert run_git(rig.repo, "for-each-ref", REF) == ""
     assert os.listdir(rig.wt_root) == []
+
+
+def test_the_publisher_creates_branches_under_the_callers_prefix(rig: Rig) -> None:
+    """
+    GIVEN a publisher built with the context's prefix bots/
+    WHEN bots/run-run1 is published, then engine/run-run1
+    THEN the first is created and the second is outside the prefix
+    """
+    tip = combined_tip(rig)
+    publisher = GitBranchPublisher(prefix="bots/")
+
+    publisher.publish(rig.project, "bots/run-run1", tip, rig.base)
+
+    assert run_git(rig.repo, "rev-parse", "refs/heads/bots/run-run1") == tip
+    with pytest.raises(DeliveryError, match="outside the engine prefix 'bots/'"):
+        publisher.publish(rig.project, BRANCH, tip, rig.base)
+
+
+@pytest.mark.parametrize("prefix", ["", "bots", "a b/"])
+def test_an_unsafe_publisher_prefix_is_refused_when_built(prefix: str) -> None:
+    with pytest.raises(ValueError, match="prefix"):
+        GitBranchPublisher(prefix=prefix)

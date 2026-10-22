@@ -977,6 +977,7 @@ class FakeGit:
     prints: list[str] = field(default_factory=lambda: ["F0"])
     add_error: Exception | None = None
     reset_error: Exception | None = None
+    remove_error: Exception | None = None
     added: list[tuple[Path, str]] = field(default_factory=list)
 
     def fingerprint(self) -> str:
@@ -995,6 +996,8 @@ class FakeGit:
     def remove_worktree(self, target: WorktreeHandle | Path) -> None:
         path = target.path if isinstance(target, WorktreeHandle) else target
         self.events.append(f"remove {path.name}")
+        if self.remove_error is not None and self.added:
+            raise self.remove_error
         if path.is_dir():
             shutil.rmtree(path)
 
@@ -1489,71 +1492,6 @@ def test_a_failed_worktree_add_still_cleans_up(rig: Rig) -> None:
     assert not rig.run_dir.exists()
 
 
-def test_cleanup_unlinks_a_planted_scratch_link_and_keeps_a_busy_run_dir(
-    rig: Rig, tmp_path: Path
-) -> None:
-    """
-    GIVEN another phase's worktree in <run> and a run that replaces the
-        scratch root with a link to a directory outside (possible with
-        fs=off)
-    WHEN the profile is cleaned up
-    THEN the link is unlinked (its target untouched), the profile's own
-        dirs are gone and <run> stays for its other owner
-    """
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    (outside / "keep.txt").write_text("keep")
-    (rig.run_dir / "baseline").mkdir(parents=True)
-
-    def respond(call: Call) -> RunSample:
-        scratch = call.sandbox.writable[1]
-        shutil.rmtree(scratch)
-        os.symlink(outside, scratch)
-        return sample()
-
-    rig.run.respond = respond
-
-    result = rig.profile(rig.workload())
-
-    assert result.notes == (
-        "workload 'bench' is not profiled: the profile output is missing"
-        + GUARD_SKIPPED,
-    )
-    assert (outside / "keep.txt").read_text() == "keep"
-    assert sorted(os.listdir(rig.run_dir)) == ["baseline"]
-
-
-def test_cleanup_unlinks_a_planted_link_in_place_of_the_scratch_parent(
-    rig: Rig, tmp_path: Path
-) -> None:
-    """
-    GIVEN a run that replaces <run>/_scratch (the parent of the scratch
-        root) with a link to a directory outside (possible with fs=off)
-    WHEN the profile is cleaned up
-    THEN the link is unlinked without following it, <run>/_probe is still
-        removed, and nothing of the run is left
-    """
-    outside = tmp_path / "outside"
-    (outside / "profile").mkdir(parents=True)
-    (outside / "profile" / "keep.txt").write_text("keep")
-
-    def respond(call: Call) -> RunSample:
-        parent = call.sandbox.writable[1].parent
-        shutil.rmtree(parent)
-        os.symlink(outside, parent)
-        return sample()
-
-    rig.run.respond = respond
-
-    result = rig.profile(rig.workload())
-
-    [note] = result.notes
-    assert note.startswith("workload 'bench' is not profiled: the profile output")
-    assert (outside / "profile" / "keep.txt").read_text() == "keep"
-    assert rig.events[-2:] == ["remove profile", "prune"]
-    assert not rig.run_dir.exists()
-
-
 def test_a_dir_that_cannot_be_removed_safely_is_an_engine_error_after_cleanup(
     rig: Rig, tmp_path: Path
 ) -> None:
@@ -1561,8 +1499,9 @@ def test_a_dir_that_cannot_be_removed_safely_is_an_engine_error_after_cleanup(
     GIVEN a run that moves <run> outside WORKTREE_ROOT and leaves a link in
         its place, so neither scratch nor probe is inside WORKTREE_ROOT
     WHEN the profile is cleaned up
-    THEN every step is still attempted (both dirs, prune), nothing outside
-        is removed through the link, and EngineError names both dirs
+    THEN every other step is still attempted (both dirs, prune), nothing
+        outside is removed through the link (git is never asked to remove the
+        worktree through it), and EngineError names the worktree and both dirs
     """
     outside = tmp_path / "moved"
 
@@ -1578,29 +1517,11 @@ def test_a_dir_that_cannot_be_removed_safely_is_an_engine_error_after_cleanup(
 
     message = str(raised.value)
     assert str(rig.scratch) in message and str(rig.probe) in message
-    assert rig.events[-2:] == ["remove profile", "prune"]
+    assert str(rig.worktree) in message
+    assert "remove profile" not in rig.events and rig.events[-1] == "prune"
+    assert (outside / "profile").is_dir()
     assert (outside / "_scratch" / "profile").is_dir()
     assert (outside / "_probe" / "profile").is_dir()
-
-
-def test_cleanup_never_removes_an_empty_dir_through_a_planted_run_link(
-    rig: Rig, tmp_path: Path
-) -> None:
-    outside = tmp_path / "moved"
-
-    def respond(call: Call) -> RunSample:
-        shutil.rmtree(rig.run_dir)
-        for name in ("_scratch", "_probe"):
-            (outside / name).mkdir(parents=True)
-        os.symlink(outside, rig.run_dir)
-        return sample()
-
-    rig.run.respond = respond
-
-    with pytest.raises(EngineError, match="could not clean up"):
-        rig.profile(rig.workload())
-
-    assert sorted(os.listdir(outside)) == ["_probe", "_scratch"]
 
 
 def test_a_cleanup_problem_never_hides_the_error_already_raised(rig: Rig) -> None:
@@ -1615,6 +1536,47 @@ def test_a_cleanup_problem_never_hides_the_error_already_raised(rig: Rig) -> Non
 
     with pytest.raises(RepoTamperedError):
         rig.profile(rig.workload())
+
+
+REMOVE_FAILURES = [
+    pytest.param(GitError("git worktree remove timed out"), id="git"),
+    pytest.param(ValueError("not inside WORKTREE_ROOT"), id="value"),
+    pytest.param(PermissionError(1, "Operation not permitted"), id="os"),
+]
+
+
+@pytest.mark.parametrize("error", REMOVE_FAILURES)
+def test_a_failing_worktree_removal_never_hides_tampering(
+    rig: Rig, error: Exception
+) -> None:
+    """
+    GIVEN a profile run that tampers with the repository (F1 != F0) and a
+        worktree removal that then fails (a git timeout, a planted link)
+    WHEN the profile is cleaned up
+    THEN the tampering propagates, not the removal's error, and prune and
+        the scratch and probe removal still ran
+    """
+    rig.git.prints = ["F0", "F1"]
+    rig.git.remove_error = error
+
+    with pytest.raises(RepoTamperedError):
+        rig.profile(rig.workload())
+
+    assert rig.events[-2:] == ["remove profile", "prune"]
+    assert not rig.scratch.exists() and not rig.probe.exists()
+
+
+@pytest.mark.parametrize("error", REMOVE_FAILURES)
+def test_a_failing_worktree_removal_alone_is_an_engine_error(
+    rig: Rig, error: Exception
+) -> None:
+    rig.git.remove_error = error
+
+    with pytest.raises(EngineError, match="the profiler could not clean up") as raised:
+        rig.profile(rig.workload())
+
+    assert str(rig.worktree) in str(raised.value)
+    assert rig.events[-2:] == ["remove profile", "prune"]
 
 
 @pytest.mark.parametrize("run_id", ["", "../x", "a/b", "x..y", "-x", "x.lock"])

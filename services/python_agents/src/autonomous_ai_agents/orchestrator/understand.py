@@ -5,7 +5,8 @@ at ``commit`` only (``ls-tree`` and ``cat-file``, never the working tree), so
 uncommitted edits and untracked files never reach the API. Names matching
 ``READ_DENY_PATTERNS`` are left out of the listing and never read; unprintable
 or non-UTF-8 names, binary and non-UTF-8 files are skipped, files and the
-listing are capped, and every skip becomes a note.
+listing are capped (git hands over only a blob's head, ``read_blob(limit=)``,
+so a huge tracked file is never held whole), and every skip becomes a note.
 
 Repository-derived text goes inside ``<untrusted_repo_content boundary=T>``
 with a fresh ``secrets.token_hex(8)`` per request; any piece holding ``T`` is
@@ -212,7 +213,9 @@ class RepoReader(Protocol):
 
     def ls_tree(self, commit: str) -> tuple[str, ...]: ...
 
-    def read_blob(self, commit: str, path: str) -> bytes: ...
+    def read_blob(
+        self, commit: str, path: str, *, limit: int | None = None
+    ) -> bytes: ...
 
 
 class ClaudeUnderstander:
@@ -388,7 +391,9 @@ class _Snapshot:
             return f"not read (read limit {cap.max_read_attempts} files)"
         self.attempts += 1
         try:
-            data = reader.read_blob(commit, path)
+            # One byte past the cap shows a cut; never less than the sniff.
+            limit = max(cap.max_file_bytes + 1, BINARY_SNIFF_BYTES)
+            data = reader.read_blob(commit, path, limit=limit)
         except GitError:
             return "unreadable in git"
         if b"\0" in data[:BINARY_SNIFF_BYTES]:

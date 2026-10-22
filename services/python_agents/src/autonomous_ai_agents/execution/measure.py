@@ -69,7 +69,8 @@ SUITE_STDERR_TAIL_BYTES = 256 * 1024
 summary must survive whatever interpreter shutdown prints after it."""
 UNITTEST, PYTEST, UNKNOWN = "unittest", "pytest", "unknown"
 
-_PYTHON = re.compile(r"(?:python|pypy)(?:\d+(?:\.\d+)*)?t?(?:-dbg)?")
+PYTHON_NAME = re.compile(r"(?:python|pypy)(?:\d+(?:\.\d+)*)?t?(?:-dbg)?")
+"""The file names of a Python interpreter (``python3.12``, ``pypy3``...)."""
 _JUNIT_FLAGS = ("--junitxml", "--junit-xml")
 _RAN = re.compile(r"Ran (\d+) tests? in \d+(?:\.\d+)?s")
 _STATUS = re.compile(r"OK(?: \(([a-z ]+=\d+(?:, [a-z ]+=\d+)*)\))?")
@@ -181,7 +182,7 @@ class AbabMeasured:
     notes: tuple[str, ...] = ()
 
 
-class _UnusableError(Exception):
+class UnusableError(Exception):
     """A file or summary that cannot be trusted; the message says why."""
 
 
@@ -229,7 +230,7 @@ def _inside(worktree: Path, rel: str, what: str) -> Path:
     return path
 
 
-def _launch(
+def launch(
     phase: Phase,
     command: Sequence[str],
     workdir: str,
@@ -261,25 +262,25 @@ def _launch(
 
 def _run(phase: Phase, workload: Workload, where: str, notes: list[str]) -> RunSample:
     command, workdir = workload.command, workload.working_dir
-    return _launch(phase, command, workdir, workload.timeout_s, where, notes)
+    return launch(phase, command, workdir, workload.timeout_s, where, notes)
 
 
-def _read_regular(path: Path, cap: int, sink: Callable[[bytes], object]) -> int:
+def read_capped(path: Path, cap: int, sink: Callable[[bytes], object]) -> int:
     """Feed a regular file to ``sink`` in chunks; never follows the last link."""
     try:
         fd = os.open(path, _FILE_FLAGS)
     except FileNotFoundError:
-        raise _UnusableError("is missing") from None
+        raise UnusableError("is missing") from None
     except OSError as error:
-        raise _UnusableError(f"cannot be opened ({error.strerror})") from None
+        raise UnusableError(f"cannot be opened ({error.strerror})") from None
     size = 0
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise _UnusableError("is not a regular file")
+            raise UnusableError("is not a regular file")
         while chunk := os.read(fd, _CHUNK):
             size += len(chunk)
             if size > cap:
-                raise _UnusableError(f"is larger than {cap} bytes")
+                raise UnusableError(f"is larger than {cap} bytes")
             sink(chunk)
     finally:
         os.close(fd)
@@ -287,14 +288,14 @@ def _read_regular(path: Path, cap: int, sink: Callable[[bytes], object]) -> int:
 
 
 def _fingerprint(phase: Phase, workload: Workload, sample: RunSample) -> str:
-    """The run's fingerprint; ``_UnusableError`` when the output file is unusable."""
+    """The run's fingerprint; ``UnusableError`` when the output file is unusable."""
     file = None
     if workload.output_file is not None:
         real = Path(os.path.realpath(phase.worktree / workload.output_file))
         if not real.is_relative_to(phase.worktree):
-            raise _UnusableError("resolves outside the worktree")
+            raise UnusableError("resolves outside the worktree")
         digest = hashlib.sha256()
-        size = _read_regular(real, phase.caps.max_output_bytes, digest.update)
+        size = read_capped(real, phase.caps.max_output_bytes, digest.update)
         file = (size, digest.hexdigest())
     return output_fingerprint(sample.stdout_bytes, sample.stdout_sha256, file)
 
@@ -306,7 +307,7 @@ def _timed(
     fingerprint: str | None = None
     try:
         fingerprint = _fingerprint(phase, workload, sample)
-    except _UnusableError as problem:
+    except UnusableError as problem:
         rel = workload.output_file
         notes.append(f"{where}: output file {rel!r} {problem}; no output fingerprint")
     into.wall.append(sample.wall_ns / 1e9)
@@ -421,9 +422,9 @@ def measure_abab(
     return AbabMeasured(rows_a, rows_b, tuple(dict.fromkeys(notes)))
 
 
-def _python_module(argv: Sequence[str]) -> tuple[str, int] | None:
+def python_module(argv: Sequence[str]) -> tuple[str, int] | None:
     """The ``-m`` module of a Python argv and the index after it, if any."""
-    if _PYTHON.fullmatch(PurePath(argv[0]).name) is None:
+    if PYTHON_NAME.fullmatch(PurePath(argv[0]).name) is None:
         return None
     index = 1
     while index < len(argv) and argv[index].startswith("-"):
@@ -451,7 +452,7 @@ def classify_runner(argv: Sequence[str]) -> str:
     """``pytest``, ``unittest`` or ``unknown`` for a test command."""
     if PurePath(argv[0]).name in ("pytest", "py.test"):
         return PYTEST
-    found = _python_module(argv)
+    found = python_module(argv)
     module = "" if found is None else found[0]
     return {"unittest": UNITTEST, "pytest": PYTEST}.get(module, UNKNOWN)
 
@@ -464,7 +465,7 @@ def _test_argv(command: Sequence[str], junit: Path) -> tuple[list[str], bool]:
     """
     if classify_runner(command) != PYTEST:
         return list(command), False
-    found = _python_module(command)
+    found = python_module(command)
     at = 1 if found is None else found[1]
     rest = list(command[at:])
     end = rest.index("--") if "--" in rest else len(rest)
@@ -483,57 +484,57 @@ def _unittest_count(stderr: bytes, tail_bytes: int) -> int:
     lines = stderr.decode("utf-8", "replace").splitlines()
     ran = [i for i, line in enumerate(lines) if _RAN.fullmatch(line)]
     if not ran:
-        raise _UnusableError(
+        raise UnusableError(
             f"exit 0 but no unittest summary in the last {tail_bytes} bytes of stderr"
         )
     status = next((line for line in lines[ran[-1] + 1 :] if line.strip()), "")
     match = _STATUS.fullmatch(status)
     if match is None:
-        raise _UnusableError(f"the unittest summary says {_quote(status)!r}, not OK")
+        raise UnusableError(f"the unittest summary says {_quote(status)!r}, not OK")
     skipped = _SKIPPED.search(match[1] or "")
     return int(lines[ran[-1]].split()[1]) - (int(skipped[1]) if skipped else 0)
 
 
 def _junit_count(path: Path) -> int:
-    """Passing testcases in pytest's report; ``_UnusableError`` for anything else."""
+    """Passing testcases in pytest's report; ``UnusableError`` for anything else."""
     data = bytearray()
     try:
-        _read_regular(path, JUNIT_MAX_BYTES, data.extend)
+        read_capped(path, JUNIT_MAX_BYTES, data.extend)
         text = data.decode("utf-8")
-    except _UnusableError as problem:
-        raise _UnusableError(f"the JUnit report {problem}") from None
+    except UnusableError as problem:
+        raise UnusableError(f"the JUnit report {problem}") from None
     except UnicodeDecodeError:
-        raise _UnusableError("the JUnit report is not UTF-8") from None
+        raise UnusableError("the JUnit report is not UTF-8") from None
     if _DTD.search(text):
-        raise _UnusableError("the JUnit report declares a DOCTYPE or ENTITY")
+        raise UnusableError("the JUnit report declares a DOCTYPE or ENTITY")
     try:
         # Untrusted XML: parsed from a str (expat ignores the declared
         # encoding) with no DTD (refused above), so no entity can expand
         # and expat never fetches an external one.
         root = ElementTree.fromstring(text)  # nosec B314
         if root.tag not in ("testsuite", "testsuites"):
-            raise _UnusableError(f"the JUnit report's root is <{_quote(root.tag)}>")
+            raise UnusableError(f"the JUnit report's root is <{_quote(root.tag)}>")
         suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
         if not suites:
-            raise _UnusableError("the JUnit report has no testsuite")
+            raise UnusableError("the JUnit report has no testsuite")
         if any(
             int(s.get("errors", "0")) or int(s.get("failures", "0")) for s in suites
         ):
-            raise _UnusableError("the JUnit report counts failures or errors")
+            raise UnusableError("the JUnit report counts failures or errors")
     except (ElementTree.ParseError, ValueError) as error:
-        raise _UnusableError(f"unreadable JUnit report: {_quote(str(error))}") from None
+        raise UnusableError(f"unreadable JUnit report: {_quote(str(error))}") from None
     outcomes = [{child.tag for child in case} for case in root.iter("testcase")]
     if any(tags & {"failure", "error"} for tags in outcomes):
-        raise _UnusableError("a test failed or errored")
+        raise UnusableError("a test failed or errored")
     return sum("skipped" not in tags for tags in outcomes)
 
 
 def _suite_count(
     runner: str, sample: RunSample, suite: Phase, baseline: int | None
 ) -> int | None:
-    """Passing tests (``None``: an unknown runner); ``_UnusableError``: failed."""
+    """Passing tests (``None``: an unknown runner); ``UnusableError``: failed."""
     if sample.exit != 0:
-        raise _UnusableError(f"exited with {_status(sample.exit)}")
+        raise UnusableError(f"exited with {_status(sample.exit)}")
     if runner == UNKNOWN:
         return None
     if runner == UNITTEST:
@@ -541,9 +542,9 @@ def _suite_count(
     else:
         count = _junit_count(suite.scratch / JUNIT_NAME)
     if count < 1:
-        raise _UnusableError("no test passed")
+        raise UnusableError("no test passed")
     if baseline is not None and count < baseline:
-        raise _UnusableError(
+        raise UnusableError(
             f"{count} tests passed, fewer than the baseline's {baseline}"
         )
     return count
@@ -572,7 +573,7 @@ def run_tests(
     argv, replaced = _test_argv(command, suite.scratch / JUNIT_NAME)
     if replaced:
         notes.append(f"{where}: its own --junitxml was replaced by the engine's report")
-    sample = _launch(suite, argv, ".", settings.TEST_TIMEOUT_S, where, notes, False)
+    sample = launch(suite, argv, ".", settings.TEST_TIMEOUT_S, where, notes, False)
     count: int | None = None
     try:
         count = _suite_count(runner, sample, suite, baseline_count)
@@ -582,7 +583,7 @@ def run_tests(
                 f"{where}: {command[0]!r} is neither unittest nor pytest: it passed"
                 " on its exit code alone; the test count could not be verified"
             )
-    except _UnusableError as problem:
+    except UnusableError as problem:
         passed = 0.0
         notes.append(f"{where}: {problem}")
     hardware = _host(phase.policy, 1, int(sample.fs_isolated), int(sample.net_isolated))

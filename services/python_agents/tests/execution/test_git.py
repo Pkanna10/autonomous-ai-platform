@@ -32,6 +32,8 @@ from autonomous_ai_agents.execution.git import (
     GitError,
     GitWorkspace,
     MergeResult,
+    contained,
+    remove_contained,
     repo_fingerprint,
 )
 from autonomous_ai_agents.execution.protocols import Change, WorktreeHandle
@@ -186,6 +188,13 @@ def full_cycle(ws: GitWorkspace, root: Path, base: str) -> None:
     assert "refs/heads/main" in ws.checked_out_branches()
     ws.update_ref("refs/heads/engine/run-run1", tip, None)
     ws.delete_ref("refs/heads/engine/run-run1", tip)
+    ws.update_ref("refs/heads/bots/run-run1", tip, None, prefix="bots/")
+    ws.delete_ref("refs/heads/bots/run-run1", tip, prefix="bots/")
+    assert "return x + 1" in ws.diff_commits(base, commit)
+    assert ws.is_ancestor(base, tip) and not ws.is_ancestor(tip, base)
+    assert ws.symbolic_ref("HEAD") == "refs/heads/main"
+    assert ws.commit_message(commit) == b"h1\n\nEngine-Trial: h1\n"
+    assert ws.read_blob(base, "core.py", limit=4) == CORE_V1.encode()[:4]
     repo_fingerprint(ws, exclude_refs=frozenset({OWN_REF}))
     ws.remove_worktree(handle)
     ws.prune()
@@ -1631,3 +1640,235 @@ def test_the_fingerprint_records_symlinks_unfollowed_and_never_opens_a_fifo(
     (hooks / "pre-push").unlink()
     os.symlink(tmp_path / "other.sh", hooks / "pre-push")
     assert repo_fingerprint(ws) != before
+
+
+# --------------------------------------------------------------------------
+# Public helpers (U20a): contained paths, messages, bounded blobs, commit
+# diffs, ancestry, symrefs and the caller's branch prefix
+# --------------------------------------------------------------------------
+
+
+def test_contained_resolves_the_parent_and_refuses_anything_outside(
+    root: Path, tmp_path: Path
+) -> None:
+    (root / "run1").mkdir()
+    os.symlink(root / "run1", root / "alias")
+    assert contained(root / "run1" / "x") == root / "run1" / "x"
+    assert contained(root / "alias" / "x") == root / "run1" / "x"
+    os.symlink(tmp_path, root / "out")
+    for path in (root, root / "out" / "x", tmp_path / "x", Path("run1/x")):
+        with pytest.raises(ValueError, match="WORKTREE_ROOT"):
+            contained(path)
+    with pytest.raises(ValueError, match="WORKTREE_ROOT"):
+        contained(root / "run1" / "..")
+
+
+def test_remove_contained_removes_trees_files_and_links_never_following_one(
+    root: Path, tmp_path: Path
+) -> None:
+    """
+    GIVEN a dir with a read-only subdir and a link out, a planted link, a
+        file and a missing path, all inside WORKTREE_ROOT, and a dir outside
+    WHEN each is removed
+    THEN each is gone, nothing outside is touched, and outside is refused
+    """
+    outside = write(tmp_path / "outside" / "keep.txt", "keep\n").parent
+    tree = root / "run1" / "_scratch" / "baseline"
+    write(tree / "locked" / "file.txt", "x\n")
+    os.symlink(outside, tree / "to-outside")
+    (tree / "locked").chmod(0)
+    link = root / "run1" / "link"
+    os.symlink(outside, link)
+    file = write(root / "run1" / "file", "x\n")
+    for path in (tree, link, file, root / "run1" / "missing"):
+        remove_contained(path)
+        assert not os.path.lexists(path)
+    assert (outside / "keep.txt").read_text() == "keep\n"
+    with pytest.raises(ValueError, match="WORKTREE_ROOT"):
+        remove_contained(outside)
+    assert outside.is_dir()
+
+
+def test_commit_message_is_the_raw_message_after_the_header(
+    ws: GitWorkspace, repo: Path, root: Path, base: str
+) -> None:
+    commit = edit_and_commit(ws, root, base, "h1", "core.py", "v2\n")
+    assert ws.commit_message(commit) == b"h1\n\nEngine-Trial: h1\n"
+    assert ws.commit_message(base) == b"base\n"
+    with pytest.raises(ValueError, match="full object id"):
+        ws.commit_message("HEAD")
+    tree = out(repo, "rev-parse", "HEAD^{tree}")
+    with pytest.raises(GitError, match="cat-file failed"):
+        ws.commit_message(tree)
+
+
+def _spy_sink(ws: GitWorkspace, monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Bytes git printed per call, counted as they stream past the sink."""
+    printed: list[int] = []
+    real = ws._spawn
+
+    def spy(
+        argv: Sequence[str],
+        what: str,
+        *,
+        env: Mapping[str, str] | None = None,
+        limit: int | None = None,
+        sink: Sink | None = None,
+    ) -> tuple[int, bytes, bytes]:
+        printed.append(0)
+        if sink is None:
+            return real(argv, what, env=env, limit=limit, sink=sink)
+        inner = sink
+
+        def counting(chunk: bytes) -> None:
+            printed[-1] += len(chunk)
+            inner(chunk)
+
+        return real(argv, what, env=env, limit=limit, sink=counting)
+
+    monkeypatch.setattr(ws, "_spawn", spy)
+    return printed
+
+
+def test_read_blob_with_a_limit_keeps_only_the_head_and_stops_git(
+    ws: GitWorkspace, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    GIVEN a tracked 8 MiB blob and an output cap of 4 KiB
+    WHEN it is read with a 10-byte limit
+    THEN the first 10 bytes come back, nothing past the cap was held, and
+        git was stopped long before the whole blob streamed past
+    """
+    (repo / "huge.bin").write_bytes(b"0123456789" * (800 * 1024))
+    write(repo / "small.txt", "tiny\n")
+    run_git(repo, "add", "-A")
+    run_git(repo, "commit", "-q", "-m", "huge")
+    head = ws.head_commit()
+    monkeypatch.setattr(settings, "MAX_OUTPUT_BYTES", 4096)
+    printed = _spy_sink(ws, monkeypatch)
+    assert ws.read_blob(head, "huge.bin", limit=10) == b"0123456789"
+    assert printed[-1] < 1024 * 1024
+    assert ws.read_blob(head, "small.txt", limit=10) == b"tiny\n"
+    assert ws.read_blob(head, "small.txt", limit=5) == b"tiny\n"
+    assert ws.read_blob(head, "small.txt", limit=1) == b"t"
+    with pytest.raises(GitError, match="cat-file failed"):
+        ws.read_blob(head, "missing.txt", limit=10)
+    with pytest.raises(ValueError, match="limit"):
+        ws.read_blob(head, "small.txt", limit=0)
+    with pytest.raises(ValueError, match="repo-relative git path"):
+        ws.read_blob(head, "../x", limit=10)
+
+
+def _commit_files(repo: Path, base: str, files: Mapping[str, bytes]) -> str:
+    """A child of ``base`` with ``files`` written, built by the test's git."""
+    index = repo.parent / "test-index"
+    env = {**_ENV, "GIT_INDEX_FILE": str(index)}
+    run_git(repo, "read-tree", base, env=env)
+    for path, data in files.items():
+        blob = run_git(repo, "hash-object", "-w", "--stdin", stdin=data).decode()
+        cache = f"100644,{blob.strip()},{path}"
+        run_git(repo, "update-index", "--add", "--cacheinfo", cache, env=env)
+    tree = run_git(repo, "write-tree", env=env).decode().strip()
+    index.unlink()
+    return out(repo, "commit-tree", tree, "-p", base, "-m", "child")
+
+
+def test_diff_commits_equals_the_worktree_diff_without_any_worktree(
+    ws: GitWorkspace, repo: Path, root: Path, base: str, calls: list[list[str]]
+) -> None:
+    tip = _commit_files(repo, base, {"core.py": b"def f(x):\n    return 2\n"})
+    handle = ws.add_worktree(root / "run1" / "check", tip)
+    expected = ws.diff(handle, base)
+    ws.remove_worktree(handle)
+    calls.clear()
+    assert ws.diff_commits(base, tip) == expected
+    assert "diff --git a/core.py b/core.py" in expected
+    assert not any(a.startswith("--work-tree") for argv in calls for a in argv)
+    assert os.listdir(root) == ["run1"] and os.listdir(root / "run1") == []
+    with pytest.raises(ValueError, match="full object id"):
+        ws.diff_commits("main", tip)
+    with pytest.raises(ValueError, match="max_bytes"):
+        ws.diff_commits(base, tip, max_bytes=0)
+
+
+def test_diff_commits_is_capped_streamed_and_strict_utf8(
+    ws: GitWorkspace, repo: Path, base: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    big = _commit_files(repo, base, {"big.py": "x = 1  # é\n".encode() * 20_000})
+    monkeypatch.setattr(settings, "MAX_OUTPUT_BYTES", 4096)
+    text = ws.diff_commits(base, big, max_bytes=1000)
+    head, _, marker = text.rpartition("\n[diff truncated: ")
+    assert head.startswith("diff --git a/big.py b/big.py")
+    assert len(head.encode()) <= 1000 and marker.startswith("1000 of ")
+    latin = _commit_files(repo, base, {"lib.py": b"caf\xe9\n"})
+    with pytest.raises(GitDecodeError, match="not UTF-8"):
+        ws.diff_commits(base, latin)
+
+
+def test_is_ancestor_answers_and_raises_on_anything_but_yes_or_no(
+    ws: GitWorkspace, repo: Path, base: str
+) -> None:
+    child = _commit_files(repo, base, {"lib.py": b"x\n"})
+    tree = out(repo, "rev-parse", "HEAD^{tree}")
+    orphan = out(repo, "commit-tree", tree, "-m", "orphan")
+    assert ws.is_ancestor(base, child) is True
+    assert ws.is_ancestor(base, base) is True
+    assert ws.is_ancestor(child, base) is False
+    assert ws.is_ancestor(orphan, child) is False
+    with pytest.raises(GitError, match="merge-base failed"):
+        ws.is_ancestor("0" * 39 + "1", child)
+    with pytest.raises(ValueError, match="full object id"):
+        ws.is_ancestor("HEAD", child)
+
+
+def test_symbolic_ref_returns_the_final_target_or_none(
+    ws: GitWorkspace, repo: Path, base: str
+) -> None:
+    run_git(repo, "symbolic-ref", "refs/heads/a", "refs/heads/b")
+    run_git(repo, "symbolic-ref", "refs/heads/b", "refs/heads/engine/run-x")
+    assert ws.symbolic_ref("HEAD") == "refs/heads/main"
+    assert ws.symbolic_ref("refs/heads/a") == "refs/heads/engine/run-x"
+    assert ws.symbolic_ref("refs/heads/main") is None
+    assert ws.symbolic_ref("refs/heads/missing") is None
+    for name in ("main", "refs/heads/a..b", "refs/x y", "-x", "HEAD\n"):
+        with pytest.raises(ValueError, match="not a ref"):
+            ws.symbolic_ref(name)
+
+
+def test_symbolic_ref_raises_on_an_unexpected_exit(tmp_path: Path) -> None:
+    body = (
+        'case " $* " in *" version "*) echo "git version 2.39.0";;'
+        ' *" symbolic-ref "*) exit 128;; esac\n'
+    )
+    git = GitWorkspace(tmp_path, executable=fake_git(tmp_path, body))
+    with pytest.raises(GitError, match="symbolic-ref failed"):
+        git.symbolic_ref("refs/heads/main")
+
+
+def test_the_callers_prefix_decides_which_refs_may_move(
+    ws: GitWorkspace, base: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    GIVEN a caller's branch prefix bots/
+    WHEN refs are created, moved and deleted with it
+    THEN refs under bots/ move, refs under the setting's prefix do not, a
+        malformed prefix is refused, and no prefix means the setting
+    """
+    ref = "refs/heads/bots/run-r1"
+    ws.update_ref(ref, base, None, prefix="bots/")
+    assert ws.ref_value(ref) == base
+    with pytest.raises(ValueError, match="not a ref under refs/heads/bots/"):
+        ws.update_ref("refs/heads/engine/run-r1", base, None, prefix="bots/")
+    with pytest.raises(ValueError, match="not a ref under refs/heads/engine/"):
+        ws.delete_ref(ref, base)
+    ws.delete_ref(ref, base, prefix="bots/")
+    assert ws.ref_value(ref) is None
+    for prefix in ("", "bots", "a b/", "refs/heads/../"):
+        with pytest.raises(ValueError, match="prefix"):
+            ws.update_ref(ref, base, None, prefix=prefix)
+        with pytest.raises(ValueError, match="prefix"):
+            ws.delete_ref(ref, base, prefix=prefix)
+    monkeypatch.setattr(settings, "TRIAL_BRANCH_PREFIX", "bots/")
+    ws.update_ref(ref, base, None)
+    ws.delete_ref(ref, base)
+    assert ws.ref_value(ref) is None

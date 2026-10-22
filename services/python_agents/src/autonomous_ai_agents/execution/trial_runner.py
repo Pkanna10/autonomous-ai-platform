@@ -3,13 +3,10 @@
 Both own their phase (decision 38): ``<WORKTREE_ROOT>/<run>/<phase>`` at the
 pinned commit plus ``<run>/_scratch/<phase>`` and ``<run>/_probe/<phase>``
 (``measure.make_phase``: sandbox, environment, the reset before every run),
-fingerprinted before and after (``repo_fingerprint``, decision 16), and in
-``finally`` removed again: ``worktree remove --force``, a contained ``rmtree``,
-``prune``, then ``rmdir <run>`` when empty. Cleanup never follows a link a
-workload planted in place of an engine dir or its parent; a dir it cannot
+fingerprinted before and after (``repo_fingerprint``, decision 16), and
+removed again by the shared ``phase.owned_phases`` cleanup (a dir it cannot
 remove safely is an ``EngineError`` after every step ran, unless an error is
-already on its way (the profiler's hardened cleanup, copied until U20 factors
-it out).
+already on its way).
 
 A trial (spec section 4, steps 1 to 8) is ``trial-<hypothesis id>``: the
 editor edits the worktree; the change is captured (``--no-renames``, strict
@@ -17,7 +14,7 @@ UTF-8, a ``GitError`` fails the trial); ``check_capture`` and
 ``check_diff_all`` run; any violation fails it and it is **never executed**.
 Otherwise it is committed with the engine identity, the base dates and an
 ``Engine-Trial: <id>`` trailer, ``clean -ffdx``-ed and put on its own ref
-``refs/heads/engine/trial-<run>-<hyp>`` (decision 18: the id is
+``refs/heads/<prefix>trial-<run>-<hyp>`` (decision 18: the id is
 ``uuid5(branch@round)``; an existing ref moves only when its commit carries
 this trial's trailer, else ``EngineError``; a re-run that commits nothing
 drops it), then measured with the baseline's test count. F1 excludes only the
@@ -57,22 +54,22 @@ from autonomous_ai_agents.common.models import (
     utc_now,
 )
 from autonomous_ai_agents.common.paths import RESERVED_MODULES, normalize_path
-from autonomous_ai_agents.common.refnames import refname_problem
-from autonomous_ai_agents.execution.git import (
-    GitError,
-    GitWorkspace,
-    _contained,
-    _rmtree,
-    repo_fingerprint,
-)
+from autonomous_ai_agents.common.refnames import branch_prefix_problem
+from autonomous_ai_agents.execution.git import GitError, GitWorkspace, repo_fingerprint
 from autonomous_ai_agents.execution.measure import (
     Phase,
     RunOnce,
-    _python_module,
     baseline_test_count,
     make_phase,
     measure_workload,
+    python_module,
     run_tests,
+)
+from autonomous_ai_agents.execution.phase import (
+    PhaseDirs,
+    owned_phases,
+    phase_dirs,
+    require_dir_name,
 )
 from autonomous_ai_agents.execution.procrun import RunFailure, run_once
 from autonomous_ai_agents.execution.protocols import (
@@ -85,9 +82,9 @@ from autonomous_ai_agents.execution.protocols import (
 )
 from autonomous_ai_agents.optimization.anticheat import (
     DEFAULT_MODULE_ROOTS,
-    _is_utf8,
     check_capture,
     check_diff_all,
+    is_utf8,
 )
 
 TRIAL_NAMESPACE = uuid.UUID("3f0c6a52-7d1e-5b9a-8c4f-2e6d9b1a7c30")
@@ -159,7 +156,7 @@ def run_scope(
     invoke = False
     for argv, workdir in commands:
         roots.add(_root(workdir))
-        found = _python_module(argv)
+        found = python_module(argv)
         module = None if found is None else found[0].split(".", 1)[0]
         if module is not None:  # its top-level name, as module_shadow reads it
             reserved.add(module)
@@ -203,50 +200,6 @@ def _base_dirs(tracked: Collection[str]) -> frozenset[str]:
     return frozenset(found)
 
 
-def _require_name(what: str, value: str) -> None:
-    problem = "it contains '/'" if "/" in value else refname_problem(value)
-    if problem is not None:
-        raise ValueError(f"{what} {value!r} is not a safe directory name: {problem}")
-
-
-def _remove(path: Path) -> None:
-    """Remove an engine dir the workload could write; a link planted in its
-    place or in its parent's is unlinked, never followed; ``ValueError`` when
-    ``<run>`` no longer resolves inside ``WORKTREE_ROOT``."""
-    parent = _contained(path.parent)
-    if os.path.islink(parent):
-        os.unlink(parent)
-        return
-    target = _contained(path)
-    if os.path.isdir(target) and not os.path.islink(target):
-        _rmtree(target)
-    elif os.path.lexists(target):
-        os.unlink(target)
-
-
-def _step(left: list[str], what: str, action: Callable[..., None], *args: Path) -> None:
-    """One cleanup step; a ``GitError`` (a timeout), an ``OSError`` (a file a
-    workload made unremovable) or a ``ValueError`` (``<run>`` is a link out of
-    ``WORKTREE_ROOT``) is appended to ``left`` instead of raised."""
-    try:
-        action(*args)
-    except ValueError:
-        left.append(
-            f"{what!r}: it no longer resolves inside WORKTREE_ROOT (a link was"
-            " planted in place of the run directory)"
-        )
-    except (GitError, OSError) as error:
-        left.append(f"{what!r}: {error}")
-
-
-@dataclass(frozen=True)
-class _Dirs:
-    run: Path
-    worktree: Path
-    scratch: Path
-    probe: Path
-
-
 class _PhaseOwner:
     """What both runners share: git, the phase factory, notes, the cleanup."""
 
@@ -281,7 +234,7 @@ class _PhaseOwner:
             for note in notes:
                 self._on_note(f"{prefix}: {note}")
 
-    def _make_phase(self, handle: WorktreeHandle, dirs: _Dirs) -> Phase:
+    def _make_phase(self, handle: WorktreeHandle, dirs: PhaseDirs) -> Phase:
         return self._phase(
             self._git, handle, scratch=dirs.scratch, probe=dirs.probe, run=self._run
         )
@@ -316,41 +269,6 @@ class _PhaseOwner:
         self._note(prefix, suite.notes)
         return (*rows, *suite.measurements)
 
-    @staticmethod
-    def _dirs(run_id: str, phase: str) -> _Dirs:
-        run = settings.WORKTREE_ROOT / run_id
-        scratch, probe = run / "_scratch" / phase, run / "_probe" / phase
-        return _Dirs(run, run / phase, scratch, probe)
-
-    def _cleanup(self, dirs: _Dirs) -> list[str]:
-        """Remove the worktree, then each dir, then prune; every step runs
-        (the profiler's nesting). A step that fails (``_step``) is recorded,
-        not raised, so an error already on its way wins; anything else still
-        propagates once every later step ran. Returns what failed, and why."""
-        left: list[str] = []
-        try:
-            _step(left, str(dirs.worktree), self._git.remove_worktree, dirs.worktree)
-        finally:
-            try:
-                for path in (dirs.scratch, dirs.probe):
-                    _step(left, str(path), _remove, path)
-            finally:
-                try:
-                    _step(left, "the worktree registrations", self._git.prune)
-                finally:
-                    for path in (dirs.run / "_scratch", dirs.run / "_probe", dirs.run):
-                        # not empty (another owner), or <run> is a planted link
-                        with contextlib.suppress(OSError, ValueError):
-                            os.rmdir(_contained(path))
-        return left
-
-    def _raise_left(self, left: Sequence[str]) -> None:
-        if left:  # only when nothing else was raised: that error wins
-            raise EngineError(
-                f"{self._what} could not clean up {'; '.join(left)}; remove what"
-                " is left by hand"
-            )
-
     def _refuse_checked_out(self, ref: str) -> None:
         """Moving a branch a worktree has checked out moves that HEAD too."""
         if ref.casefold() in {b.casefold() for b in self._git.checked_out_branches()}:
@@ -380,12 +298,12 @@ class GitBaselineRunner(_PhaseOwner):
     ) -> tuple[Measurement, ...]:
         if commit is None:
             raise ValueError("the baseline needs the pinned commit, got None")
-        _require_name("run id", run_id)
-        dirs = self._dirs(run_id, BASELINE_PHASE)
+        require_dir_name("run id", run_id)
+        dirs = phase_dirs(run_id, BASELINE_PHASE)
         before = repo_fingerprint(self._git)
         failed: RunFailure | None = None
         rows: tuple[Measurement, ...] = ()
-        try:
+        with owned_phases(self._git, self._what, dirs):
             handle = self._git.add_worktree(dirs.worktree, commit)
             phase = self._make_phase(handle, dirs)
             try:
@@ -399,9 +317,6 @@ class GitBaselineRunner(_PhaseOwner):
             except RunFailure as failure:
                 failed = failure
             self._tampered(before)
-        finally:
-            left = self._cleanup(dirs)
-        self._raise_left(left)
         if failed is not None:
             raise EngineError(f"the baseline could not be measured: {failed.reason}")
         return rows
@@ -417,7 +332,9 @@ class GitTrialRunner(_PhaseOwner):
     the editor's report and its ``Budget``'s record; above ``budget_usd`` the
     trial fails charged exactly ``budget_usd`` (and the same share of tokens).
     Notes (``RunSample``, ``RunFailure``, ``Measured``) go to ``on_note``
-    prefixed ``trial for hypothesis <id>:``.
+    prefixed ``trial for hypothesis <id>:``. ``prefix`` is the engine branch
+    prefix (default the setting's; the factory passes the context's): the
+    branch must be ``<prefix>trial-<run>-<hyp>`` and only refs under it move.
     """
 
     _what = "the trial"
@@ -434,11 +351,16 @@ class GitTrialRunner(_PhaseOwner):
         base_env: Mapping[str, str] | None = None,
         run: RunOnce = run_once,
         on_note: Callable[[str], None] | None = None,
+        prefix: str | None = None,
     ) -> None:
         super().__init__(
             project, git=git, network=network, fs=fs, platform=platform,
             base_env=base_env, run=run, on_note=on_note,
         )  # fmt: skip
+        self._prefix = settings.TRIAL_BRANCH_PREFIX if prefix is None else prefix
+        problem = branch_prefix_problem(self._prefix)
+        if problem is not None:
+            raise ValueError(f"branch prefix {self._prefix[:300]!r} {problem}")
         self._editor_factory = editor
         self._editors: dict[tuple[frozenset[str], frozenset[str]], CodeEditor] = {}
 
@@ -459,7 +381,8 @@ class GitTrialRunner(_PhaseOwner):
             )
         if baseline.commit is None:
             raise ValueError("the trial needs the baseline's commit, got None")
-        dirs = self._dirs(_run_id(branch, hypothesis.id), f"trial-{hypothesis.id}")
+        run_id = _run_id(branch, hypothesis.id, self._prefix)
+        dirs = phase_dirs(run_id, f"trial-{hypothesis.id}")
         own_ref = f"refs/heads/{branch}"
         exclude = frozenset({own_ref})
         draft = Trial(
@@ -480,7 +403,7 @@ class GitTrialRunner(_PhaseOwner):
                 f"{own_ref} exists at {prior}, which is not this trial's commit"
                 f" (no '{TRAILER}: {draft.id}' trailer); delete it to run the trial"
             )
-        try:
+        with owned_phases(self._git, self._what, dirs):
             handle = self._git.add_worktree(dirs.worktree, baseline.commit)
             trial = self._attempt(
                 handle, dirs, draft, hypothesis, workloads, baseline, brief,
@@ -488,21 +411,17 @@ class GitTrialRunner(_PhaseOwner):
             )  # fmt: skip
             if trial.commit is None and prior is not None:
                 self._refuse_checked_out(own_ref)
-                self._git.delete_ref(own_ref, prior)
+                self._git.delete_ref(own_ref, prior, prefix=self._prefix)
             self._tampered(before, exclude)
             if self._git.ref_value(own_ref) != trial.commit:
                 raise RepoTamperedError(
                     f"the trial's own ref {own_ref} moved while the trial ran"
                 )
-        finally:
-            left = self._cleanup(dirs)
-        self._raise_left(left)
         return trial.model_copy(update={"finished_at": utc_now()})
 
     def _ours(self, commit: str, trial_id: str) -> bool:
         """Whether ``commit``'s last message paragraph has this trial's trailer."""
-        raw = self._git._run("cat-file", "commit", commit)  # no public reader
-        message = raw.partition(b"\n\n")[2].rstrip(b"\n")
+        message = self._git.commit_message(commit).rstrip(b"\n")
         last = message.rsplit(b"\n\n", 1)[-1].split(b"\n")
         return f"{TRAILER}: {trial_id}".encode() in last
 
@@ -517,7 +436,7 @@ class GitTrialRunner(_PhaseOwner):
     def _attempt(
         self,
         handle: WorktreeHandle,
-        dirs: _Dirs,
+        dirs: PhaseDirs,
         trial: Trial,
         hypothesis: Hypothesis,
         workloads: Sequence[Workload],
@@ -546,7 +465,7 @@ class GitTrialRunner(_PhaseOwner):
         try:
             self._git.stage_all(handle)
             changes = self._git.changes(handle, base)
-            bad = [ascii(c.path) for c in changes if not _is_utf8(c.path)]
+            bad = [ascii(c.path) for c in changes if not is_utf8(c.path)]
             if bad:
                 return _failed(
                     trial, f"the diff names {bad[0]}, a path that is not valid UTF-8"
@@ -576,7 +495,7 @@ class GitTrialRunner(_PhaseOwner):
         if commit != prior:
             own_ref = f"refs/heads/{trial.branch}"
             self._refuse_checked_out(own_ref)  # checked out while the editor ran
-            self._git.update_ref(own_ref, commit, prior)
+            self._git.update_ref(own_ref, commit, prior, prefix=self._prefix)
         trial = trial.model_copy(update={"commit": commit})
         phase = self._make_phase(handle, dirs)
         try:
@@ -617,14 +536,14 @@ class GitTrialRunner(_PhaseOwner):
         return (*captured, *check_diff_all((c.path for c in changes), protected))
 
 
-def _run_id(branch: str, hypothesis_id: str) -> str:
+def _run_id(branch: str, hypothesis_id: str, prefix: str) -> str:
     """The run id inside ``<prefix>trial-<run>-<hypothesis id>``."""
-    _require_name("hypothesis id", hypothesis_id)
-    head, tail = f"{settings.TRIAL_BRANCH_PREFIX}trial-", f"-{hypothesis_id}"
+    require_dir_name("hypothesis id", hypothesis_id)
+    head, tail = f"{prefix}trial-", f"-{hypothesis_id}"
     inner = branch[len(head) : len(branch) - len(tail)]
     if not (branch.startswith(head) and branch.endswith(tail) and inner):
         raise ValueError(f"branch {branch!r} is not {head}<run>{tail}")
-    _require_name("run id", inner)
+    require_dir_name("run id", inner)
     return inner
 
 

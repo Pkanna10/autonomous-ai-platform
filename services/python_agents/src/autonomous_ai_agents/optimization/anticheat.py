@@ -415,7 +415,9 @@ def _violation(
     )
 
 
-def _is_utf8(text: str) -> bool:
+def is_utf8(text: str) -> bool:
+    """Whether ``text`` encodes as UTF-8: a path ``os.fsdecode`` made from
+    bytes that are not UTF-8 holds lone surrogates and does not."""
     try:
         text.encode("utf-8")
     except UnicodeEncodeError:
@@ -430,7 +432,7 @@ def _change_violations(
     scope: _Scope,
 ) -> Iterator[Violation]:
     path, verb = change.path, _VERBS[change.status]
-    if not _is_utf8(path):
+    if not is_utf8(path):
         text = f"trial {verb} {ascii(path)}, a path that is not valid UTF-8"
         yield _violation(ViolationRule.forbidden_file, None, text)
         return

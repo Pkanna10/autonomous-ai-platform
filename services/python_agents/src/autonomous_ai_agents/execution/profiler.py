@@ -4,8 +4,8 @@
 (``repo_fingerprint``), ``<WORKTREE_ROOT>/<run>/profile`` at the commit with
 ``_scratch/profile`` and ``_probe/profile`` (``measure.make_phase``: the
 sandbox, environment and reset of measurement), one untimed run per Python
-workload, F1 (``RepoTamperedError`` when it differs), and in ``finally`` the
-removal of all three, ``prune`` and an ``rmdir`` of ``<run>`` when empty.
+workload, F1 (``RepoTamperedError`` when it differs), and the shared
+``phase.owned_phases`` cleanup of all three.
 
 Each run is ``python [options] _profile_shim.py OUT module|script TARGET``
 (``profiled_argv``) from the working dir, right after a reset, with the
@@ -37,9 +37,10 @@ would time the wrong code: ``EngineError`` naming the frame's path, after F1
 workload can forge its profile, and a workload that is not profiled is not
 checked (its note says so).
 
-Cleanup never follows a link the workload planted in place of an engine dir
-or of its parent; a dir it cannot remove safely is an ``EngineError`` after
-every other step ran, unless an error is already on its way.
+Cleanup (``phase.cleanup_phases``) never follows a link the workload planted
+in place of an engine dir, its parent or ``<run>``; a dir it cannot remove
+safely is an ``EngineError`` after every other step ran, unless an error is
+already on its way (a removal that fails never hides tampering).
 
 Known limits: time in C builtins and the stdlib stays with them; child
 processes are not profiled; ``-I`` and ``-E`` ignore ``PYTHONPATH``; the
@@ -52,7 +53,6 @@ recognised (``realpath`` keeps the case it was given).
 
 from __future__ import annotations
 
-import contextlib
 import functools
 import json
 import math
@@ -63,26 +63,25 @@ from dataclasses import dataclass
 from pathlib import Path, PurePath
 from typing import Protocol
 
-from autonomous_ai_agents.common.config import IsolationMode, settings
+from autonomous_ai_agents.common.config import IsolationMode
 from autonomous_ai_agents.common.errors import EngineError, RepoTamperedError
 from autonomous_ai_agents.common.models import Hotspot, Project, Workload
 from autonomous_ai_agents.common.paths import normalize_path
-from autonomous_ai_agents.common.refnames import refname_problem
 from autonomous_ai_agents.execution import _profile_shim
-from autonomous_ai_agents.execution.git import (
-    GitWorkspace,
-    _contained,
-    _rmtree,
-    repo_fingerprint,
-)
+from autonomous_ai_agents.execution.git import GitWorkspace, repo_fingerprint
 from autonomous_ai_agents.execution.measure import (
-    _PYTHON,
+    PYTHON_NAME,
     Phase,
     RunOnce,
-    _launch,
-    _read_regular,
-    _UnusableError,
+    UnusableError,
+    launch,
     make_phase,
+    read_capped,
+)
+from autonomous_ai_agents.execution.phase import (
+    owned_phases,
+    phase_dirs,
+    require_dir_name,
 )
 from autonomous_ai_agents.execution.procrun import RunFailure, run_once
 from autonomous_ai_agents.execution.protocols import ProfileResult, WorktreeHandle
@@ -230,7 +229,7 @@ _Target = tuple[list[str], str, str, list[str]]
 
 def _split(command: Sequence[str]) -> _Target:
     """Parse a Python argv as CPython does; ``NotProfiledError`` otherwise."""
-    if _PYTHON.fullmatch(PurePath(command[0]).name) is None:
+    if PYTHON_NAME.fullmatch(PurePath(command[0]).name) is None:
         raise NotProfiledError(f"{command[0]!r} is not a Python interpreter")
     options: list[str] = []
     index = 1
@@ -342,22 +341,6 @@ def checkout_file(
     return str(path) if hit else None
 
 
-def _remove(path: Path) -> None:
-    """Remove an engine dir the workload could write. A link planted in its
-    place or in its parent's (``<run>/_scratch``) is unlinked, never
-    followed; ``ValueError`` when ``<run>`` itself no longer resolves inside
-    ``WORKTREE_ROOT``."""
-    parent = _contained(path.parent)
-    if os.path.islink(parent):
-        os.unlink(parent)
-        return
-    target = _contained(path)
-    if os.path.isdir(target) and not os.path.islink(target):
-        _rmtree(target)
-    elif os.path.lexists(target):
-        os.unlink(target)
-
-
 class ProfileGit(Protocol):
     """The ``GitWorkspace`` calls the profiler makes (a double in tests)."""
 
@@ -402,11 +385,7 @@ class CProfiler:
         self, workloads: Sequence[Workload], *, run_id: str, commit: str
     ) -> ProfileResult:
         """Hotspots of every Python workload at ``commit`` and the notes."""
-        problem = "it contains '/'" if "/" in run_id else refname_problem(run_id)
-        if problem is not None:
-            raise ValueError(
-                f"run_id {run_id!r} is not a safe directory name: {problem}"
-            )
+        require_dir_name("run_id", run_id)
         notes: list[str] = []
         planned: list[tuple[Workload, _Target]] = []
         for workload in workloads:
@@ -417,17 +396,14 @@ class CProfiler:
                 notes.append(f"{label} is not profiled: {reason}{GUARD_SKIPPED}")
         if not planned:
             return ProfileResult((), tuple(notes))
-        run_dir = settings.WORKTREE_ROOT / run_id
-        worktree = run_dir / PHASE
-        scratch, probe = run_dir / "_scratch" / PHASE, run_dir / "_probe" / PHASE
+        dirs = phase_dirs(run_id, PHASE)
         hotspots: list[Hotspot] = []
         checkout: tuple[Workload, str] | None = None
-        left: list[str] = []
         before = self._fingerprint()
-        try:
-            handle = self._git.add_worktree(worktree, commit)
+        with owned_phases(self._git, "the profiler", dirs):
+            handle = self._git.add_worktree(dirs.worktree, commit)
             phase = self._phase(
-                self._git, handle, scratch=scratch, probe=probe, run=self._run
+                self._git, handle, scratch=dirs.scratch, probe=dirs.probe, run=self._run
             )
             tracked = frozenset(self._git.ls_tree(commit))
             for workload, target in planned:
@@ -441,15 +417,6 @@ class CProfiler:
                     "the repository changed while the profiler ran: its refs,"
                     " config or hooks differ from before the run"
                 )
-        finally:
-            left = self._cleanup(run_dir, worktree, scratch, probe)
-        if left:  # only when nothing else was raised: that error wins
-            raise EngineError(
-                "the profiler could not clean up "
-                + ", ".join(_quote(path) for path in left)
-                + ": it no longer resolves inside WORKTREE_ROOT (a link was"
-                " planted in place of the run directory); remove it by hand"
-            )
         if checkout is not None:
             raise self._editable(*checkout)
         hotspots.sort(key=lambda hotspot: -hotspot.share)
@@ -472,7 +439,7 @@ class CProfiler:
         try:
             where = "the profile run"
             timeout_s = workload.timeout_s * PROFILE_TIMEOUT_FACTOR
-            _launch(phase, argv, workload.working_dir, timeout_s, where, run_notes)
+            launch(phase, argv, workload.working_dir, timeout_s, where, run_notes)
         except RunFailure as failure:
             failed = failure.reason
         notes.extend(f"{label}: {note}" for note in run_notes)
@@ -482,9 +449,9 @@ class CProfiler:
         phase.reset()
         data = bytearray()
         try:
-            _read_regular(out, _profile_shim.MAX_DOC_BYTES, data.extend)
+            read_capped(out, _profile_shim.MAX_DOC_BYTES, data.extend)
             doc = parse_profile(bytes(data))
-        except (_UnusableError, ProfileFormatError) as problem:
+        except (UnusableError, ProfileFormatError) as problem:
             notes.append(
                 f"{label} is not profiled: the profile output {problem}{GUARD_SKIPPED}"
             )
@@ -542,24 +509,3 @@ class CProfiler:
             " checkout, not the commit; install the project without -e or"
             " --symlink, or remove that entry"
         )
-
-    def _cleanup(self, run_dir: Path, worktree: Path, *dirs: Path) -> list[str]:
-        """Remove the worktree, then each dir, then prune; every step runs.
-        Returns the dirs it could not remove safely (``_remove``)."""
-        left: list[str] = []
-        try:
-            self._git.remove_worktree(worktree)
-        finally:
-            try:
-                for path in dirs:
-                    try:
-                        _remove(path)
-                    except ValueError:
-                        left.append(str(path))
-            finally:
-                self._git.prune()
-                for path in (run_dir / "_scratch", run_dir / "_probe", run_dir):
-                    # not empty (another owner), or <run> is a planted link
-                    with contextlib.suppress(OSError, ValueError):
-                        os.rmdir(_contained(path))
-        return left

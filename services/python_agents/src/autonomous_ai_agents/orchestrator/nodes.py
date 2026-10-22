@@ -75,7 +75,6 @@ from autonomous_ai_agents.common.models import (
     Objective,
     ObjectiveKind,
     Paper,
-    Project,
     RunPhase,
     ScalarDict,
     Technique,
@@ -87,7 +86,9 @@ from autonomous_ai_agents.common.models import (
     ViolationRule,
     Workload,
 )
-from autonomous_ai_agents.common.refnames import refname_problem
+from autonomous_ai_agents.common.refnames import (
+    assert_safe_branch as assert_safe_branch,
+)
 from autonomous_ai_agents.execution.measure import baseline_test_count
 from autonomous_ai_agents.execution.protocols import (
     BranchPublisher,
@@ -808,33 +809,6 @@ def decided_verdicts(
         else:
             decided.append(verdict)
     return decided
-
-
-def assert_safe_branch(branch: str, project: Project, prefix: str) -> None:
-    """Refuse a branch the engine must not create or deliver onto.
-
-    ``prefix`` must be non-empty and end with ``/``; ``branch`` must not be
-    the project's default branch, must start with ``prefix`` and must be a
-    valid git refname: ``/``-separated segments matching
-    ``[A-Za-z0-9][A-Za-z0-9._-]*``, none empty, none containing ``..`` or
-    ending with ``.lock``, no ``@{`` and no trailing ``.``. Raises
-    ``DeliveryError``.
-    """
-    if not prefix.endswith("/"):
-        raise DeliveryError(
-            f"engine branch prefix {prefix!r} must be non-empty and end with '/'"
-        )
-    if branch == project.default_branch:
-        raise DeliveryError(
-            f"refusing to touch the default branch {branch!r} of {project.name}"
-        )
-    if not branch.startswith(prefix):
-        raise DeliveryError(
-            f"branch {branch!r} is outside the engine prefix {prefix!r}"
-        )
-    problem = refname_problem(branch)
-    if problem is not None:
-        raise DeliveryError(f"branch {branch!r} is not a safe git refname: {problem}")
 
 
 _CELL_LIMIT = 200

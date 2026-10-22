@@ -55,7 +55,7 @@ from autonomous_ai_agents.common.models import (
 from autonomous_ai_agents.common.paths import RESERVED_MODULES
 from autonomous_ai_agents.execution import launcher
 from autonomous_ai_agents.execution.fakes import FakeEditor, ScriptedEditor
-from autonomous_ai_agents.execution.git import GitError, GitWorkspace, _rmtree
+from autonomous_ai_agents.execution.git import GitError, GitWorkspace
 from autonomous_ai_agents.execution.procrun import OutputCaps, RunSample
 from autonomous_ai_agents.execution.protocols import (
     Change,
@@ -1159,52 +1159,63 @@ def test_a_branch_that_does_not_name_this_trial_is_refused(
     assert git(rig.repo, "worktree", "list", "--porcelain").count("worktree ") == 1
 
 
-# ---------------------------------------------------------------------------
-# Hardened cleanup (decision 38, mirrored from the profiler)
-# ---------------------------------------------------------------------------
+def prefixed_runner(rig: Rig, prefix: str) -> GitTrialRunner:
+    def build(
+        *, module_roots: AbstractSet[str], reserved_modules: AbstractSet[str]
+    ) -> CodeEditor:
+        return ScriptedEditor(DEDUPE_EDITS)
+
+    return GitTrialRunner(
+        rig.project,
+        editor=build,
+        network="required",
+        fs="required",
+        platform="linux",
+        base_env={"PATH": "/usr/bin"},
+        run=rig.run,
+        prefix=prefix,
+    )
 
 
-def test_cleanup_unlinks_a_planted_scratch_link_and_keeps_a_busy_run_dir(
-    rig: Rig,
-) -> None:
-    outside = rig.root / "outside"
-    outside.mkdir()
-    (outside / "keep.txt").write_text("keep")
-    (rig.run_dir / "baseline").mkdir(parents=True)
+def test_the_trial_ref_lives_under_the_callers_prefix(rig: Rig) -> None:
+    """
+    GIVEN a runner built with the context's prefix bots/ (not the setting's)
+    WHEN a trial on bots/trial-<run>-<hyp> commits
+    THEN its own ref is refs/heads/bots/trial-<run>-<hyp>, and a branch
+        under the setting's prefix is refused before any worktree
+    """
+    hypothesis = rig.hypothesis()
+    load = rig.workload()
+    runner = prefixed_runner(rig, "bots/")
+    branch = f"bots/trial-{RUN_ID}-{hypothesis.id}"
 
-    def plant(call: Call) -> None:
-        scratch = call.sandbox.writable[1]
-        if not scratch.is_symlink():
-            shutil.rmtree(scratch)
-            os.symlink(outside, scratch)
+    trial = runner.run(
+        hypothesis, [load], rig.baseline([load]), round=1, branch=branch,
+        budget_usd=1.0, brief=TrialBrief(None, (), DEFAULT_PROTECTED_PATTERNS),
+    )  # fmt: skip
 
-    rig.run.hook = plant
-
-    trial = rig.trial(rig.hypothesis(), rig.runner(ScriptedEditor(DEDUPE_EDITS)))
-
-    assert trial.status is TrialStatus.measured
-    assert (outside / "keep.txt").read_text() == "keep"
-    assert sorted(os.listdir(rig.run_dir)) == ["baseline"]
-
-
-def test_cleanup_unlinks_a_planted_link_in_place_of_the_scratch_parent(
-    rig: Rig,
-) -> None:
-    outside = rig.root / "outside"
-    (outside / "keep").mkdir(parents=True)
-
-    def plant(call: Call) -> None:
-        parent = call.sandbox.writable[1].parent
-        if not parent.is_symlink():
-            shutil.rmtree(parent)
-            os.symlink(outside, parent)
-
-    rig.run.hook = plant
-
-    rig.trial(rig.hypothesis(), rig.runner(ScriptedEditor(DEDUPE_EDITS)))
-
-    assert (outside / "keep").is_dir()
+    assert trial.status is TrialStatus.measured, trial.error
+    assert git(rig.repo, "rev-parse", f"refs/heads/{branch}") == trial.commit
     no_leftovers(rig)
+    with pytest.raises(ValueError, match="branch"):
+        runner.run(
+            hypothesis, [load], rig.baseline([load]), round=1,
+            branch=rig.branch(hypothesis), budget_usd=1.0,
+            brief=TrialBrief(None, (), ()),
+        )  # fmt: skip
+
+
+@pytest.mark.parametrize("prefix", ["", "bots", "a b/"])
+def test_an_unsafe_prefix_is_refused_when_the_runner_is_built(
+    rig: Rig, prefix: str
+) -> None:
+    with pytest.raises(ValueError, match="prefix"):
+        prefixed_runner(rig, prefix)
+
+
+# ---------------------------------------------------------------------------
+# Cleanup: the shared phase helper (tests/execution/test_phase.py) is used
+# ---------------------------------------------------------------------------
 
 
 def move_run_dir(rig: Rig) -> Callable[[Call], None]:
@@ -1290,26 +1301,6 @@ def assert_engine_dirs_removed(rig: Rig, phase: str, method: str) -> None:
 
 
 @pytest.mark.parametrize(("method", "error"), CLEANUP_FAILURES)
-def test_a_failing_cleanup_step_still_runs_every_other_step(
-    rig: Rig, method: str, error: Exception
-) -> None:
-    """
-    GIVEN worktree removal or prune that fails after the worktree exists
-    WHEN the trial ends without an error of its own
-    THEN scratch and probe are still removed, <run> is rmdir-ed when empty,
-        and the failure is an EngineError naming it
-    """
-    hypothesis = rig.hypothesis()
-    failing = CleanupFailingGit(rig.repo, method, error)
-
-    with pytest.raises(EngineError, match="could not clean up") as raised:
-        rig.trial(hypothesis, rig.runner(FakeEditorThatWrites(), git_workspace=failing))
-
-    assert str(error) in str(raised.value)
-    assert_engine_dirs_removed(rig, f"trial-{hypothesis.id}", method)
-
-
-@pytest.mark.parametrize(("method", "error"), CLEANUP_FAILURES)
 def test_a_failing_cleanup_step_never_hides_tampering(
     rig: Rig, method: str, error: Exception
 ) -> None:
@@ -1321,26 +1312,6 @@ def test_a_failing_cleanup_step_never_hides_tampering(
         rig.trial(hypothesis, rig.runner(FakeEditorThatWrites(), git_workspace=failing))
 
     assert_engine_dirs_removed(rig, f"trial-{hypothesis.id}", method)
-
-
-def test_a_scratch_dir_that_cannot_be_removed_still_lets_probe_go(
-    rig: Rig, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    hypothesis = rig.hypothesis()
-    scratch = rig.run_dir / "_scratch" / f"trial-{hypothesis.id}"
-
-    def rmtree(path: Path) -> None:
-        if Path(path) == scratch:
-            raise PermissionError(1, "Operation not permitted", str(path))
-        _rmtree(path)
-
-    monkeypatch.setattr("autonomous_ai_agents.execution.trial_runner._rmtree", rmtree)
-
-    with pytest.raises(EngineError, match="could not clean up") as raised:
-        rig.trial(hypothesis, rig.runner(FakeEditorThatWrites()))
-
-    assert str(scratch) in str(raised.value)
-    assert scratch.is_dir() and not (rig.run_dir / "_probe").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -1460,6 +1431,19 @@ def test_a_baseline_cleanup_problem_is_an_engine_error(rig: Rig) -> None:
 
     with pytest.raises(EngineError, match="could not clean up"):
         baseline_runner(rig).measure([rig.workload()], run_id=RUN_ID, commit=rig.commit)
+
+
+@pytest.mark.parametrize(("method", "error"), CLEANUP_FAILURES)
+def test_a_failing_baseline_cleanup_step_never_hides_tampering(
+    rig: Rig, method: str, error: Exception
+) -> None:
+    runner = baseline_runner(rig, git=CleanupFailingGit(rig.repo, method, error))
+    rig.run.hook = user_git(rig, "config", "user.name", "planted")
+
+    with pytest.raises(RepoTamperedError):
+        runner.measure([rig.workload()], run_id=RUN_ID, commit=rig.commit)
+
+    assert_engine_dirs_removed(rig, "baseline", method)
 
 
 @pytest.mark.parametrize("run_id", ["", "../x", "a/b", "x..y", "-x", "x.lock"])
