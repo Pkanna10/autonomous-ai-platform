@@ -100,3 +100,23 @@ U17 understand (Builder, Fable correctness + security reviews, fixer; 4 agents, 
 - U20 / U4 follow-up: GitWorkspace.read_blob has no size limit, so one huge tracked file is held in memory (up to
   MAX_OUTPUT_BYTES) before the understander truncates it. Add read_blob(..., limit=) or a sized ls-tree -l in U20.
 - Accepted: understand.py 656 lines (precedent: procrun 664, preflight 654, measure 604).
+Wave 5 (U18 a22d142, U19 fefe698, Lead fix 1f5c131; 8 agents, ~1.62M subagent tokens):
+- Lead fix: Combiner.combine takes keyword-only baseline_count; CombineRules carries baseline_test_count of the state
+  baseline and _retest passes it (both U19 reviewers: the tip's suite only had to pass one test).
+- U18: a foreign engine/trial ref (no matching Engine-Trial trailer) stops the trial with EngineError before any
+  worktree; a re-run that commits nothing deletes its stale own ref; an own ref that is checked out is never moved.
+  run_scope resolves a symlinked script to its target dir (inside the worktree) for module_roots.
+- U19: publish reads the ref before checking anything out; a default branch that is a symref to the new engine ref
+  is detected after the create and undone (DeliveryError).
+- U20 follow-ups:
+  - Factor the phase cleanup into one shared helper; U18's _PhaseOwner._cleanup is the strictest version (every step
+    in its own finally, errors collected, never hides an in-flight error); CProfiler._cleanup can still let a
+    remove_worktree ValueError/GitError replace an in-flight error, so switch it to the shared helper.
+  - Public helpers instead of private imports: GitWorkspace.commit_message, anticheat.is_utf8,
+    measure.python_module, git contained-rmtree; also GitWorkspace.read_blob(..., limit=) (U17),
+    diff_commits / is_ancestor / symbolic_ref (U19: publish without a checkout, ancestor check, symref pre-check).
+  - One assert_safe_branch(branch, project, prefix) in common/refnames.py with the prefix threaded through git.py;
+    combine.py keeps a local copy and git._engine_ref hard-codes settings.TRIAL_BRANCH_PREFIX today.
+  - Preflight backlog: refuse or report merge= attributes (merge=union can hide a combine conflict; the tip is still
+    fully re-tested).
+- Accepted sizes: trial_runner.py 656 lines, combine.py 401 lines (shrink when the cleanup and publisher move out).
