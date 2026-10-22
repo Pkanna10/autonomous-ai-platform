@@ -13,6 +13,7 @@ import hashlib
 import math
 import os
 import shutil
+import signal
 import socket
 import stat
 import subprocess
@@ -349,6 +350,33 @@ def test_a_blob_past_the_output_cap_is_refused(
     monkeypatch.setattr(settings, "MAX_OUTPUT_BYTES", 4096)
     with pytest.raises(GitError, match="cat-file printed more than 4096 bytes"):
         ws.read_blob(head, "big.txt")
+
+
+def test_a_group_of_zombies_answering_eperm_never_hides_the_cap_error(
+    ws: GitWorkspace, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    GIVEN a git call past its output cap, on a host whose killpg answers
+          EPERM for a group whose members already exited (macOS)
+    WHEN the engine kills git's process group
+    THEN the cap's GitError is what the caller sees, not PermissionError
+    """
+    write(repo / "big.txt", "x" * 5000)
+    run_git(repo, "add", "big.txt")
+    run_git(repo, "commit", "-q", "-m", "big")
+    head = ws.head_commit()
+    killed: list[int] = []
+
+    def macos_killpg(pgid: int, sig: int) -> None:
+        killed.append(sig)
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(os, "killpg", macos_killpg)
+    monkeypatch.setattr(settings, "MAX_OUTPUT_BYTES", 4096)
+
+    with pytest.raises(GitError, match="cat-file printed more than 4096 bytes"):
+        ws.read_blob(head, "big.txt")
+    assert killed == [signal.SIGKILL]
 
 
 @pytest.mark.parametrize(

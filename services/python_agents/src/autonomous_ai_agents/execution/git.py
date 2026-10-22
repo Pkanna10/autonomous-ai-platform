@@ -338,7 +338,8 @@ class GitWorkspace:
             try:
                 out, err = self._collect(proc, command, what, keep, sink)
             except BaseException:
-                with contextlib.suppress(ProcessLookupError):
+                # macOS answers EPERM for a group whose members all exited
+                with contextlib.suppress(ProcessLookupError, PermissionError):
                     os.killpg(proc.pid, signal.SIGKILL)
                 raise
         return proc.returncode, out, err

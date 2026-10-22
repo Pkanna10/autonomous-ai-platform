@@ -1615,8 +1615,10 @@ def test_real_run_passes_the_probe_port_and_closes_the_listener(
 
     monkeypatch.setattr(procrun, "_probe_listener", listener)
     monkeypatch.setattr(procrun, "launcher_argv", argv_spy)
+    true = shutil.which("true")  # /usr/bin/true on macOS, no /bin/true there
+    assert true is not None
 
-    run(dirs, ["/bin/true"])
+    run(dirs, [true])
 
     [(sock, port)] = listeners
     assert ports == [port]
