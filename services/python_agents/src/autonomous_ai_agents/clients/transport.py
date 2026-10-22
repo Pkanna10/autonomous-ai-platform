@@ -170,7 +170,8 @@ class AnthropicTransport(_ChainPricing):
     """The real Claude API, through ``client.beta.messages``.
 
     The HTTP client is always built here, so redirects stay off;
-    ``http_transport`` only swaps the wire (tests pass a mock).
+    ``http_transport`` only swaps the wire (tests pass a mock). The base URL
+    is always ``ENGINE_API_BASE_URL``, never the SDK's ``ANTHROPIC_BASE_URL``.
     """
 
     def __init__(
@@ -187,6 +188,7 @@ class AnthropicTransport(_ChainPricing):
             raise LLMConfigError("ANTHROPIC_API_KEY holds the .env.example placeholder")
         self._client = anthropic.Anthropic(
             api_key=secret.get_secret_value(),
+            base_url=cfg.ENGINE_API_BASE_URL,
             max_retries=0,
             timeout=_timeout(cfg.LLM_TIMEOUT_S, cfg.LLM_TIMEOUT_S),
             http_client=anthropic.DefaultHttpxClient(

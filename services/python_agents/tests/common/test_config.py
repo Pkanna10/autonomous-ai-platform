@@ -279,6 +279,8 @@ def test_settings_keep_a_non_blank_api_key_passed_in(
 # ---------------------------------------------------------------------------
 
 STEP2_ENV = (
+    "ENGINE_API_BASE_URL",
+    "ANTHROPIC_BASE_URL",
     "ENGINE_MODEL",
     "TRIAGE_MODEL",
     "ENGINE_FALLBACKS",
@@ -705,3 +707,62 @@ def test_settings_refuse_a_bad_cost_cap(
     monkeypatch.setenv("MAX_COST_USD", "0")
     assert Settings(_env_file=None).MAX_COST_USD == 0.0
     assert math.isfinite(Settings(_env_file=None).MAX_COST_USD)
+
+
+def test_the_engine_api_base_url_defaults_to_the_official_api(
+    monkeypatch: pytest.MonkeyPatch, clean_env: Path
+) -> None:
+    """Should talk to the official API unless the engine's own setting says otherwise.
+
+    GIVEN ANTHROPIC_BASE_URL set in the environment (the SDK would read it)
+    WHEN creating Settings instance without ENGINE_API_BASE_URL
+    THEN the engine's base URL is still https://api.anthropic.com
+    """
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://proxy.example")
+
+    assert Settings(_env_file=None).ENGINE_API_BASE_URL == "https://api.anthropic.com"
+
+
+@pytest.mark.parametrize(
+    "value", ["https://api.anthropic.com", "https://gateway.example:8443/anthropic"]
+)
+def test_the_engine_api_base_url_accepts_https(
+    monkeypatch: pytest.MonkeyPatch, clean_env: Path, value: str
+) -> None:
+    """Should accept an explicit https base URL with a host.
+
+    GIVEN ENGINE_API_BASE_URL set to an https URL
+    WHEN creating Settings instance
+    THEN the value is used as given
+    """
+    monkeypatch.setenv("ENGINE_API_BASE_URL", value)
+
+    assert Settings(_env_file=None).ENGINE_API_BASE_URL == value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "http://api.anthropic.com",
+        "api.anthropic.com",
+        "https://",
+        "https://user:pw@api.anthropic.com",
+        "file:///etc/passwd",
+    ],
+)
+def test_the_engine_api_base_url_refuses_anything_but_plain_https(
+    monkeypatch: pytest.MonkeyPatch, clean_env: Path, value: str
+) -> None:
+    """Should refuse a base URL that is not https, has no host, or carries credentials.
+
+    GIVEN ENGINE_API_BASE_URL that is plain http, schemeless, hostless,
+          carries userinfo, or is another scheme
+    WHEN creating Settings instance
+    THEN validation fails naming the setting, so the API key never leaves over
+         plain http or to an unintended host
+    """
+    monkeypatch.setenv("ENGINE_API_BASE_URL", value)
+
+    with pytest.raises(ValidationError, match="ENGINE_API_BASE_URL"):
+        Settings(_env_file=None)

@@ -9,6 +9,7 @@ rather than in the middle of a run.
 import os
 from pathlib import Path
 from typing import Literal, Self
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -81,6 +82,25 @@ class Settings(BaseSettings):
         raw = value.get_secret_value() if isinstance(value, SecretStr) else value
         if isinstance(raw, str) and not raw.strip():
             return None
+        return value
+
+    ENGINE_API_BASE_URL: str = "https://api.anthropic.com"
+    """Where ``AnthropicTransport`` sends requests (and the key).
+
+    The SDK would otherwise read ``ANTHROPIC_BASE_URL`` from the environment,
+    which a host or a tool may set for its own use; the engine follows only
+    this setting. It must be ``https`` with a host and no credentials."""
+
+    @field_validator("ENGINE_API_BASE_URL")
+    @classmethod
+    def _https_base_url(cls, value: str) -> str:
+        """Plain https with a host, so the key never travels in the clear."""
+        parts = urlsplit(value)
+        if parts.scheme != "https" or not parts.hostname or "@" in parts.netloc:
+            raise ValueError(
+                f"ENGINE_API_BASE_URL {value!r} must be an https URL with a host "
+                "and no credentials"
+            )
         return value
 
     # ============================================

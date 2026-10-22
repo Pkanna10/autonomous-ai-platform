@@ -703,6 +703,41 @@ def test_a_timeout_is_a_lost_attempt_and_is_caught_before_connection_errors() ->
         assert _exception_chain(caught) == [caught]
 
 
+def test_the_sdk_base_url_variable_never_redirects_the_engine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    GIVEN ANTHROPIC_BASE_URL in the environment pointing at another host
+    WHEN the transport sends
+    THEN the request still goes to the engine's ENGINE_API_BASE_URL
+         (api.anthropic.com by default), so the key never follows the variable
+    """
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://proxy.example")
+    wire = Wire(messages=[_ok()])
+
+    _transport(wire).send(BASE)
+
+    assert [r.url.host for r in wire.requests] == ["api.anthropic.com"]
+
+
+def test_an_explicit_engine_base_url_is_used() -> None:
+    """
+    GIVEN ENGINE_API_BASE_URL set to a gateway
+    WHEN the transport sends
+    THEN the request goes to that gateway's host and path
+    """
+    cfg = _settings().model_copy(
+        update={"ENGINE_API_BASE_URL": "https://gateway.example/anthropic"}
+    )
+    wire = Wire(messages=[_ok()])
+
+    _transport(wire, cfg).send(BASE)
+
+    (request,) = wire.requests
+    assert request.url.host == "gateway.example"
+    assert request.url.path.startswith("/anthropic/")
+
+
 def test_a_redirect_is_refused_and_never_followed() -> None:
     """
     GIVEN the messages endpoint answers 307 to another host
