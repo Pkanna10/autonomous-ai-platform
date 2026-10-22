@@ -149,6 +149,10 @@ def test_normalize_path_rejects_traversal_and_absolute_paths(raw: str) -> None:
         "PYPROJECT.TOML",
         "Tests/Test_Case.py",
         ".GitHub/workflows/CI.yml",
+        # unittest discovers test*.py by default, not only test_*.py.
+        "checks/testcore.py",
+        "tests.py",
+        "src/pkg/TestHelpers.py",
     ],
 )
 def test_protected_paths_are_detected(path: str) -> None:
@@ -175,6 +179,8 @@ def test_protected_paths_are_detected(path: str) -> None:
         "docs/testing.md",
         "README.md",
         "src/engine_toolkit.py",
+        "src/pkg/latest.py",
+        "src/contest.py",
     ],
 )
 def test_ordinary_source_paths_are_not_protected(path: str) -> None:

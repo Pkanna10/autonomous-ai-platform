@@ -49,6 +49,7 @@ DEFAULT_PROTECTED_PATTERNS: tuple[str, ...] = (
     "**/tests/**",
     "**/test/**",
     "**/test_*.py",
+    "**/test*.py",  # unittest's default discovery pattern (testcore.py, tests.py)
     "**/*_test.py",
     "**/conftest.py",
     "**/benchmarks/**",
