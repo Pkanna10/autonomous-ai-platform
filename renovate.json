@@ -14,7 +14,7 @@
   ],
   "timezone": "America/Los_Angeles",
   "labels": ["dependencies"],
-  "minimumReleaseAge": "3 days",
+  "minimumReleaseAge": "7 days",
   "prConcurrentLimit": 5,
   "prHourlyLimit": 2,
   "separateMajorMinor": true,

@@ -4,9 +4,13 @@
 # not installed). Keep one of the two: when Renovate is installed, delete this
 # file or they open duplicate PRs.
 #
-# cooldown: a release must be a few days old before it is proposed. The
-# compromised npm and PyPI releases of 2025 were pulled within hours; a
-# cooldown keeps them out of the lockfiles. Security updates ignore it.
+# cooldown: a release must be seven days old before a version update proposes
+# it. The compromised npm and PyPI releases of 2025 were pulled within hours
+# to days; a week keeps them out of the lockfiles. Cooldown applies to
+# version updates only: Dependabot security updates open immediately.
+#
+# Majors are kept out of the grouped PRs (and ignored for container images)
+# so a Node, Postgres or Redis major is a deliberate change with its own PR.
 #
 # SHA-pinned actions and digest-pinned images are updated in place (the
 # version comment on each `uses:` line is kept current).
@@ -20,13 +24,13 @@ updates:
       time: '03:00'
       timezone: America/Los_Angeles
     cooldown:
-      default-days: 3
+      default-days: 7
     groups:
-      github-actions:
-        patterns: ['*']
+      github-actions-minor-patch:
+        update-types: ['minor', 'patch']
     commit-message:
       prefix: 'ci'
-    labels: ['dependencies', 'ci']
+    labels: ['dependencies']
 
   - package-ecosystem: npm
     directory: /
@@ -36,13 +40,13 @@ updates:
       time: '03:00'
       timezone: America/Los_Angeles
     cooldown:
-      default-days: 3
+      default-days: 7
     groups:
       npm-minor-patch:
         update-types: ['minor', 'patch']
     commit-message:
       prefix: 'chore(deps)'
-    labels: ['dependencies']
+    labels: ['dependencies', 'javascript']
 
   - package-ecosystem: uv
     directory: /services/python_agents
@@ -52,13 +56,13 @@ updates:
       time: '03:00'
       timezone: America/Los_Angeles
     cooldown:
-      default-days: 3
+      default-days: 7
     groups:
       python-minor-patch:
         update-types: ['minor', 'patch']
     commit-message:
       prefix: 'chore(deps)'
-    labels: ['dependencies', 'python']
+    labels: ['dependencies', 'python:uv']
 
   - package-ecosystem: docker
     directories:
@@ -70,10 +74,15 @@ updates:
       time: '03:00'
       timezone: America/Los_Angeles
     cooldown:
-      default-days: 3
+      default-days: 7
+    ignore:
+      # Non-LTS Node lines and image majors (python 3.12+, node 24+) are
+      # deliberate upgrades, not weekly PRs.
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
     commit-message:
       prefix: 'build(docker)'
-    labels: ['dependencies', 'docker']
+    labels: ['dependencies']
 
   - package-ecosystem: docker-compose
     directory: /
@@ -83,7 +92,11 @@ updates:
       time: '03:00'
       timezone: America/Los_Angeles
     cooldown:
-      default-days: 3
+      default-days: 7
+    ignore:
+      # redis 8, Postgres 17 and the like are deliberate upgrades.
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
     commit-message:
       prefix: 'build(docker)'
-    labels: ['dependencies', 'docker']
+    labels: ['dependencies']

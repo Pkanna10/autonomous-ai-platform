@@ -29,7 +29,7 @@
   },
   "homepage": "https://github.com/Pkanna10/autonomous-ai-platform#readme",
   "engines": {
-    "node": ">=20.0.0",
+    "node": ">=22.12.0",
     "pnpm": ">=10.20.0"
   },
   "scripts": {
