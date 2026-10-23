@@ -58,12 +58,15 @@ jobs:
         with:
           persist-credentials: false
 
-      # The action's default BuildKit image (pinned per release) instead of
-      # the mutable moby/buildkit:latest.
+      # BuildKit pinned by digest (the action's own default, buildx-stable-1,
+      # is a moving tag; this is what it resolved to on 2026-10-23). Renovate
+      # and Dependabot do not track driver-opts, so bump it by hand with
+      # `docker buildx imagetools inspect moby/buildkit:buildx-stable-1`.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
         with:
           driver-opts: |
+            image=moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
             network=host
 
       - name: Log in to Container Registry
@@ -111,7 +114,9 @@ jobs:
           provenance: true
           sbom: true
 
-      # Scan built image immediately (no rebuild needed)
+      # Scan built image immediately (no rebuild needed). cache: 'false': the
+      # action otherwise restores its database and binary from actions/cache,
+      # writable state this publishing job must not depend on.
       - name: Scan Docker image with Trivy
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         if: github.event_name != 'pull_request'
@@ -120,6 +125,7 @@ jobs:
           format: 'table'
           severity: 'CRITICAL,HIGH'
           ignore-unfixed: true
+          cache: 'false'
 
       # Build distroless variant for maximum security
       - name: Build distroless variant
@@ -267,10 +273,12 @@ jobs:
         with:
           platforms: linux/amd64,linux/arm64
 
+      # Same digest-pinned BuildKit as build-node (see the comment there).
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
         with:
           driver-opts: |
+            image=moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
             network=host
 
       - name: Log in to Container Registry
@@ -326,10 +334,11 @@ jobs:
           provenance: mode=max
           sbom: true
 
-      # No actions/cache for the Trivy database here: this job publishes
-      # images, and a restored cache is writable state another run could have
-      # planted (zizmor cache-poisoning). A fresh database also means the scan
-      # never runs on stale advisories.
+      # No cache for Trivy in this job (neither actions/cache nor the action's
+      # own cache: 'true' default, which restores the database and binary from
+      # actions/cache): the job publishes images, and a restored cache is
+      # writable state another run could have planted (zizmor
+      # cache-poisoning). The database is downloaded fresh on every run.
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         if: github.event_name != 'pull_request'
@@ -341,6 +350,7 @@ jobs:
           vuln-type: 'os,library'
           ignore-unfixed: true
           timeout: 5m
+          cache: 'false'
 
       # Upload scan results as artifact
       - name: Upload Trivy Results
