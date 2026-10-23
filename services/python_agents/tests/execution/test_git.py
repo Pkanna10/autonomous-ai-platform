@@ -1904,7 +1904,7 @@ def test_without_o_path_the_chmod_changes_a_link_itself(
         real(path, mode, dir_fd=dir_fd)  # Linux has no fchmodat(NOFOLLOW)
 
     (tmp_path / "locked").mkdir(mode=0)
-    monkeypatch.delattr(os, "O_PATH")
+    monkeypatch.delattr(os, "O_PATH", raising=False)  # macOS has none
     monkeypatch.setattr(os, "chmod", chmod)
     fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
     try:
