@@ -14,9 +14,9 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: 'Live suite: stage-a, corpus, attack, hard, oss, or an experiment (probes, triage, papers) (one at a time: together they need more than the 150 USD ceiling)'
+        description: 'Live suite: stage-a, corpus, attack, hard, oss, or an experiment (probes, triage, papers, web, prescreen) (one at a time: together they need more than the 150 USD ceiling)'
         type: choice
-        options: [stage-a, corpus, attack, hard, oss, probes, triage, papers]
+        options: [stage-a, corpus, attack, hard, oss, probes, triage, papers, web, prescreen]
         default: stage-a
       mode:
         description: 'Corpus mode (LIVE_CORPUS_MODE): aimed (both manifest hypotheses), blind (one generic hypothesis), decoy (the neutral one alone)'
@@ -29,7 +29,7 @@ on:
         options: [claude-opus-5-5, claude-sonnet-5-5]
         default: claude-opus-5-5
       suite_cap_usd:
-        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75, hard 50, oss 50, probes 1, triage 2, papers 10'
+        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75, hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3'
         type: string
         default: '12'
 
@@ -512,7 +512,7 @@ jobs:
     # runs 2, attack 3, corpus 15, hard 10 and oss at most 10 (larger
     # repositories). A killed job loses the cost table, so each suite gets room
     # for its loops (the hosted maximum is 360).
-    timeout-minutes: ${{ inputs.suite == 'triage' && 90 || inputs.suite == 'papers' && 60 || inputs.suite == 'corpus' && 180 || inputs.suite == 'oss' && 180 || inputs.suite == 'hard' && 120 || inputs.suite == 'attack' && 45 || 30 }}
+    timeout-minutes: ${{ inputs.suite == 'triage' && 90 || inputs.suite == 'papers' && 60 || inputs.suite == 'web' && 90 || inputs.suite == 'corpus' && 180 || inputs.suite == 'oss' && 180 || inputs.suite == 'hard' && 120 || inputs.suite == 'attack' && 45 || 30 }}
     defaults:
       run:
         working-directory: ./services/python_agents
@@ -617,7 +617,8 @@ jobs:
           # need: the sum of the caps the suite's live tests ask the ledger for
           # (Stage A 8.55, corpus 15 x 5, attack 3 x 4, hard 10 x 5, oss at most
           # 10 x 5; the Window 0 experiments under tests/live/experiments: probes
-          # 0.46, triage 1.25, papers 3 x 1.25 + 2 x 2.75 + 0.75), rounded up; a smaller cap would refuse, and fail, the later
+          # 0.46, triage 1.25, papers 3 x 1.25 + 2 x 2.75 + 0.75, web 18 caps 51.08, prescreen 2 x 1.11),
+          # rounded up; a smaller cap would refuse, and fail, the later
           # tests of the suite.
           case "${INPUT_SUITE}" in
             stage-a) paths=(tests/live tests/execution/test_editor.py "${corpus[@]}"); need=9 ;;
@@ -628,8 +629,10 @@ jobs:
             probes) paths=(tests/live/experiments/test_probes_live.py); need=1 ;;
             triage) paths=(tests/live/experiments/test_triage_live.py); need=2 ;;
             papers) paths=(tests/live/experiments/test_extraction_live.py); need=10 ;;
+            web) paths=(tests/live/experiments/test_web_live.py); need=52 ;;
+            prescreen) paths=(tests/live/experiments/test_prescreen_live.py); need=3 ;;
             *)
-              echo "::error::unknown suite input (stage-a, corpus, attack, hard, oss, probes, triage or papers)"
+              echo "::error::unknown suite input (stage-a, corpus, attack, hard, oss, probes, triage, papers, web or prescreen)"
               exit 1
               ;;
           esac

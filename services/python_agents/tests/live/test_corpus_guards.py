@@ -1007,8 +1007,23 @@ def test_every_engine_model_choice_is_a_valid_fully_priced_chain(
             assert billed == (model,)  # stage M bills and prices Sonnet alone
 
 
-SUITES = ("stage-a", "corpus", "attack", "hard", "oss", "probes", "triage", "papers")
-EXPERIMENT_MINUTES = {"triage": 90, "papers": 60}  # batch wait 60 min; 5 papers
+SUITES = (
+    "stage-a",
+    "corpus",
+    "attack",
+    "hard",
+    "oss",
+    "probes",
+    "triage",
+    "papers",
+    "web",
+    "prescreen",
+)
+EXPERIMENT_MINUTES = {
+    "triage": 90,
+    "papers": 60,
+    "web": 90,
+}  # batch wait; 5 papers; 18 web runs
 EXPERIMENTS = "tests/live/experiments"  # the Window 0 experiments: never in Stage A
 CAP_CEILING_USD = 150  # the most suite_cap_usd may be
 OSS_LIVE = "tests/live/test_oss_live.py"  # U24's suite, built in parallel
@@ -1587,7 +1602,13 @@ def _suite_needs() -> dict[str, float]:
     probes = importlib.import_module(f"{__package__}.experiments.test_probes_live")
     triage = importlib.import_module(f"{__package__}.experiments.test_triage_live")
     papers = importlib.import_module(f"{__package__}.experiments.test_extraction_live")
+    web = importlib.import_module(f"{__package__}.experiments.test_web_live")
+    prescreen = importlib.import_module(
+        f"{__package__}.experiments.test_prescreen_live"
+    )
     return {
+        "web": web.E6_NEED_USD,
+        "prescreen": prescreen.E8B_NEED_USD,
         "triage": triage.E2_CAP_USD,
         "papers": math.fsum(
             papers.E7_OPUS_PAPER_CAP_USD if p.opus else papers.E7_PAPER_CAP_USD
@@ -1644,7 +1665,8 @@ def test_the_job_timeout_fits_every_suite() -> None:
         "hard": hard,
         "oss": oss,
     }
-    # stage-a and probes take the fallback; triage and papers are no loops
+    # stage-a, probes and prescreen take the fallback; the other experiments
+    # are no loops but have their own timeouts
     assert set(pairs) == set(loops) - {"stage-a"} | set(EXPERIMENT_MINUTES)
     for suite, minutes in EXPERIMENT_MINUTES.items():
         assert int(pairs[suite]) == minutes, suite
@@ -1703,6 +1725,8 @@ def _dispatch(
         ("probes", "0.99"),
         ("triage", "1.99"),
         ("papers", "9.99"),
+        ("web", "51.99"),
+        ("prescreen", "2.99"),
     ],
 )
 def test_the_run_step_refuses_a_cap_below_the_suite_need(
