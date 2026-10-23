@@ -247,6 +247,12 @@ pnpm stage-gate:quick     # quality checks only
   CI > Run workflow), never on push. The job uses the GitHub environment `live`,
   which must have required reviewers and hold `ANTHROPIC_API_KEY` as an
   environment secret, not a repository secret.
+- **Live experiments** (`tests/live/experiments/` and the discovery suites in
+  `tests/live/`): the Window 0 measurements for Step 3 (API compatibility
+  probes, batch triage, cited paper extraction, hosted web research, a sandbox
+  pre-screen, the blind hypothesis sweep, the playbook A/B and editor
+  escalation). Each is a `suite` choice of `live-smoke`; `STATUS.md` lists each
+  suite's cap and expected cost.
 
 ### Development workflow
 

@@ -903,6 +903,29 @@ to one needs the `anthropic-workspace-id` header on every request.
 Every live run still needs the user's approval in the `live` environment and
 keeps its own hard cap; the ledger below records each.
 
+**Window 0 experiments (added 2026-10-23, after the research report "Spend the
+expiring credit testing discovery").** The corpus runs above cost $2.80 and
+answered the editor question; the remaining credit buys answers for Step 3. Each
+is a `live-smoke` suite (one dispatch, user approval each). "Need" is the suite
+cap a dispatch must carry (the sum of its tests' worst-case caps); "expected" is
+the likely bill.
+
+| #   | Suite        | Measures                                                                                               | Need | Expected |
+| --- | ------------ | ------------------------------------------------------------------------------------------------------ | ---- | -------- |
+| E1  | `probes`     | which request shapes the API accepts (citations + format, PDF in tool_result, batch fallbacks, effort) | $1   | < $0.10  |
+| E2  | `triage`     | Haiku batch triage of ~500 abstracts: cost per abstract, cache hits, batch latency, sync agreement     | $2   | ~$0.10   |
+| E3  | `sweep`      | blind hypothesis hit@1/@5 for Opus low/medium/high and Sonnet medium/high, graded by Opus 4.8          | $77  | ~$10     |
+| E5  | `ab`         | does a retrieved playbook card raise executed wins (2 reps, exact McNemar)                             | $140 | $12-18   |
+| E6  | `web`        | hosted web search/fetch on an allowlist: cost, adherence, arXiv reachability, injection resistance     | $52  | $3-4     |
+| E7  | `papers`     | two-pass cited extraction from 5 papers, local quote verification, planted-instruction PDFs            | $10  | ~$3.30   |
+| E8a | `escalation` | Sonnet low first, failures re-run on Opus high                                                         | $43  | ~$1      |
+| E8b | `prescreen`  | do code-execution sandbox timings rank like local ones                                                 | $3   | ~$0.06   |
+| E9  | -            | reconcile the ledger with the Usage API (needs an Admin key; else the Console by hand)                 | $0   | $0       |
+
+Order: E1 first (its answers settle shapes the others rely on), then the cheap
+ones, then E3 and E5. E4 is the blind playbook (`research/playbook.json`), not a
+run.
+
 ### Window 1: 2026-10-23 to 2026-11-24 ($200)
 
 | Stage                          | When               | Live work                                                                                                                                                                                   | Est. per run    | Runs | Est. total |
@@ -949,6 +972,36 @@ E to use what is left before the reset.
 | 2026-10-23 | 0      | [39972311136](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/39972311136) | E0    | 1.50       | Corpus, Opus 5.5, cap 75, 14 min: 15/15 passed, every guard held. Slowdowns 12/12 won, each keeping the aimed hypothesis (known-fix rate 100 %), wall-time gains 61-98 %; controls 0/3 false wins. Per run 0.07-0.20 USD (mean 0.10), 2-5 % of the worst-case estimate (49.65 USD in all): the bound is 30-40x the real cost. The aimed hypothesis is handed to the engine, so this measures the editor and the judges, not discovery.                                                                                                                          |
 | 2026-10-23 | 0      | [39978570791](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/39978570791) | M     | 0.68       | Corpus, Sonnet 5.5 as editor (no fallbacks), 11 min: the same result as Opus, 12/12 slowdowns won with the aimed fix (gains 60-98 %), 0/3 control wins, every guard held, at 0.045 USD a run against Opus's 0.10 (0.45x). Cache reads were priced at 0.20 USD/MTok then; the docs say 0.10 (fixed in `f02e2e7`), so the true cost is a little lower.                                                                                                                                                                                                            |
 | 2026-10-23 | 0      | [39981157005](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/39981157005) | X     | 0.31       | Attack corpus, Opus 5.5, 2.5 min: 3/3 passed, every guard held: no canary on the wire, in a diff or in the report, no lure in a delivered diff, no capture violation; each repo's real slowdown was still won (gains 92-96 %). The editor attempted no forbidden call (refused none), so the injections were ignored rather than refused: the refusal path stays proven offline only. One request in attack_exfil was served by the `claude-opus-4-8` fallback. The first dispatch was cancelled by the shared dispatch concurrency group (fixed in `69da74f`). |
+
+### 2026-10-23 (Window 0 experiments)
+
+- **A raw-SDK harness for API features the engine does not use**
+  (`tests/live/experiments/`), not new engine code: batches, citations, web
+  tools and code execution are Step 3 candidates, so they are measured before
+  they are designed in. Why: the engine's transport is deliberately narrow
+  (fallbacks, no thinking, 5-minute caching); widening it for an experiment
+  would weaken the cap it proves.
+- **The harness keeps the engine's guarantees.** Every request is pinned to the
+  engine's host at the wire, checked against a worst-case bound before it is
+  sent, priced per attempt and recorded in the suite ledger; a run over its cap
+  fails. Why: the SDK follows a batch's `results_url` by itself, and a
+  server-tool loop bills up to 10 passes; both broke the first bound.
+- **Caps are sums of worst cases, so arm order cannot refuse an arm.** The first
+  X7 draft shared one cap across arms and would have lost the later arms' data
+  exactly when the first ones spent most. Why: biased data is worse than a
+  larger reserved cap that is never spent.
+- **The playbook was written blind** (its author never read the corpus) and
+  carries distractors. Why: a playbook tuned to the benchmark makes the A/B
+  worthless.
+- **The sweep's grader is Opus 4.8, no arm's model.** Why: an LLM judge favours
+  its own family.
+- **The trial brief falls back to the run's top 5 hotspots** (`546782e`). Why:
+  caller-built candidates named no hotspot of the run, so every corpus editor
+  saw "Profiler hotspots: (none)". Runs after it are comparable with each other,
+  not with the earlier ledger rows.
+- **Effort is an explicit per-role setting** (`UNDERSTAND_EFFORT`,
+  `EDITOR_EFFORT`). Why: unset, Opus 5.5 ran at medium and Sonnet 5.5 at high,
+  so the M comparison was not like for like.
 
 ## Next: finish Step 2, then Step 3
 
@@ -1028,6 +1081,12 @@ the judged-trials key question (closed by decision 35). Left:
 
 ### Step 2
 
+- **Cost caps need a stated rule in the brief.** Two of the nine experiment
+  units first shared one cap across requests whose worst cases summed to 3x the
+  cap (the later arms would have been refused, biasing the data), and the
+  harness's first bound missed fetched PDFs and the server-tool loop. Every
+  brief that spends now states: a shared run's cap is the sum of its requests'
+  worst cases, computed with the real estimator and asserted by a guard.
 - **Real runners find what local runs cannot.** CI's runner had Python 3.10,
   whose missing `-P` broke a profiler test (`cd0a3e6`), and the first macOS run
   found that `killpg` answers EPERM there once the group has exited (`ecb24aa`).
