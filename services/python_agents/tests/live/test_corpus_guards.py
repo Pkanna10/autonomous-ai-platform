@@ -1007,7 +1007,8 @@ def test_every_engine_model_choice_is_a_valid_fully_priced_chain(
             assert billed == (model,)  # stage M bills and prices Sonnet alone
 
 
-SUITES = ("stage-a", "corpus", "attack", "hard", "oss", "probes")
+SUITES = ("stage-a", "corpus", "attack", "hard", "oss", "probes", "triage", "papers")
+EXPERIMENT_MINUTES = {"triage": 90, "papers": 60}  # batch wait 60 min; 5 papers
 EXPERIMENTS = "tests/live/experiments"  # the Window 0 experiments: never in Stage A
 CAP_CEILING_USD = 150  # the most suite_cap_usd may be
 OSS_LIVE = "tests/live/test_oss_live.py"  # U24's suite, built in parallel
@@ -1584,7 +1585,15 @@ def _suite_needs() -> dict[str, float]:
     assert _oss_repos() * OSS_RUN_CAP_USD <= oss
     stage_a = _stage_a_need()
     probes = importlib.import_module(f"{__package__}.experiments.test_probes_live")
+    triage = importlib.import_module(f"{__package__}.experiments.test_triage_live")
+    papers = importlib.import_module(f"{__package__}.experiments.test_extraction_live")
     return {
+        "triage": triage.E2_CAP_USD,
+        "papers": math.fsum(
+            papers.E7_OPUS_PAPER_CAP_USD if p.opus else papers.E7_PAPER_CAP_USD
+            for p in papers.PAPERS
+        )
+        + papers.E7_INJECTION_CAP_USD,
         "probes": math.fsum(probes.CAPS.values()),
         "stage-a": stage_a,
         "corpus": corpus,
@@ -1635,7 +1644,10 @@ def test_the_job_timeout_fits_every_suite() -> None:
         "hard": hard,
         "oss": oss,
     }
-    assert set(pairs) == set(loops) - {"stage-a"}  # stage-a takes the fallback
+    # stage-a and probes take the fallback; triage and papers are no loops
+    assert set(pairs) == set(loops) - {"stage-a"} | set(EXPERIMENT_MINUTES)
+    for suite, minutes in EXPERIMENT_MINUTES.items():
+        assert int(pairs[suite]) == minutes, suite
     for suite, count in loops.items():
         minutes = int(pairs.get(suite, fallback.group(1)))
         assert count * MINUTES_PER_LOOP <= minutes <= 360, (suite, minutes)
@@ -1689,6 +1701,8 @@ def _dispatch(
         ("hard", "49.99"),
         ("oss", "12"),
         ("probes", "0.99"),
+        ("triage", "1.99"),
+        ("papers", "9.99"),
     ],
 )
 def test_the_run_step_refuses_a_cap_below_the_suite_need(
@@ -1788,6 +1802,14 @@ STAGE_A_PATHS = (
             "claude-opus-5-5",
             "1",
             f"{EXPERIMENTS}/test_probes_live.py",
+            "on",
+            "aimed",
+        ),
+        (
+            "papers",
+            "claude-opus-5-5",
+            "10",
+            f"{EXPERIMENTS}/test_extraction_live.py",
             "on",
             "aimed",
         ),

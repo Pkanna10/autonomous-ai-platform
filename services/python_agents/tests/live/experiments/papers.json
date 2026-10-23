@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "note": "E7 papers: performance engineering, Python and CPU first. Ids and titles are from memory and cannot be checked from the build container; the live run fetches each one's metadata and records whether the title matches, and a fetch failure is recorded, not fatal.",
+  "papers": [
+    {
+      "arxiv_id": "2006.03879",
+      "title": "Scalene: Scripting-Language Aware Profiling for Python",
+      "opus": true
+    },
+    {
+      "arxiv_id": "1602.00602",
+      "title": "Virtual Machine Warmup Blows Hot and Cold",
+      "opus": true
+    },
+    {
+      "arxiv_id": "1102.1523",
+      "title": "The NumPy array: a structure for efficient numerical computation",
+      "opus": false
+    },
+    {
+      "arxiv_id": "2006.10256",
+      "title": "Array Programming with NumPy",
+      "opus": false
+    },
+    {
+      "arxiv_id": "1907.10121",
+      "title": "SciPy 1.0: Fundamental Algorithms for Scientific Computing in Python",
+      "opus": false
+    }
+  ]
+}
