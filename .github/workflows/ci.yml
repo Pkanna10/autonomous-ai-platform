@@ -35,8 +35,8 @@ jobs:
     steps:
       # Keeps the default persisted token, unlike every other job: on push,
       # paths-filter may 'git fetch' the base commit, which needs it on a
-      # private repo. This job runs no repository code.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # private repo. This job runs no repository code and uploads nothing.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 # zizmor: ignore[artipacked]
 
       - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
         id: filter
@@ -291,8 +291,8 @@ jobs:
     services:
       postgres:
         # pgvector on Postgres 16, pinned to a release tag and its multi-arch
-        # index digest. docker-compose.dev.yml floats on pgvector/pgvector:pg16
-        # (the same digest on 2026-10-22); bump both together.
+        # index digest; docker-compose.dev.yml pins the same digest. Bump both
+        # together.
         image: pgvector/pgvector:0.8.7-pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
         env:
           POSTGRES_DB: ai_platform
@@ -320,6 +320,8 @@ jobs:
       - name: Setup uv (fast Python package installer)
         uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
         with:
+          # Pinned: without it the action downloads whatever uv is latest.
+          version: '0.11.32'
           enable-cache: true
           cache-dependency-glob: |
             **/pyproject.toml
@@ -443,6 +445,8 @@ jobs:
       - name: Setup uv (fast Python package installer)
         uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
         with:
+          # Pinned: without it the action downloads whatever uv is latest.
+          version: '0.11.32'
           enable-cache: true
           cache-dependency-glob: |
             **/pyproject.toml
@@ -498,6 +502,8 @@ jobs:
       - name: Setup uv (fast Python package installer)
         uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
         with:
+          # Pinned: without it the action downloads whatever uv is latest.
+          version: '0.11.32'
           enable-cache: true
           cache-dependency-glob: |
             **/pyproject.toml
@@ -747,9 +753,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Blocking: the stage gate already requires a clean audit at moderate+,
+      # and a non-blocking audit never stopped a vulnerable lockfile.
       - name: Run pnpm audit
         run: pnpm audit --audit-level=high
-        continue-on-error: true
 
   # Docker security scan (optimized with Trivy caching)
   docker-security:
