@@ -26,6 +26,7 @@ every repository, and ``make_repo`` copies one repository directory only.
 
 from __future__ import annotations
 
+import functools
 import json
 import math
 import os
@@ -39,6 +40,7 @@ from typing import Final, Literal
 from e2e.conftest import Isolation, LaunchLog, RepoSnapshot, UserRepo, git
 from e2e.test_step2 import _check_repo_untouched
 
+from autonomous_ai_agents.clients.cost import chain, preflight_estimate
 from autonomous_ai_agents.clients.transport import LLMTransport
 from autonomous_ai_agents.common.config import Settings, settings
 from autonomous_ai_agents.common.models import (
@@ -57,6 +59,8 @@ from autonomous_ai_agents.common.models import (
     VerdictOutcome,
     Workload,
 )
+from autonomous_ai_agents.execution.editor import ClaudeEditor
+from autonomous_ai_agents.execution.trial_runner import EditorFactory
 from autonomous_ai_agents.optimization.judges import primary_metric
 from autonomous_ai_agents.orchestrator.factory import build_context
 from autonomous_ai_agents.orchestrator.main import EngineRunResult, Orchestrator
@@ -478,6 +482,17 @@ class Loop:
         )
 
 
+def settings_editor(transport: LLMTransport, cfg: Settings) -> EditorFactory:
+    """The factory's ``ClaudeEditor`` on ``cfg`` (its ``EDITOR_EFFORT`` and
+    limits) instead of the global settings."""
+    return functools.partial(ClaudeEditor, transport, config=cfg)
+
+
+def settings_trial_budget(cfg: Settings) -> float:
+    """``factory.min_trial_budget`` priced over ``cfg``'s chain."""
+    return preflight_estimate(0, cfg.EDITOR_MAX_TOKENS, chain(cfg), cfg.MODEL_PRICING)
+
+
 def start_loop(
     repo: CorpusRepo,
     run: LiveRun,
@@ -486,20 +501,35 @@ def start_loop(
     extra: Mapping[str, str] | None = None,
     *,
     mode: Mode = "aimed",
+    cfg: Settings | None = None,
+    candidates: Sequence[Hypothesis] | None = None,
 ) -> Loop:
     """``repo`` committed under ``root`` and ``build_context`` on the real
     transport (captured), with ``isolation`` (``required``) and the
-    candidates of ``mode``."""
+    candidates of ``mode``.
+
+    ``cfg`` (the discovery experiments' per-run settings copy) picks the
+    transport's chain, the editor's settings and the trial budget instead
+    of the global ``settings``; ``candidates`` replaces the mode's
+    candidates (rebound to this run's project). Both unset: as before.
+    """
     user = make_repo(repo.path, root / "user", extra)
     before = user.snapshot()
     project = repo.project(user.path)
-    candidates = tuple(repo.candidates(project, mode))
+    chosen = (
+        tuple(repo.candidates(project, mode))
+        if candidates is None
+        else tuple(h.model_copy(update={"project_id": project.id}) for h in candidates)
+    )
     launches = LaunchLog()
+    transport = run.transport(settings if cfg is None else cfg)
     context = build_context(
         project,
-        candidates=candidates,
-        transport=run.transport(settings),
+        candidates=chosen,
+        transport=transport,
         transport_factory=_no_factory,
+        editor=None if cfg is None else settings_editor(transport, cfg),
+        min_trial_budget_usd=None if cfg is None else settings_trial_budget(cfg),
         network=isolation.mode,
         fs=isolation.mode,
         run=launches,
@@ -510,7 +540,7 @@ def start_loop(
         before,
         project,
         repo.workload(project),
-        candidates,
+        chosen,
         launches,
         context,
         run.cap_usd,

@@ -1018,8 +1018,19 @@ SUITES = (
     "papers",
     "web",
     "prescreen",
+    "sweep",
+    "ab",
+    "escalation",
+)
+DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
+    "tests/live/test_sweep_live.py",
+    "tests/live/test_ab_live.py",
+    "tests/live/test_escalation_live.py",
 )
 EXPERIMENT_MINUTES = {
+    "sweep": 240,
+    "ab": 360,
+    "escalation": 90,
     "triage": 90,
     "papers": 60,
     "web": 90,
@@ -1031,9 +1042,16 @@ OSS_MAX_REPOS = 10  # U24: at most 10 repositories ...
 OSS_RUN_CAP_USD = 5.0  # ... at 5 USD each
 
 
+def _choice_options(block: str) -> tuple[str, ...]:
+    """The ``options`` of a choice input, inline or wrapped across lines."""
+    found = re.search(r"options:\s*\[([^\]]*)\]", block)
+    assert found is not None, block
+    return tuple(item.strip() for item in found.group(1).split(",") if item.strip())
+
+
 def test_every_suite_choice_names_existing_test_paths() -> None:
     inputs = _ci_block("      suite:", "      mode:")
-    assert f"options: [{', '.join(SUITES)}]" in inputs
+    assert _choice_options(inputs) == SUITES  # prettier may wrap the list
     assert "default: stage-a" in inputs
     step = _ci_block("      - name: Run live tests", "      - name: Upload live corpus")
     for suite in SUITES:
@@ -1082,6 +1100,7 @@ def test_stage_a_ignores_every_corpus_suite() -> None:
         "tests/live/test_hard_corpus_live.py",
         OSS_LIVE,
         EXPERIMENTS,
+        *DISCOVERY,
     }
     assert (SERVICE_DIR / EXPERIMENTS).is_dir()
 
@@ -1606,7 +1625,13 @@ def _suite_needs() -> dict[str, float]:
     prescreen = importlib.import_module(
         f"{__package__}.experiments.test_prescreen_live"
     )
+    sweep = importlib.import_module(f"{__package__}.discovery_sweep")
+    ab = importlib.import_module(f"{__package__}.discovery_ab")
+    escalation = importlib.import_module(f"{__package__}.discovery_escalation")
     return {
+        "sweep": sweep.sweep_need(sweep.sweep_plan({})),
+        "ab": ab.ab_need(ab.ab_plan({})),
+        "escalation": escalation.escalation_need(),
         "web": web.E6_NEED_USD,
         "prescreen": prescreen.E8B_NEED_USD,
         "triage": triage.E2_CAP_USD,
@@ -1727,6 +1752,9 @@ def _dispatch(
         ("papers", "9.99"),
         ("web", "51.99"),
         ("prescreen", "2.99"),
+        ("sweep", "76.99"),
+        ("ab", "139.99"),
+        ("escalation", "42.99"),
     ],
 )
 def test_the_run_step_refuses_a_cap_below_the_suite_need(
@@ -1780,7 +1808,7 @@ STAGE_A_PATHS = (
     " --ignore=tests/live/test_attack_corpus_live.py"
     " --ignore=tests/live/test_hard_corpus_live.py"
     f" --ignore={OSS_LIVE}"
-    f" --ignore={EXPERIMENTS}"
+    f" --ignore={EXPERIMENTS}" + "".join(f" --ignore={path}" for path in DISCOVERY)
 )
 
 
