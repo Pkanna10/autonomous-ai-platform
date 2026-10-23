@@ -22,12 +22,13 @@ if ! command -v trivy &> /dev/null; then
   exit 1
 fi
 
-# Docker images to scan (from docker-compose.dev.yml)
-IMAGES=(
-  "pgvector/pgvector:pg15"
-  "redis:7-alpine"
-  "qdrant/qdrant:latest"
-)
+# Docker images to scan: read from docker-compose.dev.yml so the list cannot
+# drift from the pinned digests the stack actually runs.
+mapfile -t IMAGES < <(grep -E '^\s+image:' docker-compose.dev.yml | awk '{print $2}')
+if [ "${#IMAGES[@]}" -eq 0 ]; then
+  echo -e "${RED}Error: no images found in docker-compose.dev.yml (run from the repository root)${NC}"
+  exit 1
+fi
 
 TOTAL_CRITICAL=0
 TOTAL_HIGH=0

@@ -1,17 +1,23 @@
-version: '3.9'
-
+# Local development stack: Postgres (pgvector), Redis and Qdrant.
+#
+# Every port binds to 127.0.0.1 only. The stack runs with development
+# credentials (dev/devpass, no Redis or Qdrant authentication), so it must not
+# be reachable from the LAN or a coffee-shop network; a bare '5432:5432' binds
+# 0.0.0.0. Images are pinned to a tag and its multi-arch index digest, and CI
+# (the python and schema-apply jobs) uses the same pgvector digest; Renovate or
+# Dependabot bump tag and digest together.
 services:
   postgres:
-    image: pgvector/pgvector:pg16 # Updated from pg15 to pg16 for security patches
+    image: pgvector/pgvector:0.8.7-pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
     environment:
       POSTGRES_DB: ai_platform
       POSTGRES_USER: dev
       POSTGRES_PASSWORD: devpass
     ports:
-      - '5432:5432'
+      - '127.0.0.1:5432:5432'
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ./infrastructure/schema:/docker-entrypoint-initdb.d
+      - ./infrastructure/schema:/docker-entrypoint-initdb.d:ro
     healthcheck:
       # Proposal #2: Validate TCP connections with -h localhost (catches 80% of network issues)
       # Uses pg_isready (lightweight, <1ms) instead of psql (heavier, requires authentication)
@@ -23,9 +29,9 @@ services:
       start_interval: 1s # Proposal #5: Docker 25+ only - 10x faster cold start detection
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4-alpine@sha256:57e4255cc971b1c8d6f8a6ca283ac01bc3ecdd914273ef6bfaede87aaecd6541
     ports:
-      - '6379:6379'
+      - '127.0.0.1:6379:6379'
     depends_on:
       postgres:
         condition: service_healthy # Proposal #4: Wait for database before starting cache
@@ -40,9 +46,9 @@ services:
       start_interval: 1s # Proposal #5: Docker 25+ only - 5x faster cold start
 
   qdrant:
-    image: qdrant/qdrant:v1.15.5 # Pinned to stable version for reproducibility
+    image: qdrant/qdrant:v1.15.5@sha256:0fb8897412abc81d1c0430a899b9a81eb8328aa634e7242d1bc804c1fe8fe863
     ports:
-      - '6333:6333'
+      - '127.0.0.1:6333:6333'
     volumes:
       - qdrant-data:/qdrant/storage
     depends_on:

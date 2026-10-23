@@ -300,9 +300,9 @@ echo ""
 
 # Define images to scan
 DOCKER_IMAGES=(
-  "pgvector/pgvector:pg16|PostgreSQL with pgvector extension"
-  "redis:7-alpine|Redis Cache"
-  "qdrant/qdrant:latest|Qdrant Vector Database"
+  "pgvector/pgvector:0.8.7-pg16|PostgreSQL with pgvector extension"
+  "redis:7.4-alpine|Redis Cache"
+  "qdrant/qdrant:v1.15.5|Qdrant Vector Database"
 )
 
 echo "📦 Scanning Docker images..."
