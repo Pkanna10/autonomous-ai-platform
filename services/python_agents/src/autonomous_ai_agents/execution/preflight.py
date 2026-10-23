@@ -433,8 +433,8 @@ def _check_worktree_root(git: _RepoGit) -> None:
 def _check_repository(
     git: _RepoGit,
 ) -> tuple[str, dict[str, _Entry], list[tuple[str, bytes]]]:
-    """Version, shape, partial clone, submodules and LFS: the head, its tree,
-    and the attribute files read (``(label, bytes)``)."""
+    """Version, shape, partial clone, conditional includes, submodules and
+    LFS: the head, its tree, and the attribute files read (``(label, bytes)``)."""
     if (version := git.version()) < MIN_GIT_VERSION:
         raise PreflightError(
             f"git {_dotted(version)} is older than 2.38 (merge-tree --write-tree):"
@@ -452,6 +452,13 @@ def _check_repository(
                 " missing objects lazily. Run 'git fetch --refetch' to download"
                 " every object, or use a full clone"
             )
+    if conditional := git.config_entries(r"^includeif\."):
+        raise PreflightError(
+            f"{conditional[0][0]} in the repository config: a conditional include"
+            " can hold in a git child (the checkout of a linked worktree) and not"
+            " where the engine vets the config, so a driver it defines could run."
+            " To connect, copy what it includes into .git/config and remove the key"
+        )
     try:
         head = git.head_commit()
     except GitError as error:

@@ -9,6 +9,7 @@ test that builds worktrees.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import math
 import os
@@ -21,6 +22,7 @@ import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -1159,6 +1161,66 @@ def test_reset_removes_a_case_variant_of_git_at_the_top(
     ws.check_link(handle)
 
 
+class _Listed:
+    """A finished ``os.scandir`` listing, iterated after the tree changed."""
+
+    def __init__(self, entries: list[os.DirEntry[str]]) -> None:
+        self._entries = entries
+
+    def __enter__(self) -> list[os.DirEntry[str]]:
+        return self._entries
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+
+def test_reset_never_follows_a_directory_swapped_for_a_link_mid_walk(
+    ws: GitWorkspace,
+    root: Path,
+    base: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    GIVEN a process that outlived its run (macOS has no PID namespace)
+        swaps an untracked directory of the worktree for a link to a
+        directory outside it, right after the scrub listed the top
+    WHEN the engine resets the worktree
+    THEN the reset refuses, and the outside directory keeps its mode, its
+        .git and its FIFO: the scrub never walks through the link
+    """
+    handle = ws.add_worktree(root / "run1" / "baseline", base)
+    write(handle.path / "swap" / "deep" / "memo.txt", "1\n")
+    outside = tmp_path / "outside"
+    write(outside / ".git" / "HEAD", "ref: refs/heads/main\n")
+    os.mkfifo(outside / "agent.sock")
+    outside.chmod(0o750)
+    top = os.stat(handle.path)
+    real = os.scandir
+    armed = [True]
+
+    def racing(target: Any = ".") -> Any:
+        listing = real(target)
+        if not armed[0] or not os.path.samestat(os.stat(target), top):
+            return listing
+        armed[0] = False
+        with listing as entries:
+            seen = list(entries)
+        shutil.rmtree(handle.path / "swap")
+        os.symlink(outside, handle.path / "swap")
+        return _Listed(seen)
+
+    monkeypatch.setattr(os, "scandir", racing)
+
+    with pytest.raises(RepoTamperedError, match="swap"):
+        ws.reset(handle)
+
+    monkeypatch.undo()
+    assert stat.S_IMODE(outside.stat().st_mode) == 0o750
+    assert (outside / ".git" / "HEAD").is_file()
+    assert stat.S_ISFIFO((outside / "agent.sock").lstat().st_mode)
+
+
 def _ignore_stat(repo: Path) -> None:
     run_git(repo, "config", "core.ignoreStat", "true")
 
@@ -1422,6 +1484,80 @@ def test_a_malicious_config_never_runs_anything(
     assert sorted(p.name for p in markers.iterdir()) != []
 
 
+def _hide_a_smudge_filter(repo: Path, tmp_path: Path) -> Path:
+    """A smudge filter defined only for linked worktrees: an includeIf whose
+    gitdir: condition matches ``<common>/worktrees/<id>`` and never the repo's
+    own git dir, selected by info/attributes. Returns the marker it writes."""
+    marker = tmp_path / "markers" / "smudge"
+    marker.parent.mkdir()
+    script = write(tmp_path / "traps" / "smudge", f"#!/bin/sh\ntouch '{marker}'\ncat\n")
+    script.chmod(0o755)
+    hidden = tmp_path / "hidden.inc"
+    write(hidden, f'[filter "hide"]\n\tsmudge = {script}\n\tclean = cat\n')
+    run_git(repo, "config", "includeIf.gitdir:worktrees/.path", str(hidden))
+    write(repo / ".git" / "info" / "attributes", "* filter=hide\n")
+    return marker
+
+
+def test_a_driver_only_a_linked_worktree_sees_never_runs_at_checkout(
+    repo: Path, root: Path, tmp_path: Path, base: str
+) -> None:
+    """
+    GIVEN a smudge filter included only when the git dir is a linked
+        worktree's admin dir (invisible from the repository itself)
+    WHEN the engine adds a worktree, the way every phase starts
+    THEN the checkout ran no filter and the files are the committed blobs;
+        plain git adding a worktree runs it (the control)
+    """
+    marker = _hide_a_smudge_filter(repo, tmp_path)
+    ws = GitWorkspace(repo)
+
+    handle = ws.add_worktree(root / "run1" / "baseline", base)
+
+    assert not marker.exists()
+    assert (handle.path / "core.py").read_bytes() == ws.read_blob(base, "core.py")
+    assert ws.dirty_entries() == ()
+    ws.reset(handle)
+    assert not marker.exists()
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", "-q", "--detach"]
+        + [str(tmp_path / "plain"), base],
+        env=_ENV,
+        capture_output=True,
+        check=True,
+    )
+    assert marker.exists()
+
+
+def test_a_failed_checkout_leaves_no_worktree_behind(
+    ws: GitWorkspace, root: Path, base: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    GIVEN the checkout into a new worktree fails
+    WHEN the engine adds the worktree
+    THEN the error propagates and the worktree is neither on disk nor
+        registered
+    """
+    real = ws._git
+
+    def failing(
+        where: WorktreeHandle | None, *args: str, **kw: Any
+    ) -> tuple[int, bytes]:
+        if args[:1] == ("checkout",):
+            raise GitError("checkout failed")
+        return real(where, *args, **kw)
+
+    monkeypatch.setattr(ws, "_git", failing)
+    target = root / "run1" / "baseline"
+
+    with pytest.raises(GitError, match="checkout failed"):
+        ws.add_worktree(target, base)
+
+    assert not target.exists()
+    listed = out(ws.repo, "worktree", "list", "--porcelain")
+    assert str(target) not in listed
+
+
 def _missing_objects(repo: Path) -> int:
     listing = run_git(repo, "rev-list", "--objects", "--missing=print", "HEAD")
     return sum(line.startswith(b"?") for line in listing.splitlines())
@@ -1449,7 +1585,7 @@ def test_a_partial_clone_never_fetches_from_its_promisor_remote(
     base = ws.head_commit()
     with pytest.raises(GitError, match="cat-file failed"):
         ws.read_blob(base, "core.py")
-    with pytest.raises(GitError, match="worktree failed"):
+    with pytest.raises(GitError, match="checkout failed"):
         ws.add_worktree(root / "run1" / "baseline", base)
     assert _missing_objects(clone) == missing
     assert not marker.exists()
@@ -1715,6 +1851,39 @@ def test_remove_contained_removes_trees_files_and_links_never_following_one(
     with pytest.raises(ValueError, match="WORKTREE_ROOT"):
         remove_contained(outside)
     assert outside.is_dir()
+
+
+def test_remove_contained_never_follows_a_tree_swapped_for_a_link(
+    root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    GIVEN a tree inside WORKTREE_ROOT that is swapped for a link to a
+        directory outside right after remove_contained checked it
+    WHEN it is removed
+    THEN the open refuses the link and the outside directory keeps its mode
+        and its files
+    """
+    outside = write(tmp_path / "outside" / "keep.txt", "keep\n").parent
+    outside.chmod(0o750)
+    tree = write(root / "run1" / "_scratch" / "baseline" / "f", "x\n").parent
+    real = os.path.islink
+
+    def racing(path: Any) -> bool:
+        if Path(path) == tree and not real(tree):
+            shutil.rmtree(tree)
+            os.symlink(outside, tree)
+            return False
+        return real(path)
+
+    monkeypatch.setattr(os.path, "islink", racing)
+
+    with pytest.raises(OSError) as caught:
+        remove_contained(tree)
+
+    monkeypatch.undo()
+    assert caught.value.errno in (errno.ELOOP, errno.ENOTDIR)  # macOS, Linux
+    assert stat.S_IMODE(outside.stat().st_mode) == 0o750
+    assert (outside / "keep.txt").read_text() == "keep\n"
 
 
 def test_commit_message_is_the_raw_message_after_the_header(

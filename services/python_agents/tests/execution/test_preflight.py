@@ -919,6 +919,35 @@ def test_lfs_in_info_attributes_is_refused(
     assert "info/attributes" in message
 
 
+@pytest.mark.parametrize("nested", [False, True], ids=["direct", "via-include"])
+def test_a_conditional_include_is_refused(
+    make: Factory, project: Project, repo: Path, tmp_path: Path, nested: bool
+) -> None:
+    """
+    GIVEN an includeIf in the repository config, set directly or inside a
+        file an unconditional include pulls in
+    WHEN preflight checks the repository
+    THEN it refuses, naming the key and the fix: a gitdir: or onbranch:
+        condition can hold in a git child the engine's listing never sees
+    """
+    key = "includeIf.gitdir:worktrees/.path"
+    hidden = write(tmp_path / "hidden.inc", '[filter "hide"]\n\tsmudge = cat\n')
+    if nested:
+        outer = write(
+            tmp_path / "outer.inc",
+            f'[includeIf "gitdir:worktrees/"]\n\tpath = {hidden}\n',
+        )
+        run_git(repo, "config", "include.path", str(outer))
+    else:
+        run_git(repo, "config", key, str(hidden))
+
+    message = refused(make(), project)
+
+    assert "includeif.gitdir:worktrees/.path" in message
+    assert "conditional include" in message
+    assert "remove" in message
+
+
 def test_a_root_lfsconfig_is_refused(
     make: Factory, project: Project, repo: Path
 ) -> None:

@@ -352,8 +352,11 @@ Step 2 (repository code now runs on the user's machine):
   `filter`/`diff`/`merge` driver key emptied, `--attr-source=<empty tree>` on
   git 2.40 and later, `--git-dir`/`--work-tree` from the `WorktreeHandle` (the
   `.git` link is compared after every run), `--` before paths, capped output.
-  Preflight refuses submodules, LFS, partial clones, dubious ownership and
-  custom merge drivers.
+  `worktree add --no-checkout`, then `checkout -f` on the handle, so the driver
+  listing and the checkout read the same config. Reset and cleanup walk
+  directory fds with `O_NOFOLLOW` (a directory swapped for a link is
+  `RepoTamperedError`, never followed). Preflight refuses submodules, LFS,
+  partial clones, dubious ownership, custom merge drivers and `includeIf`.
 - **Fingerprint.** `repo_fingerprint` (config, `config.worktree`, `hooks/`,
   `info/`, the effective config, the HEAD symref, and every ref under `refs/`
   except remote-tracking and prefetch refs, so `refs/replace`, `refs/stash` and

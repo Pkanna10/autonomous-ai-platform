@@ -397,7 +397,10 @@ submodules, Git LFS, partial clones, dubious ownership (it never sets
 checkout, the `.git` directory or another worktree of the repository), a
 committed `output_file` (the reset before every run would restore it, so a run
 that never writes it would still look right: `git rm --cached` it and ignore
-it), and a custom merge driver the combine would run.
+it), a custom merge driver the combine would run, and an `includeIf` in the
+repository config (a conditional include can hold in a linked worktree's
+checkout and not where the engine checks the config: copy what it includes into
+`.git/config`).
 
 **A run was killed (`kill -9`, a crash, a reboot)**
 
@@ -448,6 +451,9 @@ default `TRIAL_BRANCH_PREFIX` (`engine/`).
 - **macOS** uses `sandbox-exec`, which Apple has deprecated but still ships.
   Network isolation there denies all networking, the workload's own loopback
   included, so a workload that talks to a local server fails.
+- **macOS has no PID namespace**: a `setsid` grandchild can outlive its run. It
+  stays in the sandbox, and the reset before the next run never follows a link
+  it plants (a directory swapped for one stops the run).
 - **`NETWORK_ISOLATION=off` on Linux keeps no namespaces**: no PID namespace (a
   `setsid` grandchild survives the run), no private IPC, and an open network is
   a channel between runs. Measurements taken that way are weaker evidence; the

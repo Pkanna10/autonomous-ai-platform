@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import codecs
 import contextlib
+import errno
 import hashlib
 import itertools
 import math
@@ -231,15 +232,39 @@ def remove_contained(path: Path) -> None:
         os.unlink(target)
 
 
+_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+
+
 def _rmtree(path: Path) -> None:
     """Remove an engine directory, making read-only subdirectories removable."""
-    os.chmod(path, stat.S_IRWXU)
-    for top, dirs, _files in os.walk(path):
-        for name in dirs:
-            child = os.path.join(top, name)
-            if not os.path.islink(child):
-                os.chmod(child, stat.S_IRWXU)
-    shutil.rmtree(path)
+    _remove_tree(str(path), None)
+
+
+def _remove_tree(name: str, dir_fd: int | None) -> None:
+    """``name`` (relative to ``dir_fd``) and everything below it. Each
+    directory is made u+rwx through an fd opened with ``O_NOFOLLOW``, so a
+    directory swapped for a link is skipped, never followed; ``fwalk`` and
+    ``rmtree`` are fd-based too."""
+    _make_owned(dir_fd, name, required=True)
+    for _top, dirs, _files, fd in os.fwalk(name, dir_fd=dir_fd):
+        for child in dirs:
+            _make_owned(fd, child, required=False)
+    shutil.rmtree(name, dir_fd=dir_fd)
+
+
+def _make_owned(dir_fd: int | None, name: str, *, required: bool) -> None:
+    """u+rwx on the directory ``name``; a link or a non-directory is left to
+    ``rmtree`` unless ``required``."""
+    try:
+        fd = os.open(name, _DIR_FLAGS, dir_fd=dir_fd)
+    except OSError as error:
+        if required or error.errno not in (errno.ELOOP, errno.ENOTDIR):
+            raise
+        return
+    try:
+        os.fchmod(fd, stat.S_IRWXU)
+    finally:
+        os.close(fd)
 
 
 def _scrub(top: Path) -> None:
@@ -249,22 +274,54 @@ def _scrub(top: Path) -> None:
     keep its files); every ``.git`` below the top goes (git never lists one,
     so it could hold a whole cache), and so does every FIFO, socket or device
     (git never tracks one, so its name could carry state).
+
+    The walk holds an fd per level and opens each subdirectory through its
+    parent's fd with ``O_NOFOLLOW``: a directory a surviving process swaps
+    for a link after the listing is a ``RepoTamperedError``, never a walk
+    (chmod, unlink) outside the worktree.
     """
-    link = os.path.join(top, ".git")
-    pending = [str(top)]
-    while pending:
-        directory = pending.pop()
-        os.chmod(directory, stat.S_IMODE(os.lstat(directory).st_mode) | stat.S_IRWXU)
-        with os.scandir(directory) as entries:
-            for entry in entries:
-                nested = entry.name.lower() == ".git" and entry.path != link
-                if entry.is_dir(follow_symlinks=False):
-                    if nested:
-                        _rmtree(Path(entry.path))
-                    else:
-                        pending.append(entry.path)
-                elif nested or not (entry.is_symlink() or entry.is_file()):
-                    os.unlink(entry.path)
+    stack: list[tuple[int, list[str], str]] = []
+    try:
+        fd = os.open(top, _DIR_FLAGS)
+        stack.append((fd, [], str(top)))  # closed below if the scrub fails
+        stack[-1] = (fd, _scrub_level(fd, top=True), str(top))
+        while stack:
+            fd, children, where = stack[-1]
+            if not children:
+                os.close(stack.pop()[0])
+                continue
+            name = children.pop()
+            path = os.path.join(where, name)
+            try:
+                child = os.open(name, _DIR_FLAGS, dir_fd=fd)
+            except OSError as error:
+                raise RepoTamperedError(
+                    f"{path} changed while the engine reset the worktree"
+                    f" ({error.strerror}): a process from an earlier run may"
+                    " still be running"
+                ) from None
+            stack.append((child, [], path))
+            stack[-1] = (child, _scrub_level(child, top=False), path)
+    finally:
+        for fd, _children, _where in stack:
+            os.close(fd)
+
+
+def _scrub_level(fd: int, *, top: bool) -> list[str]:
+    """Scrub one directory (an fd); return the subdirectories to visit."""
+    os.fchmod(fd, stat.S_IMODE(os.fstat(fd).st_mode) | stat.S_IRWXU)
+    children: list[str] = []
+    with os.scandir(fd) as entries:
+        for entry in entries:
+            nested = entry.name.lower() == ".git" and not (top and entry.name == ".git")
+            if entry.is_dir(follow_symlinks=False):
+                if nested:
+                    _remove_tree(entry.name, fd)
+                else:
+                    children.append(entry.name)
+            elif nested or not (entry.is_symlink() or entry.is_file()):
+                os.unlink(entry.name, dir_fd=fd)
+    return children
 
 
 def _require_message(message: str) -> str:
@@ -515,18 +572,29 @@ class GitWorkspace:
         return raw.partition(b"\n\n")[2]
 
     def add_worktree(self, path: Path, commit: str) -> WorktreeHandle:
-        """A detached worktree at ``commit``; whatever was at ``path`` goes first."""
+        """A detached worktree at ``commit``; whatever was at ``path`` goes first.
+
+        ``worktree add`` writes no files: its own checkout runs in a child git
+        whose git dir is the new admin dir, where an ``includeIf "gitdir:"``
+        can define a driver the listing in the repository never saw. The
+        checkout runs through ``_git`` on the handle instead, so the listing
+        and the checkout read the same config.
+        """
         target = contained(path)
         _require_oid(commit)
         self.remove_worktree(target)
         target.parent.mkdir(parents=True, exist_ok=True)
         spec = commit + "^{commit}"
-        self._run("worktree", "add", "--detach", "--", str(target), spec)
+        self._run(
+            "worktree", "add", "--no-checkout", "--detach", "--", str(target), spec
+        )
         try:
-            return self._open(target)
-        except RepoTamperedError:
+            handle = self._open(target)
+            self._git(handle, "checkout", "-f", "-q")
+        except (RepoTamperedError, GitError):
             self.remove_worktree(target)
             raise
+        return handle
 
     def _open(self, path: Path) -> WorktreeHandle:
         """``path/.git`` must name a direct child of ``<common>/worktrees`` whose
