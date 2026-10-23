@@ -25,9 +25,11 @@ _MIB = 1024 * _KIB
 
 # USD per million tokens. Sources: the claude-api skill, shared/models.md
 # (Opus 5.5 $4/$20 with cache reads $0.20; Opus 5 at Opus 4.8's $5/$25;
-# Sonnet 5.5 $2/$10 with cache reads $0.20; Haiku 5.5 $0.10/$0.50 for prompts
-# of 100K tokens or fewer) and shared/prompt-caching.md (5-minute cache
-# writes cost 1.25x input; cache reads ~0.1x input elsewhere). Haiku 5.5's
+# Haiku 5.5 $0.10/$0.50 for prompts of 100K tokens or fewer) and
+# shared/prompt-caching.md (5-minute cache writes cost 1.25x input; cache
+# reads ~0.1x input elsewhere); the pricing page, read 2026-10-23, for Sonnet
+# 5.5 ($2/$10, cache hits 0.05x input: $0.10) and Fable 5.1 ($10/$50, cache
+# hits 0.025x input: $0.25). Haiku 5.5's
 # cache-read rate is undocumented, so its input rate stands in as an upper
 # bound; its >100K-token rates ($0.50/$2.50) are not modelled, so triage
 # prompts must stay at or under 100K tokens (Step 3).
@@ -42,7 +44,10 @@ _DEFAULT_PRICING: dict[str, ModelPrice] = {
         input=5.0, output=25.0, cache_write=6.25, cache_read=0.50
     ),
     "claude-sonnet-5-5": ModelPrice(
-        input=2.0, output=10.0, cache_write=2.5, cache_read=0.20
+        input=2.0, output=10.0, cache_write=2.5, cache_read=0.10
+    ),
+    "claude-fable-5-1": ModelPrice(
+        input=10.0, output=50.0, cache_write=12.5, cache_read=0.25
     ),
     "claude-haiku-5-5": ModelPrice(
         input=0.10, output=0.50, cache_write=0.125, cache_read=0.10

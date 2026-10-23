@@ -380,6 +380,14 @@ def test_settings_default_pricing_matches_the_documented_rates(
     assert pricing["claude-haiku-5-5"] == ModelPrice(
         input=0.10, output=0.50, cache_write=0.125, cache_read=0.10
     )
+    # Pricing page (2026-10-23): Sonnet 5.5 cache hits are 0.05x input,
+    # Fable 5.1's 0.025x.
+    assert pricing["claude-sonnet-5-5"] == ModelPrice(
+        input=2.0, output=10.0, cache_write=2.5, cache_read=0.10
+    )
+    assert pricing["claude-fable-5-1"] == ModelPrice(
+        input=10.0, output=50.0, cache_write=12.5, cache_read=0.25
+    )
     for price in pricing.values():
         assert price.cache_write == pytest.approx(1.25 * price.input)
 
