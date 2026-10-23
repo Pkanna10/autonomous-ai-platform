@@ -6,8 +6,9 @@
 
 ## Current Step
 
-**Build step:** 2 of 5 (Core loop), units U1-U20 committed; Verifier and stage
-gate next **Branch:** `claude/adoring-clarke-xpo1py` (draft PR
+**Build step:** 2 of 5 (Core loop), units U1-U21 committed; Verifier, stage gate
+and `/security-review` done, first live run pending **Branch:**
+`claude/adoring-clarke-xpo1py` (draft PR
 [#12](https://github.com/Pkanna10/autonomous-ai-platform/pull/12)) **Vision:** a
 self-improving optimization engine that uses research findings and novel ideas
 to provably improve existing code, or build something new and then improve it
@@ -22,15 +23,17 @@ repo; nothing lives only in the old session.
   reviewed for correctness and security on a different model and fixed
   test-first; U15 was reviewed after it was committed). The list is in "Step 2
   summary" below; the decisions behind them are in "Decisions".
+- **Done (2026-10-23):** the Verifier (two rounds plus a PHP2Shell-class attack
+  round, findings fixed), the stage gate (passed; minor upgrades in, majors left
+  to their own PRs), `/security-review` (two findings, both fixed: see
+  Decisions, 2026-10-23 security review) and U21, the Stage A live suite.
 - **Next, in order** (the user approves each before it starts):
-  1. the **Verifier** (spec section 6: E2E-A to E2E-C, attack repos, `kill -9`
-     in the middle of a trial, resume after approval, a dirty user tree, a
-     second run on the same repo);
-  2. the **stage gate** (`pnpm stage-gate`), with upgrades and audits;
-  3. **`/security-review`** of the branch;
-  4. **CI green**, then remove `continue-on-error` from the `python-macos` job
-     so the macOS job is blocking;
-  5. the Step 2 report, docs final, the draft PR marked ready.
+  1. the first **live-smoke** run (Stage A, user approval in the `live`
+     environment), its costs in the ledger below, and any fixes;
+  2. remove `continue-on-error` from the `python-macos` job so the macOS job is
+     blocking (green since `bb1981a`);
+  3. the Step 2 report, docs final (root `CLAUDE.md`: Dependabot instead of
+     Renovate in the stage gate, Node.js 22), the draft PR marked ready.
 - **Read first** while `.claude/handoff/step2/` still exists: `spec.md` (44
   decisions, interfaces, behaviour, security, test plan) and `lead-notes.md`
   (Lead decisions and per-unit handovers). Both are summarised under "Decisions"
@@ -579,6 +582,44 @@ Where a decision changed the spec, the code follows the decision.
   needs nothing new: `sandbox-exec`'s `(deny network*)` already covers AF_UNIX
   `connect`, so the filter and the AF_UNIX self-check are Linux-only.
 
+### 2026-10-23 (Step 2, stage gate and security review)
+
+- **Stage gate passed** with two warnings (outdated packages). Minor upgrades
+  went in (langchain 1.4.7, langchain-core 1.7.0, ruff 0.17.2,
+  sentence-transformers 6.2.0). Majors wait for their own PRs: anthropic 2,
+  redis 8, pymupdf 2, TypeScript 7, ESLint 10, Vitest 5, Vite 8, commitlint 21,
+  dotenv 18, @types/node 26. Why: a major bump changes behaviour the Step 2
+  tests do not cover on purpose, and one PR per major keeps each revertable.
+- **`worktree add` no longer checks out.** It runs with `--no-checkout`, then
+  `checkout -f` through `_git` on the new handle. Why (`/security-review`,
+  reproduced by a test): `_git` empties the repo-defined drivers it lists from
+  the command's own context, but `worktree add` checks out in a child git whose
+  git dir is the new admin dir. An `includeIf "gitdir:worktrees/"` defined a
+  smudge filter there that the listing never saw, so a malicious repository ran
+  a command unsandboxed at every phase's first checkout.
+- **Preflight refuses `includeIf`** in the repository config (direct or through
+  an include). Why: a `gitdir:` or `onbranch:` condition can hold in a git child
+  and not where the engine vets the config; refusing the key closes the class
+  for any future child, at the cost of asking the user to inline it.
+- **Reset and cleanup never walk through a link.** The scrub holds an fd per
+  level, makes each directory u+rwx with `_chmod_at` (Linux: an `O_PATH` fd
+  changed through `/proc/self/fd`; macOS: `fchmodat(AT_SYMLINK_NOFOLLOW)`) and
+  opens it through its parent's fd with `O_NOFOLLOW`; tree removal uses `fwalk`
+  and `rmtree(dir_fd=...)`. Why (reproduced: the reset made an outside directory
+  0777): on macOS a `setsid` grandchild survives its run (no PID namespace) and
+  could swap a listed directory for a link between the check and the path-based
+  chmod and scan, so the unsandboxed engine changed modes and deleted `.git`
+  directories and sockets outside the worktree. A directory swapped for a link
+  is now `RepoTamperedError`. `_chmod_at` exists because a non-root user cannot
+  open a mode-000 directory (CI failed on the first fd version; the root
+  container hid it).
+- **The older live editor test runs only under exactly `-m live`.** Why: its
+  substring guard selected it for `-m "not alive"`. The Stage A suite in
+  `tests/live` evaluates the marker expression properly.
+- **Below the review bar, kept in mind:** `Settings` reads `.env` from the
+  current directory, so the Step 4 CLI must not start from inside the target
+  repository (see Known gaps).
+
 ### 2026-10-22 (Step 2, wave 2b review fixes)
 
 - **A failed privilege drop is never silent**: the workload drops every
@@ -890,8 +931,9 @@ the diff captured by git, combine with a re-test, delivery to a real
 `engine/run-<id>` branch, the Postgres repository, the E2E fixture in CI, and
 the judged-trials key question (closed by decision 35). Left:
 
-- [ ] Verifier, stage gate, `/security-review`, CI green with the macOS job
-      blocking, the Step 2 report, development-log row, PR ready.
+- [x] Verifier, stage gate, `/security-review`, U21 live suite (2026-10-23).
+- [ ] First live-smoke run and its ledger row, the macOS job blocking, the Step
+      2 report, development-log row, PR ready.
 
 ### Known gaps carried to later steps
 
@@ -911,6 +953,10 @@ the judged-trials key question (closed by decision 35). Left:
 - **Profiler shadowing:** a repository module named like a stdlib module the
   profiler shim imports (`json.py`, `runpy.py`, ...) leaves that workload "not
   profiled", and its editable-install check does not run (the note says so).
+- **`Settings` reads `.env` from the current directory.** A `.env` inside the
+  target repository could set `ENGINE_API_BASE_URL` if the engine were started
+  there. Today there is no CLI; the Step 4 CLI must read settings from its own
+  location or the user's config dir, never the target's working directory.
 - **A context serves one run at a time**: connect rebinds the runners of the
   context `build_context` returned.
 - **A resume on a context with other isolation modes** re-tests the combination
