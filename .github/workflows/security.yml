@@ -30,10 +30,12 @@ jobs:
       security-events: write
       actions: read
     uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@9bb69575e74019c2ad085a1860787043adf47ccb # v2.2.4
+    # No --skip-git: osv-scanner 2.x has no such flag (it aborted with "flag
+    # provided but not defined", so every earlier run reported "No issues
+    # found" without scanning); 2.x skips git history by default.
     with:
       scan-args: |-
         --recursive
-        --skip-git
         ./
       upload-sarif: false
       fail-on-vuln: false
@@ -64,7 +66,6 @@ jobs:
             --format=json
             --output=osv-results.json
             --recursive
-            --skip-git
             ./
 
       - name: Generate Job Summary
