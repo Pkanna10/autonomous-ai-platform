@@ -1,0 +1,384 @@
+{
+  "repos": [
+    {
+      "name": "tabulate",
+      "url": "https://github.com/astanin/python-tabulate.git",
+      "tag": "v0.10.0",
+      "commit": "3b4cd509820e4c45cd2aaba833aa585ea6308b94",
+      "released": "2026-03-04",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "package": "tabulate",
+      "module_root": "tabulate",
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "test/test_output.py",
+        "test/test_api.py",
+        "test/test_internal.py"
+      ],
+      "hypotheses": [
+        {
+          "title": "typed-cells-skip-parsing",
+          "aimed": true,
+          "rationale": "tabulate infers every column's type by classifying each cell, and the classifier runs its string-parsing checks (integer, number, thousands separator, decimal point, through regular expressions looked up on every call) even for cells that already are Python ints or floats. Classify cells that already are numbers or None directly, before any string parsing, and compile the patterns the number checks use once; every rendered table must stay byte-identical.",
+          "files": ["tabulate/__init__.py"]
+        },
+        {
+          "title": "row-join-buffer",
+          "aimed": false,
+          "rationale": "Build each rendered row and the final table with one list and a single join instead of growing strings, so the output assembly does fewer intermediate copies; the output must stay byte-identical.",
+          "files": ["tabulate/__init__.py"]
+        }
+      ],
+      "profile": "cProfile, 3.6 s under the profiler (0.8 s plain): column type inference is 1.8 s of it (_column_type -> _type 144,000 calls, _isint 235,000, _isnumber 163,000, _isconvertible 302,000, re._compile 110,000 lookups from the thousands-separator and afterpoint checks); padding and alignment 0.85 s."
+    },
+    {
+      "name": "more_itertools",
+      "url": "https://github.com/more-itertools/more-itertools.git",
+      "tag": "v11.1.0",
+      "commit": "64be96ceb2a6e836f76f069f4a96d2394d59fd0c",
+      "released": "2026-05-22",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "package": "more_itertools",
+      "module_root": "more_itertools",
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests/test_recipes.py",
+        "tests/test_more.py",
+        "--deselect",
+        "tests/test_more.py::TestConcurrentTee"
+      ],
+      "hypotheses": [
+        {
+          "title": "windowed-running-stats",
+          "aimed": true,
+          "rationale": "In more_itertools/recipes.py, the windowed running statistics are Python generators that pay several lookups per value: _windowed_running_min and _windowed_running_max keep (index, value) tuples and index them twice per step, _windowed_running_mean calls len on its window for every value, and running_statistics tees the input four ways and builds a frozen Stats dataclass per position. Tighten these per-value loops (bound methods and fixed divisors held in locals, no repeated tuple indexing, one pass where the window is shared) without changing any yielded value: every minimum, maximum, median and mean, including float means, must stay bit-identical and in the same order.",
+          "files": ["more_itertools/recipes.py"]
+        },
+        {
+          "title": "sliding-window-deque",
+          "aimed": false,
+          "rationale": "In more_itertools/recipes.py, use the deque-based sliding_window implementation for every width above two instead of the tee-and-islice fast path for small widths, on the idea that one deque is cheaper than n tee'd iterators; every window and its order must not change.",
+          "files": ["more_itertools/recipes.py"]
+        }
+      ],
+      "profile": "cProfile, 4.5 s under the profiler (1.0 s plain): the recipes.py rolling statistics are about 1.25 s cumulative (_windowed_running_mean 200,000 values 0.33 s, _running_median_windowed 100,000 values 0.33 s, _windowed_running_min 0.32 s and _windowed_running_max 0.27 s, 0.85 s of it own time), then more.py: set_partitions 0.69 s, bucket's _get_values 0.45 s, split_when 0.25 s. Both hypotheses aim at recipes.py on purpose: more.py calls __import__('concurrent.futures') (line 4078), so the process_spawn rule refuses any trial that edits it while peak memory is judged; recipes.py is not flagged (the network test checks every target file)."
+    },
+    {
+      "name": "sortedcontainers",
+      "url": "https://github.com/grantjenks/python-sortedcontainers.git",
+      "tag": "v2.4.0",
+      "commit": "a1f52d6713dd2c2713a881d4f4d86ed68ff71cab",
+      "released": "2021-05-16",
+      "license": "Apache-2.0",
+      "license_file": "LICENSE",
+      "package": "sortedcontainers",
+      "module_root": "sortedcontainers",
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests/test_coverage_sortedlist.py",
+        "tests/test_coverage_sorteddict.py",
+        "tests/test_coverage_sortedset.py",
+        "tests/test_coverage_sortedkeylist_modulo.py",
+        "tests/test_coverage_sortedkeylist_negate.py"
+      ],
+      "hypotheses": [
+        {
+          "title": "add-skip-expand-check",
+          "aimed": true,
+          "rationale": "SortedList.add and SortedKeyList.add call the sublist split helper after every insertion, paying a method call and attribute lookups only to find that the sublist is still below twice the load factor. Check the sublist length inline in add and call the split helper only when the sublist actually needs splitting; the list contents, their order and every index must stay the same.",
+          "files": ["sortedcontainers/sortedlist.py"]
+        },
+        {
+          "title": "linear-maxes-scan",
+          "aimed": false,
+          "rationale": "Find the target sublist in add with a linear scan over the sublist maxima when there are only a few sublists, instead of bisecting, on the idea that a scan is cheaper for short lists; ordering and contents must not change.",
+          "files": ["sortedcontainers/sortedlist.py"]
+        }
+      ],
+      "profile": "cProfile, 4.1 s under the profiler (1.6 s plain): the library is already tuned; SortedList.add 1.07 s cumulative (293,000 calls, insort and bisect in C), SortedKeyList.add 0.90 s, _expand 0.29 s plus 0.19 s, SortedDict.__setitem__ 0.62 s. A small or no win is the expected outcome: this is a real-code control."
+    },
+    {
+      "name": "mistune",
+      "url": "https://github.com/lepture/mistune.git",
+      "tag": "v3.3.4",
+      "commit": "69ec2b8a6d5b37ecb3c56d96df4b40b9d3004657",
+      "released": "2026-07-22",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "package": "mistune",
+      "module_root": "src/mistune",
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests"
+      ],
+      "hypotheses": [
+        {
+          "title": "bracket-map-once",
+          "aimed": true,
+          "rationale": "The inline parser rebuilds the map of matching closing brackets for links each time it meets an opening bracket in a span, and re-splits emphasis delimiter runs while finalising each span, so a paragraph with several links and emphases is scanned repeatedly. Build the closing-bracket map once per inline text and reuse it for every bracket in that text; the HTML must stay byte-identical, including for nested and unbalanced brackets.",
+          "files": [
+            "src/mistune/_inline/links.py",
+            "src/mistune/inline_parser.py"
+          ]
+        },
+        {
+          "title": "escape-translate",
+          "aimed": false,
+          "rationale": "Escape HTML special characters with one str.translate table instead of a chain of replace calls in the escape helper; the escaped output must stay byte-identical.",
+          "files": ["src/mistune/util.py"]
+        }
+      ],
+      "profile": "cProfile, 3.9 s under the profiler (1.4 s plain): InlineParser.parse 2.26 s cumulative over 18,700 spans; emphasis finalisation 0.75 s; build_closing_bracket_map 4,031 calls, 0.22 s; renderer dispatch (render_token, _get_method) 0.78 s."
+    },
+    {
+      "name": "sqlparse",
+      "url": "https://github.com/andialbrecht/sqlparse.git",
+      "tag": "0.5.5",
+      "commit": "0d240230939bfb3b751b504878b1c7df04a3cab3",
+      "released": "2025-12-19",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "package": "sqlparse",
+      "module_root": "sqlparse",
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests"
+      ],
+      "hypotheses": [
+        {
+          "title": "lexer-jump-to-match-end",
+          "aimed": true,
+          "rationale": "The lexer tries its token regular expressions in order at every position and, after a match, skips the matched characters by advancing a character enumerator one step at a time. Track the position directly and jump it to the match end, and avoid re-trying patterns that cannot start with the next character where that is provably safe; the token stream (types and values, in order) must stay identical.",
+          "files": ["sqlparse/lexer.py"]
+        },
+        {
+          "title": "keyword-case-cache",
+          "aimed": false,
+          "rationale": "Cache the upper-cased form of each keyword the keyword-case filter has already seen in a dictionary, so repeated keywords are not upper-cased again; the formatted SQL must stay identical.",
+          "files": ["sqlparse/filters/tokens.py"]
+        }
+      ],
+      "profile": "cProfile, 5.1 s under the profiler (1.5 s plain): Lexer.get_tokens 1.20 s (0.50 s own time over 66,000 tokens), grouping 2.6 s cumulative (_group 1.0 s, token matching 1.1 s, utils.imt 524,000 calls), the statement splitter 1.76 s."
+    },
+    {
+      "name": "pyparsing",
+      "url": "https://github.com/pyparsing/pyparsing.git",
+      "tag": "3.3.3",
+      "commit": "d90d38b283efaece7ac7cace7050ba55cb82abe5",
+      "released": "2026-09-20",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "package": "pyparsing",
+      "module_root": "pyparsing",
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests/test_simple_unit.py",
+        "tests/test_util.py"
+      ],
+      "hypotheses": [
+        {
+          "title": "infix-level-memo",
+          "aimed": true,
+          "rationale": "With packrat parsing off (the default), an infix_notation grammar re-parses the same operand at the same location once for every precedence level that tries it, so each level multiplies the work. Memoise the result of each precedence level's sub-expression at a location for the duration of one parse_string call inside the expression infix_notation builds, without enabling packrat globally; results, parse actions and error messages must not change, and nothing may be cached across calls.",
+          "files": ["pyparsing/helpers.py"]
+        },
+        {
+          "title": "preparse-regex",
+          "aimed": false,
+          "rationale": "Skip leading whitespace in ParserElement.preParse with one precompiled regular-expression match per element instead of its character-by-character loop; the parsed results and every error location must not change.",
+          "files": ["pyparsing/core.py"]
+        }
+      ],
+      "profile": "cProfile, 1.6 s under the profiler (0.6 s plain): _parseNoCache 137,800 calls (0.36 s own, 1.24 s cumulative) for 1,500 expressions, the infix_notation helper parseImpl 1.10 s cumulative over 3,362 calls, ParseResults construction 0.20 s."
+    },
+    {
+      "name": "markdown",
+      "url": "https://github.com/Python-Markdown/markdown.git",
+      "tag": "3.11.0",
+      "commit": "0ffbf00cf667971d46f43aafba825e8d25098bc5",
+      "released": "2026-09-25",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE.md",
+      "package": "markdown",
+      "module_root": "markdown",
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests/test_syntax/blocks",
+        "tests/test_syntax/inline"
+      ],
+      "hypotheses": [
+        {
+          "title": "inline-pattern-prefilter",
+          "aimed": true,
+          "rationale": "The inline tree processor runs every inline pattern's regular expression over every text node, including the many nodes that do not contain any character that pattern can start with. Before running a pattern on a node, skip it with a cheap substring test when the node holds none of the characters the pattern's match must begin with, where that set is known; the HTML must stay byte-identical.",
+          "files": ["markdown/treeprocessors.py", "markdown/inlinepatterns.py"]
+        },
+        {
+          "title": "serializer-attr-sort",
+          "aimed": false,
+          "rationale": "In the HTML serializer, skip sorting the attributes of elements that have at most one attribute; the serialized HTML must stay byte-identical.",
+          "files": ["markdown/serializers.py"]
+        }
+      ],
+      "profile": "cProfile, 3.4 s under the profiler (1.2 s plain): the inline tree processor is 2.06 s of it: __applyPattern 233,600 calls (0.51 s own, 1.18 s cumulative), __handleInline 1.60 s, the registry's __getitem__ 237,400 calls; the serializer 0.19 s."
+    },
+    {
+      "name": "idna",
+      "url": "https://github.com/kjd/idna.git",
+      "tag": "v3.20",
+      "commit": "d55e65e1a3b1ede7f556bc202738066f5597e249",
+      "released": "2026-09-17",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE.md",
+      "package": "idna",
+      "module_root": "idna",
+      "test_command": [
+        "python",
+        "-m",
+        "unittest",
+        "tests.test_idna",
+        "tests.test_idna_codec",
+        "tests.test_idna_uts46",
+        "tests.test_intranges",
+        "tests.test_idna_compat"
+      ],
+      "hypotheses": [
+        {
+          "title": "codepoint-class-cache",
+          "aimed": true,
+          "rationale": "check_label classifies every code point of every label against the IDNA tables through the range-membership helper, which packs the code point and unpacks two ranges for each lookup, although the tables never change while the program runs. Remember the classification of each code point already seen (a bounded cache), so code points that repeat across labels are classified once; every accepted and rejected label, and every error message, must stay the same.",
+          "files": ["idna/core.py", "idna/intranges.py"]
+        },
+        {
+          "title": "ascii-label-shortcut",
+          "aimed": false,
+          "rationale": "Return early from the UTS 46 remapping for domains that are pure lower-case ASCII letters, digits, hyphens and dots, since the mapping leaves them unchanged; the encoded and decoded names must stay the same.",
+          "files": ["idna/core.py"]
+        }
+      ],
+      "profile": "cProfile, 3.3 s under the profiler (1.0 s plain); about a third is the stdlib punycode codec (not editable here). Library code: check_label 24,100 calls (0.79 s cumulative), intranges_contain 155,500 calls (0.32 s), ulabel 1.62 s cumulative, uts46_remap 0.18 s."
+    },
+    {
+      "name": "tomli",
+      "url": "https://github.com/hukkin/tomli.git",
+      "tag": "2.5.0",
+      "commit": "a2a578949199336ebc3884eeba4aede87da41ef2",
+      "released": "2026-10-07",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "package": "tomli",
+      "module_root": "src/tomli",
+      "test_command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests",
+        "-t",
+        "."
+      ],
+      "hypotheses": [
+        {
+          "title": "skip-chars-regex",
+          "aimed": true,
+          "rationale": "The parser skips whitespace, comments and array separators one character at a time through skip_chars, a Python loop over a set-membership test that runs about 500,000 times for this document. Skip each run of characters with one precompiled regular-expression match (or an equivalent C-level string method) instead; every parsed value, and every error position and message, must stay the same.",
+          "files": ["src/tomli/_parser.py"]
+        },
+        {
+          "title": "plain-dict-output",
+          "aimed": false,
+          "rationale": "Build the result with plain nested dicts while parsing instead of the parser's own nested-dict helper and flags bookkeeping; the parsed document and the errors raised for invalid documents must stay the same.",
+          "files": ["src/tomli/_parser.py"]
+        }
+      ],
+      "profile": "cProfile, 1.7 s under the profiler (0.6 s plain): key_value_rule 1.41 s cumulative over 51,200 pairs, parse_value 0.90 s, skip_chars 502,400 calls (0.12 s own), skip_comments_and_array_ws 0.18 s, parse_array 0.47 s."
+    },
+    {
+      "name": "pycparser",
+      "url": "https://github.com/eliben/pycparser.git",
+      "tag": "release_v3.11",
+      "commit": "ccb34399dedf518baac209592518757f367430fe",
+      "released": "2026-10-09",
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "package": "pycparser",
+      "module_root": "pycparser",
+      "test_command": [
+        "python",
+        "-m",
+        "unittest",
+        "tests.test_c_parser",
+        "tests.test_c_lexer",
+        "tests.test_c_generator",
+        "tests.test_c_ast"
+      ],
+      "hypotheses": [
+        {
+          "title": "token-peek-fast-path",
+          "aimed": true,
+          "rationale": "The parser looks ahead about 300,000 times for this unit, and every peek goes through the parser's own peek helper into the token stream's peek, which calls the buffer-fill method and recomputes the buffer length in a loop even when the token is already buffered. Return an already-buffered token directly and only fall back to filling the buffer when the lookahead runs past it; the AST and every syntax error must stay the same.",
+          "files": ["pycparser/c_parser.py"]
+        },
+        {
+          "title": "generator-visit-cache",
+          "aimed": false,
+          "rationale": "Cache the C generator's visitor method per node class instead of building the method name with string formatting and getattr for every node; the generated C must stay byte-identical.",
+          "files": ["pycparser/c_generator.py"]
+        }
+      ],
+      "profile": "cProfile, 2.5 s under the profiler (0.8 s plain): token lookahead dominates: _TokenStream._fill 369,100 calls (1.04 s cumulative), peek 299,900 (1.10 s), CParser._peek 1.22 s; the lexer's _match_token 0.64 s; the generator's visit 0.25 s."
+    }
+  ]
+}
