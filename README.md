@@ -125,7 +125,7 @@ See [STATUS.md](./STATUS.md) for the development log.
 - Linux: `unshare` (util-linux) and Landlock (kernel 5.13 or later; 5.19 or
   later recommended). macOS: `/usr/bin/sandbox-exec`, which ships with the OS
 - Docker (PostgreSQL, Redis, Qdrant)
-- Node.js 20+ and pnpm 10.20
+- Node.js 22 (`.nvmrc`; Node 20 is end of life) and pnpm 10.20
 - Python 3.11+ and [uv](https://docs.astral.sh/uv/)
 
 ### Installation
@@ -145,7 +145,7 @@ cd ../..
 # Environment
 cp .env.example .env            # add your ANTHROPIC_API_KEY
 
-# Infrastructure
+# Infrastructure (Postgres, Redis, Qdrant on 127.0.0.1 only; images pinned by digest)
 docker compose -f docker-compose.dev.yml up -d
 ```
 
@@ -253,10 +253,11 @@ pnpm stage-gate:quick     # quality checks only
 Every build step ends with the same stage gate before its PR is marked ready:
 
 1. **Upgrades:** review outdated dependencies and upgrade within the step.
-   Renovate opens weekly PRs for anything missed.
+   Dependabot opens weekly grouped PRs for anything missed (three-day release
+   cooldown); `renovate.json` is ready for when the Renovate app is installed.
 2. **Audits:** `pnpm audit`, `pip-audit` and `bandit` must be clean;
-   `security.yml` (OSV, Trivy, secret scanning) runs on every push and every
-   Monday.
+   `security.yml` (OSV, npm audit, licenses, zizmor workflow lint) runs on every
+   push and every Monday.
 3. **Security review** of the code the step added, against the OWASP checklist
    in `CLAUDE.md`, adding protections where the step needs them.
 4. **Docs:** README (what and how), STATUS.md development log, CLAUDE.md if
@@ -286,9 +287,12 @@ GitHub Actions runs on every push and pull request:
 - Schema: migrations 001-004 applied in order, then 003 and 004 re-applied to
   prove they are idempotent
 - Live Claude smoke test: manual only (see Tests above)
-- Security: `pnpm audit`, OSV scanner, Trivy (filesystem and images), Docker
-  Scout, secret scanning; SBOM and provenance attestations on image builds
-- Dependencies: Renovate with grouped, scheduled upgrade PRs
+- Security: `pnpm audit`, OSV scanner, Trivy (config and images), zizmor
+  workflow lint; every action pinned to a commit SHA, every image to a digest,
+  least-privilege workflow tokens; SBOM and provenance attestations on image
+  builds
+- Dependencies: Dependabot with grouped, scheduled upgrade PRs and a three-day
+  release cooldown (`renovate.json` equivalent kept for Renovate)
 
 ---
 
