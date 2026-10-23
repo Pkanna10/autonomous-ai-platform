@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import codecs
 import contextlib
-import errno
 import hashlib
 import itertools
 import math
@@ -241,30 +240,40 @@ def _rmtree(path: Path) -> None:
 
 
 def _remove_tree(name: str, dir_fd: int | None) -> None:
-    """``name`` (relative to ``dir_fd``) and everything below it. Each
-    directory is made u+rwx through an fd opened with ``O_NOFOLLOW``, so a
-    directory swapped for a link is skipped, never followed; ``fwalk`` and
-    ``rmtree`` are fd-based too."""
-    _make_owned(dir_fd, name, required=True)
+    """``name`` (relative to ``dir_fd``) and everything below it. Every
+    directory is made u+rwx by ``_chmod_at`` (never through a link) before
+    ``fwalk`` enters it; ``fwalk`` and ``rmtree`` are fd-based too."""
+    _chmod_at(dir_fd, name, stat.S_IRWXU)
     for _top, dirs, _files, fd in os.fwalk(name, dir_fd=dir_fd):
         for child in dirs:
-            _make_owned(fd, child, required=False)
+            with contextlib.suppress(NotADirectoryError):  # a link: rmtree unlinks it
+                _chmod_at(fd, child, stat.S_IRWXU)
     shutil.rmtree(name, dir_fd=dir_fd)
 
 
-def _make_owned(dir_fd: int | None, name: str, *, required: bool) -> None:
-    """u+rwx on the directory ``name``; a link or a non-directory is left to
-    ``rmtree`` unless ``required``."""
-    try:
-        fd = os.open(name, _DIR_FLAGS, dir_fd=dir_fd)
-    except OSError as error:
-        if required or error.errno not in (errno.ELOOP, errno.ENOTDIR):
-            raise
-        return
-    try:
-        os.fchmod(fd, stat.S_IRWXU)
-    finally:
-        os.close(fd)
+def _chmod_at(dir_fd: int | None, name: str, mode: int) -> None:
+    """chmod ``name`` itself, never a link's target, even when it cannot be
+    opened (mode 000). Linux: an ``O_PATH`` fd, which needs no permission on
+    ``name`` and refuses a link (``NotADirectoryError``), changed through its
+    ``/proc/self/fd`` entry (the inode, not a new lookup). Elsewhere:
+    ``fchmodat(AT_SYMLINK_NOFOLLOW)``, which changes a link itself."""
+    if hasattr(os, "O_PATH"):
+        flags = os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        fd = os.open(name, flags, dir_fd=dir_fd)
+        try:
+            os.chmod(f"/proc/self/fd/{fd}", mode)
+        finally:
+            os.close(fd)
+    else:
+        os.chmod(name, mode, dir_fd=dir_fd, follow_symlinks=False)
+
+
+def _open_owned(dir_fd: int | None, name: str) -> int:
+    """The directory ``name`` made u+rwx (other bits kept), opened, never
+    through a link."""
+    mode = os.stat(name, dir_fd=dir_fd, follow_symlinks=False).st_mode
+    _chmod_at(dir_fd, name, stat.S_IMODE(mode) | stat.S_IRWXU)
+    return os.open(name, _DIR_FLAGS, dir_fd=dir_fd)
 
 
 def _scrub(top: Path) -> None:
@@ -275,14 +284,14 @@ def _scrub(top: Path) -> None:
     so it could hold a whole cache), and so does every FIFO, socket or device
     (git never tracks one, so its name could carry state).
 
-    The walk holds an fd per level and opens each subdirectory through its
-    parent's fd with ``O_NOFOLLOW``: a directory a surviving process swaps
-    for a link after the listing is a ``RepoTamperedError``, never a walk
-    (chmod, unlink) outside the worktree.
+    The walk holds an fd per level and makes each subdirectory u+rwx and
+    opens it through its parent's fd, never through a link: a directory a
+    surviving process swaps for a link after the listing is a
+    ``RepoTamperedError``, never a walk (chmod, unlink) outside the worktree.
     """
     stack: list[tuple[int, list[str], str]] = []
     try:
-        fd = os.open(top, _DIR_FLAGS)
+        fd = _open_owned(None, str(top))
         stack.append((fd, [], str(top)))  # closed below if the scrub fails
         stack[-1] = (fd, _scrub_level(fd, top=True), str(top))
         while stack:
@@ -293,7 +302,7 @@ def _scrub(top: Path) -> None:
             name = children.pop()
             path = os.path.join(where, name)
             try:
-                child = os.open(name, _DIR_FLAGS, dir_fd=fd)
+                child = _open_owned(fd, name)
             except OSError as error:
                 raise RepoTamperedError(
                     f"{path} changed while the engine reset the worktree"
@@ -309,7 +318,6 @@ def _scrub(top: Path) -> None:
 
 def _scrub_level(fd: int, *, top: bool) -> list[str]:
     """Scrub one directory (an fd); return the subdirectories to visit."""
-    os.fchmod(fd, stat.S_IMODE(os.fstat(fd).st_mode) | stat.S_IRWXU)
     children: list[str] = []
     with os.scandir(fd) as entries:
         for entry in entries:

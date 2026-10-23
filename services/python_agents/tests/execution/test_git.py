@@ -9,7 +9,6 @@ test that builds worktrees.
 
 from __future__ import annotations
 
-import errno
 import hashlib
 import math
 import os
@@ -28,6 +27,7 @@ import pytest
 
 from autonomous_ai_agents.common.config import settings
 from autonomous_ai_agents.common.errors import EngineError, RepoTamperedError
+from autonomous_ai_agents.execution import git as git_module
 from autonomous_ai_agents.execution.git import (
     ENGINE_EMAIL,
     ENGINE_NAME,
@@ -1860,7 +1860,7 @@ def test_remove_contained_never_follows_a_tree_swapped_for_a_link(
     GIVEN a tree inside WORKTREE_ROOT that is swapped for a link to a
         directory outside right after remove_contained checked it
     WHEN it is removed
-    THEN the open refuses the link and the outside directory keeps its mode
+    THEN the removal refuses the link and the outside directory keeps its mode
         and its files
     """
     outside = write(tmp_path / "outside" / "keep.txt", "keep\n").parent
@@ -1877,13 +1877,44 @@ def test_remove_contained_never_follows_a_tree_swapped_for_a_link(
 
     monkeypatch.setattr(os.path, "islink", racing)
 
-    with pytest.raises(OSError) as caught:
+    with pytest.raises(OSError):  # Linux: ENOTDIR; macOS: rmtree refuses a link
         remove_contained(tree)
 
     monkeypatch.undo()
-    assert caught.value.errno in (errno.ELOOP, errno.ENOTDIR)  # macOS, Linux
     assert stat.S_IMODE(outside.stat().st_mode) == 0o750
     assert (outside / "keep.txt").read_text() == "keep\n"
+
+
+def test_without_o_path_the_chmod_changes_a_link_itself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    GIVEN a platform without O_PATH (macOS)
+    WHEN the engine makes a directory u+rwx
+    THEN it asks for fchmodat(AT_SYMLINK_NOFOLLOW) (follow_symlinks=False)
+        relative to the parent's fd, so a link is never followed
+    """
+    calls: list[tuple[str, int, int | None, bool]] = []
+    real = os.chmod
+
+    def chmod(
+        path: str, mode: int, *, dir_fd: int | None = None, follow_symlinks: bool = True
+    ) -> None:
+        calls.append((path, mode, dir_fd, follow_symlinks))
+        real(path, mode, dir_fd=dir_fd)  # Linux has no fchmodat(NOFOLLOW)
+
+    (tmp_path / "locked").mkdir(mode=0)
+    monkeypatch.delattr(os, "O_PATH")
+    monkeypatch.setattr(os, "chmod", chmod)
+    fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        git_module._chmod_at(fd, "locked", stat.S_IRWXU)
+    finally:
+        os.close(fd)
+
+    monkeypatch.undo()
+    assert calls == [("locked", stat.S_IRWXU, fd, False)]
+    assert stat.S_IMODE((tmp_path / "locked").stat().st_mode) == stat.S_IRWXU
 
 
 def test_commit_message_is_the_raw_message_after_the_header(
