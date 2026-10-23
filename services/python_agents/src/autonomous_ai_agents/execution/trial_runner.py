@@ -476,8 +476,8 @@ class GitTrialRunner(_PhaseOwner):
                 self._note(
                     f"trial for hypothesis {hypothesis_id}",
                     [
-                        f"{ref} stays at {moved}, the aborted trial's commit:"
-                        " a worktree has it checked out"
+                        f"{ref} was left alone (the aborted trial had moved it"
+                        f" to {moved}): a worktree has it checked out"
                     ],
                 )
             elif prior is None:

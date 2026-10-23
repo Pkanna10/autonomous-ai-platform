@@ -13,7 +13,9 @@ fails ``socket(AF_UNIX)`` with EACCES (the network namespace isolates AF_INET
 and *abstract* AF_UNIX but not *path*-based AF_UNIX, so without this a workload
 could still reach a host unix-domain service such as ``/var/run/docker.sock``
 or a local database socket; ``socketpair(AF_UNIX)`` and AF_INET are untouched,
-so multiprocessing and the loopback probe keep working), ``PR_SET_NO_NEW_PRIVS``,
+so the loopback probe and multiprocessing's ``fork`` start method keep working,
+while ``spawn`` and ``forkserver`` need an AF_UNIX listener and fail),
+``PR_SET_NO_NEW_PRIVS``,
 Landlock handling writes only (the writable dirs and ``/dev/null``:
 ``/dev/shm`` is deliberately *not* writable, because it is shared across runs
 and a workload could carry state from one timed run to the next; a per-run

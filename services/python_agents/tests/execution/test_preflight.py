@@ -686,9 +686,9 @@ def test_an_unmarked_engine_leftover_is_refused_with_its_recovery(
         repository without the run marker: what an owner whose cleanup
         failed, or a run killed before run markers existed, leaves
     WHEN the next run connects
-    THEN it refuses with the recovery (remove that worktree and the run
-        dir), not with advice to move WORKTREE_ROOT; once the user follows
-        it, connect accepts the repository
+    THEN it refuses without claiming whose worktree it is, with a recovery
+        that cannot destroy work (plain 'git worktree remove', never
+        --force); once the user follows it, connect accepts the repository
     """
     stale = root / "old-run" / "baseline"
     stale.parent.mkdir(parents=True)
@@ -697,16 +697,55 @@ def test_an_unmarked_engine_leftover_is_refused_with_its_recovery(
 
     message = refused(make(), project)
 
-    assert message == (
-        f"WORKTREE_ROOT {root} holds {stale}, a worktree of the repository at"
-        f" {repo} that an earlier engine run left (its cleanup failed, or it was"
-        " killed before run markers existed); no run marks it, so connect does"
-        f" not remove it: run 'git worktree remove --force {stale}', remove"
-        f" {stale.parent}, then connect again"
-    )
-    run_git(repo, "worktree", "remove", "--force", str(stale))
+    assert message == unmarked_refusal(root, stale, repo)
+    assert "--force" not in message
+    run_git(repo, "worktree", "remove", str(stale))
     shutil.rmtree(stale.parent)
     assert check(make(), project).notes == ()
+
+
+def unmarked_refusal(root: Path, path: Path, repo: Path) -> str:
+    return (
+        f"WORKTREE_ROOT {root} holds {path}, a worktree of the repository at"
+        f" {repo} that no engine run marks. An earlier engine run may have left"
+        " it (its cleanup failed, or it was killed before run markers existed),"
+        " or it may be yours; connect never removes it. If it is an engine"
+        f" leftover, run 'git worktree remove {path}' (git refuses while it"
+        " holds uncommitted work: look at that work before you remove it) and"
+        f" remove {path.parent}; if it is yours, set WORKTREE_ROOT to a"
+        " directory outside every checkout"
+    )
+
+
+def test_a_user_worktree_shaped_like_an_engine_phase_keeps_its_work(
+    make: Factory, project: Project, repo: Path, root: Path
+) -> None:
+    """
+    GIVEN the user's own worktree at <WORKTREE_ROOT>/<repo>/<branch> (two
+        plain names, the shape of an engine phase) with a branch checked
+        out and uncommitted work in it
+    WHEN preflight refuses it
+    THEN the refusal does not call it the engine's and never advises
+        --force, and following its advice to the letter cannot delete the
+        user's work: plain 'git worktree remove' refuses
+    """
+    mine = root / "myrepo" / "feature"
+    mine.parent.mkdir(parents=True)
+    run_git(repo, "worktree", "add", "-q", "-b", "feature", str(mine), "HEAD")
+    (mine / "draft.py").write_text("work in progress\n")
+
+    message = refused(make(), project)
+
+    assert message == unmarked_refusal(root, mine, repo)
+    assert "--force" not in message
+    assert "or it may be yours" in message
+    removed = subprocess.run(
+        ["git", "-C", str(repo), "worktree", "remove", str(mine)],
+        capture_output=True,
+        check=False,
+    )
+    assert removed.returncode != 0
+    assert (mine / "draft.py").read_text() == "work in progress\n"
 
 
 @pytest.mark.parametrize(

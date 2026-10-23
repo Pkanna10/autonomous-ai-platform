@@ -1120,8 +1120,9 @@ def test_an_aborted_trial_leaves_an_own_ref_a_worktree_checked_out(
     GIVEN the user checks the trial branch out in a new worktree while the
         committed trial is measured, and creates a branch (tampering)
     WHEN the trial is aborted (RepoTamperedError)
-    THEN the own ref stays at the trial commit, so the user's worktree HEAD
-        still resolves to it, and a note says why the ref was left
+    THEN the own ref is left alone, so the user's worktree HEAD still
+        resolves to it, and a note says why, without claiming where the ref
+        is now (the worktree may have moved it)
     """
     hypothesis = rig.hypothesis()
     branch = rig.branch(hypothesis)
@@ -1143,8 +1144,9 @@ def test_an_aborted_trial_leaves_an_own_ref_a_worktree_checked_out(
     assert git(user_wt, "symbolic-ref", "HEAD") == f"refs/heads/{branch}"
     assert git(user_wt, "rev-parse", "HEAD") == moved
     assert rig.notes[-1] == (
-        f"trial for hypothesis {hypothesis.id}: refs/heads/{branch} stays at"
-        f" {moved}, the aborted trial's commit: a worktree has it checked out"
+        f"trial for hypothesis {hypothesis.id}: refs/heads/{branch} was left"
+        f" alone (the aborted trial had moved it to {moved}): a worktree has it"
+        " checked out"
     )
     assert not rig.run_dir.exists()
 

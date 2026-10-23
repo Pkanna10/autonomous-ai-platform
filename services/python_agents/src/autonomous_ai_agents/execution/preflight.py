@@ -375,12 +375,19 @@ def _engine_shaped(root: Path, path: Path) -> bool:
 
 
 def _unmarked_leftover(git: _RepoGit, root: Path, path: Path) -> PreflightError:
+    """The refusal for an unmarked ``<run>/<phase>``-shaped worktree. Its shape
+    is also a common layout for the user's own worktrees, so the message
+    claims no owner and its advice cannot destroy work: plain ``git worktree
+    remove`` refuses while the worktree holds uncommitted changes."""
     return PreflightError(
         f"WORKTREE_ROOT {root} holds {path}, a worktree of the repository at"
-        f" {git.repo} that an earlier engine run left (its cleanup failed, or it"
-        " was killed before run markers existed); no run marks it, so connect"
-        f" does not remove it: run 'git worktree remove --force {path}', remove"
-        f" {path.parent}, then connect again"
+        f" {git.repo} that no engine run marks. An earlier engine run may have"
+        " left it (its cleanup failed, or it was killed before run markers"
+        " existed), or it may be yours; connect never removes it. If it is an"
+        f" engine leftover, run 'git worktree remove {path}' (git refuses while"
+        " it holds uncommitted work: look at that work before you remove it)"
+        f" and remove {path.parent}; if it is yours, set WORKTREE_ROOT to a"
+        " directory outside every checkout"
     )
 
 
@@ -391,8 +398,8 @@ def _check_worktree_root(git: _RepoGit) -> None:
     the user's ``git clean`` there would remove the engine's live dirs. An
     engine worktree (in a marked ``<run>``) and a stale registration under
     it are no overlap; connect sweeps or prunes them. An unmarked worktree
-    laid out as ``<run>/<phase>`` is an engine leftover connect may not
-    remove (no lock proves its owner gone): the refusal names the recovery."""
+    laid out as ``<run>/<phase>`` may be an engine leftover or the user's own:
+    connect never removes it, and the refusal claims no owner."""
     root = Path(os.path.realpath(settings.WORKTREE_ROOT))
     if root.is_relative_to(git.repo):
         raise PreflightError(

@@ -573,8 +573,10 @@ Where a decision changed the spec, the code follows the decision.
   socket) and exfiltrate while the engine reported a clean efficiency win.
   Blocking `socket(AF_UNIX)` closes every path-based unix socket regardless of
   its location; `socketpair(AF_UNIX)` (a connected pair, no egress, used by
-  multiprocessing) and AF_INET (the loopback probe) stay allowed. macOS needs
-  nothing new: `sandbox-exec`'s `(deny network*)` already covers AF_UNIX
+  multiprocessing's `fork` start method) and AF_INET (the loopback probe) stay
+  allowed. Cost: multiprocessing's `spawn` and `forkserver` start methods need
+  an AF_UNIX listener and fail under the Linux sandbox (see Known gaps). macOS
+  needs nothing new: `sandbox-exec`'s `(deny network*)` already covers AF_UNIX
   `connect`, so the filter and the AF_UNIX self-check are Linux-only.
 
 ### 2026-10-22 (Step 2, wave 2b review fixes)
@@ -893,6 +895,14 @@ the judged-trials key question (closed by decision 35). Left:
 
 ### Known gaps carried to later steps
 
+- **Multiprocessing `spawn`/`forkserver` fail in the Linux sandbox.** The
+  seccomp filter that closes path-based AF_UNIX egress refuses every
+  `socket(AF_UNIX)`, and those start methods need an AF_UNIX listener; `fork`
+  (socketpair-based) works. Python 3.14 makes `forkserver` the Linux default, so
+  a 3.14 workload using multiprocessing fails at baseline. Follow-up: allow
+  AF_UNIX sockets bound inside the worktree or scratch dir only (Landlock scoped
+  unix sockets where the kernel has them, else a connect/bind filter), so local
+  IPC works and host sockets stay unreachable. Owner: Step 4 (runner).
 - **Runner notes reach the live stream only.** `RunNotes` emits them as
   `runner_note` events, but they are not appended to `state["events"]` or the
   audit row. Step 4's CLI live log is the place to keep them.

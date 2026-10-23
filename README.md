@@ -403,12 +403,15 @@ probe dirs) and says so in a `preflight_note`; a run still working elsewhere
 keeps its lock and is left alone. A killed trial that had committed keeps its
 trial ref for review, like every committed trial (see below). A worktree at
 `<WORKTREE_ROOT>/<run>/<phase>` that no run marks (a run whose own cleanup
-failed, or one killed before run markers existed) is not removed: connect
-refuses and names the two commands below for it. To clean up by hand instead:
+failed, or one killed before run markers existed) is not removed, because the
+same layout is common for your own worktrees: connect refuses, claims no owner
+and names the commands below. Plain `git worktree remove` refuses while a
+worktree holds uncommitted work, so look at that work before you add `--force`:
 
 ```bash
 git worktree list                         # the engine's are under WORKTREE_ROOT
-git worktree remove --force <WORKTREE_ROOT>/<run>/<phase>
+git -C <WORKTREE_ROOT>/<run>/<phase> status   # anything of yours in there?
+git worktree remove <WORKTREE_ROOT>/<run>/<phase>
 rm -rf <WORKTREE_ROOT>/<run>              # then: git worktree prune
 ```
 
