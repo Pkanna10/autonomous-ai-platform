@@ -649,20 +649,20 @@ def render_cost_table(ledger: SuiteLedger) -> str:
 def write_cost_summary(
     ledger: SuiteLedger, environ: Mapping[str, str], echo: Callable[[str], None]
 ) -> None:
-    """Append the table to ``$GITHUB_STEP_SUMMARY`` (an absolute path), else
-    print it line by line through ``echo``."""
+    """Print the table line by line through ``echo``, and append it to
+    ``$GITHUB_STEP_SUMMARY`` (an absolute path) too: the job summary is not
+    readable through the GitHub API, so the calibration reads the log."""
     text = render_cost_table(ledger)
+    for line in text.splitlines():
+        echo(line)
     target = environ.get("GITHUB_STEP_SUMMARY", "")
     if target and os.path.isabs(target):
         with open(target, "a", encoding="utf-8") as summary:
             summary.write(text + "\n")
         echo(
             f"live API cost: {ledger.spent_usd:.4f} USD over {len(ledger.rows)} "
-            "test(s), written to the job summary"
+            "test(s), also in the job summary"
         )
-        return
-    for line in text.splitlines():
-        echo(line)
 
 
 XDIST_ENV: Final = "PYTEST_XDIST_WORKER"

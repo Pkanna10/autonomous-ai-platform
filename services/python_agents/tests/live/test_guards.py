@@ -399,10 +399,11 @@ def test_write_cost_summary_appends_to_the_job_summary(tmp_path: Path) -> None:
         write_cost_summary(ledger, {"GITHUB_STEP_SUMMARY": str(target)}, echoed.append)
     written = target.read_text(encoding="utf-8")
     assert written.count("## Live API suite cost") == 2
-    assert (
-        echoed
-        == ["live API cost: 0.5000 USD over 1 test(s), written to the job summary"] * 2
-    )
+    # The log carries the table too: the job summary is not readable through
+    # the GitHub API, and the calibration (Stage B) reads the log.
+    table = render_cost_table(ledger).splitlines()
+    note = "live API cost: 0.5000 USD over 1 test(s), also in the job summary"
+    assert echoed == [*table, note] * 2
 
 
 @pytest.mark.parametrize("environ", [{}, {"GITHUB_STEP_SUMMARY": "relative.md"}])
