@@ -1227,13 +1227,44 @@ def test_a_module_root_outside_the_repo_is_refused_at_construction(root: str) ->
 
 
 def _live_selected(config: pytest.Config) -> bool:
-    """True only when the run asked for live tests by name (``-m live``).
+    """True only when the run's marker expression is exactly ``live`` (what
+    the CI live job passes).
 
     ``-o addopts=""`` drops the default ``-m "not live"``; without this check
-    such a run would spend money whenever a key happens to be set.
+    such a run would spend money whenever a key happens to be set. A
+    substring test is not enough: ``-m "not alive"`` contains ``live``.
     """
-    expression = str(config.getoption("markexpr") or "")
-    return "live" in expression and "not live" not in expression
+    return str(config.getoption("markexpr") or "").strip() == "live"
+
+
+class _MarkerConfig:
+    def __init__(self, markexpr: str | None) -> None:
+        self._markexpr = markexpr
+
+    def getoption(self, name: str) -> str | None:
+        assert name == "markexpr"
+        return self._markexpr
+
+
+@pytest.mark.parametrize(
+    ("markexpr", "selected"),
+    [
+        ("live", True),
+        (" live ", True),
+        (None, False),
+        ("", False),
+        ("not live", False),
+        ("not alive", False),
+        ("not delivery", False),
+        ("live or not live", False),
+        ("slow or live", False),
+    ],
+)
+def test_the_live_edit_runs_only_under_exactly_dash_m_live(
+    markexpr: str | None, selected: bool
+) -> None:
+    config = cast(pytest.Config, _MarkerConfig(markexpr))
+    assert _live_selected(config) is selected
 
 
 @pytest.mark.live

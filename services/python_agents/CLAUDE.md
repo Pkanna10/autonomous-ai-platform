@@ -409,10 +409,17 @@ Step 2 (repository code now runs on the user's machine):
   replaces it, and `-o addopts=""` drops it: always keep `-m "not live"` then.
   To run serially use `uv run pytest -o addopts="" -m "not live"` rather than
   `-p no:xdist`.
-- **Live tests** (`live` marker) call the real API and cost money. Each one also
-  checks that the run selected `-m live` explicitly (the `_live_selected`
-  pattern in `tests/execution/test_editor.py`) and skips without
-  `ANTHROPIC_API_KEY`; CI runs them only in the manual `live-smoke` job.
+- **Live tests** (`live` marker) call the real API and cost money; CI runs them
+  only in the manual `live-smoke` job (environment `live`, `-n 0`). The Stage A
+  suite lives in `tests/live` (contract checks, understand on three repo shapes,
+  the whole loop, the injected-repository attack; fixtures in
+  `tests/fixtures/live_repos`). Its `conftest.py` skips a live test unless the
+  marker expression needs `live` to select it and `ANTHROPIC_API_KEY` is set,
+  fails under xdist or without the sandbox, refuses a test once the suite ledger
+  would pass `LIVE_SUITE_CAP_USD` (12), and writes the cost table to the job
+  summary; `tests/live/test_guards.py` tests all of it offline. The older editor
+  live test in `tests/execution/test_editor.py` runs only under exactly
+  `-m live`.
 - **Postgres tests** (`postgres` marker) skip when `TEST_DATABASE_URL` is unset;
   CI always sets it. Each pytest process creates its own database from
   `infrastructure/schema/*.sql` and drops it at the end, so the role must be

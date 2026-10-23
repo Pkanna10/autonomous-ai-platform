@@ -475,18 +475,26 @@ jobs:
   # as an environment secret (not a repository secret), so starting a run on
   # any branch still needs a second person before the key reaches the runner.
   live-smoke:
-    name: Live Claude smoke test (manual)
+    name: Live Claude API suite (manual)
     runs-on: ubuntu-22.04
     if: github.event_name == 'workflow_dispatch'
     environment: live
     permissions:
       contents: read
-    timeout-minutes: 15
+    # The live E2E and attack runs each take a few minutes of real trials.
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: ./services/python_agents
     env:
       UV_PYTHON: '3.11'
+      # The live E2E and attack runs must be sandboxed: a runner that cannot
+      # isolate fails instead of running Claude-edited code unconfined.
+      REQUIRE_NETWORK_SANDBOX: '1'
+      REQUIRE_FS_SANDBOX: '1'
+      # tests/live/conftest.py refuses to start a live test once what the suite
+      # spent plus that test's own cap would pass this (USD).
+      LIVE_SUITE_CAP_USD: '12'
 
     steps:
       - name: Checkout code
@@ -510,11 +518,53 @@ jobs:
             **/uv.lock
 
       - name: Install dependencies with uv sync
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --extra database
 
-      # -m live replaces the default "not live" filter; --no-cov because a
-      # handful of tests cannot meet the suite's coverage gate. A missing key
-      # fails here instead of letting every live test skip.
+      # The same probe as the python job: fail loudly before any money is
+      # spent when the runner cannot give the engine its Linux sandbox.
+      - name: Sandbox probe (unshare and Landlock)
+        run: |
+          echo "kernel $(uname -r)"
+          userns=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          if [ -r "${userns}" ]; then
+            echo "apparmor_restrict_unprivileged_userns=$(cat "${userns}")"
+          fi
+          if ! command -v unshare >/dev/null 2>&1; then
+            echo "::error::unshare is not installed: the live E2E cannot be sandboxed (REQUIRE_*=1)"
+            exit 1
+          fi
+          uv run python - <<'PY'
+          import subprocess
+          import sys
+
+          from autonomous_ai_agents.execution import launcher
+          from autonomous_ai_agents.execution.sandbox import UNSHARE_ARGV
+
+          HINT = (
+              "decision 36: move this job to ubuntu-24.04 with "
+              "'sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0'; "
+              "never unset REQUIRE_*"
+          )
+          argv = [*UNSHARE_ARGV, "true"]
+          probe = subprocess.run(argv, capture_output=True, timeout=30, check=False)
+          if probe.returncode != 0:
+              detail = probe.stderr.decode(errors="replace").strip()
+              print(f"::error::{' '.join(argv)} exited {probe.returncode}: {detail} ({HINT})")
+              sys.exit(1)
+          print(f"{' '.join(argv)}: ok")
+          try:
+              abi = launcher.default_ops().syscall(444, (None, 0, 1))
+          except OSError as error:
+              print(f"::error::Landlock is unavailable: {error} ({HINT})")
+              sys.exit(1)
+          print(f"Landlock ABI {abi}")
+          PY
+
+      # -m live replaces the default "not live" filter; --no-cov because the
+      # live tests alone cannot meet the suite's coverage gate; -n 0 so one
+      # session ledger sees every test. The key reaches only this step and is
+      # never printed; a missing key fails here instead of letting every live
+      # test skip. The cost table goes to the job summary.
       - name: Run live tests
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -523,7 +573,7 @@ jobs:
             echo "::error::the ANTHROPIC_API_KEY secret of environment 'live' is not set"
             exit 1
           fi
-          uv run pytest -m live --no-cov -n 0 -rA
+          uv run pytest tests/live tests/execution/test_editor.py -m live --no-cov -n 0 -rA
 
   # Database schema: apply every migration to a real Postgres, then re-apply the
   # engine migrations (003, 004) to prove they are idempotent. 001 and 002 are
