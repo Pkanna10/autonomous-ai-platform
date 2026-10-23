@@ -377,11 +377,11 @@ def test_settings_default_pricing_matches_the_documented_rates(
     assert pricing["claude-opus-4-8"] == ModelPrice(
         input=5.0, output=25.0, cache_write=6.25, cache_read=0.50
     )
+    # Pricing page (2026-10-23): Haiku 5.5 cache hits are $0.01 for prompts
+    # up to 100K tokens, Sonnet 5.5's 0.05x input, Fable 5.1's 0.025x.
     assert pricing["claude-haiku-5-5"] == ModelPrice(
-        input=0.10, output=0.50, cache_write=0.125, cache_read=0.10
+        input=0.10, output=0.50, cache_write=0.125, cache_read=0.01
     )
-    # Pricing page (2026-10-23): Sonnet 5.5 cache hits are 0.05x input,
-    # Fable 5.1's 0.025x.
     assert pricing["claude-sonnet-5-5"] == ModelPrice(
         input=2.0, output=10.0, cache_write=2.5, cache_read=0.10
     )

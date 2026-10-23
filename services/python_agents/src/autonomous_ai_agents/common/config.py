@@ -28,10 +28,9 @@ _MIB = 1024 * _KIB
 # Haiku 5.5 $0.10/$0.50 for prompts of 100K tokens or fewer) and
 # shared/prompt-caching.md (5-minute cache writes cost 1.25x input; cache
 # reads ~0.1x input elsewhere); the pricing page, read 2026-10-23, for Sonnet
-# 5.5 ($2/$10, cache hits 0.05x input: $0.10) and Fable 5.1 ($10/$50, cache
-# hits 0.025x input: $0.25). Haiku 5.5's
-# cache-read rate is undocumented, so its input rate stands in as an upper
-# bound; its >100K-token rates ($0.50/$2.50) are not modelled, so triage
+# 5.5 ($2/$10, cache hits 0.05x input: $0.10), Fable 5.1 ($10/$50, cache hits
+# 0.025x input: $0.25) and Haiku 5.5's cache hits ($0.01). Haiku 5.5's
+# >100K-token rates ($0.50/$2.50, hits $0.05) are not modelled, so triage
 # prompts must stay at or under 100K tokens (Step 3).
 _DEFAULT_PRICING: dict[str, ModelPrice] = {
     "claude-opus-5-5": ModelPrice(
@@ -50,7 +49,7 @@ _DEFAULT_PRICING: dict[str, ModelPrice] = {
         input=10.0, output=50.0, cache_write=12.5, cache_read=0.25
     ),
     "claude-haiku-5-5": ModelPrice(
-        input=0.10, output=0.50, cache_write=0.125, cache_read=0.10
+        input=0.10, output=0.50, cache_write=0.125, cache_read=0.01
     ),
 }
 
