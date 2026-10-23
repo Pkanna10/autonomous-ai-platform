@@ -11,9 +11,11 @@ so a huge tracked file is never held whole), and every skip becomes a note.
 Repository-derived text goes inside ``<untrusted_repo_content boundary=T>``
 with a fresh ``secrets.token_hex(8)`` per request; any piece holding ``T`` is
 dropped with a note. The rules live in ``SYSTEM_PROMPT``. One structured-output
-request goes through ``clients.transport.call`` (budget check first), with no
-effort set (the API default), no caching (one request per run) and a fixed
-allowance for the structured-output system prompt the API adds.
+request goes through ``clients.transport.call`` (budget check first), with
+``UNDERSTAND_EFFORT`` as ``output_config.effort`` beside the format when it is
+set (else no effort key: the model's default), no caching (one request per
+run) and a fixed allowance for the structured-output system prompt the API
+adds.
 
 The reply is validated strictly (exactly the schema's keys and types, lengths
 capped) before anything is built; then each entrypoint and candidate module
@@ -46,7 +48,7 @@ from autonomous_ai_agents.clients.transport import (
     LLMTransport,
     call,
 )
-from autonomous_ai_agents.common.config import Settings, settings
+from autonomous_ai_agents.common.config import Effort, Settings, settings
 from autonomous_ai_agents.common.errors import LLMRequestError, LLMUnavailable
 from autonomous_ai_agents.common.models import (
     CandidateModule,
@@ -275,7 +277,7 @@ class ClaudeUnderstander:
                 },
             ),
             max_tokens=self._config.UNDERSTAND_MAX_TOKENS,
-            output_config=_output_config(),
+            output_config=_output_config(self._config.UNDERSTAND_EFFORT),
             cache=False,
             prompt_allowance_tokens=PROMPT_ALLOWANCE_TOKENS,
         )
@@ -309,8 +311,19 @@ def _failed(what: str, exc: Exception, charged: bool) -> str:
     return f"the Claude API {what}: {exc}{paid}"
 
 
-def _output_config() -> BetaOutputConfigParam:
-    return {"format": {"type": "json_schema", "schema": RESPONSE_SCHEMA}}
+def _output_config(effort: Effort | None) -> BetaOutputConfigParam:
+    """The JSON schema format, plus ``effort`` when one is configured.
+
+    Effort page (platform.claude.com/docs/en/build-with-claude/effort): the
+    level goes in ``output_config.effort``; omitting it means the model's
+    default, so ``None`` adds no key and the request stays as it was.
+    """
+    config: BetaOutputConfigParam = {
+        "format": {"type": "json_schema", "schema": RESPONSE_SCHEMA}
+    }
+    if effort is not None:
+        config["effort"] = effort
+    return config
 
 
 @dataclass

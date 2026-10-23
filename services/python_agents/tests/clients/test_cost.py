@@ -40,16 +40,20 @@ from anthropic.types.beta import (
 )
 from anthropic.types.beta.beta_iterations_usage import BetaIterationsUsageItem
 
+from autonomous_ai_agents.clients import transport as transport_module
 from autonomous_ai_agents.clients.cost import (
     BUILTIN_TOOL_INPUT_TOKENS,
+    COUNT_MARGIN_DIVISOR,
+    COUNT_MARGIN_MIN_TOKENS,
     TOOL_USE_SYSTEM_PROMPT_TOKENS,
     chain,
+    count_margin,
     preflight_estimate,
     prompt_token_bound,
     response_cost,
 )
 from autonomous_ai_agents.common.config import Settings, settings
-from autonomous_ai_agents.common.models import ModelPrice
+from autonomous_ai_agents.common.models import LongContextPrice, ModelPrice
 
 MTOK = 1_000_000
 
@@ -1242,6 +1246,325 @@ def test_prompt_token_bound_refuses_a_value_json_cannot_hold() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Long-context tier (Haiku 5.5 over 100,000 prompt tokens)
+# ---------------------------------------------------------------------------
+
+# Pricing page, "Long context pricing" (read 2026-10-23): a Haiku 5.5 request
+# whose prompt is over 100,000 tokens pays the higher prices; the prompt
+# counts every input token, cache reads and writes included; each request is
+# priced on its own. The model-pricing table lists the long row's output too.
+HAIKU_LONG = LongContextPrice(
+    threshold_tokens=100_000,
+    input=0.50,
+    output=2.50,
+    cache_write=0.625,
+    cache_read=0.05,
+)
+HAIKU = ModelPrice(
+    input=0.10, output=0.50, cache_write=0.125, cache_read=0.01, long_context=HAIKU_LONG
+)
+HAIKU_PRICES: dict[str, ModelPrice] = {**PRICES, "claude-haiku-5-5": HAIKU}
+
+
+def _haiku(inp: int, out: int, write: int = 0, read: int = 0) -> dict[str, int]:
+    return {
+        "input_tokens": inp,
+        "output_tokens": out,
+        "cache_creation_input_tokens": write,
+        "cache_read_input_tokens": read,
+    }
+
+
+def test_a_prompt_of_exactly_the_threshold_pays_the_base_rates() -> None:
+    """
+    GIVEN a Haiku 5.5 response whose prompt is exactly 100,000 tokens
+    WHEN it is priced
+    THEN every component bills the base rates ("over" 100,000 means > 100,000)
+    """
+    usage = _haiku(40_000, 2_000, write=30_000, read=30_000)
+
+    usd, tokens = response_cost(usage, HAIKU_PRICES, model="claude-haiku-5-5")
+
+    assert usd == pytest.approx(_cost(HAIKU, 40_000, 2_000, 30_000, 30_000))
+    assert tokens == 102_000
+
+
+def test_one_token_over_the_threshold_reprices_the_whole_request() -> None:
+    """
+    GIVEN a Haiku 5.5 response whose prompt is 100,001 tokens
+    WHEN it is priced
+    THEN every component, output included, bills the long-context rates
+    """
+    usage = _haiku(40_001, 2_000, write=30_000, read=30_000)
+    long = ModelPrice(**HAIKU_LONG.model_dump(exclude={"threshold_tokens"}))
+
+    usd, _ = response_cost(usage, HAIKU_PRICES, model="claude-haiku-5-5")
+
+    assert usd == pytest.approx(_cost(long, 40_001, 2_000, 30_000, 30_000))
+    assert usd > _cost(HAIKU, 40_001, 2_000, 30_000, 30_000) * 4
+
+
+def test_cache_reads_and_writes_count_toward_the_threshold() -> None:
+    """
+    GIVEN a Haiku 5.5 response with 10 plain input tokens and a 100,000-token
+          cached prefix (a cache hit)
+    WHEN it is priced
+    THEN the prompt is 100,010 tokens, so the hit pays the long read rate
+    """
+    usage = _haiku(10, 0, read=100_000)
+
+    usd, _ = response_cost(usage, HAIKU_PRICES, model="claude-haiku-5-5")
+
+    assert usd == pytest.approx((10 * 0.50 + 100_000 * 0.05) / MTOK)
+
+
+def test_a_long_one_hour_write_bills_twice_the_long_input_rate() -> None:
+    """
+    GIVEN a Haiku 5.5 response over the threshold whose cache writes are
+          1-hour ones
+    WHEN it is priced
+    THEN they bill 2x the long input rate, the page's $1 / MTok
+    """
+    usage = {
+        **_haiku(1, 0, write=200_000),
+        "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 200_000,
+        },
+    }
+
+    usd, _ = response_cost(usage, HAIKU_PRICES, model="claude-haiku-5-5")
+
+    assert usd == pytest.approx((1 * 0.50 + 200_000 * 1.0) / MTOK)
+
+
+def test_each_attempt_is_priced_on_its_own_prompt() -> None:
+    """
+    GIVEN two attempts in iterations, one Haiku 5.5 attempt over the
+          threshold and one under it
+    WHEN the response is priced
+    THEN only the long attempt pays the long rates
+    """
+    usage = {
+        **_haiku(0, 0),
+        "iterations": [
+            {**_haiku(150_000, 100), "model": "claude-haiku-5-5"},
+            {**_haiku(50_000, 100), "model": "claude-haiku-5-5"},
+        ],
+    }
+
+    usd, _ = response_cost(usage, HAIKU_PRICES, model="claude-haiku-5-5")
+
+    expected = (150_000 * 0.50 + 100 * 2.50 + 50_000 * 0.10 + 100 * 0.50) / MTOK
+    assert usd == pytest.approx(expected)
+
+
+def test_a_model_without_a_tier_pays_flat_rates_at_any_length() -> None:
+    """
+    GIVEN an Opus 5.5 response with a 900,000-token prompt
+    WHEN it is priced
+    THEN it pays the base rates (no long tier on the other models)
+    """
+    usage = _haiku(900_000, 1_000)
+
+    usd, _ = response_cost(usage, HAIKU_PRICES, model="claude-opus-5-5")
+
+    assert usd == pytest.approx(_cost(OPUS_5_5, 900_000, 1_000, 0, 0))
+
+
+def test_an_unknown_model_takes_the_long_rates_of_a_listed_tier() -> None:
+    """
+    GIVEN a table holding Haiku 5.5's tier and a response from an unlisted
+          model with a 200,000-token prompt
+    WHEN it is priced
+    THEN each component is the dearest rate any listed model charges at that
+         prompt length, long tiers included
+    """
+    cheap = ModelPrice(input=0.2, output=1.0, cache_write=0.25, cache_read=0.02)
+    prices = {"cheap": cheap, "claude-haiku-5-5": HAIKU}
+    usage = _haiku(200_000, 1_000)
+
+    usd, _ = response_cost(usage, prices, model="claude-unlisted-9")
+
+    assert usd == pytest.approx((200_000 * 0.50 + 1_000 * 2.50) / MTOK)
+
+
+@pytest.mark.parametrize(
+    ("bound", "rate_in", "rate_out"),
+    [(98_000, 0.125, 0.50), (100_001, 0.625, 2.50)],
+    ids=["a margin under", "one over"],
+)
+def test_preflight_uses_the_long_rates_when_the_bound_can_cross(
+    bound: int, rate_in: float, rate_out: float
+) -> None:
+    """
+    GIVEN a Haiku 5.5 chain and a prompt bound more than one count margin
+          under the threshold, or one token over it
+    WHEN the request is estimated
+    THEN the first is priced at the base rates; one over, at the long rates
+         (the dearest input side is the cache write)
+    """
+    estimate = preflight_estimate(bound, 4_000, ("claude-haiku-5-5",), HAIKU_PRICES)
+
+    assert estimate == pytest.approx((bound * rate_in + 4_000 * rate_out) / MTOK)
+
+
+def test_the_count_margin_is_two_percent_and_at_least_sixteen_tokens() -> None:
+    """
+    GIVEN the count margin rule
+    WHEN it is applied to small, round and odd counts
+    THEN it is ceil(count / 50), at least 16; and the transport pads its
+         count with the very same constants (they cannot drift apart)
+    """
+    assert (COUNT_MARGIN_MIN_TOKENS, COUNT_MARGIN_DIVISOR) == (16, 50)
+    assert [count_margin(n) for n in (0, 800, 801, 98_000, 99_960, 100_001)] == [
+        16,
+        16,
+        17,
+        1_960,
+        2_000,
+        2_001,
+    ]
+    assert transport_module.COUNT_MARGIN_MIN_TOKENS == COUNT_MARGIN_MIN_TOKENS
+    assert transport_module.COUNT_MARGIN_DIVISOR == COUNT_MARGIN_DIVISOR
+
+
+def test_a_count_just_under_the_threshold_is_estimated_at_the_long_tier() -> None:
+    """
+    GIVEN the reviewer's repro on a Haiku 5.5-only chain: count_tokens says
+          98,000, so the padded bound is 98,000 + 1,960 = 99,960, under the
+          threshold; max_tokens 8,000; the API then bills a 100,001-token
+          prompt and 1 output token (count_tokens is only an estimate)
+    WHEN the request is estimated and the response priced
+    THEN the bound is within one margin of the threshold, so the estimate
+         uses the long rates (about $0.0825, not $0.0165) and the bill
+         (about $0.0500) fits under it
+    """
+    cfg = Settings.model_validate({})
+    models = (cfg.TRIAGE_MODEL,)
+    bound = 98_000 + count_margin(98_000)
+
+    estimate = preflight_estimate(bound, 8_000, models, cfg.MODEL_PRICING)
+    usd, _ = response_cost(_haiku(100_001, 1), cfg.MODEL_PRICING, model=models[0])
+
+    assert bound == 99_960
+    assert estimate == pytest.approx((99_960 * 0.625 + 8_000 * 2.50) / MTOK)
+    assert usd == pytest.approx((100_001 * 0.50 + 1 * 2.50) / MTOK)
+    assert usd <= estimate
+
+
+@pytest.mark.parametrize(
+    ("bound", "long"),
+    [(97_999, False), (98_000, False), (98_040, True), (100_000, True)],
+)
+def test_a_bound_within_one_margin_of_the_threshold_counts_as_crossing(
+    bound: int, long: bool
+) -> None:
+    """
+    GIVEN Haiku 5.5's 100,000-token threshold and bounds around 98,000
+    WHEN each bound is estimated
+    THEN a bound whose own margin (2 %) reaches past the threshold is priced
+         at the long rates, and one that stays under it at the base rates
+    """
+    rate_in, rate_out = (0.625, 2.50) if long else (0.125, 0.50)
+
+    estimate = preflight_estimate(bound, 100, ("claude-haiku-5-5",), HAIKU_PRICES)
+
+    assert estimate == pytest.approx((bound * rate_in + 100 * rate_out) / MTOK)
+
+
+def test_preflight_keeps_the_dearer_of_the_base_and_long_rates() -> None:
+    """
+    GIVEN a tier whose long output rate is below its base output rate
+    WHEN a bound over the threshold is estimated
+    THEN each component takes the dearer of the two: a prompt under the
+         threshold may still be what the request bills
+    """
+    odd = ModelPrice(
+        input=1.0,
+        output=9.0,
+        cache_write=1.0,
+        cache_read=0.1,
+        long_context=LongContextPrice(
+            threshold_tokens=10, input=2.0, output=3.0, cache_write=2.0, cache_read=0.2
+        ),
+    )
+
+    estimate = preflight_estimate(1_000, 100, ("m",), {"m": odd})
+
+    assert estimate == pytest.approx((1_000 * 2.0 + 100 * 9.0) / MTOK)
+
+
+def test_the_default_chain_is_unaffected_by_the_haiku_tier() -> None:
+    """
+    GIVEN the shipped settings (Opus 5.5 -> Opus 4.8, Haiku 5.5 as triage)
+    WHEN a 500,000-token request on the engine chain is estimated
+    THEN it is the flat worst case of the chain: Haiku's tier is not in it
+    """
+    cfg = Settings.model_validate({"ENGINE_FALLBACKS": True})
+    models = chain(cfg)
+
+    estimate = preflight_estimate(500_000, 8_000, models, cfg.MODEL_PRICING)
+
+    assert models == ("claude-opus-5-5", "claude-opus-4-8")
+    assert estimate == pytest.approx(2 * (500_000 * 6.25 + 8_000 * 25.0) / MTOK)
+
+
+def test_a_fallback_chain_through_haiku_prices_its_long_tier() -> None:
+    """
+    GIVEN a chain Opus 5.5 -> Haiku 5.5 from the shipped price table, and a
+          prompt bound of 150,000 tokens
+    WHEN the request is estimated and a response billed by both is priced
+    THEN the estimate is two attempts at the chain's dearest rates (Opus 5.5
+         dominates Haiku's long tier) and the long-priced Haiku attempt fits
+         under it
+    """
+    cfg = Settings.model_validate(
+        {
+            "ENGINE_FALLBACKS": True,
+            "ENGINE_FALLBACK_MODELS": ("claude-haiku-5-5",),
+        }
+    )
+    models = chain(cfg)
+    usage = {
+        **_haiku(0, 0),
+        "iterations": [
+            {**_haiku(150_000, 8_000), "model": "claude-opus-5-5"},
+            {**_haiku(150_000, 8_000), "model": "claude-haiku-5-5"},
+        ],
+    }
+
+    estimate = preflight_estimate(150_000, 8_000, models, cfg.MODEL_PRICING)
+    usd, _ = response_cost(usage, cfg.MODEL_PRICING, model="claude-haiku-5-5")
+
+    assert estimate == pytest.approx(2 * (150_000 * 5.0 + 8_000 * 20.0) / MTOK)
+    haiku_long = (150_000 * 0.50 + 8_000 * 2.50) / MTOK
+    opus = (150_000 * 4.0 + 8_000 * 20.0) / MTOK
+    assert usd == pytest.approx(opus + haiku_long)
+    assert usd <= estimate
+
+
+def test_a_haiku_only_chain_is_estimated_at_the_long_tier() -> None:
+    """
+    GIVEN the shipped price table and a Haiku 5.5-only chain (triage), with
+          a 150,000-token bound
+    WHEN the request is estimated and a long response priced
+    THEN the estimate uses the long rates, and the response fits under it;
+         with flat rates it would have been five times too low
+    """
+    cfg = Settings.model_validate({})
+    models = (cfg.TRIAGE_MODEL,)
+    usage = _haiku(150_000, 8_000)
+
+    estimate = preflight_estimate(150_000, 8_000, models, cfg.MODEL_PRICING)
+    usd, _ = response_cost(usage, cfg.MODEL_PRICING, model=cfg.TRIAGE_MODEL)
+
+    assert estimate == pytest.approx((150_000 * 0.625 + 8_000 * 2.50) / MTOK)
+    assert usd <= estimate
+    assert usd > (150_000 * 0.125 + 8_000 * 0.50) / MTOK
+
+
+# ---------------------------------------------------------------------------
 # Property: actual cost <= pre-send estimate
 # ---------------------------------------------------------------------------
 
@@ -1255,16 +1578,35 @@ REAL_RATES = (
 )
 
 
-def _random_price(rng: random.Random) -> ModelPrice:
-    """Real-looking rates some of the time, arbitrary floats otherwise."""
-    if rng.random() < 0.4:
-        return rng.choice(REAL_RATES)
-    return ModelPrice(
+def _random_tier(rng: random.Random) -> LongContextPrice | None:
+    """No tier half the time; else a random threshold and arbitrary rates
+    (sometimes below the base rates, so the dearer-of-both rule is tested)."""
+    if rng.random() < 0.5:
+        return None
+    return LongContextPrice(
+        threshold_tokens=rng.choice((0, 100_000, rng.randint(0, 300_000))),
         input=rng.uniform(0, 30),
         output=rng.uniform(0, 120),
         cache_write=rng.uniform(0, 40),
         cache_read=rng.uniform(0, 30),
     )
+
+
+def _random_price(rng: random.Random) -> ModelPrice:
+    """Real-looking rates some of the time, arbitrary floats otherwise; a
+    random long-context tier on about half of them."""
+    if rng.random() < 0.4:
+        price = rng.choice((*REAL_RATES, HAIKU))
+    else:
+        price = ModelPrice(
+            input=rng.uniform(0, 30),
+            output=rng.uniform(0, 120),
+            cache_write=rng.uniform(0, 40),
+            cache_read=rng.uniform(0, 30),
+        )
+    if price.long_context is None:
+        return price.model_copy(update={"long_context": _random_tier(rng)})
+    return price
 
 
 def _upto(rng: random.Random, limit: int) -> int:
@@ -1430,6 +1772,42 @@ def test_property_cost_never_exceeds_the_estimate_for_chain_models() -> None:
 
         assert tokens == expected_tokens
         assert 0.0 <= usd <= estimate, (usage, prices, models)
+
+
+def test_property_an_under_count_within_the_margin_never_crosses_a_tier_unpriced() -> (
+    None
+):
+    """
+    GIVEN random price tables with long tiers whose thresholds sit near the
+          bound, a prompt bound, and responses whose attempts bill up to one
+          count margin MORE prompt tokens than the bound (count_tokens
+          under-counted beyond the padding)
+    WHEN the response is priced and the request estimated
+    THEN the cost exceeds the estimate at most in proportion to the tokens
+         the bound missed (the flat overrun), never by a tier's jump: the
+         estimate already priced every tier such a prompt could reach
+    """
+    rng = random.Random(23102026)
+    for _ in range(PROPERTY_CASES):
+        prompt_bound = rng.randint(1, 300_000)
+        reach = prompt_bound + count_margin(prompt_bound)
+        names = [f"m{i}" for i in range(rng.randint(1, 4))]
+        prices: dict[str, ModelPrice] = {}
+        for name in names:
+            tier = _random_tier(rng)
+            if tier is not None:
+                near = rng.randint(max(0, prompt_bound - 50), reach)
+                tier = tier.model_copy(update={"threshold_tokens": near})
+            prices[name] = _random_price(rng).model_copy(update={"long_context": tier})
+        models = [rng.choice(names) for _ in range(rng.randint(1, 3))]
+        max_tokens = rng.randint(0, 16_000)
+        usage, _ = _random_usage(rng, models, reach, max_tokens)
+
+        usd, _ = response_cost(usage, prices, model=rng.choice(models))
+        estimate = preflight_estimate(prompt_bound, max_tokens, models, prices)
+
+        scale = reach / prompt_bound  # the most the flat overrun can add
+        assert 0.0 <= usd <= estimate * scale * (1 + 1e-12), (usage, prices, models)
 
 
 def test_property_cost_never_exceeds_the_estimate_for_unknown_models() -> None:

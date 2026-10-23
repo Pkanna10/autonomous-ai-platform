@@ -20,12 +20,14 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
+import httpx2
 import pytest
 from anthropic.types.beta import BetaMessage
 
 from autonomous_ai_agents.clients.budget import Budget
 from autonomous_ai_agents.clients.cost import preflight_estimate, response_cost
 from autonomous_ai_agents.clients.transport import (
+    AnthropicTransport,
     LLMRequest,
     LLMUnreadableResponseError,
     ScriptedReply,
@@ -440,6 +442,82 @@ def test_one_structured_output_request_is_sent(repo: Repo, fixed_token: str) -> 
     assert "w1" in inside and '["python", "-m", "dedupe.main"]' in inside
     assert TOKEN in text.split(opening)[0]  # Claude is told the token
     assert "untrusted" in SYSTEM_PROMPT and "instructions" in SYSTEM_PROMPT
+
+
+@pytest.mark.parametrize("level", ["low", "medium", "high", "xhigh", "max"])
+def test_the_understand_effort_joins_the_output_format(
+    repo: Repo, fixed_token: str, level: str
+) -> None:
+    """
+    GIVEN UNDERSTAND_EFFORT set to a level (and EDITOR_EFFORT to another)
+    WHEN the project is understood
+    THEN output_config carries the JSON schema format and that effort, and
+         nothing else in the request changes
+    """
+    plain = _run(repo, [_ok()]).transport.requests[0]
+    cfg = _settings(UNDERSTAND_EFFORT=level, EDITOR_EFFORT="low")
+
+    (request,) = _run(repo, [_ok()], cfg=cfg).transport.requests
+
+    assert request.output_config == {
+        "format": {"type": "json_schema", "schema": RESPONSE_SCHEMA},
+        "effort": level,
+    }
+    assert request.messages == plain.messages
+    assert (request.system, request.tools) == (plain.system, plain.tools)
+    assert (request.max_tokens, request.cache) == (plain.max_tokens, plain.cache)
+
+
+WIRE_KEY = "sk-ant-api03-WIRE-ONLY-not-a-key"
+
+
+def _wire_bodies(repo: Repo, **overrides: object) -> list[bytes]:
+    """The /v1/messages bodies the real SDK client sends for one understand.
+
+    Production wiring (``AnthropicTransport``, the real ``anthropic`` client)
+    with only the HTTP wire swapped for ``httpx2.MockTransport``.
+    """
+    sent: list[bytes] = []
+
+    def wire(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path.endswith("/count_tokens"):
+            return httpx2.Response(200, json={"input_tokens": 1200})
+        sent.append(request.content)
+        return httpx2.Response(200, json=_ok())
+
+    cfg = _settings(ANTHROPIC_API_KEY=WIRE_KEY, **overrides)
+    transport = AnthropicTransport(cfg, http_transport=httpx2.MockTransport(wire))
+    project = _project(repo)
+    result = ClaudeUnderstander(transport, config=cfg).understand(
+        project, [_workload(project)], commit=repo.commit, budget=Budget(5.0)
+    )
+    assert result.understanding is not None
+    return sent
+
+
+def test_without_an_effort_the_wire_body_carries_no_effort_key(
+    repo: Repo, fixed_token: str
+) -> None:
+    """
+    GIVEN UNDERSTAND_EFFORT unset (the default) and then set to high
+    WHEN the real SDK client sends the understand request over a mock wire
+    THEN the default body's output_config is exactly the format, with no
+         "effort" anywhere; the body with effort differs only by that key,
+         so the default request is byte-identical to the one sent before
+         effort existed
+    """
+    (default,) = _wire_bodies(repo)
+    (with_effort,) = _wire_bodies(repo, UNDERSTAND_EFFORT="high")
+
+    body = json.loads(default)
+    assert body["output_config"] == {
+        "format": {"type": "json_schema", "schema": RESPONSE_SCHEMA}
+    }
+    assert b'"effort"' not in default
+    effort_body = json.loads(with_effort)
+    assert effort_body["output_config"].pop("effort") == "high"
+    assert effort_body == body
+    assert default == _wire_bodies(repo, EDITOR_EFFORT="max")[0]
 
 
 def test_each_request_gets_a_fresh_boundary(repo: Repo) -> None:

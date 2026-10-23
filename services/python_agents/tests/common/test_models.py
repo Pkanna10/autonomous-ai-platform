@@ -9,6 +9,7 @@ through JSON unchanged.
 from __future__ import annotations
 
 import logging
+import math
 import uuid
 from datetime import UTC, date, datetime
 from enum import StrEnum
@@ -44,6 +45,7 @@ from autonomous_ai_agents.common.models import (
     JudgeOutcome,
     JudgeResult,
     Lesson,
+    LongContextPrice,
     Measurement,
     ModelPrice,
     NoiseCheck,
@@ -282,6 +284,20 @@ def _all_instances() -> list[EngineModel]:
         gain_abs=0.75, gain_rel=0.417, floor_abs=0.08, floor_rel=0.044, passed=True
     )
     price = ModelPrice(input=4.0, output=20.0, cache_write=5.0, cache_read=0.2)
+    long_tier = LongContextPrice(
+        threshold_tokens=100_000,
+        input=0.5,
+        output=2.5,
+        cache_write=0.625,
+        cache_read=0.05,
+    )
+    long_price = ModelPrice(
+        input=0.1,
+        output=0.5,
+        cache_write=0.125,
+        cache_read=0.01,
+        long_context=long_tier,
+    )
     candidate = CandidateModule(path="src/bridge/encoder.py", reason="hot loop")
     understanding = ProjectUnderstanding(
         language="python",
@@ -335,6 +351,8 @@ def _all_instances() -> list[EngineModel]:
         understanding,
         skip,
         combination,
+        long_tier,
+        long_price,
     ]
 
 
@@ -1094,6 +1112,86 @@ def test_model_price_rates_are_non_negative() -> None:
                 "cache_write_1h": 2,
             }
         )
+
+
+LONG_RATES: dict[str, object] = {
+    "threshold_tokens": 100_000,
+    "input": 0.5,
+    "output": 2.5,
+    "cache_write": 0.625,
+    "cache_read": 0.05,
+}
+
+
+def test_a_model_price_has_no_long_context_tier_by_default() -> None:
+    """
+    GIVEN a ModelPrice built from the four flat rates
+    WHEN its long_context is read
+    THEN it is None: every prompt length bills the flat rates
+    """
+    price = ModelPrice(input=4.0, output=20.0, cache_write=5.0, cache_read=0.2)
+
+    assert price.long_context is None
+
+
+def test_a_long_context_tier_keeps_its_threshold_and_rates() -> None:
+    """
+    GIVEN the Haiku 5.5 long-context tier
+    WHEN it is built and nested in a ModelPrice, also from JSON-like data
+    THEN the threshold and the four rates are kept
+    """
+    tier = LongContextPrice.model_validate(LONG_RATES)
+    price = ModelPrice.model_validate(
+        {
+            "input": 0.1,
+            "output": 0.5,
+            "cache_write": 0.125,
+            "cache_read": 0.01,
+            "long_context": LONG_RATES,
+        }
+    )
+
+    assert price.long_context == tier
+    assert (tier.threshold_tokens, tier.input, tier.output) == (100_000, 0.5, 2.5)
+    assert (tier.cache_write, tier.cache_read) == (0.625, 0.05)
+
+
+@pytest.mark.parametrize(
+    ("field", "bad"),
+    [
+        ("threshold_tokens", -1),
+        ("threshold_tokens", True),
+        ("threshold_tokens", 1.5),
+        ("threshold_tokens", "100000"),
+        ("input", -0.01),
+        ("output", -0.01),
+        ("cache_write", -0.01),
+        ("cache_read", -0.01),
+        ("input", math.inf),
+    ],
+)
+def test_a_long_context_tier_refuses_a_bad_value(field: str, bad: object) -> None:
+    """
+    GIVEN a long-context tier with a negative, boolean, fractional or textual
+          threshold, or a negative or infinite rate
+    WHEN it is validated
+    THEN validation fails
+    """
+    with pytest.raises(ValidationError):
+        LongContextPrice.model_validate({**LONG_RATES, field: bad})
+
+
+def test_a_long_context_tier_refuses_unknown_and_missing_fields() -> None:
+    """
+    GIVEN a long-context tier with an extra field, or without its threshold
+    WHEN it is validated
+    THEN validation fails (extra = forbid, every field required)
+    """
+    with pytest.raises(ValidationError):
+        LongContextPrice.model_validate({**LONG_RATES, "cache_write_1h": 1.0})
+    without = {key: value for key, value in LONG_RATES.items() if key != "input"}
+    with pytest.raises(ValidationError):
+        LongContextPrice.model_validate(without)
 
 
 def test_candidate_module_path_stays_inside_the_project() -> None:

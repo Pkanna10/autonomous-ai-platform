@@ -7,18 +7,64 @@ rather than in the middle of a run.
 """
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Literal, Self
+from types import MappingProxyType
+from typing import Final, Literal, Self, get_args
 from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from autonomous_ai_agents.common.models import ModelPrice
+from autonomous_ai_agents.common.models import LongContextPrice, ModelPrice
 from autonomous_ai_agents.common.refnames import branch_prefix_problem
 
 IsolationMode = Literal["required", "best_effort", "off"]
 """``required`` fails closed; ``best_effort`` records what was applied; ``off``."""
+
+Effort = Literal["low", "medium", "high", "xhigh", "max"]
+"""``output_config.effort`` levels, lowest first (the SDK's own literal)."""
+
+_LEVELS: Final[tuple[Effort, ...]] = get_args(Effort)
+_ALL: Final = frozenset(_LEVELS)
+_NO_XHIGH: Final = _ALL - {"xhigh"}
+
+# The effort page (platform.claude.com/docs/en/build-with-claude/effort, read
+# 2026-10-23): its supported-model list and the "Effort levels" table. max:
+# every listed model but Opus 4.5; xhigh: Fable 5.1 / 5, Mythos 5.1 / 5, Opus
+# 5.5 / 5 / 4.8 / 4.7, Sonnet 5.5 / 5 and Haiku 5.5 ("Not every model that
+# supports max supports xhigh"). The per-model sections say Opus 5.5, Sonnet
+# 5.5, Haiku 5.5 and Fable 5.1 "support all five effort levels". Opus 4.5
+# (claude-opus-4-5-20251101) is on the page's supported-model list but in
+# neither the max nor the xhigh row, so it takes low, medium and high only.
+# The lookup is an exact model-id match, like MODEL_PRICING: a model missing
+# here (an alias such as claude-opus-4-5 included) is refused any effort
+# setting, since the docs list no levels for that id.
+EFFORT_LEVELS: Final[Mapping[str, frozenset[Effort]]] = MappingProxyType(
+    {
+        **dict.fromkeys(
+            (
+                "claude-fable-5-1",
+                "claude-mythos-5-1",
+                "claude-fable-5",
+                "claude-mythos-5",
+                "claude-opus-5-5",
+                "claude-opus-5",
+                "claude-opus-4-8",
+                "claude-opus-4-7",
+                "claude-sonnet-5-5",
+                "claude-sonnet-5",
+                "claude-haiku-5-5",
+            ),
+            _ALL,
+        ),
+        **dict.fromkeys(
+            ("claude-mythos-preview", "claude-opus-4-6", "claude-sonnet-4-6"),
+            _NO_XHIGH,
+        ),
+        "claude-opus-4-5-20251101": frozenset(_LEVELS[:3]),
+    }
+)
 
 _KIB = 1024
 _MIB = 1024 * _KIB
@@ -29,9 +75,12 @@ _MIB = 1024 * _KIB
 # shared/prompt-caching.md (5-minute cache writes cost 1.25x input; cache
 # reads ~0.1x input elsewhere); the pricing page, read 2026-10-23, for Sonnet
 # 5.5 ($2/$10, cache hits 0.05x input: $0.10), Fable 5.1 ($10/$50, cache hits
-# 0.025x input: $0.25) and Haiku 5.5's cache hits ($0.01). Haiku 5.5's
-# >100K-token rates ($0.50/$2.50, hits $0.05) are not modelled, so triage
-# prompts must stay at or under 100K tokens (Step 3).
+# 0.025x input: $0.25) and Haiku 5.5's cache hits ($0.01). Haiku 5.5 alone has
+# a long-context tier (pricing page, "Long context pricing"): a request whose
+# prompt (every input token, cache reads and writes included) is over 100,000
+# tokens pays $0.50 / $2.50, 5-minute writes $0.625 and hits $0.05 on all of
+# its tokens; ``clients/cost.py`` applies it per attempt. Every other model
+# bills one price across its whole context window.
 _DEFAULT_PRICING: dict[str, ModelPrice] = {
     "claude-opus-5-5": ModelPrice(
         input=4.0, output=20.0, cache_write=5.0, cache_read=0.20
@@ -49,7 +98,17 @@ _DEFAULT_PRICING: dict[str, ModelPrice] = {
         input=10.0, output=50.0, cache_write=12.5, cache_read=0.25
     ),
     "claude-haiku-5-5": ModelPrice(
-        input=0.10, output=0.50, cache_write=0.125, cache_read=0.01
+        input=0.10,
+        output=0.50,
+        cache_write=0.125,
+        cache_read=0.01,
+        long_context=LongContextPrice(
+            threshold_tokens=100_000,
+            input=0.50,
+            output=2.50,
+            cache_write=0.625,
+            cache_read=0.05,
+        ),
     ),
 }
 
@@ -134,6 +193,22 @@ class Settings(BaseSettings):
 
     UNDERSTAND_MAX_TOKENS: int = Field(default=8000, ge=1)
     """``max_tokens`` for the understand request (thinking counts toward it)."""
+
+    UNDERSTAND_EFFORT: Effort | None = None
+    """``output_config.effort`` for the understand request; ``None`` sends no
+    effort key, so the model's own default applies (``medium`` on Opus 5.5)."""
+
+    EDITOR_EFFORT: Effort | None = None
+    """``output_config.effort`` on every editor request; ``None`` sends no
+    ``output_config``. One value for a whole conversation keeps the cache."""
+
+    @field_validator("UNDERSTAND_EFFORT", "EDITOR_EFFORT", mode="before")
+    @classmethod
+    def _blank_effort_is_unset(cls, value: object) -> object:
+        """An empty variable (an unset CI var) means no effort, not an error."""
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     LLM_MAX_RETRIES: int = Field(default=2, ge=0)
     """Extra attempts after a transient failure (so at most 3 in all)."""
@@ -248,6 +323,33 @@ class Settings(BaseSettings):
         missing = sorted({name for name in needed if name not in self.MODEL_PRICING})
         if missing:
             raise ValueError(f"MODEL_PRICING has no price for {', '.join(missing)}")
+        return self
+
+    @model_validator(mode="after")
+    def _effort_accepted_by_every_serving_model(self) -> Self:
+        """A configured level must be one every model in the chain accepts.
+
+        The chain is ``cost.chain``'s: the engine model, plus the fallbacks
+        when they are sent; a fallback re-runs the same body, effort included.
+        """
+        serving: tuple[str, ...] = (self.ENGINE_MODEL,)
+        if self.ENGINE_FALLBACKS:
+            serving += self.ENGINE_FALLBACK_MODELS
+        for key in ("UNDERSTAND_EFFORT", "EDITOR_EFFORT"):
+            level: Effort | None = getattr(self, key)
+            for model in dict.fromkeys(serving) if level is not None else ():
+                accepted = EFFORT_LEVELS.get(model)
+                if accepted is None:
+                    raise ValueError(
+                        f"{key} {level!r}: the effort docs list no effort levels "
+                        f"for {model}, which may serve the request; unset {key}"
+                    )
+                if level not in accepted:
+                    takes = ", ".join(x for x in _LEVELS if x in accepted)
+                    raise ValueError(
+                        f"{key} {level!r} is not accepted by {model}, which may "
+                        f"serve the request (it accepts {takes})"
+                    )
         return self
 
     # ============================================

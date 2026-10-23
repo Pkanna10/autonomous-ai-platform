@@ -33,9 +33,10 @@ Models come from settings, never from string literals: `settings.ENGINE_MODEL`
 `MAX_COST_USD=5.0`, `TRIAL_BRANCH_PREFIX="engine/"`. Step 2 added the isolation
 modes (`NETWORK_ISOLATION`, `FS_ISOLATION`, default `required`),
 `WORKTREE_ROOT`, `ENGINE_API_BASE_URL`, the fallback chain and `MODEL_PRICING`,
-the git, test and output limits, the editor and understand limits and the retry
-policy; the README's "Environment Variables" lists them with their defaults. All
-are validated at startup (`MODEL_PRICING` must price every model the engine may
+the git, test and output limits, the editor and understand limits (and their
+`UNDERSTAND_EFFORT` / `EDITOR_EFFORT`, unset by default) and the retry policy;
+the README's "Environment Variables" lists them with their defaults. All are
+validated at startup (`MODEL_PRICING` must price every model the engine may
 bill).
 
 ---

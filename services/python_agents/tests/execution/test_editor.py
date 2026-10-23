@@ -23,6 +23,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import NamedTuple, cast
 
+import httpx2
 import pytest
 from anthropic.types.beta import BetaMessage, BetaToolUseBlock
 
@@ -119,14 +120,19 @@ CFG = _settings()
 # --------------------------------------------------------------------------
 
 
-@pytest.fixture
-def repo(tmp_path: Path) -> Path:
+def _worktree(base: Path, name: str = "wt") -> Path:
     """A trial worktree: the dedupe fixture, a ``.git`` link and a symlink."""
-    worktree = tmp_path / "wt"
+    worktree = base / name
     shutil.copytree(DEDUPE_REPO, worktree, ignore=shutil.ignore_patterns("__pycache__"))
     (worktree / ".git").write_text("gitdir: /home/user/project/.git/worktrees/h1\n")
     (worktree / "dedupe" / "fast.py").symlink_to("core.py")
     return worktree
+
+
+@pytest.fixture
+def repo(tmp_path: Path) -> Path:
+    """A trial worktree: the dedupe fixture, a ``.git`` link and a symlink."""
+    return _worktree(tmp_path)
 
 
 def snapshot(base: Path) -> dict[str, tuple[str, bytes]]:
@@ -446,6 +452,80 @@ def test_every_request_has_the_same_system_tools_and_settings(repo: Path) -> Non
         "name": TOOL,
         "max_characters": VIEW_MAX_CHARS,
     }
+
+
+@pytest.mark.parametrize("level", ["low", "medium", "high", "xhigh", "max"])
+def test_the_editor_effort_is_sent_on_every_turn(tmp_path: Path, level: str) -> None:
+    """
+    GIVEN EDITOR_EFFORT set to a level (and UNDERSTAND_EFFORT to another)
+    WHEN a three-turn edit runs
+    THEN every request carries output_config {"effort": level} and nothing
+         else differs from the run without effort: one constant value per
+         conversation, so the cached prefix stays valid across turns
+    """
+    replies = _transcript("e2e_a_h1_attack_then_edit")
+    plain = _run(_worktree(tmp_path, "plain"), replies).transport.requests
+    cfg = _settings(EDITOR_EFFORT=level, UNDERSTAND_EFFORT="low")
+
+    requests = _run(_worktree(tmp_path, "effort"), replies, cfg=cfg).transport.requests
+
+    assert len(requests) == len(plain) == 3
+    for request, before in zip(requests, plain, strict=True):
+        assert request.output_config == {"effort": level}
+        assert request.messages == before.messages
+        assert (request.system, request.tools) == (before.system, before.tools)
+        assert (request.max_tokens, request.cache) == (before.max_tokens, True)
+
+
+WIRE_KEY = "sk-ant-api03-WIRE-ONLY-not-a-key"
+
+
+def _wire_bodies(worktree: Path, **overrides: object) -> list[bytes]:
+    """The /v1/messages bodies the real SDK client sends for one edit.
+
+    Production wiring (``AnthropicTransport``, the real ``anthropic`` client)
+    with only the HTTP wire swapped for ``httpx2.MockTransport``.
+    """
+    sent: list[bytes] = []
+    replies = [_reply("tool_use", H1_EDIT), DONE]
+
+    def wire(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path.endswith("/count_tokens"):
+            return httpx2.Response(200, json={"input_tokens": 3500})
+        sent.append(request.content)
+        return httpx2.Response(200, json=replies[len(sent) - 1])
+
+    cfg = _settings(ANTHROPIC_API_KEY=WIRE_KEY, **overrides)
+    transport = AnthropicTransport(cfg, http_transport=httpx2.MockTransport(wire))
+    result = ClaudeEditor(transport, config=cfg).edit(worktree, _task(), Budget(5.0))
+    assert result.stop == STOP_DONE
+    return sent
+
+
+def test_without_an_effort_the_wire_bodies_carry_no_output_config(
+    tmp_path: Path,
+) -> None:
+    """
+    GIVEN EDITOR_EFFORT unset (the default) and then set to medium, each on
+          a fresh copy of the fixture
+    WHEN the real SDK client sends a two-turn edit over a mock wire
+    THEN the default bodies carry no output_config and no "effort" at all;
+         with effort each body differs only by output_config {"effort":
+         "medium"}, so the default requests are byte-identical to before
+    """
+    default = _wire_bodies(_worktree(tmp_path, "plain"))
+    with_effort = _wire_bodies(_worktree(tmp_path, "effort"), EDITOR_EFFORT="medium")
+
+    assert len(default) == len(with_effort) == 2
+    for plain, effort in zip(default, with_effort, strict=True):
+        body, effort_body = json.loads(plain), json.loads(effort)
+        assert "output_config" not in body
+        assert b'"effort"' not in plain
+        assert effort_body.pop("output_config") == {"effort": "medium"}
+        assert effort_body == body
+    assert default == _wire_bodies(
+        _worktree(tmp_path, "other"), UNDERSTAND_EFFORT="max"
+    )
 
 
 def test_messages_are_append_only_and_echo_the_answer_verbatim(repo: Path) -> None:

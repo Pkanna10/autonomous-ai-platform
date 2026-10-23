@@ -5,7 +5,8 @@
 pricing) and the files only through ``WorktreeEditor``, so the rules live in
 code. Every request carries the same system prompt and the one text editor
 tool (cached across turns and trials), messages are only appended, and no
-``thinking``, ``temperature``, ``tool_choice`` or ``output_config`` is sent.
+``thinking``, ``temperature`` or ``tool_choice`` is sent; ``output_config`` is
+``{"effort": EDITOR_EFFORT}`` on every turn when that is set, else absent.
 Stop reasons: ``tool_use`` echoes the answer and runs its calls in order;
 ``end_turn`` is done once a file was written, else one nudge, then
 ``no_edits``; ``max_tokens`` runs nothing and asks for smaller edits;
@@ -38,6 +39,7 @@ from anthropic.types.beta import (
     BetaContentBlockParam,
     BetaMessage,
     BetaMessageParam,
+    BetaOutputConfigParam,
     BetaTextBlockParam,
     BetaToolResultBlockParam,
     BetaToolTextEditor20250728Param,
@@ -47,7 +49,7 @@ from anthropic.types.beta import (
 
 from autonomous_ai_agents.clients.budget import Budget
 from autonomous_ai_agents.clients.transport import LLMRequest, LLMTransport, call
-from autonomous_ai_agents.common.config import Settings, settings
+from autonomous_ai_agents.common.config import Effort, Settings, settings
 from autonomous_ai_agents.common.errors import (
     BudgetExceeded,
     LLMRequestError,
@@ -198,7 +200,9 @@ class ClaudeEditor:
                 raise TypeError(f"{keyword} must be a set of str, not a str")
         for directory in module_roots:
             repo_relative(directory)  # a root outside the repo fails here
-        self._wiring = _Wiring(transport, config, sleep, (EDITOR_TOOL.copy(),))
+        self._wiring = _Wiring(
+            transport, config, sleep, (EDITOR_TOOL.copy(),), config.EDITOR_EFFORT
+        )
         self._roots = frozenset(module_roots)
         self._reserved = frozenset(reserved_modules)
         self._limits = limits = EditorLimits.from_settings(config)
@@ -242,6 +246,16 @@ class _Wiring:
     config: Settings
     sleep: Callable[[float], None]
     tools: tuple[BetaToolUnionParam, ...]
+    effort: Effort | None
+
+    def output_config(self) -> BetaOutputConfigParam | None:
+        """``{"effort": level}`` when one is set, else ``None`` (not sent).
+
+        Effort page (platform.claude.com/docs/en/build-with-claude/effort):
+        changing top-level effort between requests invalidates the prompt
+        cache, so one edit sends the same value on every turn.
+        """
+        return None if self.effort is None else {"effort": self.effort}
 
 
 class _Session:
@@ -317,6 +331,7 @@ class _Session:
             messages=tuple(self._messages),
             max_tokens=self._config.EDITOR_MAX_TOKENS,
             tools=self._wiring.tools,
+            output_config=self._wiring.output_config(),
         )
         spent, used = self._budget.spent_usd, self._budget.tokens
         try:

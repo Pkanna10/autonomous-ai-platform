@@ -13,14 +13,26 @@ served by at most one attempt per entry of ``chain()``, and the response's
 ``usage.iterations`` lists every attempt with the model that ran it. Each
 attempt reads the same prompt, at most ``prompt_token_bound`` tokens (the
 input the API adds for tools included) billed as some mix of plain input,
-cache write and cache read, and writes at most ``max_tokens``. So ``len(chain) x (prompt x dearest input-side rate +
-max_tokens x dearest output rate)``, taken over the chain, is at least the
-cost of any response within those limits. Both functions add up in exact
-rational arithmetic and round to a float once, and rounding is monotone, so
-rounding can never lift a cost above its estimate. The property is checked
-over many random usage shapes in ``tests/clients/test_cost.py``.
+cache write and cache read, and writes at most ``max_tokens``. So
+``len(chain) x (prompt x dearest input-side rate + max_tokens x dearest
+output rate)``, taken over the chain, is at least the cost of any response
+within those limits. Both functions add up in exact rational arithmetic and
+round to a float once, and rounding is monotone, so rounding can never lift
+a cost above its estimate. The property is checked over many random usage
+shapes in ``tests/clients/test_cost.py``.
 
-The bound has two preconditions, both on the callers:
+Long-context tiers (``ModelPrice.long_context``, Claude Haiku 5.5). Pricing
+page, "Long context pricing" (platform.claude.com, read 2026-10-23): "a
+request whose prompt is over 100,000 tokens pays higher prices. A request's
+prompt length counts all of its input tokens, including cache reads and
+cache writes. Each request is priced on its own." So ``response_cost``
+prices an attempt whose input, cache-write and cache-read tokens add up to
+more than ``threshold_tokens`` at the long rates for every component, output
+included. ``preflight_estimate`` takes, per model and component, the dearer
+of the base and long rates whenever the prompt bound, plus one count margin,
+is over the threshold (some billed prompt could be): the bound still holds.
+
+The bound has three preconditions, all on the callers:
 
 - **Only 5-minute cache writes.** ``response_cost`` prices a 1-hour write at
   its true rate, twice the base input rate. The estimate does not charge
@@ -35,6 +47,16 @@ The bound has two preconditions, both on the callers:
   takes the chain's rates. A dearer unchained model then lifts an unknown
   model's cost above the estimate: an over-count, so the safe direction. The
   settings validator already requires a price for every model in the chain.
+- **A count off by at most one more margin, near a long-context tier.**
+  ``prompt_tokens`` is ``count_tokens`` plus ``count_margin`` in production,
+  and the count is only an estimate. Without a tier, a billed prompt a few
+  tokens past the bound costs only those tokens more; past a tier's threshold it
+  would re-price the whole request (Haiku 5.5: 5x input). So the estimate
+  treats a bound within ``count_margin(bound)`` of a threshold as crossing
+  it: a billed prompt up to ``bound + count_margin(bound)`` never pays a tier
+  the estimate left out, and overruns the estimate only by its extra tokens.
+  The margin constants are ``COUNT_MARGIN_MIN_TOKENS`` and
+  ``COUNT_MARGIN_DIVISOR``, the same ones ``transport`` pads its count with.
 
 Rates are USD per million tokens (``ModelPrice``). ``prompt_token_bound``
 also counts the input the API adds when tools are sent: its tool-use system
@@ -55,7 +77,10 @@ from typing import Final
 from pydantic import BaseModel
 
 from autonomous_ai_agents.common.config import Settings, settings
-from autonomous_ai_agents.common.models import ModelPrice
+from autonomous_ai_agents.common.models import LongContextPrice, ModelPrice
+
+_Rates = ModelPrice | LongContextPrice
+"""Four per-MTok rates; only ``input``, ``output`` and the cache rates are read."""
 
 _PER_MTOK: Final = Fraction(1_000_000)
 # Pricing page, prompt caching: a 1-hour cache write bills 2x base input.
@@ -70,6 +95,16 @@ TOOL_USE_SYSTEM_PROMPT_TOKENS: Final = 804
 BUILTIN_TOOL_INPUT_TOKENS: Final[Mapping[str, int]] = MappingProxyType(
     {"text_editor_20250728": 974}
 )
+
+
+COUNT_MARGIN_MIN_TOKENS: Final = 16
+COUNT_MARGIN_DIVISOR: Final = 50
+"""``count_tokens`` is an estimate: a count gains 1/50 (2 %), at least 16 tokens."""
+
+
+def count_margin(tokens: int) -> int:
+    """The margin added to a token count: ``ceil(tokens / 50)``, at least 16."""
+    return max(COUNT_MARGIN_MIN_TOKENS, -(-tokens // COUNT_MARGIN_DIVISOR))
 
 
 def chain(cfg: Settings = settings) -> tuple[str, ...]:
@@ -100,25 +135,34 @@ def response_cost(
     attempt is priced at its own ``model``, or at ``model`` when it names
     none. ``cache_creation`` splits the cache writes by TTL: 5-minute ones
     bill at ``cache_write``, 1-hour ones at twice ``input``; without the
-    split every write is a 5-minute one. ``tokens`` counts every input,
-    cache and output token.
+    split every write is a 5-minute one. An attempt whose prompt (input,
+    cache-write and cache-read tokens) is over its model's
+    ``long_context.threshold_tokens`` bills every component at the long
+    rates. ``tokens`` counts every input, cache and output token.
 
     Raises ``ValueError`` on a negative, fractional, boolean or missing
     count, a TTL split that does not add up to its total, a malformed
     ``iterations``, an empty price table, or a cost too large for a float.
     """
-    worst = _worst(prices.values())
+    if not prices:
+        raise ValueError("the price table is empty, so nothing can be priced")
     micro_usd = Fraction(0)
     tokens = 0
     for attempt in _attempts(usage):
-        price = prices.get(_attempt_model(attempt, model), worst)
+        price = prices.get(_attempt_model(attempt, model))
         read = _counts(attempt)
+        prompt = read[0] + read[2] + read[3] + read[4]
+        rates = (
+            _worst(_rates_at(listed, prompt) for listed in prices.values())
+            if price is None
+            else _rates_at(price, prompt)
+        )
         micro_usd += (
-            read[0] * Fraction(price.input)
-            + read[1] * Fraction(price.output)
-            + read[2] * Fraction(price.cache_write)
-            + read[3] * _ONE_HOUR_WRITE_PER_INPUT * Fraction(price.input)
-            + read[4] * Fraction(price.cache_read)
+            read[0] * Fraction(rates.input)
+            + read[1] * Fraction(rates.output)
+            + read[2] * Fraction(rates.cache_write)
+            + read[3] * _ONE_HOUR_WRITE_PER_INPUT * Fraction(rates.input)
+            + read[4] * Fraction(rates.cache_read)
         )
         tokens += sum(read)
     return _usd(micro_usd), tokens
@@ -135,8 +179,10 @@ def preflight_estimate(
     ``models`` is the request's ``chain()``. Every prompt token is charged
     at the dearest of input, cache-write and cache-read rates, and every
     ``max_tokens`` token at the dearest output rate, each taken over the
-    chain separately. ``cache_write`` is the 5-minute rate: the bound assumes
-    no 1-hour cache writes (module docstring). Raises ``ValueError`` on a
+    chain separately. When ``prompt_tokens`` plus its ``count_margin`` is
+    over a model's long-context threshold, that model's long rates count too
+    (the dearer of base and long per component). ``cache_write`` is the 5-minute rate: the bound
+    assumes no 1-hour cache writes (module docstring). Raises ``ValueError`` on a
     bad count, an empty chain, a bare string as the chain, or a chain model
     with no price.
     """
@@ -147,7 +193,7 @@ def preflight_estimate(
     missing = sorted({name for name in models if name not in prices})
     if missing:
         raise ValueError(f"the model chain has no price for {', '.join(missing)}")
-    worst = _worst(prices[name] for name in models)
+    worst = _worst(_rates_upto(prices[name], prompt) for name in models)
     input_side = max(worst.input, worst.cache_write, worst.cache_read)
     attempt = prompt * Fraction(input_side) + output * Fraction(worst.output)
     return _usd(len(models) * attempt)
@@ -214,11 +260,30 @@ def _jsonable(value: object) -> object:
     raise TypeError(f"{type(value).__name__} cannot be part of a request body")
 
 
-def _worst(rates: Iterable[ModelPrice]) -> ModelPrice:
-    """The dearest rate for each component, whichever model charges it."""
+def _rates_at(price: ModelPrice, prompt: int) -> _Rates:
+    """The rates a request with ``prompt`` prompt tokens pays on this model."""
+    long = price.long_context
+    if long is not None and prompt > long.threshold_tokens:
+        return long
+    return price
+
+
+def _rates_upto(price: ModelPrice, prompt_bound: int) -> _Rates:
+    """The dearest rates of any prompt the API may bill under ``prompt_bound``.
+
+    A bound within ``count_margin(prompt_bound)`` of the threshold counts as
+    crossing it (third precondition in the module docstring).
+    """
+    long = price.long_context
+    reach = prompt_bound + count_margin(prompt_bound)
+    if long is not None and reach > long.threshold_tokens:
+        return _worst((price, long))
+    return price
+
+
+def _worst(rates: Iterable[_Rates]) -> ModelPrice:
+    """The dearest rate for each component over a non-empty ``rates``."""
     listed = tuple(rates)
-    if not listed:
-        raise ValueError("the price table is empty, so nothing can be priced")
     return ModelPrice(
         input=max(rate.input for rate in listed),
         output=max(rate.output for rate in listed),

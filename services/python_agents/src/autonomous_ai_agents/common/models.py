@@ -664,17 +664,38 @@ class EngineEvent(EngineModel):
 # ---------------------------------------------------------------------------
 
 
+class LongContextPrice(EngineModel):
+    """The rates a request pays once its prompt is over ``threshold_tokens``.
+
+    Pricing page, "Long context pricing" (platform.claude.com, read
+    2026-10-23), for Claude Haiku 5.5: a request whose prompt is over 100,000
+    tokens pays the higher prices; the prompt counts all of its input tokens,
+    cache reads and cache writes included; each request is priced on its own,
+    and the long row prices every component, output included. Same units and
+    meaning per field as ``ModelPrice``.
+    """
+
+    threshold_tokens: int = Field(ge=0, strict=True)
+    input: float = Field(ge=0)
+    output: float = Field(ge=0)
+    cache_write: float = Field(ge=0)
+    cache_read: float = Field(ge=0)
+
+
 class ModelPrice(EngineModel):
     """What one Claude model bills, in USD per million tokens.
 
     ``cache_write`` is the 5-minute cache-write rate (the engine never asks
-    for the 1-hour TTL); ``cache_read`` the cache-hit rate.
+    for the 1-hour TTL); ``cache_read`` the cache-hit rate. ``long_context``
+    replaces all four for a request whose prompt is over its threshold;
+    ``None`` means one price at every prompt length.
     """
 
     input: float = Field(ge=0)
     output: float = Field(ge=0)
     cache_write: float = Field(ge=0)
     cache_read: float = Field(ge=0)
+    long_context: LongContextPrice | None = None
 
 
 class CandidateModule(EngineModel):
@@ -757,6 +778,7 @@ ENGINE_MODEL_CLASSES: tuple[type[EngineModel], ...] = (
     ApprovalRequest,
     ApprovalDecision,
     EngineEvent,
+    LongContextPrice,
     ModelPrice,
     CandidateModule,
     ProjectUnderstanding,

@@ -38,7 +38,14 @@ from anthropic.types.beta import (
 
 from autonomous_ai_agents.clients.budget import Budget
 from autonomous_ai_agents.clients.cost import (
+    COUNT_MARGIN_DIVISOR as COUNT_MARGIN_DIVISOR,
+)
+from autonomous_ai_agents.clients.cost import (
+    COUNT_MARGIN_MIN_TOKENS as COUNT_MARGIN_MIN_TOKENS,
+)
+from autonomous_ai_agents.clients.cost import (
     chain,
+    count_margin,
     preflight_estimate,
     prompt_token_bound,
     response_cost,
@@ -58,9 +65,8 @@ MAX_BACKOFF_S: Final = 30.0
 MAX_RETRY_AFTER_S: Final = 60.0
 CONNECT_TIMEOUT_S: Final = 10.0
 COUNT_TIMEOUT_S: Final = 30.0  # one free count request; both capped by LLM_TIMEOUT_S
-COUNT_MARGIN_MIN_TOKENS: Final = 16
-COUNT_MARGIN_DIVISOR: Final = 50
-"""``count_tokens`` is an estimate: it gains 1/50 (2 %), at least 16 tokens."""
+# ``count_tokens`` is an estimate: it gains ``cost.count_margin`` (1/50, 2 %,
+# at least 16 tokens), defined once in ``cost`` so the tier rule matches it.
 
 _PLACEHOLDER_KEY: Final = "your-api-key-here"  # the .env.example value
 _ERROR_TYPE: Final = re.compile(r"[a-z_]{1,64}")
@@ -226,8 +232,7 @@ class AnthropicTransport(_ChainPricing):
                 return _byte_bound(request)
             counts.append(counted)
         top = max(counts)
-        margin = max(COUNT_MARGIN_MIN_TOKENS, -(-top // COUNT_MARGIN_DIVISOR))
-        return top + margin + request.prompt_allowance_tokens
+        return top + count_margin(top) + request.prompt_allowance_tokens
 
     def send(self, request: LLMRequest) -> BetaMessage:
         """One attempt, no retries; SDK failures become engine errors."""
