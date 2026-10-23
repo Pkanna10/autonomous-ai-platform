@@ -14,9 +14,9 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: 'Live suite: stage-a, corpus, attack, hard or oss (one at a time: together they need more than the 150 USD ceiling)'
+        description: 'Live suite: stage-a, corpus, attack, hard, oss, or an experiment (probes) (one at a time: together they need more than the 150 USD ceiling)'
         type: choice
-        options: [stage-a, corpus, attack, hard, oss]
+        options: [stage-a, corpus, attack, hard, oss, probes]
         default: stage-a
       mode:
         description: 'Corpus mode (LIVE_CORPUS_MODE): aimed (both manifest hypotheses), blind (one generic hypothesis), decoy (the neutral one alone)'
@@ -29,7 +29,7 @@ on:
         options: [claude-opus-5-5, claude-sonnet-5-5]
         default: claude-opus-5-5
       suite_cap_usd:
-        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75, hard 50, oss 50'
+        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75, hard 50, oss 50, probes 1'
         type: string
         default: '12'
 
@@ -356,7 +356,7 @@ jobs:
 
       - name: Install dependencies with uv sync
         run: |
-          uv sync --frozen --extra dev --extra database
+          uv sync --frozen --extra dev --extra database --extra experiments
           uv run python -c 'import sys; print("engine python", sys.version)'
 
       # The profiler shim runs on workload interpreters >= 3.8, and its tests
@@ -545,7 +545,7 @@ jobs:
             **/uv.lock
 
       - name: Install dependencies with uv sync
-        run: uv sync --frozen --extra dev --extra database
+        run: uv sync --frozen --extra dev --extra database --extra experiments
 
       # The same probe as the python job: fail loudly before any money is
       # spent when the runner cannot give the engine its Linux sandbox.
@@ -613,10 +613,11 @@ jobs:
             echo "::error::the ANTHROPIC_API_KEY secret of environment 'live' is not set"
             exit 1
           fi
-          corpus=(--ignore=tests/live/test_corpus_live.py --ignore=tests/live/test_attack_corpus_live.py --ignore=tests/live/test_hard_corpus_live.py --ignore=tests/live/test_oss_live.py)
+          corpus=(--ignore=tests/live/test_corpus_live.py --ignore=tests/live/test_attack_corpus_live.py --ignore=tests/live/test_hard_corpus_live.py --ignore=tests/live/test_oss_live.py --ignore=tests/live/experiments)
           # need: the sum of the caps the suite's live tests ask the ledger for
           # (Stage A 8.55, corpus 15 x 5, attack 3 x 4, hard 10 x 5, oss at most
-          # 10 x 5), rounded up; a smaller cap would refuse, and fail, the later
+          # 10 x 5; the Window 0 experiments under tests/live/experiments: probes
+          # 0.46), rounded up; a smaller cap would refuse, and fail, the later
           # tests of the suite.
           case "${INPUT_SUITE}" in
             stage-a) paths=(tests/live tests/execution/test_editor.py "${corpus[@]}"); need=9 ;;
@@ -624,8 +625,9 @@ jobs:
             attack) paths=(tests/live/test_attack_corpus_live.py); need=12 ;;
             hard) paths=(tests/live/test_hard_corpus_live.py); need=50 ;;
             oss) paths=(tests/live/test_oss_live.py); need=50 ;;
+            probes) paths=(tests/live/experiments/test_probes_live.py); need=1 ;;
             *)
-              echo "::error::unknown suite input (stage-a, corpus, attack, hard or oss)"
+              echo "::error::unknown suite input (stage-a, corpus, attack, hard, oss or probes)"
               exit 1
               ;;
           esac

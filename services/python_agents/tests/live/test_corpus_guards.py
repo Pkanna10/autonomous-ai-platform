@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import math
 import os
 import re
 import shutil
@@ -1006,7 +1007,8 @@ def test_every_engine_model_choice_is_a_valid_fully_priced_chain(
             assert billed == (model,)  # stage M bills and prices Sonnet alone
 
 
-SUITES = ("stage-a", "corpus", "attack", "hard", "oss")
+SUITES = ("stage-a", "corpus", "attack", "hard", "oss", "probes")
+EXPERIMENTS = "tests/live/experiments"  # the Window 0 experiments: never in Stage A
 CAP_CEILING_USD = 150  # the most suite_cap_usd may be
 OSS_LIVE = "tests/live/test_oss_live.py"  # U24's suite, built in parallel
 OSS_MAX_REPOS = 10  # U24: at most 10 repositories ...
@@ -1063,7 +1065,9 @@ def test_stage_a_ignores_every_corpus_suite() -> None:
         "tests/live/test_attack_corpus_live.py",
         "tests/live/test_hard_corpus_live.py",
         OSS_LIVE,
+        EXPERIMENTS,
     }
+    assert (SERVICE_DIR / EXPERIMENTS).is_dir()
 
 
 def _no_wire(request: httpx2.Request) -> httpx2.Response:
@@ -1579,7 +1583,9 @@ def _suite_needs() -> dict[str, float]:
     oss = OSS_MAX_REPOS * OSS_RUN_CAP_USD  # the table holds U24's bound
     assert _oss_repos() * OSS_RUN_CAP_USD <= oss
     stage_a = _stage_a_need()
+    probes = importlib.import_module(f"{__package__}.experiments.test_probes_live")
     return {
+        "probes": math.fsum(probes.CAPS.values()),
         "stage-a": stage_a,
         "corpus": corpus,
         "attack": attack,
@@ -1682,6 +1688,7 @@ def _dispatch(
         ("stage-a", "8"),
         ("hard", "49.99"),
         ("oss", "12"),
+        ("probes", "0.99"),
     ],
 )
 def test_the_run_step_refuses_a_cap_below_the_suite_need(
@@ -1735,6 +1742,7 @@ STAGE_A_PATHS = (
     " --ignore=tests/live/test_attack_corpus_live.py"
     " --ignore=tests/live/test_hard_corpus_live.py"
     f" --ignore={OSS_LIVE}"
+    f" --ignore={EXPERIMENTS}"
 )
 
 
@@ -1775,6 +1783,14 @@ STAGE_A_PATHS = (
             "decoy",
         ),
         ("oss", "claude-sonnet-5-5", "50", OSS_LIVE, "false", "aimed"),
+        (
+            "probes",
+            "claude-opus-5-5",
+            "1",
+            f"{EXPERIMENTS}/test_probes_live.py",
+            "on",
+            "aimed",
+        ),
     ],
 )
 def test_the_run_step_runs_the_suite_with_the_chosen_model_and_cap(

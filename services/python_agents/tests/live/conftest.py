@@ -324,10 +324,21 @@ class CapturingTransport(httpx2.BaseTransport):
 
 
 ERROR_MESSAGE_CHARS: Final = 300
+KEY_SHAPE: Final = re.compile(r"sk-ant-[A-Za-z0-9_-]{6,}")
+
+
+def redact_keys(text: str, secrets: Collection[str] = ()) -> str:
+    """``text`` with ``secrets``, the host's key and anything shaped like an
+    Anthropic key replaced by ``[redacted]``: API errors and experiment
+    results reach the job summary, which must never hold a key."""
+    for secret in (*secrets, HOST_KEY or ""):
+        if secret:
+            text = text.replace(secret, "[redacted]")
+    return KEY_SHAPE.sub("[redacted]", text)
 
 
 def _error_text(exchange: Exchange) -> str:
-    """The API's own reason for refusing ``exchange``, capped."""
+    """The API's own reason for refusing ``exchange``, keys redacted, capped."""
     head = f"HTTP {exchange.status} {exchange.path}"
     try:
         loaded: object = json.loads(exchange.response_body)
@@ -337,7 +348,7 @@ def _error_text(exchange: Exchange) -> str:
     if not isinstance(error, dict):
         return f"{head}: no JSON error body"
     kind, message = error.get("type"), error.get("message")
-    return f"{head}: {kind}: {str(message)[:ERROR_MESSAGE_CHARS]}"
+    return f"{head}: {kind}: {redact_keys(str(message))[:ERROR_MESSAGE_CHARS]}"
 
 
 @dataclass(frozen=True)
@@ -728,11 +739,18 @@ def live(
         return run
 
     yield start
+    overruns: list[str] = []
     for run in runs:
         for error in run.api_errors():  # into the cost table's notes
             run.note(error)
         suite_ledger.close(run)
         run.capture.close()
+        if run.spent_usd > run.cap_usd:
+            overruns.append(
+                f"{run.test}: spent {run.spent_usd:.4f} USD > cap {run.cap_usd:.4f} USD"
+            )
+    if overruns:  # after the ledger rows: an overrun is never a green test
+        pytest.fail("live run over its cap: " + "; ".join(overruns))
 
 
 def pytest_terminal_summary(

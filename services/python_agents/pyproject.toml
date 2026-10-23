@@ -119,6 +119,14 @@ database = [
 ]
 
 # ============================================
+# Window 0 live experiments (tests/live/experiments): PDF text for the
+# local check of Claude's page citations. BSD-3-Clause, pure Python.
+# ============================================
+experiments = [
+    "pypdf>=6.0.0,<7.0.0",
+]
+
+# ============================================
 # Development dependencies (all phases)
 # ============================================
 dev = [
