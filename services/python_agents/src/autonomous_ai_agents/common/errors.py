@@ -14,6 +14,8 @@ accident.
 
 from __future__ import annotations
 
+from typing import Literal
+
 _SPEND = "engine_spend"
 
 
@@ -77,3 +79,14 @@ class LLMUnavailable(Exception):  # noqa: N818 - name fixed by the spec
 
 class LLMRequestError(Exception):
     """The Claude API refused the request itself (HTTP 400, 404 or 413)."""
+
+
+ReplyProblem = Literal["refusal", "stopped", "no_text", "not_json", "schema"]
+
+
+class UnusableReplyError(Exception):
+    """A paid structured reply that cannot be used as a whole (``kind`` says why)."""
+
+    def __init__(self, kind: ReplyProblem, text: str) -> None:
+        super().__init__(text)
+        self.kind: ReplyProblem = kind

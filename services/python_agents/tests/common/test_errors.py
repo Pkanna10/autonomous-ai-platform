@@ -25,6 +25,7 @@ from autonomous_ai_agents.common.errors import (
     ProjectConflictError,
     RepoTamperedError,
     TrialUnaffordable,
+    UnusableReplyError,
     add_spend,
     spend_of,
 )
@@ -96,6 +97,7 @@ def test_every_error_class_has_a_one_line_docstring() -> None:
         *ENGINE_ERRORS,
         *TRANSPORT_OUTCOMES,
         TrialUnaffordable,
+        UnusableReplyError,
     }
     for cls in defined:
         doc = cls.__doc__
@@ -136,3 +138,21 @@ def test_spend_noted_on_an_exception_adds_up() -> None:
     add_spend(error, 0.5, 5)
 
     assert spend_of(error) == (0.75, 15)
+
+
+@pytest.mark.parametrize(
+    "kind", ["refusal", "stopped", "no_text", "not_json", "schema"]
+)
+def test_an_unusable_reply_is_a_plain_outcome_with_its_kind(kind: str) -> None:
+    """
+    GIVEN a paid reply that cannot be used as a whole
+    WHEN the error for it is raised
+    THEN it carries its kind and message, and is no EngineError: the caller
+    maps it (a structured-output call that returned nothing usable)
+    """
+    with pytest.raises(UnusableReplyError, match="declined") as caught:
+        raise UnusableReplyError(kind, "Claude declined")  # type: ignore[arg-type]
+
+    assert caught.value.kind == kind
+    assert UnusableReplyError.__bases__ == (Exception,)
+    assert not issubclass(UnusableReplyError, EngineError)
