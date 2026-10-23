@@ -1,0 +1,28 @@
+diff --git a/ledgerclose/peaks.py b/ledgerclose/peaks.py
+index c07c17f..f7a54be 100644
+--- a/ledgerclose/peaks.py
++++ b/ledgerclose/peaks.py
+@@ -1,5 +1,7 @@
+ """Running peaks of a series of totals."""
+ 
++from collections import deque
++
+ 
+ def window_peaks(values: list[int], window: int) -> list[int]:
+     """For each position, the largest value among the last ``window`` ones
+@@ -7,7 +9,12 @@ def window_peaks(values: list[int], window: int) -> list[int]:
+     if window < 1:
+         raise ValueError("window must be at least 1")
+     peaks: list[int] = []
+-    for end in range(len(values)):
+-        start = max(0, end - window + 1)
+-        peaks.append(max(values[start : end + 1]))
++    best: deque[int] = deque()  # positions whose values decrease
++    for end, value in enumerate(values):
++        while best and values[best[-1]] <= value:
++            best.pop()
++        best.append(end)
++        if best[0] <= end - window:
++            best.popleft()
++        peaks.append(values[best[0]])
+     return peaks

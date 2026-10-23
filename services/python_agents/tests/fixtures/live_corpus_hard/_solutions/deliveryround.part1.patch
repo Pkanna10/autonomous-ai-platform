@@ -1,0 +1,25 @@
+diff --git a/deliveryround/main.py b/deliveryround/main.py
+index a708618..cdd802a 100644
+--- a/deliveryround/main.py
++++ b/deliveryround/main.py
+@@ -1,17 +1,18 @@
+ """Workload: ``python -m deliveryround.main``."""
+ 
+ from deliveryround.distance import distance_so_far, leg_length
+-from deliveryround.network import build_stops, find_stop, legs
++from deliveryround.network import build_stops, legs
+ from deliveryround.pickups import pending_views
+ 
+ 
+ def main() -> None:
+     stops = build_stops(1000)
+     round_legs = legs(stops, 9000)
++    by_code = {stop.code: stop for stop in stops}
+     lengths: list[int] = []
+     zones: dict[str, int] = {}
+     for start, end in round_legs:
+-        a, b = find_stop(stops, start), find_stop(stops, end)
++        a, b = by_code[start], by_code[end]
+         lengths.append(leg_length(a, b))
+         zones[b.zone] = zones.get(b.zone, 0) + 1
+     so_far = distance_so_far(lengths)

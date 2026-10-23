@@ -427,8 +427,11 @@ Step 2 (repository code now runs on the user's machine):
   run in `LIVE_RESULTS_PATH` and a summary (win rate, known-fix rate, false-win
   rate on controls, cost per win); `tests/live/test_corpus_guards.py` proves
   offline that every slowdown is winnable. `live-smoke` takes `suite` (stage-a,
-  corpus, attack, all; caps needed 9, 75, 12, 96 USD), `engine_model` and
-  `suite_cap_usd`.
+  corpus, attack, hard, oss; caps needed 9, 75, 12, 50, 50 USD, one at a time
+  under the 150 USD ceiling), `mode` (aimed, blind, decoy: what each corpus run
+  is handed), `engine_model` and `suite_cap_usd`. Blind runs hand the editor no
+  profiler hotspots: caller-built candidates carry no `hotspot_ids`, and the
+  trials node passes only the hotspots a hypothesis names.
 - **Postgres tests** (`postgres` marker) skip when `TEST_DATABASE_URL` is unset;
   CI always sets it. Each pytest process creates its own database from
   `infrastructure/schema/*.sql` and drops it at the end, so the role must be

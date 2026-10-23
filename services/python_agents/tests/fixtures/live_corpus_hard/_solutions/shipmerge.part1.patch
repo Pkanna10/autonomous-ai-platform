@@ -1,0 +1,17 @@
+diff --git a/shipmerge/catalog.py b/shipmerge/catalog.py
+index ab4ffdd..c136785 100644
+--- a/shipmerge/catalog.py
++++ b/shipmerge/catalog.py
+@@ -5,11 +5,7 @@ from shipmerge.data import Shipment
+ 
+ def distinct_skus(lines: list[Shipment]) -> list[str]:
+     """Every SKU once, in the order it first appears."""
+-    seen: list[str] = []
+-    for line in lines:
+-        if line.sku not in seen:
+-            seen.append(line.sku)
+-    return seen
++    return list(dict.fromkeys(line.sku for line in lines))
+ 
+ 
+ def units_by_warehouse(lines: list[Shipment]) -> dict[str, int]:

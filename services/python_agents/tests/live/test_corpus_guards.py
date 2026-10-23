@@ -75,8 +75,12 @@ from .corpus import (
     CORPUS,
     CORPUS_DIR,
     CORPUS_RUN_CAP_USD,
+    HARD_CORPUS,
+    HARD_RUN_CAP_USD,
     MANIFEST,
     MIN_FIX_GAIN,
+    MODE_ENV,
+    MODES,
     RESULTS_ENV,
     SOLUTIONS_DIR,
     TRUNCATED_DIFF,
@@ -86,8 +90,12 @@ from .corpus import (
     Loop,
     _no_factory,
     append_outcome,
+    blind_hypothesis,
     check_attack,
     check_loop_guards,
+    corpus_mode,
+    mode_hypotheses,
+    mode_recorder,
     outcome_of,
     parse_manifest,
     render_summary,
@@ -441,8 +449,22 @@ def _outcome(
     trials: int = 2,
     violations: tuple[str, ...] = (),
     guard: str = "ok",
+    mode: str = "aimed",
+    category: str = "single",
+    metric: str = METRIC_WALL_TIME_S,
+    reached_fix: bool | None = None,
+    known_fix: bool | None = None,
 ) -> CorpusOutcome:
-    """A scripted outcome; ``aimed_kept`` defaults to ``delivered``."""
+    """A scripted outcome; ``aimed_kept`` defaults to ``delivered``,
+    ``reached_fix`` to a delivered gain of at least 30 %, ``known_fix`` to
+    what the mode counts (aimed: ``aimed_kept``; blind: ``reached_fix``)."""
+    aimed = delivered if aimed_kept is None else aimed_kept
+    reached = (
+        delivered and gain_pct is not None and gain_pct >= 30.0
+        if reached_fix is None
+        else reached_fix
+    )
+    default_fix = {"aimed": aimed, "blind": reached}.get(mode, False)
     return CorpusOutcome(
         repo=repo,
         kind=kind,
@@ -452,7 +474,7 @@ def _outcome(
         served_models=served_models,
         kept=kept,
         delivered=delivered,
-        aimed_kept=delivered if aimed_kept is None else aimed_kept,
+        aimed_kept=aimed,
         gain_pct=gain_pct,
         best_trial_gain_pct=best_trial_gain_pct,
         cost_usd=cost_usd,
@@ -460,6 +482,12 @@ def _outcome(
         trials=trials,
         violations=violations,
         guard=guard,
+        mode=mode,
+        category=category,
+        metric=metric,
+        fix_gain_pct=30.0,
+        reached_fix=reached,
+        known_fix=default_fix if known_fix is None else known_fix,
     )
 
 
@@ -566,7 +594,7 @@ def test_summary_sanitizes_a_hostile_repo_name_and_note() -> None:
     rows = [line for line in body.splitlines() if line.startswith("| evil")]
     assert len(rows) == 1
     for line in rows:
-        assert len(re.findall(r"(?<!\\)\|", line)) == 14  # 13 cells, no more
+        assert len(re.findall(r"(?<!\\)\|", line)) == 18  # 17 cells, no more
 
 
 def test_write_summary_appends_to_the_step_summary_or_echoes(tmp_path: Path) -> None:
@@ -703,6 +731,246 @@ def test_recording_records_each_run_and_a_breach_then_reraises(
 
 
 # ---------------------------------------------------------------------------
+# Corpus modes (LIVE_CORPUS_MODE): aimed, blind, decoy
+# ---------------------------------------------------------------------------
+
+# Words that would name a fix: the blind hypothesis states an intent only.
+FIX_WORDS = (
+    "set",
+    "dict",
+    "lookup",
+    "join",
+    "cache",
+    "memoi",  # memoise, memoize (memory is the peak-memory goal itself)
+    "sort",
+    "index",
+    "compile",
+    "quadratic",
+    "linear",
+    "generator",
+    "stream",
+    "list",
+    "loop",
+    "deque",
+    "heap",
+    ".py",
+    "/",
+)
+
+
+def test_corpus_mode_reads_the_environment_strictly() -> None:
+    assert MODES == ("aimed", "blind", "decoy")
+    assert corpus_mode({}) == "aimed"  # unset: today's behaviour
+    for mode in MODES:
+        assert corpus_mode({MODE_ENV: mode}) == mode
+    for bad in ("", "Blind", " aimed", "aimed ", "random", "blind,decoy"):
+        with pytest.raises(ValueError, match=MODE_ENV):
+            corpus_mode({MODE_ENV: bad})
+
+
+def test_an_unknown_mode_refuses_before_any_run_spends(tmp_path: Path) -> None:
+    """The live modules build their recorder through ``mode_recorder`` in a
+    module-scoped fixture, set up before the first test's ``live(...)``."""
+    with pytest.raises(ValueError, match=MODE_ENV):
+        mode_recorder("Benchmark corpus", {MODE_ENV: "bogus"})
+    recorder = mode_recorder("Benchmark corpus", {MODE_ENV: "blind"})
+    assert recorder.mode == "blind" and recorder.outcomes == []
+    assert CorpusRecorder("Attack corpus", {MODE_ENV: "blind"}).mode == "aimed"
+    for stem in ("test_corpus_live", "test_hard_corpus_live"):
+        source = (TESTS_DIR / "live" / f"{stem}.py").read_text(encoding="utf-8")
+        assert '@pytest.fixture(scope="module")' in source, stem
+        assert "mode_recorder(" in source and "mode=recorder.mode" in source, stem
+
+
+@pytest.mark.parametrize("goal", ["runtime", "peak_memory"])
+def test_the_blind_hypothesis_states_an_intent_never_a_fix(goal: str) -> None:
+    spec = blind_hypothesis("runtime" if goal == "runtime" else "peak_memory")
+    title = "speed-up-hot-path" if goal == "runtime" else "shrink-peak-memory"
+    assert spec.title == title and not spec.aimed
+    assert NAME.fullmatch(spec.title.replace("-", "_"))
+    text = spec.rationale.casefold()
+    assert "project understanding" in text and "code" in text
+    assert "byte-for-byte" in text and "tests" in text
+    assert "\n" not in spec.rationale
+    if goal == "runtime":
+        # The trials node hands the editor only the hotspots a hypothesis
+        # names (hotspot_ids), and a caller-built candidate names none: the
+        # rationale may point at hotspots only for when the brief names some.
+        assert "profiler hotspots when the brief names any" in text
+    else:  # cProfile measures time, not memory: no hotspot steers this one
+        assert "profiler" not in text and "hotspot" not in text
+    found = [w for w in FIX_WORDS if re.search(rf"(?<![a-z]){re.escape(w)}", text)]
+    assert not found, found
+    for repo in (*CORPUS, *ATTACK_CORPUS, *HARD_CORPUS):  # names no repository
+        assert repo.package not in text and repo.name not in text
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_caller_candidates_name_no_hotspot(mode: str, tmp_path: Path) -> None:
+    """The seam behind the blind rationale's wording: a candidate the corpus
+    builds carries no ``hotspot_ids`` (the profile does not exist yet), so
+    until the engine attaches the profile's hotspots to such a candidate the
+    editor's brief lists none for it."""
+    chosen = next(m for m in MODES if m == mode)
+    for repo in (CORPUS[0], HARD_CORPUS[0]):
+        built = repo.candidates(repo.project(tmp_path), chosen)
+        assert built and all(h.hotspot_ids == () for h in built), repo.name
+
+
+@pytest.mark.parametrize("repo", ALL_REPOS, ids=_ids(ALL_REPOS))
+def test_each_mode_offers_its_hypotheses(repo: CorpusRepo, tmp_path: Path) -> None:
+    assert mode_hypotheses(repo, "aimed") == repo.hypotheses
+    assert mode_hypotheses(repo, "blind") == (blind_hypothesis("runtime"),)
+    (decoy,) = mode_hypotheses(repo, "decoy")
+    assert decoy in repo.hypotheses and not decoy.aimed
+    project = repo.project(tmp_path)
+    for mode in MODES:
+        built = repo.candidates(project, mode)
+        assert [h.title for h in built] == [
+            s.title for s in mode_hypotheses(repo, mode)
+        ]
+        assert {h.change_class for h in built} == {ChangeClass.efficiency}
+    assert [h.title for h in repo.candidates(project)] == [
+        s.title for s in repo.hypotheses
+    ]
+    with pytest.raises(ValueError, match="mode"):
+        mode_hypotheses(repo, "bogus")  # type: ignore[arg-type]
+
+
+def _mode_result(
+    tmp_path: Path, mode: str, gain: float, *, delivered: bool = True
+) -> tuple[CorpusRepo, EngineRunResult]:
+    """``_result`` with the candidates of ``mode`` and a delivered wall-time
+    gain of ``gain`` (a fraction)."""
+    repo = CORPUS[0]
+    result = _result(tmp_path, delivered=delivered)
+    state = result.state
+    project = state["project"]
+    (spec,) = mode_hypotheses(repo, "blind" if mode == "blind" else "decoy")
+    hypothesis = spec.build(project)
+    trial = state["trials"][0]
+    state["hypotheses"] = [hypothesis]
+    state["verdicts"] = [
+        state["verdicts"][0].model_copy(
+            update={"hypothesis_id": hypothesis.id, "trial_id": trial.id}
+        )
+    ]
+    combination = state["combination"]
+    assert combination is not None
+    speed = combination.judge_results[1].model_copy(update={"gain": gain})
+    state["combination"] = combination.model_copy(
+        update={"judge_results": (combination.judge_results[0], speed)}
+    )
+    return repo, result
+
+
+def test_outcome_of_counts_a_known_fix_by_mode(tmp_path: Path) -> None:
+    run = LiveRun("t", 5.0, wire=httpx2.MockTransport(_no_wire))
+    repo, result = _mode_result(tmp_path / "a", "blind", 0.45)
+    blind = outcome_of(repo, run, result, guard="ok", mode="blind")
+    assert (blind.mode, blind.metric) == ("blind", METRIC_WALL_TIME_S)
+    assert blind.fix_gain_pct == pytest.approx(100 * MIN_FIX_GAIN)
+    assert blind.delivered and not blind.aimed_kept  # no aimed title to keep
+    assert blind.reached_fix and blind.known_fix  # 45 % >= 30 %
+    repo, result = _mode_result(tmp_path / "b", "blind", 0.29)
+    short = outcome_of(repo, run, result, guard="ok", mode="blind")
+    assert short.delivered and not short.reached_fix and not short.known_fix
+    repo, result = _mode_result(tmp_path / "c", "decoy", 0.9)
+    decoy = outcome_of(repo, run, result, guard="ok", mode="decoy")
+    assert decoy.delivered and decoy.reached_fix and not decoy.known_fix
+    aimed = outcome_of(repo, run, _result(tmp_path / "d", delivered=True), guard="ok")
+    assert aimed.mode == "aimed" and aimed.known_fix == aimed.aimed_kept is True
+    assert aimed.reached_fix  # 50 % on the wall time
+    loaded = json.loads(blind.to_json())
+    assert (loaded["mode"], loaded["known_fix"], loaded["reached_fix"]) == (
+        "blind",
+        True,
+        True,
+    )
+    failed = outcome_of(repo, run, None, guard="breach: x", mode="decoy")
+    assert (failed.mode, failed.reached_fix, failed.known_fix) == (
+        "decoy",
+        False,
+        False,
+    )
+
+
+def test_recording_carries_the_recorder_mode(tmp_path: Path) -> None:
+    recorder = mode_recorder("Benchmark corpus", {MODE_ENV: "decoy"})
+    run = LiveRun("t", 5.0, wire=httpx2.MockTransport(_no_wire))
+    repo, result = _mode_result(tmp_path, "decoy", 0.6)
+    with recorder.recording(repo, run) as slot:
+        slot.result = result
+    (outcome,) = recorder.outcomes
+    assert outcome.mode == "decoy" and not outcome.known_fix
+    assert "mode decoy" in run.notes[0]
+
+
+def test_summary_splits_rates_by_mode() -> None:
+    outcomes = [
+        _outcome(),
+        _outcome(repo="leaderboard", mode="blind", kept=("speed-up-hot-path",)),
+        _outcome(
+            repo="wordcount",
+            mode="blind",
+            kept=("speed-up-hot-path",),
+            gain_pct=12.0,
+            cost_usd=0.5,
+        ),
+        _outcome(repo="graphwalk", mode="blind", delivered=False, kept=()),
+        _outcome(repo="stairways", mode="decoy", kept=("init-once",), gain_pct=4.0),
+        _outcome(repo="tokenparse", mode="decoy", delivered=False, kept=()),
+        _outcome(repo="blockhash", kind="control", expected="none", mode="decoy"),
+    ]
+    text = render_summary("Benchmark corpus", outcomes)
+    aimed, blind, decoy = (
+        next(line for line in text.splitlines() if line.startswith(f"Mode {m}:"))
+        for m in MODES
+    )
+    assert "Slowdown win rate: 1/1 (100.0%)" in aimed
+    assert "Known-fix rate: 1/1 (100.0%) (the aimed hypothesis kept" in aimed
+    assert "Slowdown win rate: 2/3 (66.7%)" in blind
+    assert "Known-fix rate: 1/3 (33.3%) (the delivered gain reached" in blind
+    assert "Control false-win rate: 0/0 (n/a)" in blind
+    assert "Decoy win rate: 1/2 (50.0%)" in decoy
+    assert "recorded, never a failure" in decoy and "Known-fix" not in decoy
+    assert "Control false-win rate: 1/1 (100.0%)" in decoy
+    assert "Cost per win: 1.5000 USD" in aimed
+    assert "Cost per win: 1.7500 USD" in blind  # slowdown spend 3.5 / 2 wins
+    assert "Cost per known fix: 3.5000 USD" in blind
+    assert "Cost per decoy win: 3.0000 USD" in decoy
+    assert "Mean cost per run: 1.3571 USD over 7 run(s)" in text
+    assert "**CONTROL WIN**: blockhash" in text
+    assert "| stairways | slowdown | win | done | yes | init-once |" in text
+    row = next(line for line in text.splitlines() if line.startswith("| wordcount"))
+    assert row.endswith("| blind | wall_time_s | no | no |")
+    single = render_summary("Benchmark corpus", [_outcome(mode="blind")])
+    assert "Mode blind:" in single and "Mode aimed:" not in single
+
+
+def test_summary_reports_reference_gain_per_category() -> None:
+    outcomes = [
+        _outcome(repo="shipmerge", category="multi", gain_pct=85.0, reached_fix=True),
+        _outcome(
+            repo="ledgerclose", category="multi", gain_pct=50.0, reached_fix=False
+        ),
+        _outcome(
+            repo="eventagg",
+            category="memory",
+            metric="peak_rss_bytes",
+            gain_pct=88.0,
+        ),
+    ]
+    text = render_summary("Hard corpus", outcomes)
+    assert "Reached the reference gain: 2/3 (66.7%)" in text
+    assert "Category multi: delivered 2/2; reached the reference gain 1/2" in text
+    assert "Category memory: delivered 1/1; reached the reference gain 1/1" in text
+    assert "Category single" not in text
+    plain = render_summary("Benchmark corpus", [_outcome()])
+    assert "Category" not in plain
+
+
+# ---------------------------------------------------------------------------
 # The live-smoke inputs (ci.yml) against the production settings
 # ---------------------------------------------------------------------------
 
@@ -738,22 +1006,64 @@ def test_every_engine_model_choice_is_a_valid_fully_priced_chain(
             assert billed == (model,)  # stage M bills and prices Sonnet alone
 
 
+SUITES = ("stage-a", "corpus", "attack", "hard", "oss")
+CAP_CEILING_USD = 150  # the most suite_cap_usd may be
+OSS_LIVE = "tests/live/test_oss_live.py"  # U24's suite, built in parallel
+OSS_MAX_REPOS = 10  # U24: at most 10 repositories ...
+OSS_RUN_CAP_USD = 5.0  # ... at 5 USD each
+
+
 def test_every_suite_choice_names_existing_test_paths() -> None:
-    inputs = _ci_block("      suite:", "      engine_model:")
-    assert "options: [stage-a, corpus, attack, all]" in inputs
+    inputs = _ci_block("      suite:", "      mode:")
+    assert f"options: [{', '.join(SUITES)}]" in inputs
     assert "default: stage-a" in inputs
     step = _ci_block("      - name: Run live tests", "      - name: Upload live corpus")
-    for suite in ("stage-a", "corpus", "attack", "all"):
+    for suite in SUITES:
         assert f"            {suite}) paths=(" in step, suite
     named = set(re.findall(r"tests/[\w/]+\.py|tests/live(?=[ )])", step))
     assert {
         "tests/live",
         "tests/live/test_corpus_live.py",
         "tests/live/test_attack_corpus_live.py",
+        "tests/live/test_hard_corpus_live.py",
+        OSS_LIVE,
     } <= named
     for path in named:
+        if path == OSS_LIVE and not (SERVICE_DIR / path).exists():
+            continue  # U24 lands it; the oss suite fails at collection until then
         assert (SERVICE_DIR / path).exists(), path
     assert "${{" not in step.split("run: |", 1)[1]  # inputs reach run: via env only
+
+
+def test_the_mode_input_is_a_strict_choice() -> None:
+    inputs = _ci_block("      mode:", "      engine_model:")
+    assert "type: choice" in inputs
+    assert f"options: [{', '.join(MODES)}]" in inputs
+    assert "default: aimed" in inputs
+    step = _ci_block("      - name: Run live tests", "      - name: Upload live corpus")
+    assert "INPUT_MODE: ${{ inputs.mode }}" in step
+    for mode in MODES:
+        assert f"            {mode}) ;;" in step, mode
+    assert 'export LIVE_CORPUS_MODE="${INPUT_MODE}"' in step
+
+
+def test_stage_a_ignores_every_corpus_suite() -> None:
+    script = _run_script()
+    found = re.search(r"^corpus=\((.*)\)$", script, re.MULTILINE)
+    assert found is not None
+    ignored = set(re.findall(r"--ignore=(\S+)", found.group(1)))
+    corpus_files = {
+        f"tests/live/{p.name}"
+        for p in (TESTS_DIR / "live").glob("test_*_live.py")
+        if "corpus" in p.name or "oss" in p.name
+    }
+    assert corpus_files | {OSS_LIVE} <= ignored
+    assert ignored == {
+        "tests/live/test_corpus_live.py",
+        "tests/live/test_attack_corpus_live.py",
+        "tests/live/test_hard_corpus_live.py",
+        OSS_LIVE,
+    }
 
 
 def _no_wire(request: httpx2.Request) -> httpx2.Response:
@@ -1249,15 +1559,32 @@ def _stage_a_need() -> float:
     return total
 
 
+def _oss_repos() -> int:
+    """U24's repository count once ``tests/live/oss.py`` exists (its
+    ``OSS_CORPUS``), else the bound U24 was given."""
+    if not (TESTS_DIR / "live" / "oss.py").exists():
+        return OSS_MAX_REPOS
+    oss = importlib.import_module(f"{__package__}.oss")
+    assert getattr(oss, "OSS_RUN_CAP_USD", OSS_RUN_CAP_USD) == OSS_RUN_CAP_USD
+    repos = getattr(oss, "OSS_CORPUS", None)
+    count = OSS_MAX_REPOS if repos is None else len(repos)
+    assert 0 < count <= OSS_MAX_REPOS, count
+    return count
+
+
 def _suite_needs() -> dict[str, float]:
     corpus = len(CORPUS) * CORPUS_RUN_CAP_USD
     attack = len(ATTACK_CORPUS) * ATTACK_RUN_CAP_USD
+    hard = len(HARD_CORPUS) * HARD_RUN_CAP_USD
+    oss = OSS_MAX_REPOS * OSS_RUN_CAP_USD  # the table holds U24's bound
+    assert _oss_repos() * OSS_RUN_CAP_USD <= oss
     stage_a = _stage_a_need()
     return {
         "stage-a": stage_a,
         "corpus": corpus,
         "attack": attack,
-        "all": stage_a + corpus + attack,
+        "hard": hard,
+        "oss": oss,
     }
 
 
@@ -1294,18 +1621,23 @@ def test_the_job_timeout_fits_every_suite() -> None:
     )
     fallback = re.search(r"\|\| (\d+)$", found.group(1))
     assert fallback is not None
+    hard, oss = len(HARD_CORPUS), _oss_repos()
     loops = {
         "stage-a": STAGE_A_LOOPS,
         "corpus": len(CORPUS),
         "attack": len(ATTACK_CORPUS),
-        "all": STAGE_A_LOOPS + len(CORPUS) + len(ATTACK_CORPUS),
+        "hard": hard,
+        "oss": oss,
     }
+    assert set(pairs) == set(loops) - {"stage-a"}  # stage-a takes the fallback
     for suite, count in loops.items():
         minutes = int(pairs.get(suite, fallback.group(1)))
         assert count * MINUTES_PER_LOOP <= minutes <= 360, (suite, minutes)
 
 
-def _dispatch(tmp_path: Path, suite: str, model: str, cap: str) -> tuple[int, str, str]:
+def _dispatch(
+    tmp_path: Path, suite: str, model: str, cap: str, mode: str = "aimed"
+) -> tuple[int, str, str]:
     """The run step under bash -e with a fake ``uv`` that records its call."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
@@ -1314,7 +1646,7 @@ def _dispatch(tmp_path: Path, suite: str, model: str, cap: str) -> tuple[int, st
     fake.write_text(
         "#!/bin/sh\n"
         f'printf "%s\\n" "$*" "$ENGINE_MODEL" "${{ENGINE_FALLBACKS:-on}}" '
-        f'"$LIVE_SUITE_CAP_USD" > "{called}"\n',
+        f'"$LIVE_SUITE_CAP_USD" "$LIVE_CORPUS_MODE" > "{called}"\n',
         encoding="utf-8",
     )
     fake.chmod(0o755)
@@ -1327,6 +1659,7 @@ def _dispatch(tmp_path: Path, suite: str, model: str, cap: str) -> tuple[int, st
         "INPUT_SUITE": suite,
         "INPUT_ENGINE_MODEL": model,
         "INPUT_SUITE_CAP_USD": cap,
+        "INPUT_MODE": mode,
         "LIVE_RESULTS_PATH": str(tmp_path / "results.jsonl"),
     }
     proc = subprocess.run(
@@ -1343,7 +1676,13 @@ def _dispatch(tmp_path: Path, suite: str, model: str, cap: str) -> tuple[int, st
 
 @pytest.mark.parametrize(
     ("suite", "cap"),
-    [("corpus", "12"), ("all", "75"), ("attack", "11.99"), ("stage-a", "8")],
+    [
+        ("corpus", "12"),
+        ("attack", "11.99"),
+        ("stage-a", "8"),
+        ("hard", "49.99"),
+        ("oss", "12"),
+    ],
 )
 def test_the_run_step_refuses_a_cap_below_the_suite_need(
     suite: str, cap: str, tmp_path: Path
@@ -1354,6 +1693,22 @@ def test_the_run_step_refuses_a_cap_below_the_suite_need(
     assert not (tmp_path / "results.jsonl").exists()
 
 
+def test_every_suite_choice_fits_under_the_cap_ceiling(tmp_path: Path) -> None:
+    """No dropdown choice always fails: every suite's need is at most the
+    150 USD ceiling. Every suite together (``all``) would need more than the
+    ceiling (196 USD), so it is no choice: dispatch the suites one by one."""
+    table = dict(re.findall(r"(\S+)\) paths=\(.*\); need=([0-9.]+) ;;", _run_script()))
+    assert set(table) == set(SUITES)
+    assert max(float(need) for need in table.values()) <= CAP_CEILING_USD
+    assert sum(_suite_needs().values()) > CAP_CEILING_USD
+    assert "all" not in _ci_block("      suite:", "      mode:")
+    assert "'all'" not in _ci_block("  live-smoke:", "    defaults:")
+    assert f"at most {CAP_CEILING_USD} " in _ci_block("      suite_cap_usd:", "\n\n")
+    code, output, calls = _dispatch(tmp_path, "all", "claude-opus-5-5", "150")
+    assert (code, calls) == (1, "") and "unknown suite" in output
+    assert not (tmp_path / "results.jsonl").exists()
+
+
 @pytest.mark.parametrize("cap", ["0", "151", "1e3", "12;id", "-5", ""])
 def test_the_run_step_refuses_a_malformed_cap(cap: str, tmp_path: Path) -> None:
     code, output, calls = _dispatch(tmp_path, "stage-a", "claude-opus-5-5", cap)
@@ -1361,15 +1716,30 @@ def test_the_run_step_refuses_a_malformed_cap(cap: str, tmp_path: Path) -> None:
     assert "::error::suite_cap_usd must be" in output
 
 
-def test_the_run_step_refuses_an_unknown_suite_or_model(tmp_path: Path) -> None:
+def test_the_run_step_refuses_an_unknown_suite_model_or_mode(tmp_path: Path) -> None:
     code, output, calls = _dispatch(tmp_path, "everything", "claude-opus-5-5", "12")
     assert (code, calls) == (1, "") and "unknown suite" in output
     code, output, calls = _dispatch(tmp_path, "stage-a", "gpt", "12")
     assert (code, calls) == (1, "") and "unknown engine_model" in output
+    for mode in ("", "Blind", "blind;id", "random"):
+        code, output, calls = _dispatch(
+            tmp_path, "corpus", "claude-opus-5-5", "75", mode
+        )
+        assert (code, calls) == (1, "") and "unknown mode" in output, mode
+        assert not (tmp_path / "results.jsonl").exists()
+
+
+STAGE_A_PATHS = (
+    "tests/live tests/execution/test_editor.py"
+    " --ignore=tests/live/test_corpus_live.py"
+    " --ignore=tests/live/test_attack_corpus_live.py"
+    " --ignore=tests/live/test_hard_corpus_live.py"
+    f" --ignore={OSS_LIVE}"
+)
 
 
 @pytest.mark.parametrize(
-    ("suite", "model", "cap", "paths", "fallbacks"),
+    ("suite", "model", "cap", "paths", "fallbacks", "mode"),
     [
         (
             "corpus",
@@ -1377,6 +1747,15 @@ def test_the_run_step_refuses_an_unknown_suite_or_model(tmp_path: Path) -> None:
             "75",
             "tests/live/test_corpus_live.py",
             "false",
+            "aimed",
+        ),
+        (
+            "corpus",
+            "claude-opus-5-5",
+            "75",
+            "tests/live/test_corpus_live.py",
+            "on",
+            "blind",
         ),
         (
             "attack",
@@ -1384,24 +1763,36 @@ def test_the_run_step_refuses_an_unknown_suite_or_model(tmp_path: Path) -> None:
             "12",
             "tests/live/test_attack_corpus_live.py",
             "on",
+            "aimed",
         ),
+        ("stage-a", "claude-opus-5-5", "9", STAGE_A_PATHS, "on", "aimed"),
         (
-            "all",
+            "hard",
             "claude-opus-5-5",
-            "150",
-            "tests/live tests/execution/test_editor.py",
+            "50",
+            "tests/live/test_hard_corpus_live.py",
             "on",
+            "decoy",
         ),
+        ("oss", "claude-sonnet-5-5", "50", OSS_LIVE, "false", "aimed"),
     ],
 )
 def test_the_run_step_runs_the_suite_with_the_chosen_model_and_cap(
-    suite: str, model: str, cap: str, paths: str, fallbacks: str, tmp_path: Path
+    suite: str,
+    model: str,
+    cap: str,
+    paths: str,
+    fallbacks: str,
+    mode: str,
+    tmp_path: Path,
 ) -> None:
-    code, output, calls = _dispatch(tmp_path, suite, model, cap)
+    code, output, calls = _dispatch(tmp_path, suite, model, cap, mode)
     assert code == 0, output
-    argv, engine_model, engine_fallbacks, suite_cap = calls.splitlines()
+    argv, engine_model, engine_fallbacks, suite_cap, corpus = calls.splitlines()
     assert argv == f"run pytest {paths} -m live --no-cov -n 0 -rA"
     assert (engine_model, engine_fallbacks, suite_cap) == (model, fallbacks, cap)
+    assert corpus == mode
+    assert f"mode {mode}" in output
     assert (tmp_path / "results.jsonl").read_text(encoding="utf-8") == ""
     assert "placeholder-not-a-key" not in output
 

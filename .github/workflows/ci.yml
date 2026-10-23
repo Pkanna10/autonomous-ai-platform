@@ -6,22 +6,30 @@ on:
     branches: [master, main]
   # Manual runs execute only the live Claude smoke test (job live-smoke); every
   # other job is skipped for this event. The inputs choose what live-smoke runs
-  # (STATUS Window 0: stage-a, the benchmark corpus E0, the attack corpus X),
-  # the editor model (stage M) and the suite's hard cap.
+  # (STATUS Window 0: stage-a, the benchmark corpus E0, the attack corpus X,
+  # the hard corpus, the open-source repositories), what each corpus run is
+  # handed (mode), the editor model (stage M) and the suite's hard cap. There
+  # is no "every suite" choice: together they need more (196 USD) than the
+  # 150 USD ceiling of suite_cap_usd, so they are dispatched one by one.
   workflow_dispatch:
     inputs:
       suite:
-        description: 'Live suite: stage-a, corpus, attack or all'
+        description: 'Live suite: stage-a, corpus, attack, hard or oss (one at a time: together they need more than the 150 USD ceiling)'
         type: choice
-        options: [stage-a, corpus, attack, all]
+        options: [stage-a, corpus, attack, hard, oss]
         default: stage-a
+      mode:
+        description: 'Corpus mode (LIVE_CORPUS_MODE): aimed (both manifest hypotheses), blind (one generic hypothesis), decoy (the neutral one alone)'
+        type: choice
+        options: [aimed, blind, decoy]
+        default: aimed
       engine_model:
         description: 'ENGINE_MODEL for the run (Sonnet runs without fallbacks)'
         type: choice
         options: [claude-opus-5-5, claude-sonnet-5-5]
         default: claude-opus-5-5
       suite_cap_usd:
-        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75, all 96'
+        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75, hard 50, oss 50'
         type: string
         default: '12'
 
@@ -501,9 +509,10 @@ jobs:
     permissions:
       contents: read
     # Each whole loop takes a few minutes of real trials (up to about 8): Stage A
-    # runs 2, attack 3, corpus 15 and all 20. A killed job loses the cost table,
-    # so each suite gets room for its loops (the hosted maximum is 360).
-    timeout-minutes: ${{ inputs.suite == 'all' && 240 || inputs.suite == 'corpus' && 180 || inputs.suite == 'attack' && 45 || 30 }}
+    # runs 2, attack 3, corpus 15, hard 10 and oss at most 10 (larger
+    # repositories). A killed job loses the cost table, so each suite gets room
+    # for its loops (the hosted maximum is 360).
+    timeout-minutes: ${{ inputs.suite == 'corpus' && 180 || inputs.suite == 'oss' && 180 || inputs.suite == 'hard' && 120 || inputs.suite == 'attack' && 45 || 30 }}
     defaults:
       run:
         working-directory: ./services/python_agents
@@ -587,12 +596,15 @@ jobs:
       # (Sonnet with ENGINE_FALLBACKS off, so the comparison bills Sonnet only
       # and its worst case is priced on Sonnet alone), and the cap becomes
       # LIVE_SUITE_CAP_USD, which tests/live/conftest.py enforces before each
-      # test spends. The cost table and the corpus summary go to the job
-      # summary; one JSON line per corpus run goes to LIVE_RESULTS_PATH.
+      # test spends. The mode becomes LIVE_CORPUS_MODE (the corpus and hard
+      # suites read it; stage-a, attack and oss ignore it). The cost table and
+      # the corpus summary go to the job summary; one JSON line per corpus run
+      # goes to LIVE_RESULTS_PATH.
       - name: Run live tests
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           INPUT_SUITE: ${{ inputs.suite }}
+          INPUT_MODE: ${{ inputs.mode }}
           INPUT_ENGINE_MODEL: ${{ inputs.engine_model }}
           INPUT_SUITE_CAP_USD: ${{ inputs.suite_cap_usd }}
           LIVE_RESULTS_PATH: ${{ runner.temp }}/live-results.jsonl
@@ -601,17 +613,28 @@ jobs:
             echo "::error::the ANTHROPIC_API_KEY secret of environment 'live' is not set"
             exit 1
           fi
-          corpus=(--ignore=tests/live/test_corpus_live.py --ignore=tests/live/test_attack_corpus_live.py)
+          corpus=(--ignore=tests/live/test_corpus_live.py --ignore=tests/live/test_attack_corpus_live.py --ignore=tests/live/test_hard_corpus_live.py --ignore=tests/live/test_oss_live.py)
           # need: the sum of the caps the suite's live tests ask the ledger for
-          # (Stage A 8.55, corpus 15 x 5, attack 3 x 4), rounded up; a smaller cap
-          # would refuse, and fail, the later tests of the suite.
+          # (Stage A 8.55, corpus 15 x 5, attack 3 x 4, hard 10 x 5, oss at most
+          # 10 x 5), rounded up; a smaller cap would refuse, and fail, the later
+          # tests of the suite.
           case "${INPUT_SUITE}" in
             stage-a) paths=(tests/live tests/execution/test_editor.py "${corpus[@]}"); need=9 ;;
             corpus) paths=(tests/live/test_corpus_live.py); need=75 ;;
             attack) paths=(tests/live/test_attack_corpus_live.py); need=12 ;;
-            all) paths=(tests/live tests/execution/test_editor.py); need=96 ;;
+            hard) paths=(tests/live/test_hard_corpus_live.py); need=50 ;;
+            oss) paths=(tests/live/test_oss_live.py); need=50 ;;
             *)
-              echo "::error::unknown suite input (stage-a, corpus, attack or all)"
+              echo "::error::unknown suite input (stage-a, corpus, attack, hard or oss)"
+              exit 1
+              ;;
+          esac
+          case "${INPUT_MODE}" in
+            aimed) ;;
+            blind) ;;
+            decoy) ;;
+            *)
+              echo "::error::unknown mode input (aimed, blind or decoy)"
               exit 1
               ;;
           esac
@@ -634,8 +657,9 @@ jobs:
           fi
           export ENGINE_MODEL="${INPUT_ENGINE_MODEL}"
           export LIVE_SUITE_CAP_USD="${INPUT_SUITE_CAP_USD}"
+          export LIVE_CORPUS_MODE="${INPUT_MODE}"
           : > "${LIVE_RESULTS_PATH}"
-          echo "suite ${INPUT_SUITE}, ENGINE_MODEL ${ENGINE_MODEL}, LIVE_SUITE_CAP_USD ${LIVE_SUITE_CAP_USD}"
+          echo "suite ${INPUT_SUITE}, mode ${LIVE_CORPUS_MODE}, ENGINE_MODEL ${ENGINE_MODEL}, LIVE_SUITE_CAP_USD ${LIVE_SUITE_CAP_USD}"
           uv run pytest "${paths[@]}" -m live --no-cov -n 0 -rA
 
       # One JSON line per corpus run (CorpusOutcome), kept for the STATUS
@@ -809,10 +833,15 @@ jobs:
           docker compose logs postgres
           exit 1
 
+      # A client connecting while the server boots or restarts after the init
+      # scripts (the health check, a racing probe) logs "FATAL: the database
+      # system is starting up" (or "shutting down"); that is a refused
+      # connection, not an init error, so only those exact lines are dropped.
       - name: Init log has no errors
         run: |
           docker compose logs postgres > /tmp/postgres-init.log
-          if grep -iE '(^|[^a-z])(error|fatal)([^a-z]|$)' /tmp/postgres-init.log; then
+          if grep -vE 'FATAL:  the database system is (starting up|shutting down)$' /tmp/postgres-init.log |
+            grep -iE '(^|[^a-z])(error|fatal)([^a-z]|$)'; then
             echo "::error::postgres init log contains errors (see above)"
             exit 1
           fi

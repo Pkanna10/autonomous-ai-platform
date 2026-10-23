@@ -1,0 +1,47 @@
+diff --git a/distmatrix/distances.py b/distmatrix/distances.py
+index 936d1a7..d9b5437 100644
+--- a/distmatrix/distances.py
++++ b/distmatrix/distances.py
+@@ -1,14 +1,21 @@
+ """Pairwise distances and their per-point summaries."""
+ 
+ import math
++from collections.abc import Iterable, Iterator
+ 
+ 
+ def matrix(points: list[tuple[float, float]]) -> list[list[float]]:
+     """Every pairwise Euclidean distance; row ``i`` holds point ``i``'s."""
+-    return [[math.dist(p, q) for q in points] for p in points]
++    return list(each_row(points))
+ 
+ 
+-def summaries(rows: list[list[float]]) -> list[tuple[float, float]]:
++def each_row(points: list[tuple[float, float]]) -> Iterator[list[float]]:
++    """The rows of ``matrix``, one at a time."""
++    for p in points:
++        yield [math.dist(p, q) for q in points]
++
++
++def summaries(rows: Iterable[list[float]]) -> list[tuple[float, float]]:
+     """``(nearest neighbour, mean distance to the others)`` per point."""
+     out: list[tuple[float, float]] = []
+     for i, row in enumerate(rows):
+diff --git a/distmatrix/main.py b/distmatrix/main.py
+index d7a90d7..4e51da8 100644
+--- a/distmatrix/main.py
++++ b/distmatrix/main.py
+@@ -1,12 +1,12 @@
+ """Workload: ``python -m distmatrix.main``."""
+ 
+-from distmatrix.distances import histogram, matrix, summaries
++from distmatrix.distances import each_row, histogram, summaries
+ from distmatrix.points import generate
+ 
+ 
+ def main() -> None:
+     points = generate(1900)
+-    rows = summaries(matrix(points))
++    rows = summaries(each_row(points))
+     nearest = [near for near, _ in rows]
+     isolated = sorted(range(len(rows)), key=lambda i: (-rows[i][0], i))[:5]
+     for i in isolated:

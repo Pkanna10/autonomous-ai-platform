@@ -1,0 +1,15 @@
+diff --git a/shipmerge/orders.py b/shipmerge/orders.py
+index f975767..9a30e1b 100644
+--- a/shipmerge/orders.py
++++ b/shipmerge/orders.py
+@@ -10,8 +10,8 @@ def order_numbers(lines: list[Shipment]) -> list[int]:
+ 
+ def arrival_ranks(lines: list[Shipment]) -> list[int]:
+     """For each line, the rank of its order among all orders (0 = first)."""
+-    numbers = order_numbers(lines)
+-    return [numbers.index(line.order_id) for line in lines]
++    rank = {number: i for i, number in enumerate(order_numbers(lines))}
++    return [rank[line.order_id] for line in lines]
+ 
+ 
+ def rank_digest(ranks: list[int]) -> int:

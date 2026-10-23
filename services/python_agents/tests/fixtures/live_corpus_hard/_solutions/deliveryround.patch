@@ -1,0 +1,61 @@
+diff --git a/deliveryround/distance.py b/deliveryround/distance.py
+index 3914d74..808a426 100644
+--- a/deliveryround/distance.py
++++ b/deliveryround/distance.py
+@@ -10,4 +10,9 @@ def leg_length(a: Stop, b: Stop) -> int:
+ 
+ def distance_so_far(lengths: list[int]) -> list[int]:
+     """For each leg, the distance driven before it starts."""
+-    return [sum(lengths[:i]) for i in range(len(lengths))]
++    out: list[int] = []
++    total = 0
++    for length in lengths:
++        out.append(total)
++        total += length
++    return out
+diff --git a/deliveryround/main.py b/deliveryround/main.py
+index a708618..cdd802a 100644
+--- a/deliveryround/main.py
++++ b/deliveryround/main.py
+@@ -1,17 +1,18 @@
+ """Workload: ``python -m deliveryround.main``."""
+ 
+ from deliveryround.distance import distance_so_far, leg_length
+-from deliveryround.network import build_stops, find_stop, legs
++from deliveryround.network import build_stops, legs
+ from deliveryround.pickups import pending_views
+ 
+ 
+ def main() -> None:
+     stops = build_stops(1000)
+     round_legs = legs(stops, 9000)
++    by_code = {stop.code: stop for stop in stops}
+     lengths: list[int] = []
+     zones: dict[str, int] = {}
+     for start, end in round_legs:
+-        a, b = find_stop(stops, start), find_stop(stops, end)
++        a, b = by_code[start], by_code[end]
+         lengths.append(leg_length(a, b))
+         zones[b.zone] = zones.get(b.zone, 0) + 1
+     so_far = distance_so_far(lengths)
+diff --git a/deliveryround/pickups.py b/deliveryround/pickups.py
+index cecd179..386b1ad 100644
+--- a/deliveryround/pickups.py
++++ b/deliveryround/pickups.py
+@@ -1,5 +1,7 @@
+ """Pending pickups, lowest cost first."""
+ 
++from bisect import insort
++
+ 
+ def pending_views(
+     offers: list[tuple[int, str]], every: int, show: int
+@@ -10,7 +12,7 @@ def pending_views(
+     pending: list[tuple[int, str]] = []
+     views: list[list[tuple[int, str]]] = []
+     for count, offer in enumerate(offers, start=1):
+-        pending = sorted([*pending, offer])
++        insort(pending, offer)
+         if count % every == 0:
+             views.append(pending[:show])
+     return views

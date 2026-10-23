@@ -1,0 +1,31 @@
+diff --git a/fleetsim/service.py b/fleetsim/service.py
+index 17ca58a..f0f2cdf 100644
+--- a/fleetsim/service.py
++++ b/fleetsim/service.py
+@@ -1,8 +1,7 @@
+ """Service levels per job and per customer tier."""
+ 
++from bisect import bisect_right
+ from dataclasses import dataclass
+-
+-from fleetsim.metrics import share_at_most
+ from fleetsim.simulation import Outcome
+ 
+ 
+@@ -16,12 +15,15 @@ class JobService:
+ 
+ def per_job(outcomes: list[Outcome], past: list[float]) -> list[JobService]:
+     """Each delivered job with its standing among the ``past`` waits."""
++    if not past:
++        raise ValueError("no samples")
++    ordered = sorted(past)
+     return [
+         JobService(
+             outcome.job.number,
+             outcome.job.tier,
+             outcome.wait,
+-            share_at_most(past, outcome.wait),
++            bisect_right(ordered, outcome.wait) / len(ordered),
+         )
+         for outcome in outcomes
+     ]
