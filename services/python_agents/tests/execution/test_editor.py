@@ -78,6 +78,9 @@ OPEN = f"<untrusted_repo_content boundary={BOUNDARY}>"
 CLOSE = f"</untrusted_repo_content boundary={BOUNDARY}>"
 NOTICE = f"<engine_notice nonce={BOUNDARY}>"
 LIVE_CAP_USD = 0.50
+HOST_KEY = os.environ.get("ANTHROPIC_API_KEY")
+"""Read at import: the suite's autouse reset_environment puts a placeholder
+in the environment for every test, and the live test must not send it."""
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 TRANSCRIPTS = FIXTURES / "transcripts"
@@ -1273,11 +1276,11 @@ def test_live_edit_of_the_dedupe_fixture_stays_under_the_cap(
 ) -> None:
     if not _live_selected(request.config):
         pytest.skip("live tests run only when selected with -m live")
-    if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+    if not (HOST_KEY or "").strip():
         pytest.skip("needs ANTHROPIC_API_KEY in the environment")
     # A smaller max_tokens lowers the worst-case pre-send estimate (about
     # $0.19 a request instead of $0.42), so several turns fit under the cap.
-    cfg = Settings(EDITOR_MAX_TOKENS=3000)
+    cfg = Settings(EDITOR_MAX_TOKENS=3000, ANTHROPIC_API_KEY=HOST_KEY)
     budget = Budget(LIVE_CAP_USD)
     original = (repo / "dedupe" / "core.py").read_text(encoding="utf-8")
     editor = ClaudeEditor(AnthropicTransport(cfg), config=cfg)

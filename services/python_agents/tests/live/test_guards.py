@@ -39,13 +39,14 @@ from autonomous_ai_agents.clients.transport import (
     ScriptedTransport,
     call,
 )
-from autonomous_ai_agents.common.config import Settings
+from autonomous_ai_agents.common.config import Settings, settings
 from autonomous_ai_agents.common.errors import (
     LLMRequestError,
     LLMUnavailable,
 )
 
 from .conftest import (
+    KEY_ENV,
     LIVE_SUITE_CAP_USD,
     SKIP_NO_KEY,
     SKIP_NOT_SELECTED,
@@ -64,6 +65,7 @@ from .conftest import (
     must_refuse,
     render_cost_table,
     require_sandbox,
+    restore_host_key,
     skip_unless_live,
     suite_cap,
     tool_calls,
@@ -456,6 +458,34 @@ def test_capture_keeps_each_count_reply_body() -> None:
     counted, sent = capture.exchanges
     assert json.loads(counted.response_body) == {"input_tokens": 7}
     assert sent.response_body == b""  # message replies are left to the SDK
+
+
+def test_a_live_test_sends_the_host_key_not_the_suite_placeholder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    GIVEN the suite's autouse reset_environment set ANTHROPIC_API_KEY to its
+        placeholder (the first live run sent it: HTTP 401 on every request
+        built from fresh Settings)
+    WHEN a live test restores the key the process started with
+    THEN fresh Settings and the shared settings both hold the host key, and
+        with no host key there is none at all
+    """
+    assert os.environ[KEY_ENV] == "test-key-12345"  # the suite's reset ran
+
+    restore_host_key(monkeypatch, "sk-ant-host-0000")
+
+    assert os.environ[KEY_ENV] == "sk-ant-host-0000"
+    fresh = Settings().ANTHROPIC_API_KEY
+    assert fresh is not None and fresh.get_secret_value() == "sk-ant-host-0000"
+    shared = settings.ANTHROPIC_API_KEY
+    assert shared is not None and shared.get_secret_value() == "sk-ant-host-0000"
+
+    restore_host_key(monkeypatch, None)
+
+    assert KEY_ENV not in os.environ
+    assert Settings().ANTHROPIC_API_KEY is None
+    assert settings.ANTHROPIC_API_KEY is None
 
 
 def _refusing(status: int, error_type: str, message: str) -> httpx2.MockTransport:

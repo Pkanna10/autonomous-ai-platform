@@ -53,6 +53,7 @@ from typing import Final
 import httpx2
 import pytest
 from anthropic.types.beta import BetaMessage
+from pydantic import SecretStr
 
 from autonomous_ai_agents.clients.budget import Budget
 from autonomous_ai_agents.clients.cost import preflight_estimate, response_cost
@@ -121,6 +122,10 @@ from e2e.conftest import (  # noqa: E402
 LIVE_SUITE_CAP_USD: Final = 12.0
 SUITE_CAP_ENV: Final = "LIVE_SUITE_CAP_USD"
 KEY_ENV: Final = "ANTHROPIC_API_KEY"
+HOST_KEY: Final = os.environ.get(KEY_ENV)
+"""The key the process started with, read before any fixture: the suite's
+autouse ``reset_environment`` replaces it with a placeholder for every test,
+so a live test that read the environment then sent the placeholder."""
 SKIP_NOT_SELECTED: Final = "live tests run only when selected with -m live"
 SKIP_NO_KEY: Final = "needs ANTHROPIC_API_KEY in the environment"
 REDACTED_HEADERS: Final = frozenset({"x-api-key", "authorization", "cookie"})
@@ -219,6 +224,17 @@ def skip_unless_live(
     reason = live_skip_reason(markexpr, marked, environ)
     if reason is not None:
         pytest.skip(reason)
+
+
+def restore_host_key(monkeypatch: pytest.MonkeyPatch, host: str | None) -> None:
+    """Give fresh ``Settings`` and the shared ``settings`` the host's key
+    (``None``: no key at all), for one test."""
+    if host is None:
+        monkeypatch.delenv(KEY_ENV, raising=False)
+        monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", None)
+    else:
+        monkeypatch.setenv(KEY_ENV, host)
+        monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", SecretStr(host))
 
 
 def _markexpr(config: pytest.Config) -> str:
@@ -679,17 +695,23 @@ StartLive = Callable[[float], LiveRun]
 
 @pytest.fixture
 def live(
-    request: pytest.FixtureRequest, suite_ledger: SuiteLedger
+    request: pytest.FixtureRequest,
+    suite_ledger: SuiteLedger,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[StartLive]:
     """``start(cap_usd) -> LiveRun``, admitted by the suite ledger.
 
-    Checks the skip guard again (a test that forgot the marker cannot spend
-    either), and records every run in the ledger at teardown, pass or fail.
+    Checks the skip guard again against the host's environment (a test that
+    forgot the marker cannot spend either), restores the host's key over the
+    suite's placeholder, and records every run in the ledger at teardown,
+    pass or fail.
     """
     marks = frozenset({mark.name for mark in request.node.iter_markers()} | {"live"})
-    reason = live_skip_reason(_markexpr(request.config), marks, os.environ)
+    host = {KEY_ENV: HOST_KEY} if HOST_KEY is not None else {}
+    reason = live_skip_reason(_markexpr(request.config), marks, host)
     if reason is not None:
         pytest.skip(reason)
+    restore_host_key(monkeypatch, HOST_KEY)
     refusal = xdist_refusal(os.environ)
     if refusal is not None:
         pytest.fail(refusal)
