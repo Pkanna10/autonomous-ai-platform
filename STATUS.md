@@ -1014,8 +1014,8 @@ the judged-trials key question (closed by decision 35). Left:
   reviewed**, security bugs among them: report forgery through `/proc` in the
   launcher, test-runner shadowing with an added `unittest.py`, the API address
   following a stray `ANTHROPIC_BASE_URL`, planted links reaching git's worktree
-  removal, an ungated paid key in CI. Keep two lenses (correctness, security) on
-  every unit.
+  removal, an ungated paid key in CI. Keep the security lens on every unit that
+  touches a trust boundary (all of those did).
 - **A review that returns nothing must halt the workflow.** A reviewer that died
   returned null, which read as "no findings" and skipped the fixer;
   `build-wave.workflow` now stops the unit and names the missing lens
@@ -1023,6 +1023,19 @@ the judged-trials key question (closed by decision 35). Left:
 - **Write the decisions down where they will survive.** The spec and the Lead
   notes lived in `.claude/handoff/`, which is deleted before merge; the
   Decisions section above now carries them.
+- **Reviews missed what sits between the units.** The first live run sent a
+  placeholder key: the suite's autouse `reset_environment` replaces
+  `ANTHROPIC_API_KEY` for every test, and every dry run and review swapped the
+  key itself, so none exercised the real wiring. The root container hid that a
+  non-root user cannot open a mode-000 directory (CI caught it). Builders and
+  Reviewers now get a SEAMS checklist in `build-wave.workflow`: read the
+  fixtures above the tests, swap only the wire in a dry run, run file-mode code
+  as a non-root user, name what only CI, macOS or a live run can prove.
+- **Spend review effort where the risk is.** One correctness Reviewer per unit,
+  a security Reviewer only where the unit touches a trust boundary, reviews
+  scoped to the diff and its direct callers and fixtures, the cheap local matrix
+  (non-root, Python 3.11, Postgres up) before any review, and one Verifier round
+  per risk area rather than repeated full sweeps.
 
 ### Step 1
 

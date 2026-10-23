@@ -256,8 +256,12 @@ User (product owner): vision, priorities, approvals, merges
 
 Rules: spawn a role only when it adds separable value; the author never reviews
 their own work; parallel Builders only on disjoint files; reports carry commands
-and outputs, not claims; the Lead is the only writer to the branch. Every design
-decision gets a first-principles "why" in `STATUS.md`.
+and outputs, not claims; the Lead is the only writer to the branch. Every brief
+carries the seams checklist (fixtures above the tests, real-vs-fake swap points,
+root vs non-root, what only CI, macOS or a live run proves; `STATUS.md` Lessons,
+Step 2), and review effort follows risk: one correctness Reviewer per unit, a
+security Reviewer only at trust boundaries, scoped to the diff and its callers.
+Every design decision gets a first-principles "why" in `STATUS.md`.
 
 ### Process
 
