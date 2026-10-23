@@ -816,6 +816,69 @@ blockers and 12 should-fixes were closed before building.
 
 ---
 
+## Live API testing plan and credit budget (decided 2026-10-23)
+
+**Decision.** The user's Anthropic API credits ($200 a month, reset on the 24th;
+the current window ends 2026-11-24, unused credit does not carry over) fund the
+engine's live tests and dogfooding. They pay only for the engine's own API calls
+made with that key (CI `live-smoke` job, `live` environment with required
+reviewers), never for Claude Code sessions.
+
+**Why.** The spec leaves several API facts unverified until "the live smoke test
+confirms before Step 5" (risk 8: text editor tool version, the explicit
+`fallbacks` body, the `role: system` notice shape), and the worst-case cost
+estimate is deliberately conservative (risk 14) until real usage is measured.
+Scripted replies prove the engine's logic; only live runs prove the contract
+with the API and calibrate cost. Spending each window's credit on the step in
+progress buys evidence that would otherwise wait for Step 5.
+
+**Unit cost basis** (engine price table, `claude-opus-5-5`: $4 input, $20
+output, $0.20 cache read per MTok; to be replaced by Stage A measurements):
+understand about $0.15-0.20 per call (worst case about $0.30); one trial about
+$0.30-0.60 (worst case about $6, always bounded by the run cap); Haiku triage
+about $0.0001 per abstract.
+
+### Window 1: 2026-10-23 to 2026-11-24 ($200)
+
+| Stage                          | When               | Live work                                                                                                                                                                                   | Est. per run    | Runs | Est. total |
+| ------------------------------ | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | ---- | ---------- |
+| A. Step 2 gate, U21 live suite | this week          | contract checks (tool version, `fallbacks` body, system notice, `count_tokens`, structured output, cache hits), live understand on varied repos, live E2E on the fixture, live attack repos | $6-9 (cap $12)  | 3-4  | ~$30       |
+| B. Cost calibration            | with A             | real usage replaces worst-case estimates; tighten `min_trial_budget_usd` and defaults                                                                                                       | $0              | -    | $0         |
+| C. Step 3 research             | early to mid Nov   | Haiku arXiv triage, Opus claim/precondition extraction (about 50 papers), live matcher tests                                                                                                | $5-10 per batch | 3-4  | ~$30       |
+| D. Weekly live regression      | weekly after merge | the Stage A suite, to catch API or model drift                                                                                                                                              | ~$8             | 4    | ~$32       |
+| E. Early dogfood pilot         | Nov 15-23          | the engine through the factory (no CLI yet) on 2-3 small OSS Python repos, real Claude trials                                                                                               | $10-15 (capped) | 4-6  | ~$60       |
+| Reserve                        | -                  | re-runs after fixes                                                                                                                                                                         | -               | -    | ~$40       |
+
+Total about $190. Stage E is the flex: around Nov 15, check the ledger and size
+E to use what is left before the reset.
+
+### Window 2: 2026-11-24 to 2026-12-24 ($200)
+
+| Stage             | Live work                                                                   | Est. total |
+| ----------------- | --------------------------------------------------------------------------- | ---------- |
+| Step 4 interfaces | `--goal` English to objectives (small requests), live CLI runs              | ~$15       |
+| Step 5 dogfood    | 10-15 OSS repo runs at $5-10 each, then the user's VLM bridge on the M4 Pro | ~$120      |
+| Weekly regression | as D                                                                        | ~$32       |
+| Reserve           | -                                                                           | ~$30       |
+
+### Guardrails
+
+- Every live test carries its own hard cap and the suite one overall; the
+  engine's pre-send check refuses any request whose worst case would pass the
+  cap.
+- Each CI live run writes its real cost to the job summary; the ledger below is
+  updated after every run.
+- No live run without the user's approval in the `live` environment.
+- Recommended backstop: a $200 monthly spend limit on the key's workspace in the
+  Anthropic console.
+- Live tests never run from a Claude Code container; the engine ignores the
+  container's `ANTHROPIC_BASE_URL`.
+
+### Live spend ledger
+
+| Date | Window | Run | Stage | Cost (USD) | Notes |
+| ---- | ------ | --- | ----- | ---------- | ----- |
+
 ## Next: finish Step 2, then Step 3
 
 Step 2's build list is done: real baseline and trial runners in git worktrees
