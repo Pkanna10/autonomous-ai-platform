@@ -253,8 +253,9 @@ pnpm stage-gate:quick     # quality checks only
 Every build step ends with the same stage gate before its PR is marked ready:
 
 1. **Upgrades:** review outdated dependencies and upgrade within the step.
-   Dependabot opens weekly grouped PRs for anything missed (three-day release
-   cooldown); `renovate.json` is ready for when the Renovate app is installed.
+   Dependabot opens weekly grouped PRs for anything missed (seven-day release
+   cooldown; security updates open immediately); `renovate.json` is ready for
+   when the Renovate app is installed.
 2. **Audits:** `pnpm audit`, `pip-audit` and `bandit` must be clean;
    `security.yml` (OSV, npm audit, licenses, zizmor workflow lint) runs on every
    push and every Monday.
@@ -287,11 +288,11 @@ GitHub Actions runs on every push and pull request:
 - Schema: migrations 001-004 applied in order, then 003 and 004 re-applied to
   prove they are idempotent
 - Live Claude smoke test: manual only (see Tests above)
-- Security: `pnpm audit`, OSV scanner, Trivy (config and images), zizmor
-  workflow lint; every action pinned to a commit SHA, every image to a digest,
-  least-privilege workflow tokens; SBOM and provenance attestations on image
-  builds
-- Dependencies: Dependabot with grouped, scheduled upgrade PRs and a three-day
+- Security: `pnpm audit` (blocking), OSV scanner (reporting), Trivy (config and
+  images), zizmor workflow lint (blocking); every action pinned to a commit SHA,
+  every base, BuildKit and dev-stack image to a digest, least-privilege workflow
+  tokens; SBOM and provenance attestations on image builds
+- Dependencies: Dependabot with grouped, scheduled upgrade PRs and a seven-day
   release cooldown (`renovate.json` equivalent kept for Renovate)
 
 ---

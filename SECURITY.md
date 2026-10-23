@@ -22,21 +22,21 @@ workflows, and security best practices.
 
 ## 🔒 Security Tools Overview
 
-| Tool             | Purpose                                   | Frequency                 | Cost | Automation |
-| ---------------- | ----------------------------------------- | ------------------------- | ---- | ---------- |
-| **pnpm audit**   | Built-in npm vulnerability scanner        | Every commit (pre-commit) | FREE | Automated  |
-| **pip-audit**    | PyPA official Python vulnerability scan   | On-demand + CI            | FREE | Automated  |
-| **bandit**       | Python SAST security linter               | On-demand + CI            | FREE | Automated  |
-| **safety**       | Python dependency security checker        | On-demand + CI            | FREE | Automated  |
-| **mypy**         | Python static type checker (strict mode)  | On-demand + CI            | FREE | Automated  |
-| **OSV-Scanner**  | Google's vulnerability database           | Weekly + PR               | FREE | Automated  |
-| **Trivy**        | Container & IaC security scanner          | Every PR + Weekly         | FREE | Automated  |
-| **Docker Scout** | CVE scanning with PR comments             | Every PR                  | FREE | Automated  |
-| **Dependabot**   | Security alerts only                      | Real-time                 | FREE | Automated  |
-| **Renovate**     | Advanced dependency updates               | Weekly                    | FREE | Automated  |
-| **Commitlint**   | Commit message validation                 | Every commit              | FREE | Automated  |
-| **ESLint**       | Code quality & security linting           | Every commit              | FREE | Automated  |
-| **Ruff**         | Ultra-fast Python linter (10-100x faster) | On-demand + CI            | FREE | Automated  |
+| Tool            | Purpose                                   | Frequency                 | Cost | Automation |
+| --------------- | ----------------------------------------- | ------------------------- | ---- | ---------- |
+| **pnpm audit**  | Built-in npm vulnerability scanner        | Every commit (pre-commit) | FREE | Automated  |
+| **pip-audit**   | PyPA official Python vulnerability scan   | On-demand + CI            | FREE | Automated  |
+| **bandit**      | Python SAST security linter               | On-demand + CI            | FREE | Automated  |
+| **safety**      | Python dependency security checker        | On-demand (dev extra)     | FREE | Manual     |
+| **mypy**        | Python static type checker (strict mode)  | On-demand + CI            | FREE | Automated  |
+| **OSV-Scanner** | Google's vulnerability database           | Push + PR + weekly        | FREE | Reporting  |
+| **Trivy**       | Config scan (CI) and image scan (publish) | Every PR + master push    | FREE | Automated  |
+| **zizmor**      | GitHub Actions workflow static analysis   | Every push + PR           | FREE | Blocking   |
+| **Dependabot**  | Security alerts + weekly version updates  | Real-time / weekly        | FREE | Automated  |
+| **Renovate**    | Equivalent config, app not installed      | Dormant                   | FREE | Off        |
+| **Commitlint**  | Commit message validation                 | Every commit              | FREE | Automated  |
+| **ESLint**      | Code quality & security linting           | Every commit              | FREE | Automated  |
+| **Ruff**        | Ultra-fast Python linter (10-100x faster) | On-demand + CI            | FREE | Automated  |
 
 ---
 
@@ -59,10 +59,15 @@ What the repository itself enforces, independent of the engine's sandbox:
 - **Dev stack.** `docker-compose.dev.yml` binds every port to `127.0.0.1`
   (development credentials must never be reachable from the LAN).
 - **Dependency cooldown.** `pnpm-workspace.yaml` (`minimumReleaseAge`),
-  `.github/dependabot.yml` and `renovate.json` require a release to be three
-  days old before it is resolved or proposed; security updates bypass it.
+  `.github/dependabot.yml` and `renovate.json` require a release to be seven
+  days old before it is resolved or proposed. Dependabot security updates open
+  immediately (cooldown covers version updates only); pnpm has no such
+  exemption, so a fix younger than a week goes through
+  `minimumReleaseAgeExclude` for that install.
 - **Audits that block.** `pnpm audit --audit-level=high` in CI, `pip-audit` and
-  `bandit` in the stage gate, OSV-Scanner on every push.
+  `bandit` in the stage gate, zizmor on the workflows. OSV-Scanner runs on every
+  push and PR but reports only (`fail-on-vuln: false`; its findings also arrive
+  as Dependabot alerts).
 
 **Alert triage.** The Security tab's Dependabot alerts are computed from
 GitHub's dependency graph, which can lag the lockfiles on `master` (on
@@ -174,37 +179,26 @@ settings; this file adds version updates):
 
 - **npm, uv (Python), GitHub Actions, Docker, Docker Compose** - weekly, grouped
   minor/patch PRs, every Monday at 3am PT
-- **Three-day cooldown** on new releases (security updates bypass it)
+- **Seven-day cooldown** on new releases for version updates; security updates
+  open immediately. Majors are excluded from the groups and ignored for
+  container images (a deliberate PR each)
 - `renovate.json` holds the equivalent Renovate configuration for when the
   Renovate app is installed; run one of the two, not both
 
-#### 4. Trivy Docker Security
+#### 4. Trivy (`ci.yml` job `docker-security`)
 
-Runs on every push/PR with enhanced reporting:
+Runs on every push/PR: a Trivy _config_ scan of the repository (Dockerfiles,
+Compose, workflows), results as a 14-day artifact and a job summary, failing on
+CRITICAL/HIGH misconfigurations.
 
-- Scans HIGH/CRITICAL separately from MEDIUM/LOW
-- Generates detailed summary with badges
-- Uploads artifacts for 30-day retention
-- Fails build on CRITICAL/HIGH vulnerabilities
+#### 5. Docker Build & Push (`docker-build.yml`)
 
-#### 5. Docker Scout Integration
-
-Runs on every Python Docker build:
-
-- CVE scanning with severity filtering (CRITICAL, HIGH)
-- PR comments comparing vulnerability changes vs. baseline
-- SARIF upload to GitHub Security tab
-- Supply chain security (SBOM + provenance attestations)
-
-#### 6. Python Docker Build Workflow
-
-Multi-platform builds with comprehensive security:
-
-- **Platforms:** linux/amd64, linux/arm64 (Apple Silicon support)
-- **Security Scanning:** Dual scanning (Trivy + Docker Scout)
-- **Caching:** Hybrid strategy (GHA + Registry) for 95-98% hit rate
-- **Supply Chain:** SBOM generation and provenance attestations
-- **Image Size:** ~200-250MB (vs 1GB+ single-stage baseline)
+- Builds the Node images (production and distroless) and the Python image
+  (linux/amd64 and linux/arm64) on every PR; pushes to `ghcr.io` on master only,
+  with SBOM and provenance attestations
+- Scans the pushed images with Trivy (fresh database, `cache: 'false'`); results
+  go to a 14-day artifact and the job summary, not to code scanning
+- Digest-pinned BuildKit; no Docker Scout (not configured)
 
 ---
 
@@ -286,10 +280,10 @@ For false positives or accepted risks, document in project documentation
 pnpm security:docker
 
 # Scan specific image
-trivy image pgvector/pgvector:pg15
+trivy image pgvector/pgvector:0.8.7-pg16
 
 # Get JSON report for analysis
-trivy image --format json --output postgres-scan.json pgvector/pgvector:pg15
+trivy image --format json --output postgres-scan.json pgvector/pgvector:0.8.7-pg16
 ```
 
 ### Docker Security Best Practices
@@ -582,7 +576,8 @@ DATABASE_URL=postgresql://user:pass@host:5432/ai_platform?sslmode=require
 - ✅ **Digest-pinned base and tooling** - `python:3.11-slim-bookworm@sha256:…`
   and `ghcr.io/astral-sh/uv:0.11.32@sha256:…`
 - ✅ **Locked dependencies** - `uv sync --frozen` from `uv.lock`, the same
-  resolution CI tests; no dev extra, no tests, no pip in the runtime image
+  resolution CI tests; no dev extra, no tests; the venv has no pip (the base
+  image's root-owned `/usr/local` pip is unused)
 - ✅ **Non-root user** - `appuser`, no shell, no home directory
 - ✅ **No secrets baked in** - the key arrives through the environment at run
   time; the root `.dockerignore` keeps `.env*` out of the build context
