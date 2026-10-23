@@ -60,7 +60,7 @@
     "security:scan": "bash scripts/security-scan.sh",
     "security:docker": "bash scripts/docker-security-scan.sh",
     "security:trivy": "bash scripts/trivy-scan-full.sh",
-    "security:osv": "npx -y @google/osv-scanner -r .",
+    "security:osv": "osv-scanner scan source --recursive .",
     "security:fix": "pnpm audit fix",
     "python:install": "cd services/python_agents && pip install -e \".[dev]\"",
     "python:lint": "cd services/python_agents && ruff check .",
