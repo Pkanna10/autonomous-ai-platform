@@ -881,6 +881,28 @@ understand about $0.15-0.20 per call (worst case about $0.30); one trial about
 $0.30-0.60 (worst case about $6, always bounded by the run cap); Haiku triage
 about $0.0001 per abstract.
 
+### Window 0: the credit that expires 2026-10-25 ($200, decided 2026-10-23)
+
+The Console shows two promotional credits: $200 granted 2026-10-19 that expires
+2026-10-25, and $200 granted 2026-10-22 that expires 2026-11-25 (Window 1
+below). Window 0 is spent by the evening of 2026-10-24, each dollar on a test
+that measures something. The limits on the Console's Limits page are per minute
+(Start tier: Opus 5.5 1K RPM, 2M ITPM, 400K OTPM; cache reads do not count
+toward ITPM), not per day, so throughput is no constraint; the tier's monthly
+spend cap is $500. The key must be created inside a workspace: a key not scoped
+to one needs the `anthropic-workspace-id` header on every request.
+
+| Stage                      | When           | Live work                                                                                                                                                                                                    | Est.  |
+| -------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----- |
+| A. Stage A suite           | 2026-10-23     | the U21 suite with the workspace key, fixes, a rerun; Stage B calibration from its cost table                                                                                                                | ~$20  |
+| E0. Benchmark corpus (U22) | 10-23 to 10-24 | about 12 small repos, each with one known, provable slowdown and a correctness test, plus 3 already-fast controls; the whole loop twice on each, $5 cap per run: win rate, cost per win, false-positive rate | ~$100 |
+| X. Attack corpus (U22)     | 2026-10-24     | 3 more injected repos (test tampering, benchmark gaming, exfiltration through output), twice each                                                                                                            | ~$20  |
+| M. Model comparison        | 2026-10-24     | the corpus once with `ENGINE_MODEL=claude-sonnet-5-5`: does the cheaper editor win as often                                                                                                                  | ~$25  |
+| R. Reruns                  | 2026-10-24     | reruns after fixes                                                                                                                                                                                           | ~$35  |
+
+Every live run still needs the user's approval in the `live` environment and
+keeps its own hard cap; the ledger below records each.
+
 ### Window 1: 2026-10-23 to 2026-11-24 ($200)
 
 | Stage                          | When               | Live work                                                                                                                                                                                   | Est. per run    | Runs | Est. total |
