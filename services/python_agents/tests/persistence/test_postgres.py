@@ -333,6 +333,33 @@ def test_a_second_project_at_a_registered_root_raises_project_conflict(
 
 
 @pytest.mark.postgres
+@pytest.mark.parametrize("spelling", ["slash", "symlink"])
+def test_another_spelling_of_a_registered_root_raises_project_conflict(
+    postgres_repository: PostgresRepository,
+    postgres_dsn: str,
+    tmp_path: Path,
+    spelling: str,
+) -> None:
+    """
+    GIVEN a run saved for project A at a repository root
+    WHEN a run for a new project id at the same root, spelled with a
+         trailing slash or through a symlink, is saved
+    THEN ProjectConflictError names A's id, and one project row remains
+    """
+    repo = tmp_path.resolve() / "repo"
+    repo.mkdir()
+    (tmp_path / "alias").symlink_to(repo)
+    first = _state("run-a", root=str(repo))
+    postgres_repository.save_run(first)
+    other = f"{repo}/" if spelling == "slash" else str(tmp_path / "alias")
+
+    with pytest.raises(ProjectConflictError, match=first["project"].id):
+        postgres_repository.save_run(_state("run-b", root=other))
+
+    assert _rows(postgres_dsn, "SELECT root_path FROM projects") == [(str(repo),)]
+
+
+@pytest.mark.postgres
 def test_moving_a_project_onto_another_projects_root_raises_project_conflict(
     postgres_repository: PostgresRepository, postgres_dsn: str
 ) -> None:

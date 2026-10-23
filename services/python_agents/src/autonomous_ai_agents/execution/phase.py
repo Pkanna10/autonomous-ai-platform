@@ -27,11 +27,28 @@ nothing under it is removed, git is never asked to remove a worktree
 through it, and the worktree, scratch and probe dirs are recorded as left. What is left becomes one ``EngineError``
 naming it (``raise_left``), and only when no error is already on its way:
 that error wins.
+
+**Crash recovery.** While an owner works, it holds a shared ``flock`` on
+``<run>/.aip-run.lock`` (``RUN_LOCK``); the lock file marks ``<run>`` as the
+engine's. The kernel drops the lock when the process dies, even on
+``kill -9``, and ``cleanup_phases`` never runs then, so the worktree, its
+registration in the user's ``.git/worktrees``, the scratch and probe dirs
+stay. ``sweep_stale_runs`` (connect calls it before its ``prune``) finds
+every marked ``<run>`` whose lock it can take exclusively, which no live owner
+holds, and runs ``cleanup_phases`` on each phase found in it. It never
+touches a directory without the marker (a user's own worktree inside
+``WORKTREE_ROOT``, the preflight probe's dir) or one a live owner holds. A
+worktree of another repository under the same root is removed from disk; its
+own repository's next prune drops the registration, which then points at a
+missing path. A live owner drops the marker when it ends (what its cleanup
+could not remove is its ``EngineError``); a sweep that cannot remove
+everything keeps it, so the next sweep tries again.
 """
 
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import os
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
@@ -45,6 +62,9 @@ from autonomous_ai_agents.execution.git import GitError, contained, remove_conta
 from autonomous_ai_agents.execution.protocols import WorktreeHandle
 
 SCRATCH, PROBE = "_scratch", "_probe"
+RUN_LOCK = ".aip-run.lock"
+"""The marker and lock in ``<run>``: no phase name can begin with a dot."""
+_LOCK_FLAGS = os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC
 PLANTED = (
     "it no longer resolves inside WORKTREE_ROOT (a link was planted in place of"
     " the run directory)"
@@ -183,13 +203,130 @@ def raise_left(owner: str, left: Sequence[str]) -> None:
         )
 
 
+def _same_file(fd: int, path: Path) -> bool:
+    """Whether ``fd`` is still the file at ``path`` (no one replaced it)."""
+    try:
+        here = os.lstat(path)
+    except OSError:
+        return False
+    there = os.fstat(fd)
+    return (here.st_dev, here.st_ino) == (there.st_dev, there.st_ino)
+
+
+def _hold(run: Path) -> int | None:
+    """A shared lock on ``<run>/RUN_LOCK`` (created, with ``<run>``, when
+    missing), or ``None`` when ``<run>`` is a link or the file cannot be
+    made: a run without the marker is never swept, so that only costs the
+    crash recovery, never safety."""
+    try:
+        contained(run).mkdir(mode=0o700, parents=True, exist_ok=True)
+        _not_through_a_link(run)
+        fd = os.open(run / RUN_LOCK, _LOCK_FLAGS | os.O_CREAT, 0o600)
+    except (OSError, ValueError):
+        return None
+    fcntl.flock(fd, fcntl.LOCK_SH)  # waits while a sweep cleans this run
+    return fd
+
+
+def _release(run: Path, fd: int) -> None:
+    """Drop the marker when no other owner holds the lock, then ``<run>`` when
+    it is empty; always close ``fd``. What the cleanup could not remove was
+    reported (``raise_left``), so the marker never outlives its owner."""
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        os.unlink(run / RUN_LOCK)
+        os.rmdir(run)
+    except OSError:  # another owner holds it (it drops the marker), or not empty
+        pass
+    finally:
+        os.close(fd)
+
+
 @contextlib.contextmanager
 def owned_phases(git: PhaseGit, owner: str, *phases: PhaseDirs) -> Iterator[None]:
     """Run the body, then always ``cleanup_phases``; what is left is an
-    ``EngineError`` only when the body raised nothing (its error wins)."""
-    _one_run(phases)
+    ``EngineError`` only when the body raised nothing (its error wins).
+
+    The run's lock is held for the whole body and its cleanup (module
+    docstring), so a sweep never removes what a live owner uses."""
+    run = _one_run(phases)
+    fd = _hold(run)
     try:
         yield
     finally:
-        left = cleanup_phases(git, *phases)
+        try:
+            left = cleanup_phases(git, *phases)
+        finally:
+            if fd is not None:
+                _release(run, fd)
     raise_left(owner, left)
+
+
+def _phase_names(run: Path) -> tuple[list[str], list[str]]:
+    """The phases found in a marked ``<run>``: its own dirs and the names in
+    its scratch and probe dirs; names no phase can have are the second list
+    (left alone)."""
+    found = [n for n in os.listdir(run) if n not in (SCRATCH, PROBE, RUN_LOCK)]
+    for sub in (SCRATCH, PROBE):
+        with contextlib.suppress(OSError):  # missing (a link is safe: step 2)
+            found += os.listdir(run / sub)
+    names: list[str] = []
+    odd: list[str] = []
+    for name in dict.fromkeys(found):
+        try:
+            require_dir_name("phase", name)
+        except ValueError:
+            odd.append(name)
+        else:
+            names.append(name)
+    return names, odd
+
+
+def _sweep_one(git: PhaseGit, name: str) -> str:
+    """Clean the stale ``<run>`` called ``name`` (its lock held); a note."""
+    run = settings.WORKTREE_ROOT / name
+    phases, odd = _phase_names(run)
+    left = cleanup_phases(git, *(phase_dirs(name, p) for p in phases)) if phases else []
+    left += [f"{_shown(str(run / entry))!r}: not an engine phase" for entry in odd]
+    if left:  # the marker stays, so the next sweep tries again
+        return (
+            f"an engine run that ended without its cleanup left {'; '.join(left)};"
+            " remove what is left by hand"
+        )
+    with contextlib.suppress(OSError):
+        os.unlink(run / RUN_LOCK)
+        os.rmdir(run)
+    shown = ", ".join(_shown(p) for p in phases) or "no phase dirs"
+    return (
+        "removed what an engine run that ended without its cleanup (killed?)"
+        f" left in WORKTREE_ROOT: run {_shown(name)} ({shown})"
+    )
+
+
+def sweep_stale_runs(git: PhaseGit) -> list[str]:
+    """Clean every marked ``<run>`` no live owner holds (module docstring);
+    one note per run swept. A directory without the marker, a link, or a run
+    some process still holds is never touched."""
+    root = Path(os.path.realpath(settings.WORKTREE_ROOT))
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:  # no root yet: nothing ever ran here
+        return []
+    notes: list[str] = []
+    for name in names:
+        lock = root / name / RUN_LOCK
+        try:
+            require_dir_name("run id", name)
+            _not_through_a_link(root / name)
+            fd = os.open(lock, _LOCK_FLAGS)
+        except (OSError, ValueError):  # unmarked, a link, or no run name
+            continue
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if _same_file(fd, lock):  # else an owner replaced it: it is live
+                notes.append(_sweep_one(git, name))
+        except BlockingIOError:  # a live owner holds it
+            pass
+        finally:
+            os.close(fd)
+    return notes

@@ -54,7 +54,13 @@ from autonomous_ai_agents.clients.budget import Budget
 from autonomous_ai_agents.common.config import settings
 from autonomous_ai_agents.common.errors import DeliveryError as DeliveryError
 from autonomous_ai_agents.common.errors import EngineError as EngineError
+from autonomous_ai_agents.common.errors import (
+    TrialUnaffordable,
+    add_spend,
+    spend_of,
+)
 from autonomous_ai_agents.common.models import (
+    METRIC_PEAK_RSS_BYTES,
     METRIC_TESTS_PASSED,
     METRIC_WALL_TIME_S,
     ApprovalDecision,
@@ -89,7 +95,11 @@ from autonomous_ai_agents.common.models import (
 from autonomous_ai_agents.common.refnames import (
     assert_safe_branch as assert_safe_branch,
 )
-from autonomous_ai_agents.execution.measure import baseline_test_count
+from autonomous_ai_agents.execution.measure import (
+    UNKNOWN,
+    baseline_test_count,
+    classify_runner,
+)
 from autonomous_ai_agents.execution.protocols import (
     BranchPublisher,
     Combiner,
@@ -235,6 +245,32 @@ class NodeContext:
 # ---------------------------------------------------------------------------
 # Helpers shared by the nodes
 # ---------------------------------------------------------------------------
+
+
+_PROGRESS = "engine_progress"
+
+
+def keep_progress(exc: BaseException, delta: NodeDelta) -> None:
+    """Attach to ``exc`` the delta its node had already earned (what it spent,
+    the trials it ran), for ``Orchestrator`` to merge into the failed state.
+
+    A node that raises returns no delta, and a failed run is built from the
+    last checkpoint, so without this the money a node spent before it failed
+    (and the trials it had saved) would be missing from the failed run.
+    """
+    vars(exc)[_PROGRESS] = dict(delta)
+
+
+def progress_of(exc: BaseException) -> NodeDelta:
+    """What ``keep_progress`` attached to ``exc``; empty when nothing was."""
+    return dict(vars(exc).get(_PROGRESS, {}))
+
+
+DEFAULT_RSS_MAX_GROWTH = 0.10
+"""With no objectives given, the default objective (minimize wall time) comes
+with a ``metric_bound`` guardrail: peak RSS may grow by at most this share of
+the baseline mean, so the default "faster and leaner" never ships a change
+that trades memory for speed (unless the user bounds peak RSS themselves)."""
 
 
 _STATUS_AFTER_VERDICT: dict[VerdictOutcome, HypothesisStatus] = {
@@ -725,17 +761,43 @@ def _noisy_host(state: EngineState, noise: _Noise, name: str) -> EngineEvent:
     )
 
 
+def _trials_progress(
+    state: EngineState, trials: Sequence[Trial], cost_usd: float, tokens_used: int
+) -> NodeDelta:
+    """What an aborted trials node had earned: the running total and the
+    round's finished trials (unjudged; a failed run judges nothing more)."""
+    ran = {trial.hypothesis_id: HypothesisStatus.trialled for trial in trials}
+    return {
+        "round_trials": list(trials),
+        "trials": list(trials),
+        "hypotheses": _with_statuses(state["hypotheses"], ran),
+        "cost_usd": cost_usd,
+        "tokens_used": tokens_used,
+    }
+
+
 def _budget_exhausted(
-    state: EngineState, remaining: float, floor: float, not_started: int
+    state: EngineState,
+    remaining: float,
+    floor: float,
+    not_started: int,
+    *,
+    reason: str | None = None,
 ) -> EngineEvent:
+    """The trials stop: below the floor, or (``reason``) the next trial's
+    first editor request alone would pass the cap."""
     left = max(0.0, remaining)
+    needs = (
+        f"a trial needs more than 0 and at least {floor:.4f} USD"
+        if reason is None
+        else f"the next trial's first request does not fit ({reason[:300]})"
+    )
     return _note(
         state,
         RunPhase.trials,
         "budget_exhausted",
-        f"{left:.4f} USD left of the {state['max_cost_usd']:.4f} USD cap; a trial "
-        f"needs more than 0 and at least {floor:.4f} USD, so {not_started} "
-        "hypothesis(es) were not started",
+        f"{left:.4f} USD left of the {state['max_cost_usd']:.4f} USD cap; {needs}, "
+        f"so {not_started} hypothesis(es) were not started",
         level=EventLevel.warning,
         data={
             "remaining_usd": left,
@@ -887,8 +949,76 @@ _REF_STEM = re.compile(r"[A-Za-z0-9._/-]+")
 """Characters a trial-ref stem may hold to appear in a copyable shell command."""
 
 
+def trial_ref_cleanup(trials: Iterable[Trial], run_id: str, prefix: str) -> list[str]:
+    """The lines of a copyable command deleting the committed trials' refs.
+
+    One ``git update-ref --stdin`` transaction naming each ref and the commit
+    it was left at: exactly this run's refs (a ``trial-<run>-*`` pattern also
+    matches run ``<run>-2``'s), nothing at all when one moved since, and no
+    command when there is nothing to delete. Empty too when a piece is not
+    plain refname characters (the ref stem, a ref) or not a commit id, so
+    the command never carries text a shell would interpret.
+    """
+    refs = {
+        f"refs/heads/{trial.branch}": trial.commit
+        for trial in trials
+        if trial.commit is not None and trial.branch
+    }
+    plain = _REF_STEM.fullmatch(f"{prefix}trial-{run_id}-") is not None and all(
+        _REF_STEM.fullmatch(ref) and is_commit(commit) for ref, commit in refs.items()
+    )
+    if not refs or not plain:
+        return []
+    deletes = [f"delete {ref} {commit}" for ref, commit in refs.items()]
+    return ["git update-ref --stdin <<'EOF'", *deletes, "EOF"]
+
+
+def trial_refs_left(state: EngineState, prefix: str) -> list[EngineEvent]:
+    """A failed run's warning naming the trial refs it kept, with the command
+    that deletes them (a failed run has no report); none without one."""
+    refs = list(
+        dict.fromkeys(
+            f"refs/heads/{trial.branch}"
+            for trial in state["trials"]
+            if trial.commit is not None and trial.branch
+        )
+    )
+    if not refs:
+        return []
+    cleanup = "\n".join(trial_ref_cleanup(state["trials"], state["run_id"], prefix))
+    return [
+        _note(
+            state,
+            RunPhase.failed,
+            "trial_refs_left",
+            f"{len(refs)} trial ref(s) kept for review: " + ", ".join(refs),
+            level=EventLevel.warning,
+            data={"refs": ", ".join(refs), "cleanup": cleanup},
+        )
+    ]
+
+
 def _latest(events: Sequence[EngineEvent], code: str) -> EngineEvent | None:
     return next((e for e in reversed(events) if e.data.get("code") == code), None)
+
+
+def _test_count_text(state: EngineState) -> str:
+    """Whether the suite's passing count was read from the runner's summary
+    (so fewer passing tests than the baseline fail) or only its exit code."""
+    command = state["project"].test_command
+    if command is None:
+        return "no test command"
+    runner = classify_runner(command)
+    if runner == UNKNOWN:
+        return (
+            "not verified (the test command is neither unittest nor pytest, so the"
+            " suite passed on its exit code alone; a trial that skips or deletes"
+            " tests is not caught)"
+        )
+    return (
+        f"verified from the {runner} summary (fewer passing tests than the"
+        " baseline fail)"
+    )
 
 
 def _noise_floor_text(state: EngineState) -> str:
@@ -909,9 +1039,8 @@ def _noise_floor_text(state: EngineState) -> str:
 def _run_conditions(state: EngineState, prefix: str) -> list[str]:
     """What the numbers above were measured under, and how to remove trial refs.
 
-    Every value goes through ``_cell``. The cleanup command sits in a fenced
-    block so it can be copied as is; it is printed only when its one
-    interpolated piece (the ref stem) is plain refname characters.
+    Every value goes through ``_cell``. The cleanup command
+    (``trial_ref_cleanup``) sits in a fenced block so it can be copied as is.
     """
     commit, events = state["base_commit"], state["events"]
     lines = ["**Run conditions**", ""]
@@ -930,6 +1059,7 @@ def _run_conditions(state: EngineState, prefix: str) -> list[str]:
         f"filesystem {_cell(str(isolation.data.get('fs')))}"
     )
     lines.append(f"- Noise floor: {_noise_floor_text(state)}")
+    lines.append(f"- Test count: {_cell(_test_count_text(state))}")
     ignored = [_cell(w.name) for w in state["workloads"] if w.inputs]
     lines.append("- Workload inputs ignored: " + (", ".join(ignored) or "none"))
     combination = state["combination"]
@@ -950,15 +1080,15 @@ def _run_conditions(state: EngineState, prefix: str) -> list[str]:
         )
     )
     lines.append("- Trial refs: " + (", ".join(_cell(ref) for ref in refs) or "none"))
-    stem = f"{prefix}trial-{state['run_id']}-"
-    if refs and _REF_STEM.fullmatch(stem):
+    cleanup = trial_ref_cleanup(state["trials"], state["run_id"], prefix)
+    if cleanup:
         lines += [
             "",
-            "Delete the trial refs once they are reviewed:",
+            "Delete the trial refs once they are reviewed (one transaction: if"
+            " one moved since, none is deleted):",
             "",
             "```",
-            f"git for-each-ref --format='%(refname)' 'refs/heads/{stem}*' "
-            "| xargs -n1 git update-ref -d",
+            *cleanup,
             "```",
         ]
     return lines
@@ -1127,8 +1257,10 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             result = ctx.understander.understand(
                 state["project"], state["workloads"], commit=commit, budget=budget
             )
-        except EngineError:
-            raise  # BudgetExceeded, LLMConfigError and the like end the run
+        except EngineError as exc:  # BudgetExceeded, LLMConfigError: the run ends
+            cost_usd, tokens_used = _charged(state, budget)  # a timeout was charged
+            keep_progress(exc, {"cost_usd": cost_usd, "tokens_used": tokens_used})
+            raise
         except Exception as exc:  # transport outcomes and bad replies are soft
             return _understand_failed(state, budget, exc)
         return _understood(state, budget, result)
@@ -1145,15 +1277,37 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                 description="minimize wall time",
             )
         ]
+        guardrails = list(state["guardrails"])
+        bounded = {g.metric for g in guardrails if g.kind is GuardrailKind.metric_bound}
+        leaner = not state["objectives"] and METRIC_PEAK_RSS_BYTES not in bounded
+        if leaner:  # the default is faster *and* leaner: memory may not grow
+            guardrails.append(
+                Guardrail(
+                    project_id=project.id,
+                    kind=GuardrailKind.metric_bound,
+                    metric=METRIC_PEAK_RSS_BYTES,
+                    max_drop=DEFAULT_RSS_MAX_GROWTH,
+                    direction=Direction.minimize,
+                    description="peak RSS may not grow by more than "
+                    f"{DEFAULT_RSS_MAX_GROWTH:.0%} (default)",
+                )
+            )
         metrics = ", ".join(objective.metric for objective in objectives)
-        kinds = ", ".join(guardrail.kind.value for guardrail in state["guardrails"])
+        kinds = ", ".join(guardrail.kind.value for guardrail in guardrails)
         event = _announce(
             state,
             RunPhase.define,
             f"objectives: {metrics}; guardrails: {kinds or 'none'}",
             data={"objectives": metrics, "guardrails": kinds, "min_runs": ctx.min_runs},
         )
-        return {"phase": RunPhase.define, "objectives": objectives, "events": [event]}
+        delta: NodeDelta = {
+            "phase": RunPhase.define,
+            "objectives": objectives,
+            "events": [event],
+        }
+        if leaner:
+            delta["guardrails"] = guardrails
+        return delta
 
     def baseline(state: EngineState) -> NodeDelta:
         measurements = ctx.baseline_runner.measure(
@@ -1285,6 +1439,41 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             "events": [event],
         }
 
+    def run_one(
+        state: EngineState,
+        hypothesis: Hypothesis,
+        measured: Baseline,
+        remaining: float,
+    ) -> Trial:
+        """One trial offered ``remaining``; ``EngineError`` when the runner's
+        Trial cannot be trusted (charged at most ``remaining`` as progress)."""
+        branch = f"{ctx.branch_prefix}trial-{state['run_id']}-{hypothesis.id}"
+        assert_safe_branch(branch, state["project"], ctx.branch_prefix)
+        trial = ctx.runner.run(
+            hypothesis,
+            state["workloads"],
+            measured,
+            round=state["round"],
+            branch=branch,
+            budget_usd=remaining,
+            brief=TrialBrief(
+                understanding=state["understanding"],
+                hotspots=tuple(
+                    h for h in state["hotspots"] if h.id in hypothesis.hotspot_ids
+                ),
+                protected=(*ctx.protected_patterns, *state["extra_protected"]),
+            ),
+        )
+        problems = _runner_trial_problems(trial, hypothesis, state["round"], remaining)
+        if problems:
+            error = EngineError(
+                f"runner returned an untrustworthy trial {trial.id} for "
+                f"hypothesis {hypothesis.id}: " + "; ".join(problems)
+            )
+            add_spend(error, trial.cost_usd, trial.tokens_used)
+            raise error
+        return trial
+
     def trials(state: EngineState) -> NodeDelta:
         measured = _require_baseline(state)
         run_id = state["run_id"]
@@ -1309,34 +1498,35 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                     )
                 )
                 break
-            branch = f"{ctx.branch_prefix}trial-{run_id}-{hypothesis.id}"
-            assert_safe_branch(branch, state["project"], ctx.branch_prefix)
-            trial = ctx.runner.run(
-                hypothesis,
-                state["workloads"],
-                measured,
-                round=round_number,
-                branch=branch,
-                budget_usd=remaining,
-                brief=TrialBrief(
-                    understanding=state["understanding"],
-                    hotspots=tuple(
-                        h for h in state["hotspots"] if h.id in hypothesis.hotspot_ids
-                    ),
-                    protected=(*ctx.protected_patterns, *state["extra_protected"]),
-                ),
-            )
-            problems = _runner_trial_problems(
-                trial, hypothesis, round_number, remaining
-            )
-            if problems:
-                raise EngineError(
-                    f"runner returned an untrustworthy trial {trial.id} for "
-                    f"hypothesis {hypothesis.id}: " + "; ".join(problems)
+            try:
+                trial = run_one(state, hypothesis, measured, remaining)
+            except TrialUnaffordable as exc:  # its first request alone passes the cap
+                stopped.append(
+                    _budget_exhausted(
+                        state,
+                        remaining,
+                        ctx.min_trial_budget_usd,
+                        len(proposed) - index,
+                        reason=str(exc),
+                    )
                 )
+                break
+            except Exception as exc:  # the round so far is the failed run's
+                usd, tokens = spend_of(exc)
+                keep_progress(
+                    exc,
+                    _trials_progress(
+                        state,
+                        new_trials,
+                        min(state["max_cost_usd"], cost_usd + min(usd, remaining)),
+                        tokens_used + tokens,
+                    ),
+                )
+                raise
             ctx.repository.save_trial(run_id, trial)
             new_trials.append(trial)
-            cost_usd += trial.cost_usd
+            # trial.cost_usd <= remaining, so only rounding could pass the cap
+            cost_usd = min(state["max_cost_usd"], cost_usd + trial.cost_usd)
             tokens_used += trial.tokens_used
         ran = {trial.hypothesis_id: HypothesisStatus.trialled for trial in new_trials}
         failed = sum(1 for t in new_trials if t.status is TrialStatus.failed)

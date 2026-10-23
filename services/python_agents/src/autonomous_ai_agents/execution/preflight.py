@@ -2,10 +2,13 @@
 
 ``GitPreflight.check`` reads the repository only through ``GitWorkspace`` (its
 ``-c``, attribute and environment overrides), never writes the checkout or a
-ref, and ends with ``prune``. A ``PreflightError`` (printable text) names the
-problem and the fix: ``tests_pass`` without ``project.test_command``; git
+ref, and ends with ``phase.sweep_stale_runs`` (what a killed run left under
+``WORKTREE_ROOT``, one note per run) and ``prune``. A ``PreflightError``
+(printable text) names the problem and the fix: ``tests_pass`` without ``project.test_command``; git
 < 2.38; dubious ownership (never ``safe.directory``); ``root_path`` not the top
-of a work tree, without a commit, or holding ``WORKTREE_ROOT``; a partial
+of a work tree, without a commit, or overlapping ``WORKTREE_ROOT`` (the
+checkout, the git common dir or another worktree of the repository, or an
+unmarked engine leftover at ``<run>/<phase>``, with its recovery); a partial
 clone; a crafted tree path, ``.gitmodules`` or a gitlink; LFS (``filter=lfs`` in
 any ``.gitattributes`` blob read with ``cat-file``, in ``info/attributes``, or a
 root ``.lfsconfig``; no filter runs); a custom merge driver (any
@@ -20,8 +23,10 @@ write and connect self-checks, in a fresh ``WORKTREE_ROOT/preflight-*``).
 a repo executable reached through links that stay in the tree (as ``measure``
 requires). Arguments naming base-tree files (``--opt=`` values, node ids, ``-m``
 targets, through links, in any case) are protected, as is a directory the test
-command names (not the root or ``src``). A tracked path given absolutely (the
-run would use the checkout's copy) and inline shell or Python code are refused.
+command names (not the root or ``src``), and every workload's ``output_file``,
+which may not be committed (the reset would restore it before every run). A
+tracked path given absolutely (the run would use the checkout's copy) and
+inline shell or Python code are refused.
 
 Merge attributes are parsed here, never through ``check-attr`` (the engine's
 ``--attr-source`` hides blobs from it), as git does: comments, a UTF-8 BOM,
@@ -79,6 +84,13 @@ from autonomous_ai_agents.execution.git import (
     GitWorkspace,
 )
 from autonomous_ai_agents.execution.measure import RunOnce
+from autonomous_ai_agents.execution.phase import (
+    PROBE,
+    RUN_LOCK,
+    SCRATCH,
+    require_dir_name,
+    sweep_stale_runs,
+)
 from autonomous_ai_agents.execution.procrun import (
     WRAPPER_PATH,
     OutputCaps,
@@ -345,6 +357,72 @@ def _git_refusal(repo: Path, error: Exception) -> PreflightError:
     return PreflightError(f"cannot read the git repository at {repo}: {error}")
 
 
+def _overlaps(a: Path, b: Path) -> bool:
+    return a.is_relative_to(b) or b.is_relative_to(a)
+
+
+def _engine_shaped(root: Path, path: Path) -> bool:
+    """Whether ``path`` is ``<root>/<run>/<phase>``, as ``phase_dirs`` lays a
+    phase's worktree out."""
+    if path.parent.parent != root or path.name in (SCRATCH, PROBE):
+        return False
+    try:
+        require_dir_name("run id", path.parent.name)
+        require_dir_name("phase", path.name)
+    except ValueError:
+        return False
+    return True
+
+
+def _unmarked_leftover(git: _RepoGit, root: Path, path: Path) -> PreflightError:
+    return PreflightError(
+        f"WORKTREE_ROOT {root} holds {path}, a worktree of the repository at"
+        f" {git.repo} that an earlier engine run left (its cleanup failed, or it"
+        " was killed before run markers existed); no run marks it, so connect"
+        f" does not remove it: run 'git worktree remove --force {path}', remove"
+        f" {path.parent}, then connect again"
+    )
+
+
+def _check_worktree_root(git: _RepoGit) -> None:
+    """``WORKTREE_ROOT`` may not overlap the checkout, the git common dir (its
+    admin dirs, a linked worktree's main repository) or any other worktree
+    of the repository: the engine's cleanup removes what is under it, and
+    the user's ``git clean`` there would remove the engine's live dirs. An
+    engine worktree (in a marked ``<run>``) and a stale registration under
+    it are no overlap; connect sweeps or prunes them. An unmarked worktree
+    laid out as ``<run>/<phase>`` is an engine leftover connect may not
+    remove (no lock proves its owner gone): the refusal names the recovery."""
+    root = Path(os.path.realpath(settings.WORKTREE_ROOT))
+    if root.is_relative_to(git.repo):
+        raise PreflightError(
+            f"WORKTREE_ROOT {root} is inside the project {git.repo}: engine"
+            " worktrees would land in your checkout; set WORKTREE_ROOT elsewhere"
+        )
+    places = [("the git dir", git.common_dir())]
+    leftovers: list[Path] = []
+    for listed, prunable in git.registered_worktrees():
+        path = Path(os.path.realpath(listed))
+        if prunable:
+            continue
+        if path.is_relative_to(root):
+            if (path.parent / RUN_LOCK).is_file():
+                continue
+            if _engine_shaped(root, path):
+                leftovers.append(path)
+                continue
+        places.append(("the worktree", path))
+    for what, place in places:
+        if _overlaps(root, place):
+            raise PreflightError(
+                f"WORKTREE_ROOT {root} overlaps {what} {place} of the repository at"
+                f" {git.repo}: set WORKTREE_ROOT to a directory outside every"
+                " checkout and the .git directory of the repository"
+            )
+    if leftovers:
+        raise _unmarked_leftover(git, root, leftovers[0])
+
+
 def _check_repository(
     git: _RepoGit,
 ) -> tuple[str, dict[str, _Entry], list[tuple[str, bytes]]]:
@@ -358,12 +436,7 @@ def _check_repository(
     if (top := git.toplevel()) != git.repo:
         message = f"{git.repo} is not the top of its work tree: set root_path to {top}"
         raise PreflightError(message)
-    worktrees = Path(os.path.realpath(settings.WORKTREE_ROOT))
-    if worktrees.is_relative_to(git.repo):
-        raise PreflightError(
-            f"WORKTREE_ROOT {worktrees} is inside the project {git.repo}: engine"
-            " worktrees would land in your checkout; set WORKTREE_ROOT elsewhere"
-        )
+    _check_worktree_root(git)
     for key, value in git.config_entries(_PARTIAL):
         shown = "true" if value is None else value
         if key.startswith("extensions.") or shown.lower() not in _FALSE:
@@ -713,7 +786,23 @@ class _Resolver:
     def workload(self, work: Workload) -> Workload:
         what = f"workload {work.name!r}"
         command = self.resolve(work.command, work.working_dir, what)
+        if work.output_file is not None:
+            self._output_file(work.output_file, what)
         return work.model_copy(update={"command": command})
+
+    def _output_file(self, rel: str, what: str) -> None:
+        """Refuse a committed ``output_file`` (the reset before every run
+        restores it, so the fingerprint would read it whether or not the run
+        wrote it); protect the path, so no trial commits one either."""
+        links, target = self._walk(rel, what)
+        if target is not None and target in self.tree:
+            raise PreflightError(
+                f"{what}: output_file {rel} is committed ({target}): the reset"
+                " before every run restores it, so a run that never writes it"
+                f" would still be fingerprinted. Run 'git rm --cached {target}',"
+                " ignore it in .gitignore and commit"
+            )
+        self.protected.update(glob.escape(path) for path in (*links, rel))
 
     def resolve(
         self, argv: Sequence[str], workdir: str, what: str, *, suite: bool = False
@@ -898,6 +987,7 @@ class GitPreflight:
             notes += _check_syntax(git, head, tree, self._max_parse_bytes, protected)
             dirty = git.dirty_entries()
             notes += self._probe(network, fs)
+            notes += sweep_stale_runs(git)
             git.prune()
         except (GitError, ValueError) as error:
             raise _git_refusal(git.repo, error) from None

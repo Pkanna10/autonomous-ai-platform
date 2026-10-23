@@ -21,6 +21,12 @@ drops it), then measured with the baseline's test count. F1 excludes only the
 own ref, which must then be absent or at ``Trial.commit``
 (``RepoTamperedError``). The editor, cost and the run notes: see
 ``GitTrialRunner``.
+
+An editor the cost cap stopped before anything was written or spent raises
+``TrialUnaffordable``: the trial never started, so it is no rejected change.
+Any exception that ends a trial carries the money it spent (``add_spend``),
+and the own ref it moved is put back (nothing records that trial any more),
+unless a worktree checked it out meanwhile: that ref stays, with a note.
 """
 
 from __future__ import annotations
@@ -41,7 +47,12 @@ from typing import Protocol
 
 from autonomous_ai_agents.clients.budget import Budget
 from autonomous_ai_agents.common.config import IsolationMode, settings
-from autonomous_ai_agents.common.errors import EngineError, RepoTamperedError
+from autonomous_ai_agents.common.errors import (
+    EngineError,
+    RepoTamperedError,
+    TrialUnaffordable,
+    add_spend,
+)
 from autonomous_ai_agents.common.models import (
     Baseline,
     Hypothesis,
@@ -55,6 +66,7 @@ from autonomous_ai_agents.common.models import (
 )
 from autonomous_ai_agents.common.paths import RESERVED_MODULES, normalize_path
 from autonomous_ai_agents.common.refnames import branch_prefix_problem
+from autonomous_ai_agents.execution.editor import STOP_BUDGET
 from autonomous_ai_agents.execution.git import GitError, GitWorkspace, repo_fingerprint
 from autonomous_ai_agents.execution.measure import (
     Phase,
@@ -107,6 +119,26 @@ _INVOKE = frozenset({"invoke", "inv"})
 _EDIT_DONE = "end_turn"
 _REGULAR = frozenset({"100644", "100755"})
 _SUBJECT_CHARS = 72
+
+
+@dataclass
+class _Progress:
+    """What one trial did so far, for when it raises: the editor's budget, the
+    charged trial once the edit ended, and the commit its own ref moved to."""
+
+    budget: Budget
+    trial: Trial | None = None
+    moved: str | None = None
+
+    def spent(self, cap: float) -> tuple[float, int]:
+        """The money spent, never above the trial's budget ``cap``."""
+        usd, tokens = self.budget.spent_usd, self.budget.tokens
+        if self.trial is not None:
+            usd, tokens = (
+                max(usd, self.trial.cost_usd),
+                max(tokens, self.trial.tokens_used),
+            )
+        return min(usd, cap), tokens
 
 
 class EditorFactory(Protocol):
@@ -269,9 +301,14 @@ class _PhaseOwner:
         self._note(prefix, suite.notes)
         return (*rows, *suite.measurements)
 
+    def _checked_out(self, ref: str) -> bool:
+        return ref.casefold() in {
+            b.casefold() for b in self._git.checked_out_branches()
+        }
+
     def _refuse_checked_out(self, ref: str) -> None:
         """Moving a branch a worktree has checked out moves that HEAD too."""
-        if ref.casefold() in {b.casefold() for b in self._git.checked_out_branches()}:
+        if self._checked_out(ref):
             raise EngineError(
                 f"refusing to move {ref}: it is checked out in a worktree; check"
                 " out another branch there, then run the trial again"
@@ -403,21 +440,50 @@ class GitTrialRunner(_PhaseOwner):
                 f"{own_ref} exists at {prior}, which is not this trial's commit"
                 f" (no '{TRAILER}: {draft.id}' trailer); delete it to run the trial"
             )
-        with owned_phases(self._git, self._what, dirs):
-            handle = self._git.add_worktree(dirs.worktree, baseline.commit)
-            trial = self._attempt(
-                handle, dirs, draft, hypothesis, workloads, baseline, brief,
-                budget_usd, prior,
-            )  # fmt: skip
-            if trial.commit is None and prior is not None:
-                self._refuse_checked_out(own_ref)
-                self._git.delete_ref(own_ref, prior, prefix=self._prefix)
-            self._tampered(before, exclude)
-            if self._git.ref_value(own_ref) != trial.commit:
-                raise RepoTamperedError(
-                    f"the trial's own ref {own_ref} moved while the trial ran"
-                )
+        progress = _Progress(Budget(budget_usd))
+        try:
+            with owned_phases(self._git, self._what, dirs):
+                handle = self._git.add_worktree(dirs.worktree, baseline.commit)
+                trial = self._attempt(
+                    handle, dirs, draft, hypothesis, workloads, baseline, brief,
+                    prior, progress,
+                )  # fmt: skip
+                if trial.commit is None and prior is not None:
+                    self._refuse_checked_out(own_ref)
+                    self._git.delete_ref(own_ref, prior, prefix=self._prefix)
+                self._tampered(before, exclude)
+                if self._git.ref_value(own_ref) != trial.commit:
+                    raise RepoTamperedError(
+                        f"the trial's own ref {own_ref} moved while the trial ran"
+                    )
+        except Exception as exc:  # the trial is lost: keep its cost, drop its ref
+            self._undo_own_ref(own_ref, prior, progress.moved, hypothesis.id)
+            add_spend(exc, *progress.spent(budget_usd))
+            raise
         return trial.model_copy(update={"finished_at": utc_now()})
+
+    def _undo_own_ref(
+        self, ref: str, prior: str | None, moved: str | None, hypothesis_id: str
+    ) -> None:
+        """Put the own ref back where it was before this trial moved it; a ref
+        someone else moved since stays where they put it, and so does one a
+        worktree checked out meanwhile (moving it would move that HEAD; a note
+        says so)."""
+        if moved is None:
+            return
+        with contextlib.suppress(GitError):
+            if self._checked_out(ref):
+                self._note(
+                    f"trial for hypothesis {hypothesis_id}",
+                    [
+                        f"{ref} stays at {moved}, the aborted trial's commit:"
+                        " a worktree has it checked out"
+                    ],
+                )
+            elif prior is None:
+                self._git.delete_ref(ref, moved, prefix=self._prefix)
+            else:
+                self._git.update_ref(ref, prior, moved, prefix=self._prefix)
 
     def _ours(self, commit: str, trial_id: str) -> bool:
         """Whether ``commit``'s last message paragraph has this trial's trailer."""
@@ -442,10 +508,11 @@ class GitTrialRunner(_PhaseOwner):
         workloads: Sequence[Workload],
         baseline: Baseline,
         brief: TrialBrief,
-        budget_usd: float,
         prior: str | None,
+        progress: _Progress,
     ) -> Trial:
-        """Steps 2 to 6; every outcome but an exception is a Trial (draft: failed)."""
+        """Steps 2 to 6; every outcome but an exception is a Trial (draft: failed).
+        ``progress`` records the spend and the own ref's move as they happen."""
         base = str(baseline.commit)
         tracked = self._git.ls_tree(base)
         scope = run_scope(self._project, workloads, tracked, worktree=handle.path)
@@ -453,10 +520,15 @@ class GitTrialRunner(_PhaseOwner):
         task = EditTask(
             hypothesis, replace(brief, protected=protected), secrets.token_hex(8)
         )
-        budget = Budget(budget_usd)
+        budget = progress.budget
         result = self._editor(scope).edit(handle.path, task, budget)
+        trial = progress.trial = _charged(trial, result, budget, budget.cap_usd)
         self._git.check_link(handle)
-        trial = _charged(trial, result, budget, budget_usd)
+        untouched = not result.written and trial.cost_usd == 0 and not trial.tokens_used
+        if result.stop == STOP_BUDGET and untouched:
+            raise TrialUnaffordable(
+                result.error or "the run's cost cap stopped the edit"
+            )
         if trial.error is not None:
             return trial
         if result.error is not None or result.stop != _EDIT_DONE:
@@ -496,6 +568,7 @@ class GitTrialRunner(_PhaseOwner):
             own_ref = f"refs/heads/{trial.branch}"
             self._refuse_checked_out(own_ref)  # checked out while the editor ran
             self._git.update_ref(own_ref, commit, prior, prefix=self._prefix)
+            progress.moved = commit
         trial = trial.model_copy(update={"commit": commit})
         phase = self._make_phase(handle, dirs)
         try:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import fcntl
 import hashlib
 import math
 import os
@@ -44,6 +45,7 @@ from autonomous_ai_agents.execution.git import (
     GitWorkspace,
     repo_fingerprint,
 )
+from autonomous_ai_agents.execution.phase import RUN_LOCK
 from autonomous_ai_agents.execution.preflight import (
     MIN_GIT_VERSION,
     GitPreflight,
@@ -424,6 +426,79 @@ def test_preflight_ends_with_a_scoped_worktree_prune(
     assert str(stale) not in out(repo, "worktree", "list", "--porcelain")
 
 
+def test_connect_recovers_what_a_killed_run_left_in_worktree_root(
+    make: Factory, project: Project, repo: Path, root: Path
+) -> None:
+    """
+    GIVEN a run killed with -9 in a trial: its marked run dir under
+        WORKTREE_ROOT still holds the registered worktree and its scratch
+        and probe dirs (the directory exists, so git does not call it stale)
+    WHEN the next run's preflight checks the repository
+    THEN the worktree, its registration and the run dir are gone, and a
+        note says so
+    """
+    stale = root / "killed-run" / "trial-h1"
+    stale.parent.mkdir(parents=True)
+    run_git(repo, "worktree", "add", "--detach", str(stale), "HEAD")
+    for sub in ("_scratch", "_probe"):
+        (root / "killed-run" / sub / "trial-h1").mkdir(parents=True)
+    (root / "killed-run" / RUN_LOCK).write_text("")
+
+    report = check(make(), project)
+
+    assert out(repo, "worktree", "list", "--porcelain").count("worktree ") == 1
+    assert not (root / "killed-run").exists()
+    assert not (repo / ".git" / "worktrees").exists() or not os.listdir(
+        repo / ".git" / "worktrees"
+    )
+    [note] = report.notes
+    assert "killed-run" in note and "trial-h1" in note
+
+
+@pytest.mark.parametrize(
+    ("output_file", "committed"),
+    [("conf.toml", "conf.toml"), ("link-run", "scripts/bench")],
+    ids=["tracked", "through-a-tracked-link"],
+)
+def test_a_committed_output_file_is_refused(
+    make: Factory, project: Project, output_file: str, committed: str
+) -> None:
+    """
+    GIVEN a workload whose output_file is a committed file, directly or
+        through a committed link
+    WHEN preflight checks it
+    THEN it refuses, naming the file and the fix: the reset before every run
+        restores the committed copy, so a run that never writes the file
+        would still be fingerprinted as if it had
+    """
+    work = workload(project, "tool", "core").model_copy(
+        update={"output_file": output_file}
+    )
+
+    message = refused(make(), project, [work])
+
+    assert f"output_file {output_file}" in message and committed in message
+    assert "git rm --cached" in message
+
+
+def test_an_untracked_output_file_is_protected_so_no_trial_commits_one(
+    make: Factory, project: Project
+) -> None:
+    """
+    GIVEN a workload whose output_file is not in the repository
+    WHEN preflight checks it
+    THEN it is accepted and the path is protected: a trial that commits a
+        copy of it (the same memo, made by the trial) is rejected unrun
+    """
+    work = workload(project, "tool", "core").model_copy(
+        update={"output_file": "out/result[1].txt"}
+    )
+
+    report = check(make(), project, [work])
+
+    assert "out/result[[]1].txt" in report.extra_protected
+
+
 # ---------------------------------------------------------------------------
 # Refusals: test command, git version, ownership, repository shape
 # ---------------------------------------------------------------------------
@@ -540,6 +615,120 @@ def test_worktree_root_inside_the_project_is_refused(
     message = refused(make(), project)
 
     assert "WORKTREE_ROOT" in message
+
+
+@pytest.mark.parametrize(
+    "where",
+    ["main-checkout", "common-dir", "admin-dir", "contains-both", "other-worktree"],
+)
+def test_worktree_root_overlapping_the_repository_beyond_root_path_is_refused(
+    make: Factory,
+    project: Project,
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    where: str,
+) -> None:
+    """
+    GIVEN root_path is a linked worktree, and WORKTREE_ROOT inside the main
+        checkout, inside the git common dir, at its admin dir, containing
+        both checkouts, or inside another (unmarked) worktree of the repository
+    WHEN preflight checks the linked worktree
+    THEN it refuses, naming WORKTREE_ROOT and what it overlaps
+    """
+    linked = (tmp_path / "linked").resolve()
+    run_git(repo, "worktree", "add", "-q", "--detach", str(linked), "HEAD")
+    other = (tmp_path / "other").resolve()
+    run_git(repo, "worktree", "add", "-q", "--detach", str(other), "HEAD")
+    chosen = {
+        "main-checkout": repo / ".aip-worktrees",
+        "common-dir": repo / ".git" / "aip",
+        "admin-dir": repo / ".git" / "worktrees",
+        "contains-both": tmp_path.resolve(),
+        "other-worktree": other / "wt",
+    }[where]
+    monkeypatch.setattr(settings, "WORKTREE_ROOT", chosen)
+    project = project.model_copy(update={"root_path": str(linked)})
+
+    message = refused(make(), project)
+
+    assert "WORKTREE_ROOT" in message and "overlaps" in message
+
+
+def test_engine_worktrees_under_worktree_root_are_no_overlap(
+    make: Factory, project: Project, repo: Path, root: Path
+) -> None:
+    """
+    GIVEN a live engine run's marked worktree under WORKTREE_ROOT (another
+        process holds its lock)
+    WHEN preflight checks the repository
+    THEN it accepts the repository and leaves that worktree alone
+    """
+    live = root / "live-run" / "baseline"
+    live.parent.mkdir(parents=True)
+    run_git(repo, "worktree", "add", "--detach", str(live), "HEAD")
+    held = os.open(live.parent / RUN_LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(held, fcntl.LOCK_SH)
+    try:
+        report = check(make(), project)
+    finally:
+        os.close(held)
+
+    assert report.notes == ()
+    assert str(live) in out(repo, "worktree", "list", "--porcelain")
+
+
+def test_an_unmarked_engine_leftover_is_refused_with_its_recovery(
+    make: Factory, project: Project, repo: Path, root: Path
+) -> None:
+    """
+    GIVEN <WORKTREE_ROOT>/<run>/<phase> is a registered worktree of the
+        repository without the run marker: what an owner whose cleanup
+        failed, or a run killed before run markers existed, leaves
+    WHEN the next run connects
+    THEN it refuses with the recovery (remove that worktree and the run
+        dir), not with advice to move WORKTREE_ROOT; once the user follows
+        it, connect accepts the repository
+    """
+    stale = root / "old-run" / "baseline"
+    stale.parent.mkdir(parents=True)
+    run_git(repo, "worktree", "add", "-q", "--detach", str(stale), "HEAD")
+    (root / "old-run" / "_scratch" / "baseline").mkdir(parents=True)
+
+    message = refused(make(), project)
+
+    assert message == (
+        f"WORKTREE_ROOT {root} holds {stale}, a worktree of the repository at"
+        f" {repo} that an earlier engine run left (its cleanup failed, or it was"
+        " killed before run markers existed); no run marks it, so connect does"
+        f" not remove it: run 'git worktree remove --force {stale}', remove"
+        f" {stale.parent}, then connect again"
+    )
+    run_git(repo, "worktree", "remove", "--force", str(stale))
+    shutil.rmtree(stale.parent)
+    assert check(make(), project).notes == ()
+
+
+@pytest.mark.parametrize(
+    "rel", ["mine", "a/b/c", ".hidden/baseline", "run/..x", "run/_scratch"], ids=str
+)
+def test_a_user_worktree_under_worktree_root_is_an_overlap(
+    make: Factory, project: Project, repo: Path, root: Path, rel: str
+) -> None:
+    """
+    GIVEN an unmarked worktree of the repository under WORKTREE_ROOT that
+        is not shaped <run>/<phase> (two engine dir names)
+    WHEN preflight checks the repository
+    THEN it refuses with the overlap advice: it is no engine leftover
+    """
+    mine = root / rel
+    mine.parent.mkdir(parents=True, exist_ok=True)
+    run_git(repo, "worktree", "add", "-q", "--detach", str(mine), "HEAD")
+
+    message = refused(make(), project)
+
+    assert f"overlaps the worktree {mine}" in message
+    assert "set WORKTREE_ROOT to a directory outside" in message
 
 
 @pytest.mark.parametrize(

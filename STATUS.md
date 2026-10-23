@@ -1,6 +1,6 @@
 # Project Status - Autonomous AI Platform
 
-**Last Updated:** 2026-10-22
+**Last Updated:** 2026-10-23
 
 ---
 
@@ -504,6 +504,79 @@ Where a decision changed the spec, the code follows the decision.
   `transport.py`, `measure.py`, `editor.py`, `editor_tools.py`, `preflight.py`,
   `understand.py`, `trial_runner.py` (sizes under "Technical Debt").
 
+### 2026-10-23 (Step 2, Verifier findings fixed)
+
+- **A killed run is recovered by the next connect.** Each phase owner holds a
+  shared `flock` on `<WORKTREE_ROOT>/<run>/.aip-run.lock` while it works;
+  connect's `sweep_stale_runs` takes the lock of every marked run exclusively
+  and runs the shared cleanup on each phase in it. Why: a SIGKILLed run's
+  directory still exists, so git never calls its registration prunable, and only
+  the kernel knows reliably whether its owner is alive (it drops a `flock` on
+  any exit). An unmarked directory is never touched, so a user's own worktree
+  inside `WORKTREE_ROOT` is safe. An unmarked worktree of the repository at
+  `<run>/<phase>` (an owner whose cleanup failed drops its marker; runs killed
+  before the marker existed never had one) is refused at connect with the manual
+  recovery, not swept and not called an overlap. Why: no lock proves its owner
+  gone (an owner that could not create the marker runs unmarked), so the user
+  removes it; the overlap advice ("move `WORKTREE_ROOT`") was wrong there.
+- **One call drives a run id at a time per process** (`Orchestrator`
+  `_driving`). Why: `resume` checked the gate and invoked the graph later, so
+  two resumes both passed, delivered contradicting decisions and raced for the
+  fixed `<run>/combine` path. The claim makes check and call one step; the
+  in-memory checkpointer is per process, so a process-wide claim is complete
+  until a shared checkpointer exists. `stream` releases it before its own last
+  event. Why: a generator suspended at that event held the claim, so a consumer
+  that stopped there and kept the iterator could not resume the paused run.
+- **A failing node keeps what it earned.** The trials node and understand attach
+  their running total (and the round's finished trials) to the exception
+  (`nodes.keep_progress`); the trial runner notes the money an aborted trial
+  spent (`errors.add_spend`) and puts its own ref back, unless a worktree
+  checked it out meanwhile (a runner note says the ref stays: deleting it left
+  that worktree's HEAD unborn). `Orchestrator` merges it into the failed state,
+  adds a `trial_refs_left` event with the cleanup command, and saves a failed
+  row before a non-engine exception propagates. Why: a failed run was built from
+  the previous checkpoint, so the money spent in the failing node and the trials
+  it had saved were missing from the state and the audit row.
+- **A trial the cap stops before its first request never started**
+  (`TrialUnaffordable`): the trials node treats it as an exhausted budget, not a
+  rejected change, so no verdict or lesson is recorded. Why: the factory's floor
+  prices an empty prompt and is always below a real first request, and a
+  "reject" lesson for a hypothesis that was never tried would lower its ranking
+  in later runs.
+- **`Project.root_path` is canonical** (`realpath`). Why: the one-project-per-
+  root rule compared strings, so a trailing slash or a symlink registered one
+  repository under several ids, while git already used the real path.
+- **`WORKTREE_ROOT` may not overlap the git common dir or any other worktree**
+  of the repository (connect). Why: with a linked worktree as root_path, a
+  `WORKTREE_ROOT` inside the main checkout was swept by the user's `git clean`,
+  and one in `.git/worktrees` collided with git's admin dirs.
+- **A committed `output_file` is refused, and the path is protected.** Why: the
+  reset before every run restores a committed copy, so the fingerprint read it
+  whether or not the run wrote it, and a change that skipped its work passed the
+  equivalence judge.
+- **The default objective bounds peak RSS** (a `metric_bound` guardrail, at most
+  +10 %, added only when no objective is given and no RSS bound exists). Why:
+  the documented default is "faster and leaner", but only wall time was judged,
+  so a 27x memory regression shipped. A guardrail, not a second objective, so a
+  trial need not also prove a memory gain.
+- **The report says whether the test count was verified** ("Test count" in Run
+  conditions), and README lists wrapper runners as a limitation.
+- **The trial-ref cleanup command names exact refs and commits** in one
+  `git update-ref --stdin` transaction. Why: the `xargs` form failed on empty
+  input, and the `trial-<run>-*` pattern also matched run `<run>-2`'s refs.
+- **The launcher blocks `socket(AF_UNIX)` with a seccomp filter** (Linux,
+  whenever network isolation is on), installed in PID 1 of the namespace and
+  inherited across exec, with a new self-check that creating an AF_UNIX socket
+  must fail. Why: the network namespace isolates AF_INET and abstract AF_UNIX
+  but not path-based AF_UNIX, so a kept, delivered trial could still reach a
+  host unix-domain service (`/var/run/docker.sock`, a local Postgres/Redis
+  socket) and exfiltrate while the engine reported a clean efficiency win.
+  Blocking `socket(AF_UNIX)` closes every path-based unix socket regardless of
+  its location; `socketpair(AF_UNIX)` (a connected pair, no egress, used by
+  multiprocessing) and AF_INET (the loopback probe) stay allowed. macOS needs
+  nothing new: `sandbox-exec`'s `(deny network*)` already covers AF_UNIX
+  `connect`, so the filter and the AF_UNIX self-check are Linux-only.
+
 ### 2026-10-22 (Step 2, wave 2b review fixes)
 
 - **A failed privilege drop is never silent**: the workload drops every
@@ -545,11 +618,13 @@ blockers and 12 should-fixes were closed before building.
   launcher, 6.5 MiB). Without it the memory judge measures the engine, not the
   workload.
 - **Trials run sandboxed and fail closed**: network namespace (`unshare -rn`)
-  with a private loopback, Landlock write confinement to the worktree and a
-  scratch directory, a PID namespace so orphans die, and a per-run self-check
-  that the isolation really applied (macOS: `sandbox-exec` with the same
-  checks). The engine runs Claude-edited code on the user's machine; a fresh
-  HOME is not a sandbox.
+  with a private loopback, a seccomp filter that blocks `socket(AF_UNIX)` so a
+  path-based unix socket to a host service cannot be reached (the namespace does
+  not cover those), Landlock write confinement to the worktree and a scratch
+  directory, a PID namespace so orphans die, and a per-run self-check that the
+  isolation really applied (macOS: `sandbox-exec`, whose `(deny network*)`
+  covers AF_UNIX `connect`, with the same checks). The engine runs Claude-edited
+  code on the user's machine; a fresh HOME is not a sandbox.
 - **The engine never trusts what the editor says it changed**: the diff and the
   touched paths come from git after the edit (`--no-renames`, so a renamed test
   shows up as a protected path), symlinks, mode changes, binaries, git metadata
@@ -765,6 +840,14 @@ the judged-trials key question (closed by decision 35). Left:
   profiled", and its editable-install check does not run (the note says so).
 - **A context serves one run at a time**: connect rebinds the runners of the
   context `build_context` returned.
+- **A resume on a context with other isolation modes** re-tests the combination
+  with those modes while the report shows connect's. The `Combiner` protocol
+  does not expose its modes yet; Step 4's resume should refuse the mismatch.
+- **A trial over its budget is charged exactly the budget**; the overrun the
+  editor reported is in the trial's error text, not the run total (the estimate
+  is a bound, so this only happens if the API bills above it).
+- **The run-id claim is per process** (`Orchestrator` with the in-memory
+  checkpointer); `PostgresSaver` resume (Step 4) needs it in the database.
 - From the spec, deferred by design: research and LLM-generated candidates (Step
   3); the CLI, `--max-cost`/`--goal`/`--test-command`, test-command inference,
   the live log, hardware detection, `PostgresSaver` resume and a `clean` command

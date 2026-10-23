@@ -14,6 +14,26 @@ accident.
 
 from __future__ import annotations
 
+_SPEND = "engine_spend"
+
+
+def add_spend(exc: BaseException, usd: float, tokens: int) -> None:
+    """Note on ``exc`` money a call spent before it raised ``exc``.
+
+    A runner that raises loses the trial it would have returned, and with it
+    the cost; the caller reads it back with ``spend_of`` and adds it to the
+    run's total, so a failed run reports what was billed. Any exception
+    carries it (a bug in the middle of a trial spent money too).
+    """
+    spent_usd, spent_tokens = spend_of(exc)
+    vars(exc)[_SPEND] = (spent_usd + usd, spent_tokens + tokens)
+
+
+def spend_of(exc: BaseException) -> tuple[float, int]:
+    """What ``add_spend`` noted on ``exc``: ``(0.0, 0)`` when nothing was."""
+    usd, tokens = vars(exc).get(_SPEND, (0.0, 0))
+    return float(usd), int(tokens)
+
 
 class EngineError(Exception):
     """A run cannot continue: the state or the measurements are not trustworthy."""
@@ -33,6 +53,10 @@ class RepoTamperedError(EngineError):
 
 class BudgetExceeded(EngineError):  # noqa: N818 - name fixed by the spec
     """A request or a recorded spend would take the run past its cost cap."""
+
+
+class TrialUnaffordable(BudgetExceeded):  # noqa: N818 - a BudgetExceeded
+    """The cap refused a trial's first editor request: the trial never started."""
 
 
 class LLMConfigError(EngineError):

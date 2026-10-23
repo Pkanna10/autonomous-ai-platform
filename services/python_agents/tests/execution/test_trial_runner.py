@@ -31,6 +31,8 @@ from autonomous_ai_agents.common.errors import (
     EngineError,
     LLMConfigError,
     RepoTamperedError,
+    TrialUnaffordable,
+    spend_of,
 )
 from autonomous_ai_agents.common.models import (
     METRIC_CPU_TIME_S,
@@ -782,6 +784,43 @@ def test_an_editor_error_fails_with_the_money_spent(
     assert_never_executed(rig, trial, hypothesis)
 
 
+def test_a_trial_the_cap_stops_before_its_first_request_never_started(
+    rig: Rig,
+) -> None:
+    """
+    GIVEN an editor stopped by the cost cap before its first request: nothing
+        written, nothing spent
+    WHEN the trial runs
+    THEN TrialUnaffordable says it never started (it is no rejected change),
+        and nothing is left: no worktree, no run dir, no ref
+    """
+    hypothesis = rig.hypothesis()
+    stopped = EditResult(stop="budget", error="the run's cost cap stopped the edit")
+
+    with pytest.raises(TrialUnaffordable, match="cost cap"):
+        rig.trial(hypothesis, rig.runner(FakeEditor({"h1": stopped})))
+
+    assert rig.ref(hypothesis) is None
+    no_leftovers(rig)
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        EditResult(cost_usd=0.1, tokens_used=5, stop="budget", error="cap"),
+        EditResult(written={"dedupe/core.py": 3}, stop="budget", error="cap"),
+    ],
+    ids=["spent", "wrote"],
+)
+def test_a_budget_stop_after_work_began_is_a_failed_trial(
+    rig: Rig, result: EditResult
+) -> None:
+    trial = rig.trial(rig.hypothesis(), rig.runner(FakeEditor({"h1": result})))
+
+    assert trial.status is TrialStatus.failed
+    assert trial.error == "the editor stopped (budget): cap"
+
+
 def test_the_cost_is_the_larger_of_the_report_and_the_budget_record(
     rig: Rig,
 ) -> None:
@@ -991,6 +1030,137 @@ def test_a_run_that_moves_the_own_ref_raises_repo_tampered(rig: Rig) -> None:
     with pytest.raises(RepoTamperedError, match="own ref"):
         rig.trial(hypothesis, rig.runner(ScriptedEditor(DEDUPE_EDITS)))
 
+    no_leftovers(rig)
+
+
+@dataclass
+class SpendThenRaise:
+    """Records a paid request into the budget, then raises ``error``."""
+
+    error: Exception
+
+    def edit(self, worktree: Path, task: EditTask, budget: Budget) -> EditResult:
+        budget.spent_usd += 0.2
+        budget.tokens += 40
+        raise self.error
+
+
+def test_tampering_after_the_commit_undoes_the_own_ref_and_keeps_the_spend(
+    rig: Rig,
+) -> None:
+    """
+    GIVEN an editor that spent 0.3 USD, and the user committing (a new
+        branch) while the committed trial is measured
+    WHEN the trial runs
+    THEN RepoTamperedError propagates carrying the 0.3 USD and 70 tokens
+        spent, and the trial's own ref, which nothing records, is removed
+    """
+    rig.run.hook = user_git(rig, "branch", "planted")
+    hypothesis = rig.hypothesis()
+
+    with pytest.raises(RepoTamperedError, match="changed while") as raised:
+        rig.trial(hypothesis, rig.runner(SpendingEditor(0.3, 70)))
+
+    assert spend_of(raised.value) == (0.3, 70)
+    assert rig.ref(hypothesis) is None
+    no_leftovers(rig)
+
+
+def test_tampering_in_a_re_executed_trial_puts_the_own_ref_back(rig: Rig) -> None:
+    """
+    GIVEN a trial already committed on its own ref, re-executed with another
+        edit while the user creates a branch
+    WHEN the re-executed trial is aborted as tampering
+    THEN its own ref points at the earlier trial commit again
+    """
+    hypothesis = rig.hypothesis()
+    first = rig.trial(hypothesis, rig.runner(ScriptedEditor(DEDUPE_EDITS)))
+    rig.run.hook = user_git(rig, "branch", "planted")
+    other = WriteEditor({"dedupe/core.py": FAST_CORE + b"\n# again\n"})
+
+    with pytest.raises(RepoTamperedError):
+        rig.trial(hypothesis, rig.runner(other))
+
+    assert rig.ref(hypothesis) == first.commit
+
+
+def test_an_own_ref_someone_else_moved_is_left_where_they_put_it(rig: Rig) -> None:
+    hypothesis = rig.hypothesis()
+    ref = f"refs/heads/{rig.branch(hypothesis)}"
+    rig.run.hook = user_git(rig, "update-ref", ref, rig.commit)
+
+    with pytest.raises(RepoTamperedError, match="own ref"):
+        rig.trial(hypothesis, rig.runner(ScriptedEditor(DEDUPE_EDITS)))
+
+    assert rig.ref(hypothesis) == rig.commit
+
+
+@dataclass
+class CheckoutThenTamper:
+    """A run hook: once, the user checks ``branch`` out at ``path`` and creates
+    a branch (tampering); ``seen`` is the branch's commit at that moment."""
+
+    rig: Rig
+    branch: str
+    path: Path
+    seen: str = ""
+
+    def __call__(self, call: Call) -> None:
+        if not self.path.exists():
+            git(self.rig.repo, "worktree", "add", "-q", str(self.path), self.branch)
+            git(self.rig.repo, "branch", "-f", "planted")
+            self.seen = git(self.rig.repo, "rev-parse", self.branch)
+
+
+@pytest.mark.parametrize("rerun", [False, True], ids=["new-ref", "re-executed"])
+def test_an_aborted_trial_leaves_an_own_ref_a_worktree_checked_out(
+    rig: Rig, rerun: bool
+) -> None:
+    """
+    GIVEN the user checks the trial branch out in a new worktree while the
+        committed trial is measured, and creates a branch (tampering)
+    WHEN the trial is aborted (RepoTamperedError)
+    THEN the own ref stays at the trial commit, so the user's worktree HEAD
+        still resolves to it, and a note says why the ref was left
+    """
+    hypothesis = rig.hypothesis()
+    branch = rig.branch(hypothesis)
+    first = None
+    if rerun:
+        first = rig.trial(hypothesis, rig.runner(ScriptedEditor(DEDUPE_EDITS)))
+        editor: CodeEditor = WriteEditor({"dedupe/core.py": FAST_CORE + b"\n# 2\n"})
+    else:
+        editor = ScriptedEditor(DEDUPE_EDITS)
+    user_wt = rig.root / "user-wt"
+    hook = rig.run.hook = CheckoutThenTamper(rig, branch, user_wt)
+
+    with pytest.raises(RepoTamperedError, match="changed while"):
+        rig.trial(hypothesis, rig.runner(editor))
+
+    moved = hook.seen
+    assert moved and (first is None or moved != first.commit)
+    assert rig.ref(hypothesis) == moved
+    assert git(user_wt, "symbolic-ref", "HEAD") == f"refs/heads/{branch}"
+    assert git(user_wt, "rev-parse", "HEAD") == moved
+    assert rig.notes[-1] == (
+        f"trial for hypothesis {hypothesis.id}: refs/heads/{branch} stays at"
+        f" {moved}, the aborted trial's commit: a worktree has it checked out"
+    )
+    assert not rig.run_dir.exists()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [LLMConfigError("402: billing"), RuntimeError("bug")],
+    ids=["engine-error", "other"],
+)
+def test_an_editor_exception_carries_the_money_it_spent(
+    rig: Rig, error: Exception
+) -> None:
+    with pytest.raises(type(error)) as raised:
+        rig.trial(rig.hypothesis(), rig.runner(SpendThenRaise(error)))
+
+    assert spend_of(raised.value) == (0.2, 40)
     no_leftovers(rig)
 
 

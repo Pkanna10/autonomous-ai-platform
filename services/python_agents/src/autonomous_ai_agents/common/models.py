@@ -224,6 +224,9 @@ ENGINE_ENUM_CLASSES: tuple[type[StrEnum], ...] = (
 class Project(EngineModel):
     """A codebase the engine improves. Long-lived across runs.
 
+    ``root_path`` is stored canonical (``os.path.realpath``), the form every
+    git call already uses.
+
     ``test_command`` is the argv of the project's test suite (never a shell
     string). The caller supplies it; ``None`` means no suite is run, which
     preflight refuses when a ``tests_pass`` guardrail exists.
@@ -241,9 +244,15 @@ class Project(EngineModel):
     @field_validator("root_path")
     @classmethod
     def _absolute_without_parent_segments(cls, value: str) -> str:
+        """Absolute, no ``..``, and canonical (``realpath``: no trailing slash,
+        ``.`` or link), so one repository has one spelling and the
+        repository's one-project-per-root check cannot be bypassed."""
         if not os.path.isabs(value) or ".." in PurePath(value).parts:
             raise ValueError("root_path must be absolute and must not contain '..'")
-        return value
+        try:
+            return os.path.realpath(value)
+        except ValueError:  # a NUL names no directory: spelled canonically only
+            return os.path.normpath(value)
 
 
 class Workload(EngineModel):

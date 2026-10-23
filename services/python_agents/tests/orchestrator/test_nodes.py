@@ -11,9 +11,12 @@ reducers, so no graph is involved except for ``approval_gate``, whose
 from __future__ import annotations
 
 import math
+import os
 import re
+import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import FrozenInstanceError, replace
+from pathlib import Path
 from typing import Any, TypeVar, cast
 
 import pytest
@@ -30,6 +33,8 @@ from autonomous_ai_agents.common.errors import (
     LLMUnavailable,
     PreflightError,
     RepoTamperedError,
+    TrialUnaffordable,
+    add_spend,
 )
 from autonomous_ai_agents.common.models import (
     METRIC_PEAK_RSS_BYTES,
@@ -111,6 +116,8 @@ from autonomous_ai_agents.orchestrator.nodes import (
     make_nodes,
     make_router,
     measurement_violations,
+    progress_of,
+    trial_ref_cleanup,
 )
 from autonomous_ai_agents.orchestrator.state import (
     REDUCER_KEYS,
@@ -678,6 +685,90 @@ class TestDefine:
         assert objective.min_relative_gain == 0.05
         assert objective.project_id == base_state["project"].id
         assert objective.description == "minimize wall time"
+
+
+class TestDefaultMemoryBound:
+    def test_the_default_objective_also_bounds_peak_memory(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_guardrails: tuple[Guardrail, ...],
+    ) -> None:
+        """
+        GIVEN no objectives (the default "faster and leaner") and guardrails
+              without a peak RSS bound
+        WHEN define runs
+        THEN the user's guardrails are kept and one more bounds peak RSS: a
+             trial may not grow it by more than 10 %
+        """
+        base_state["objectives"] = []
+
+        delta = make_nodes(make_context())["define"](base_state)
+
+        *kept, bound = _items(delta, "guardrails", Guardrail)
+        assert kept == list(sample_guardrails)
+        assert bound.kind is GuardrailKind.metric_bound
+        assert bound.metric == METRIC_PEAK_RSS_BYTES
+        assert bound.direction is Direction.minimize
+        assert bound.max_drop == pytest.approx(0.10)
+        assert bound.project_id == base_state["project"].id
+        assert "metric_bound" in str(_only_event(delta).data["guardrails"])
+
+    def test_a_peak_rss_bound_of_the_users_own_is_left_alone(
+        self, make_context: ContextFactory, base_state: EngineState
+    ) -> None:
+        own = Guardrail(
+            project_id=base_state["project"].id,
+            kind=GuardrailKind.metric_bound,
+            metric=METRIC_PEAK_RSS_BYTES,
+            max_drop=0.5,
+            direction=Direction.minimize,
+            description="memory may grow by half",
+        )
+        base_state["objectives"], base_state["guardrails"] = [], [own]
+
+        delta = make_nodes(make_context())["define"](base_state)
+
+        assert "guardrails" not in delta
+
+    def test_a_default_run_rejects_a_trial_that_grows_memory(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+    ) -> None:
+        """
+        GIVEN the default objective, and H1 3x faster but with 27x the peak RSS
+        WHEN the run goes through verdicts
+        THEN H1 is rejected by the guardrail judge naming peak RSS
+        """
+        fat = ScriptedOutcome(
+            samples={
+                METRIC_WALL_TIME_S: (0.6,) * 5,
+                METRIC_PEAK_RSS_BYTES: (27e7,) * 5,
+            },
+            touched_paths=("src/bridge/encoder.py",),
+        )
+        base = ScriptedOutcome(
+            samples={
+                METRIC_WALL_TIME_S: (1.8,) * 5,
+                METRIC_PEAK_RSS_BYTES: (1e7,) * 5,
+            }
+        )
+        base_state["objectives"], base_state["guardrails"] = [], []
+        nodes = make_nodes(
+            make_context(
+                [h1_cache],
+                scripts={h1_cache.title: fat},
+                baseline_runner=StubBaselineRunner(base),
+            )
+        )
+
+        state = _advance(nodes, base_state, _before("combine"))
+
+        (verdict,) = state["verdicts"]
+        assert verdict.outcome is VerdictOutcome.reject
+        assert METRIC_PEAK_RSS_BYTES in verdict.summary
 
 
 # ---------------------------------------------------------------------------
@@ -4912,8 +5003,8 @@ class TestReportRunConditions:
         assert "- Combination: " + combination.summary[:40] in report
         assert f"- Trial refs: {ref}" in report
         assert (
-            "```\ngit for-each-ref --format='%(refname)' "
-            f"'refs/heads/engine/trial-{RUN_ID}-*' | xargs -n1 git update-ref -d\n```"
+            "```\ngit update-ref --stdin <<'EOF'\n"
+            f"delete {ref} {trial.commit}\nEOF\n```"
         ) in report
 
     def test_run_conditions_are_sanitised(
@@ -4988,3 +5079,332 @@ class TestReportRunConditions:
 
         assert "- Trial refs: refs/heads/engine/trial-" in report
         assert "for-each-ref" not in report
+
+
+class TestReportTestCount:
+    @pytest.mark.parametrize(
+        ("command", "says"),
+        [
+            (None, "- Test count: no test command"),
+            (
+                ("/usr/bin/python3", "-m", "unittest"),
+                "- Test count: verified from the unittest summary",
+            ),
+            (("pytest", "tests"), "- Test count: verified from the pytest summary"),
+            (
+                ("./run_tests.sh",),
+                "- Test count: not verified (the test command is neither unittest"
+                " nor pytest, so the suite passed on its exit code alone",
+            ),
+        ],
+        ids=["none", "unittest", "pytest", "wrapper"],
+    )
+    def test_the_report_says_whether_the_test_count_was_verified(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        command: tuple[str, ...] | None,
+        says: str,
+    ) -> None:
+        """
+        GIVEN no test command, a unittest or pytest command, or a wrapper
+              script the engine cannot read a summary from
+        WHEN deliver writes the report
+        THEN Run conditions says whether a suite that runs fewer tests than
+             the baseline would have been caught
+        """
+        project = base_state["project"].model_copy(update={"test_command": command})
+        state = cast(EngineState, {**base_state, "project": project})
+
+        delivery = make_nodes(make_context())["deliver"](state)["delivery"]
+
+        assert says in cast(Delivery, delivery).report_markdown
+
+
+class TestTrialRefCleanup:
+    def test_the_command_names_exactly_this_runs_refs_at_their_commits(self) -> None:
+        """
+        GIVEN trials of run 'nightly' (one committed twice, one never) and a
+              run 'nightly-2' whose ref a 'trial-nightly-*' pattern would match
+        WHEN the cleanup command is built for 'nightly'
+        THEN it deletes this run's committed refs only, each once at the
+             commit it was left at, in one update-ref transaction
+        """
+        mine = "refs/heads/engine/trial-nightly-h1"
+        trials = [
+            Trial(hypothesis_id="h1", round=1, branch="engine/trial-nightly-h1", commit="1" * 40),
+            Trial(hypothesis_id="h1", round=2, branch="engine/trial-nightly-h1", commit="2" * 40),
+            Trial(hypothesis_id="h2", round=1, branch="engine/trial-nightly-h2"),
+        ]  # fmt: skip
+
+        lines = trial_ref_cleanup(trials, "nightly", "engine/")
+
+        assert lines == [
+            "git update-ref --stdin <<'EOF'",
+            f"delete {mine} {'2' * 40}",
+            "EOF",
+        ]
+
+    @pytest.mark.parametrize(
+        ("branch", "commit", "prefix"),
+        [
+            ("engine/trial-r-h1", "1" * 40, "eng'$(x)/"),
+            ("engine/trial-r-h1;rm", "1" * 40, "engine/"),
+            ("engine/trial-r-h1", "not-a-commit", "engine/"),
+        ],
+        ids=["prefix", "ref", "commit"],
+    )
+    def test_no_command_when_a_piece_is_not_plain(
+        self, branch: str, commit: str, prefix: str
+    ) -> None:
+        trial = Trial(hypothesis_id="h1", round=1, branch=branch, commit=commit)
+
+        assert trial_ref_cleanup([trial], "r", prefix) == []
+
+    def test_no_command_without_a_committed_trial(self) -> None:
+        assert (
+            trial_ref_cleanup([Trial(hypothesis_id="h1", round=1)], "r", "engine/")
+            == []
+        )
+
+    def test_the_printed_command_deletes_the_refs_and_leaves_the_other_run(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        GIVEN a repository with the refs of runs 'nightly' and 'nightly-2'
+        WHEN the report's command for 'nightly' is fed to git as printed
+        THEN only 'nightly''s ref is gone
+        """
+        env = {"PATH": os.environ.get("PATH", os.defpath), "HOME": os.devnull,
+               "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+               "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}  # fmt: skip
+
+        def git(*args: str, stdin: str | None = None) -> str:
+            return subprocess.run(
+                ["git", "-C", str(tmp_path), *args],
+                env=env, input=stdin, capture_output=True, text=True, check=True,
+            ).stdout.strip()  # fmt: skip
+
+        git("init", "-q")
+        git("commit", "-q", "--allow-empty", "-m", "base")
+        head = git("rev-parse", "HEAD")
+        for ref in ("engine/trial-nightly-h1", "engine/trial-nightly-2-h1"):
+            git("update-ref", f"refs/heads/{ref}", head)
+        trial = Trial(
+            hypothesis_id="h1", round=1, branch="engine/trial-nightly-h1", commit=head
+        )
+        first, *body, last = trial_ref_cleanup([trial], "nightly", "engine/")
+        assert (first, last) == ("git update-ref --stdin <<'EOF'", "EOF")
+
+        git("update-ref", "--stdin", stdin="".join(f"{line}\n" for line in body))
+
+        refs = git("for-each-ref", "--format=%(refname)", "refs/heads/engine/")
+        assert refs.splitlines() == ["refs/heads/engine/trial-nightly-2-h1"]
+
+
+# ---------------------------------------------------------------------------
+# What a failing node already spent (and ran) survives its exception
+# ---------------------------------------------------------------------------
+
+
+class _RaisingRunner:
+    """Delegates to the stub, but raises ``error`` for one title after noting
+    ``spend`` on it (what the real runner does when a trial is aborted)."""
+
+    def __init__(
+        self,
+        inner: StubTrialRunner,
+        title: str,
+        error: Exception,
+        spend: tuple[float, int] = (0.0, 0),
+    ) -> None:
+        self._inner, self._title, self._error, self._spend = inner, title, error, spend
+
+    def run(
+        self,
+        hypothesis: Hypothesis,
+        workloads: Sequence[Workload],
+        baseline: Baseline,
+        *,
+        round: int,
+        branch: str,
+        budget_usd: float,
+        brief: TrialBrief,
+    ) -> Trial:
+        if hypothesis.title == self._title:
+            add_spend(self._error, *self._spend)
+            raise self._error
+        return self._inner.run(
+            hypothesis,
+            workloads,
+            baseline,
+            round=round,
+            branch=branch,
+            budget_usd=budget_usd,
+            brief=brief,
+        )
+
+
+class _SpendingUnderstander:
+    """Records ``usd`` into the run's budget (a timed-out attempt), then raises."""
+
+    def __init__(self, usd: float, tokens: int, error: Exception) -> None:
+        self._usd, self._tokens, self._error = usd, tokens, error
+
+    def understand(
+        self,
+        project: Project,
+        workloads: Sequence[Workload],
+        *,
+        commit: str,
+        budget: Budget,
+    ) -> UnderstandResult:
+        budget.record(self._usd, self._tokens)
+        raise self._error
+
+
+class TestProgressOfAFailingNode:
+    @pytest.fixture
+    def two(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+        h3_noise: Hypothesis,
+        design_scripts: dict[str, ScriptedOutcome],
+    ) -> Callable[[Any], tuple[dict[str, NodeFn], EngineState]]:
+        """H1 (0.12 USD) then H3 proposed; 0.25 of 1.00 spent."""
+
+        def build(runner: Any) -> tuple[dict[str, NodeFn], EngineState]:
+            nodes = make_nodes(make_context([h1_cache, h3_noise], runner=runner))
+            state = _advance(nodes, base_state, _before("trials"))
+            update = {"max_cost_usd": 1.0, "cost_usd": 0.25, "tokens_used": 100}
+            return nodes, cast(EngineState, {**state, **update})
+
+        return build
+
+    @pytest.mark.parametrize(
+        "error",
+        [RepoTamperedError("the repository changed"), RuntimeError("bug")],
+        ids=["engine-error", "other"],
+    )
+    def test_an_aborted_trial_keeps_the_rounds_trials_and_every_cost(
+        self,
+        two: Callable[[Any], tuple[dict[str, NodeFn], EngineState]],
+        design_scripts: dict[str, ScriptedOutcome],
+        h1_cache: Hypothesis,
+        h3_noise: Hypothesis,
+        error: Exception,
+    ) -> None:
+        """
+        GIVEN H1 run (0.12 USD) and H3 aborted after spending 0.05 USD
+        WHEN trials runs
+        THEN the error propagates carrying the node's progress: the running
+             total with both trials' money, and H1's trial in round_trials
+             and trials, H1 trialled and H3 still proposed
+        """
+        runner = _RaisingRunner(
+            StubTrialRunner(design_scripts), h3_noise.title, error, (0.05, 30)
+        )
+        nodes, state = two(runner)
+
+        with pytest.raises(type(error)) as raised:
+            nodes["trials"](state)
+
+        progress = progress_of(raised.value)
+        assert progress["cost_usd"] == pytest.approx(0.25 + 0.12 + 0.05)
+        [kept] = _items(progress, "round_trials", Trial)
+        assert progress["tokens_used"] == 100 + kept.tokens_used + 30
+        assert kept.hypothesis_id == h1_cache.id
+        assert _items(progress, "trials", Trial) == [kept]
+        statuses = {h.id: h.status for h in _items(progress, "hypotheses", Hypothesis)}
+        assert statuses[h1_cache.id] is HypothesisStatus.trialled
+        assert statuses[h3_noise.id] is HypothesisStatus.proposed
+
+    def test_an_untrustworthy_trial_is_charged_at_most_its_offer(
+        self,
+        two: Callable[[Any], tuple[dict[str, NodeFn], EngineState]],
+        design_scripts: dict[str, ScriptedOutcome],
+    ) -> None:
+        """
+        GIVEN a runner reporting 9.00 USD for a trial offered 0.75 USD
+        WHEN trials refuses it
+        THEN the progress charges the 0.75 USD offered, never past the cap
+        """
+        runner = _TamperingRunner(StubTrialRunner(design_scripts), {"cost_usd": 9.0})
+        nodes, state = two(runner)
+
+        with pytest.raises(EngineError, match="exceeds its budget") as raised:
+            nodes["trials"](state)
+
+        assert progress_of(raised.value)["cost_usd"] == pytest.approx(1.0)
+
+    def test_money_understand_spent_before_an_engine_error_is_kept(
+        self, make_context: ContextFactory, base_state: EngineState
+    ) -> None:
+        """
+        GIVEN 0.50 of a 2.00 cap spent, and an understander whose timed-out
+              attempt was charged 0.53 USD before the cap stopped the retry
+        WHEN understand runs
+        THEN BudgetExceeded propagates with the 1.03 USD total as progress
+        """
+        understander = _SpendingUnderstander(0.53, 9000, BudgetExceeded("cap"))
+        state = cast(
+            EngineState,
+            {
+                **base_state,
+                "base_commit": SHA,
+                "max_cost_usd": 2.0,
+                "cost_usd": 0.5,
+                "tokens_used": 100,
+            },
+        )
+
+        with pytest.raises(BudgetExceeded) as raised:
+            make_nodes(make_context(understander=understander))["understand"](state)
+
+        progress = progress_of(raised.value)
+        assert progress == {"cost_usd": pytest.approx(1.03), "tokens_used": 9100}
+
+    def test_an_exception_without_progress_has_none(self) -> None:
+        assert progress_of(RuntimeError("bug")) == {}
+
+
+class TestUnaffordableTrials:
+    def test_a_trial_the_cap_stopped_before_it_began_ends_the_trials(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+        h3_noise: Hypothesis,
+        design_scripts: dict[str, ScriptedOutcome],
+    ) -> None:
+        """
+        GIVEN H1 run, then H3 whose first editor request the cap refused
+              (TrialUnaffordable: nothing edited or spent)
+        WHEN trials runs
+        THEN no error: the budget is exhausted (warning and flag, so the
+             router combines), H1's trial is the round's only one, and H3
+             stays proposed, so no verdict or lesson is ever made for it
+        """
+        runner = _RaisingRunner(
+            StubTrialRunner(design_scripts),
+            h3_noise.title,
+            TrialUnaffordable("spent 0 USD + estimate 0.48 USD exceeds the cap"),
+        )
+        nodes = make_nodes(make_context([h1_cache, h3_noise], runner=runner))
+        state = _advance(nodes, base_state, _before("trials"))
+
+        delta = nodes["trials"](state)
+
+        assert delta["budget_exhausted"] is True
+        (stopped,) = _coded(delta, "budget_exhausted")
+        assert stopped.level is EventLevel.warning
+        assert stopped.data["not_started"] == 1
+        assert "estimate 0.48 USD exceeds the cap" in stopped.message
+        assert [t.hypothesis_id for t in _items(delta, "round_trials", Trial)] == [
+            h1_cache.id
+        ]
+        statuses = {h.id: h.status for h in _items(delta, "hypotheses", Hypothesis)}
+        assert statuses[h3_noise.id] is HypothesisStatus.proposed

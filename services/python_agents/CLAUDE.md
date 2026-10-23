@@ -250,9 +250,13 @@ run waits at the gate. `run` and `stream` call `save_run` on the initial state
 before the graph starts, so an `EngineError` from the repository
 (`ProjectConflictError`, `InvalidRecordIdError`) propagates before any node
 runs. `run` refuses a `run_id` that already has a thread, `resume` refuses a run
-that is not waiting at the gate, and every result is saved to the repository. An
-invalid approval payload re-interrupts with the error on the request instead of
-failing the run.
+that is not waiting at the gate (also while another call in the process drives
+that run id), and every result is saved to the repository. A failed state keeps
+what the failing node had spent and run (`nodes.keep_progress`) and lists the
+trial refs left (`trial_refs_left`); a non-engine exception is saved as a failed
+run, then propagates. An invalid approval payload re-interrupts with the error
+on the request instead of failing the run. With no objectives, `define` uses
+"minimize wall time" plus a peak-RSS `metric_bound` guardrail (at most +10 %).
 
 ### Live log (`orchestrator/events.py`)
 
@@ -317,14 +321,19 @@ Step 2 (repository code now runs on the user's machine):
 - **Sandbox, fail closed.** Every launch (preflight probe, baseline, profile,
   trials, combine, test suites) goes through `procrun.run_once`: on Linux
   `unshare -rn -p -f --ipc --mount-proc` around `python -I -S launcher.py`,
-  which brings `lo` up, sets `no_new_privs`, applies Landlock (writes only to
-  the worktree, its `_scratch` dir and `/dev/null`; `/dev/shm` is not writable),
-  drops every capability in the child and self-checks before exec (a write in
-  `_probe` and a connect to the parent's 127.0.0.1 listener must fail). macOS
-  uses `sandbox-exec` with `(deny network*)` and a write allowlist. Under
-  `required` a failed step refuses the run; procrun parses the report strictly
-  and cross-checks it against the wrapper's `wait4` accounting.
-  `NETWORK_ISOLATION=off` on Linux runs without namespaces.
+  which brings `lo` up, installs a seccomp filter that fails `socket(AF_UNIX)`
+  with EACCES (the network namespace isolates AF_INET and abstract AF_UNIX but
+  not path-based AF_UNIX, so without it a workload could reach a host
+  unix-domain service such as `/var/run/docker.sock` or a local database socket;
+  `socketpair(AF_UNIX)` and AF_INET are untouched), sets `no_new_privs`, applies
+  Landlock (writes only to the worktree, its `_scratch` dir and `/dev/null`;
+  `/dev/shm` is not writable), drops every capability in the child and
+  self-checks before exec (a write in `_probe`, a connect to the parent's
+  127.0.0.1 listener and creating an AF_UNIX socket must all fail). macOS uses
+  `sandbox-exec` with `(deny network*)` (which also covers AF_UNIX `connect`)
+  and a write allowlist. Under `required` a failed step refuses the run; procrun
+  parses the report strictly and cross-checks it against the wrapper's `wait4`
+  accounting. `NETWORK_ISOLATION=off` on Linux runs without namespaces.
 - **Child environment** (`sandbox.child_env`): an allowlist (`PATH` with
   relative entries dropped, locale, `TZ`, venv vars) plus deny patterns that win
   over explicit extras; forced `PYTHONHASHSEED=0`, `PYTHONDONTWRITEBYTECODE=1`,
@@ -333,8 +342,11 @@ Step 2 (repository code now runs on the user's machine):
 - **Worktree ownership** (`execution/phase.py`): each phase owns
   `<WORKTREE_ROOT>/<run>/<phase>`, `_scratch/<phase>` and `_probe/<phase>` and
   removes them in `finally`; planted links are unlinked, never followed; a
-  cleanup failure never hides an error already raised. `WORKTREE_ROOT` may not
-  overlap the checkout.
+  cleanup failure never hides an error already raised. While it works it holds a
+  shared `flock` on `<run>/.aip-run.lock`; connect's `sweep_stale_runs` cleans
+  every marked run no live owner holds (a `kill -9` leftover). `WORKTREE_ROOT`
+  may not overlap the checkout, the git common dir or another worktree of the
+  repository.
 - **Git is untrusted input** (`execution/git.py`): a scratch environment, no
   hooks, fsmonitor, signing, network or credential helpers, every
   `filter`/`diff`/`merge` driver key emptied, `--attr-source=<empty tree>` on

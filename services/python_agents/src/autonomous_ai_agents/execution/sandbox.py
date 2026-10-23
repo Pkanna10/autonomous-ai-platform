@@ -51,7 +51,9 @@ the ``unshare`` process, which still holds the report pipe). The last assumes
 this ``/proc`` is the only procfs the sandbox can see: another procfs of the
 outer PID namespace mounted elsewhere (a ``/host/proc`` bind, say) would show
 the ``unshare`` process again, and the defensive tests walk every procfs mount
-so such a host fails them."""
+so such a host fails them. The network namespace isolates AF_INET and abstract
+AF_UNIX but not path-based AF_UNIX sockets (a host ``docker.sock`` or database
+socket): the launcher's seccomp filter, not this namespace, closes that."""
 
 PASS_THROUGH: tuple[str, ...] = tuple(
     "PATH LANG LC_ALL LC_CTYPE TERM TZ SYSTEMROOT VIRTUAL_ENV CONDA_PREFIX".split()

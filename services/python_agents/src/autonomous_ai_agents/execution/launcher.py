@@ -8,13 +8,21 @@ Linux, in order. The launcher first makes itself non-dumpable
 (``PR_SET_DUMPABLE`` 0) so a workload without capabilities cannot reach it
 through ``/proc/<pid>/mem``, ``/proc/<pid>/fd`` or ptrace. With the network
 isolated it runs inside ``sandbox.UNSHARE_ARGV`` (user, network, PID and IPC
-namespaces and a private ``/proc``). Then: ``lo`` up, ``PR_SET_NO_NEW_PRIVS``,
+namespaces and a private ``/proc``). Then: ``lo`` up, a seccomp filter that
+fails ``socket(AF_UNIX)`` with EACCES (the network namespace isolates AF_INET
+and *abstract* AF_UNIX but not *path*-based AF_UNIX, so without this a workload
+could still reach a host unix-domain service such as ``/var/run/docker.sock``
+or a local database socket; ``socketpair(AF_UNIX)`` and AF_INET are untouched,
+so multiprocessing and the loopback probe keep working), ``PR_SET_NO_NEW_PRIVS``,
 Landlock handling writes only (the writable dirs and ``/dev/null``:
 ``/dev/shm`` is deliberately *not* writable, because it is shared across runs
 and a workload could carry state from one timed run to the next; a per-run
 tmpfs for workloads that need shared memory is a Step 5 item), then the
-self-check: ``O_CREAT|O_EXCL`` in the probe dir must fail with EACCES/EPERM and
-a connect to the parent's 127.0.0.1 probe listener must fail.
+self-check: ``O_CREAT|O_EXCL`` in the probe dir must fail with EACCES/EPERM, a
+connect to the parent's 127.0.0.1 probe listener must fail, and creating an
+AF_UNIX socket must fail (proving the seccomp filter holds). The filter is
+installed in the launcher (PID 1 of the namespace, which holds CAP_SYS_ADMIN
+there) and inherited across ``fork``/``execve`` by the workload.
 
 Before the fork the launcher resets its Python-level signal handlers (SIGINT)
 to SIG_DFL: PID 1 of a namespace only receives a signal sent from inside it
@@ -38,6 +46,9 @@ workload's own exit status 125/126/127 is never read as a launcher failure.
 On darwin ``sandbox-exec`` applied the policy, so only the self-check runs and
 there is no privilege drop (there is no ``/proc``); report integrity there
 rests on ``sandbox-exec`` plus the process runner's outer cross-checks (U11).
+``(deny network*)`` there already covers AF_UNIX ``connect`` (a
+``network-outbound`` operation), so the seccomp filter and the AF_UNIX
+self-check are Linux-only.
 
 Under ``required`` a failed isolation step writes ``error`` and exits 125
 without exec; ``best_effort`` records the flag as false; ``off`` skips. Then
@@ -120,6 +131,25 @@ _TRUNCATE = 1 << 14  # ABI 3
 _DEV_NULL = "/dev/null"
 _O_PATH = getattr(os, "O_PATH", os.O_RDONLY)
 
+# seccomp(2): a classic-BPF filter that fails socket(AF_UNIX) with EACCES, so a
+# workload cannot reach a host unix-domain service the network namespace leaves
+# open (path-based AF_UNIX is not namespaced). socketpair(AF_UNIX) is a
+# different syscall and stays allowed; AF_INET stays allowed for the loopback
+# probe. Each arch: (AUDIT_ARCH, socket syscall nr, seccomp syscall nr).
+_SECCOMP_ARCH = {
+    "x86_64": (0xC000003E, 41, 317),
+    "aarch64": (0xC00000B7, 198, 277),
+}
+_AF_UNIX = 1
+_SECCOMP_SET_MODE_FILTER = 1
+_SECCOMP_RET_KILL_PROCESS = 0x80000000
+_SECCOMP_RET_ERRNO = 0x00050000
+_SECCOMP_RET_ALLOW = 0x7FFF0000
+_X32_SYSCALL_BIT = 0x40000000
+# BPF opcodes (linux/filter.h) and seccomp_data field offsets.
+_BPF_LD_W_ABS, _BPF_JEQ, _BPF_JGE, _BPF_RET = 0x20, 0x15, 0x35, 0x06
+_SD_NR, _SD_ARCH, _SD_ARG0 = 0, 4, 16
+
 _DENIED = frozenset({errno.EACCES, errno.EPERM})
 _UNREACHABLE = _DENIED | {
     errno.ECONNREFUSED,
@@ -152,6 +182,69 @@ def landlock_rules(writable: Sequence[str], *, abi: int) -> list[tuple[str, int]
     full, file_only = handled_access_fs(abi), file_access_fs(abi)
     rules = [(path, full if os.path.isdir(path) else file_only) for path in writable]
     return [*rules, (_DEV_NULL, file_only)]
+
+
+def seccomp_filter(machine: str) -> bytes:
+    """A classic-BPF program failing ``socket(AF_UNIX)`` with EACCES on ``machine``.
+
+    It validates the arch and kills a caller using a mismatched or x32 syscall
+    ABI (so a 32-bit syscall cannot smuggle a different numbering past the
+    check), lets every syscall but ``socket`` through, and denies only
+    ``socket`` calls whose domain is AF_UNIX. ``OSError(EOPNOTSUPP)`` for an
+    unsupported architecture, so the network self-check then fails closed.
+    """
+    try:
+        audit_arch, socket_nr, _ = _SECCOMP_ARCH[machine]
+    except KeyError:
+        raise OSError(
+            errno.EOPNOTSUPP, f"no seccomp filter for machine {machine!r}"
+        ) from None
+    deny = _SECCOMP_RET_ERRNO | errno.EACCES
+    program = [
+        (_BPF_LD_W_ABS, 0, 0, _SD_ARCH),
+        (_BPF_JEQ, 0, 6, audit_arch),  # not this arch -> kill (index 8)
+        (_BPF_LD_W_ABS, 0, 0, _SD_NR),
+        (_BPF_JGE, 4, 0, _X32_SYSCALL_BIT),  # x32 syscall -> kill (index 8)
+        (_BPF_JEQ, 0, 4, socket_nr),  # not socket() -> allow (index 9)
+        (_BPF_LD_W_ABS, 0, 0, _SD_ARG0),
+        (_BPF_JEQ, 0, 2, _AF_UNIX),  # socket() but not AF_UNIX -> allow (index 9)
+        (_BPF_RET, 0, 0, deny),  # 7: socket(AF_UNIX) -> EACCES
+        (_BPF_RET, 0, 0, _SECCOMP_RET_KILL_PROCESS),  # 8
+        (_BPF_RET, 0, 0, _SECCOMP_RET_ALLOW),  # 9
+    ]
+    return b"".join(struct.pack("=HBBI", *instruction) for instruction in program)
+
+
+def _install_seccomp(seccomp_nr: int, program: bytes) -> None:
+    """``seccomp(SET_MODE_FILTER)`` with ``program`` as its filter; ``OSError``."""
+    import ctypes
+
+    buffer = ctypes.create_string_buffer(program, len(program))
+    fprog = struct.pack("@HP", len(program) // 8, ctypes.addressof(buffer))
+    fprog_buffer = ctypes.create_string_buffer(fprog, len(fprog))
+    _checked(
+        int(
+            libc().syscall(
+                ctypes.c_long(seccomp_nr),
+                ctypes.c_long(_SECCOMP_SET_MODE_FILTER),
+                ctypes.c_long(0),
+                fprog_buffer,
+            )
+        )
+    )
+
+
+def real_seccomp() -> None:
+    """Install the AF_UNIX-blocking filter for this host; ``OSError``."""
+    machine = os.uname().machine
+    if machine not in _SECCOMP_ARCH:
+        raise OSError(errno.EOPNOTSUPP, f"no seccomp filter for machine {machine!r}")
+    _install_seccomp(_SECCOMP_ARCH[machine][2], seccomp_filter(machine))
+
+
+def real_unix_socket() -> None:
+    """Create and close an AF_UNIX socket; the self-check wants this to fail."""
+    socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).close()
 
 
 def strictest(*modes: str) -> str:
@@ -238,6 +331,8 @@ class Ops:
         cap_last_cap: Callable[[], int | None],
         open: Callable[[str, int, int], int],
         connect: Callable[[str, int], None],
+        seccomp: Callable[[], None],
+        unix_socket: Callable[[], None],
         pipe: Callable[[], tuple[int, int]],
         fork: Callable[[], int],
         execvp: Callable[[str, list[str]], NoReturn],
@@ -255,6 +350,8 @@ class Ops:
         self.cap_last_cap = cap_last_cap
         self.open = open
         self.connect = connect
+        self.seccomp = seccomp
+        self.unix_socket = unix_socket
         self.pipe = pipe
         self.fork = fork
         self.execvp = execvp
@@ -378,6 +475,8 @@ def default_ops() -> Ops:
         cap_last_cap=real_cap_last_cap,
         open=os.open,
         connect=real_connect,
+        seccomp=real_seccomp,
+        unix_socket=real_unix_socket,
         pipe=os.pipe,
         fork=os.fork,
         execvp=os.execvp,
@@ -485,6 +584,22 @@ def probe_connect(ops: Ops, port: int | None) -> str | None:
     return f"a connect to the parent's 127.0.0.1:{port} succeeded"
 
 
+def probe_unix(ops: Ops) -> str | None:
+    """``None`` when creating an AF_UNIX socket is denied, else why not.
+
+    After the seccomp filter, ``socket(AF_UNIX)`` must fail with EACCES/EPERM;
+    anything else means a workload could still open a path-based unix socket to
+    a host service.
+    """
+    try:
+        ops.unix_socket()
+    except OSError as error:
+        if error.errno in _DENIED:
+            return None
+        return f"the AF_UNIX probe got {_describe(error)}: it does not prove isolation"
+    return "an AF_UNIX socket could be created despite the network isolation"
+
+
 class RefusedError(Exception):
     """A ``required`` isolation part failed; the message goes in the report."""
 
@@ -532,10 +647,13 @@ def isolate(spec: LaunchSpec, ops: Ops) -> tuple[bool, bool]:
         # sharing its namespace cannot read /proc/<pid>/mem or /proc/<pid>/fd.
         ops.prctl(_PR_SET_DUMPABLE, 0)
         net.attempt("bringing up lo", lambda: loopback_up(ops))
+        net.attempt("blocking AF_UNIX sockets", ops.seccomp)
         fs.attempt("setting no_new_privs", lambda: ops.prctl(_PR_SET_NO_NEW_PRIVS, 1))
         fs.attempt("applying Landlock", lambda: landlock_restrict(ops, spec.writable))
     fs.verify(lambda: probe_write(ops, spec.probe_dir))
     net.verify(lambda: probe_connect(ops, spec.probe_port))
+    if spec.platform == "linux":
+        net.verify(lambda: probe_unix(ops))
     return fs.intact, net.intact
 
 

@@ -121,6 +121,53 @@ def test_landlock_rules_cover_writable_dirs_and_dev_null(tmp_path: Path) -> None
 
 
 # ---------------------------------------------------------------------------
+# The seccomp AF_UNIX filter (pure)
+# ---------------------------------------------------------------------------
+
+
+def _decode_bpf(program: bytes) -> list[tuple[int, int, int, int]]:
+    assert len(program) % 8 == 0
+    count = len(program) // 8
+    return [struct.unpack("=HBBI", program[i * 8 : i * 8 + 8]) for i in range(count)]
+
+
+@pytest.mark.parametrize(
+    ("machine", "audit_arch", "socket_nr"),
+    [("x86_64", 0xC000003E, 41), ("aarch64", 0xC00000B7, 198)],
+)
+def test_seccomp_filter_denies_only_socket_af_unix(
+    machine: str, audit_arch: int, socket_nr: int
+) -> None:
+    """
+    GIVEN a supported architecture
+    WHEN the AF_UNIX seccomp filter is built
+    THEN it checks the arch, allows every syscall but socket(), and returns
+        EACCES only for socket() whose domain is AF_UNIX (1)
+    """
+    instructions = _decode_bpf(launcher.seccomp_filter(machine))
+
+    assert instructions[0] == (0x20, 0, 0, 4)  # load arch
+    assert instructions[1] == (0x15, 0, 6, audit_arch)  # wrong arch -> kill
+    assert instructions[4] == (0x15, 0, 4, socket_nr)  # not socket() -> allow
+    assert instructions[6] == (0x15, 0, 2, 1)  # not AF_UNIX -> allow
+    assert instructions[7] == (0x06, 0, 0, 0x00050000 | errno.EACCES)  # EACCES
+    assert instructions[8] == (0x06, 0, 0, 0x80000000)  # kill
+    assert instructions[9] == (0x06, 0, 0, 0x7FFF0000)  # allow
+
+
+def test_seccomp_filter_refuses_an_unsupported_architecture() -> None:
+    """
+    GIVEN an architecture with no known syscall numbers
+    WHEN the filter is built
+    THEN it raises OSError(EOPNOTSUPP), so the network self-check fails closed
+    """
+    with pytest.raises(OSError) as info:
+        launcher.seccomp_filter("s390x")
+
+    assert info.value.errno == errno.EOPNOTSUPP
+
+
+# ---------------------------------------------------------------------------
 # The fake OS
 # ---------------------------------------------------------------------------
 
@@ -159,6 +206,7 @@ class FakeOS:
         fail: dict[str, Exception] | None = None,
         probe_error: OSError | None = EACCES,
         connect_error: OSError | None = ECONNREFUSED,
+        unix_error: OSError | None = EACCES,
         pid: int = 4242,
         status: int = 0,
         exec_error: Exception = ENOENT,
@@ -173,6 +221,7 @@ class FakeOS:
         self.fail = fail or {}
         self.probe_error = probe_error
         self.connect_error = connect_error
+        self.unix_error = unix_error
         self.pid = pid
         self.status = status
         self.exec_error = exec_error
@@ -257,6 +306,15 @@ class FakeOS:
         if self.connect_error is not None:
             raise self.connect_error
 
+    def seccomp(self) -> None:
+        self.calls.append(("seccomp",))
+        self._maybe_fail("seccomp")
+
+    def unix_socket(self) -> None:
+        self.calls.append(("unix_socket",))
+        if self.unix_error is not None:
+            raise self.unix_error
+
     def fork(self) -> int:
         self.calls.append(("fork",))
         return self.pid
@@ -287,6 +345,8 @@ class FakeOS:
             cap_last_cap=self.cap_last_cap,
             open=self.open,
             connect=self.connect,
+            seccomp=self.seccomp,
+            unix_socket=self.unix_socket,
             pipe=self.pipe,
             fork=self.fork,
             execvp=self.execvp,
@@ -393,9 +453,10 @@ def test_linux_applies_isolation_in_order_then_runs_and_reports(
     """
     GIVEN a Linux spec with both modes required and Landlock ABI 7
     WHEN the launcher runs a workload that exits 3
-    THEN the launcher makes itself non-dumpable, lo comes up, no_new_privs,
-        Landlock (writable dirs and /dev/null only, never /dev/shm), the write
-        probe, the connect probe and the clearing of Python's signal handlers
+    THEN the launcher makes itself non-dumpable, lo comes up, the AF_UNIX
+        seccomp filter, no_new_privs, Landlock (writable dirs and /dev/null
+        only, never /dev/shm), the write probe, the connect probe, the AF_UNIX
+        probe and the clearing of Python's signal handlers
         (so a workload cannot kill PID 1 with SIGINT) run in that order before
         the fork; the
         report carries the raw rusage, exit 3 and both flags true; the launcher
@@ -421,6 +482,7 @@ def test_linux_applies_isolation_in_order_then_runs_and_reports(
         "set_dumpable",
         "get_flags",
         "set_flags",
+        "seccomp",
         "no_new_privs",
         "abi",
         "create_ruleset",
@@ -428,6 +490,7 @@ def test_linux_applies_isolation_in_order_then_runs_and_reports(
         "restrict_self",
         "probe_write",
         "connect",
+        "unix_socket",
         "clear_handlers",
         "fork",
         "wait4",
@@ -540,6 +603,7 @@ def test_report_keys_match_the_launch_report_contract(
     [
         ("get_flags", "network", "bringing up lo"),
         ("set_flags", "network", "bringing up lo"),
+        ("seccomp", "network", "blocking AF_UNIX sockets"),
         ("no_new_privs", "fs", "no_new_privs"),
         ("abi", "fs", "Landlock"),
         ("create_ruleset", "fs", "Landlock"),
@@ -784,6 +848,81 @@ def test_a_connect_that_succeeds_under_best_effort_is_recorded(
     code, report = run_main(fake, pipe, spec_json(dirs, net="best_effort", fs="off"))
 
     assert (code, report["net_isolated"], report["error"]) == (0, False, None)
+
+
+def test_a_best_effort_seccomp_failure_records_false_and_still_runs(
+    dirs: Dirs, pipe: tuple[int, int]
+) -> None:
+    """
+    GIVEN the network best_effort and the seccomp install failing
+    WHEN the launcher runs
+    THEN net_isolated is false, there is no error and the workload still runs
+    """
+    fake = FakeOS(fail={"seccomp": OSError(errno.ENOSYS, "no seccomp")})
+
+    code, report = run_main(fake, pipe, spec_json(dirs, net="best_effort", fs="off"))
+
+    assert (code, report["net_isolated"], report["error"]) == (0, False, None)
+    assert "fork" in fake.names()
+    assert "unix_socket" not in fake.names()
+
+
+@pytest.mark.parametrize(
+    ("unix_error", "words"),
+    [
+        (None, "could be created"),
+        (OSError(errno.ENOSYS, "no socket"), "does not prove isolation"),
+    ],
+)
+def test_the_unix_self_check_fails_closed(
+    dirs: Dirs, pipe: tuple[int, int], unix_error: OSError | None, words: str
+) -> None:
+    """
+    GIVEN the seccomp install reported success but an AF_UNIX socket can still
+        be made, or the probe fails for another reason
+    WHEN the network is required
+    THEN the run is refused with exit 125 and no fork
+    """
+    fake = FakeOS(unix_error=unix_error)
+
+    code, report = run_main(fake, pipe, spec_json(dirs, fs="off"))
+
+    assert code == 125
+    assert words in str(report["error"])
+    assert "fork" not in fake.names()
+
+
+def test_a_reachable_unix_socket_under_best_effort_is_recorded(
+    dirs: Dirs, pipe: tuple[int, int]
+) -> None:
+    """
+    GIVEN the network best_effort and an AF_UNIX socket that can be created
+    WHEN the launcher runs
+    THEN net_isolated is false and the workload still runs
+    """
+    fake = FakeOS(unix_error=None)
+
+    code, report = run_main(fake, pipe, spec_json(dirs, net="best_effort", fs="off"))
+
+    assert (code, report["net_isolated"], report["error"]) == (0, False, None)
+    assert "fork" in fake.names()
+
+
+def test_the_unix_self_check_is_skipped_on_darwin(
+    dirs: Dirs, pipe: tuple[int, int]
+) -> None:
+    """
+    GIVEN a darwin spec (sandbox-exec's (deny network*) covers AF_UNIX connect)
+    WHEN the launcher runs
+    THEN neither the seccomp install nor the AF_UNIX probe runs
+    """
+    eperm = OSError(errno.EPERM, "Operation not permitted")
+    fake = FakeOS(platform="darwin", probe_error=eperm, connect_error=eperm)
+
+    code, report = run_main(fake, pipe, spec_json(dirs, platform="darwin"))
+
+    assert (code, report["net_isolated"]) == (0, True)
+    assert "seccomp" not in fake.names() and "unix_socket" not in fake.names()
 
 
 def test_a_spec_for_another_platform_is_refused(
@@ -1441,6 +1580,8 @@ def test_default_ops_are_the_real_os_calls() -> None:
     assert ops.capset is launcher.real_capset
     assert ops.capget is launcher.real_capget
     assert ops.cap_last_cap is launcher.real_cap_last_cap
+    assert ops.seccomp is launcher.real_seccomp
+    assert ops.unix_socket is launcher.real_unix_socket
     assert ops.clear_handlers is launcher.clear_signal_handlers
 
 
@@ -1558,6 +1699,72 @@ def test_real_connect_reaches_a_listener_and_raises_when_refused() -> None:
         connect("127.0.0.1", port)
     with pytest.raises(ConnectionRefusedError):
         connect("127.0.0.1", port)
+
+
+def test_real_unix_socket_creates_one_when_unconfined() -> None:
+    """
+    GIVEN an unconfined process
+    WHEN the AF_UNIX probe runs
+    THEN it creates and closes the socket without raising (the self-check then
+        reports network isolation is missing)
+    """
+    launcher.real_unix_socket()
+
+
+@linux_only
+def test_install_seccomp_maps_a_rejected_filter_to_oserror() -> None:
+    """
+    GIVEN an empty (zero-instruction) BPF program the kernel rejects
+    WHEN _install_seccomp calls seccomp(2) with it
+    THEN it raises OSError and installs nothing, so the test process is intact
+    """
+    seccomp_nr = launcher._SECCOMP_ARCH[os.uname().machine][2]
+
+    with pytest.raises(OSError) as info:
+        launcher._install_seccomp(seccomp_nr, b"")
+
+    assert info.value.errno == errno.EINVAL
+    launcher.real_unix_socket()  # proves no filter was installed in this process
+
+
+def test_real_seccomp_builds_the_filter_for_this_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    GIVEN a supported host
+    WHEN real_seccomp runs with the install stubbed out
+    THEN it installs this machine's filter with the right seccomp syscall nr
+    """
+    machine = os.uname().machine
+    if machine not in launcher._SECCOMP_ARCH:
+        pytest.skip(f"no seccomp numbers for {machine}")
+    calls: list[tuple[int, bytes]] = []
+    monkeypatch.setattr(
+        launcher, "_install_seccomp", lambda nr, program: calls.append((nr, program))
+    )
+
+    launcher.real_seccomp()
+
+    assert calls == [
+        (launcher._SECCOMP_ARCH[machine][2], launcher.seccomp_filter(machine))
+    ]
+
+
+def test_real_seccomp_refuses_an_unsupported_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    GIVEN a host whose architecture has no known syscall numbers
+    WHEN real_seccomp runs
+    THEN it raises OSError(EOPNOTSUPP) before touching the install path
+    """
+    fake = os.uname_result(("Linux", "h", "6", "#1", "s390x"))
+    monkeypatch.setattr(os, "uname", lambda: fake)
+
+    with pytest.raises(OSError) as info:
+        launcher.real_seccomp()
+
+    assert info.value.errno == errno.EOPNOTSUPP
 
 
 def test_restore_signals_resets_the_python_ignored_signals() -> None:
@@ -1755,6 +1962,7 @@ def launch(
 PROBE_WORKLOAD = r"""
 import errno, json, os, socket, sys
 outside, inside, shm, port = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+unix_path = sys.argv[5]
 def write(path, flags=os.O_WRONLY | os.O_CREAT | os.O_TRUNC):
     try:
         fd = os.open(path, flags, 0o600)
@@ -1769,6 +1977,26 @@ def connect(target):
     except OSError as error:
         return errno.errorcode.get(error.errno, str(error))
     return "ok"
+def make_unix():
+    try:
+        socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).close()
+    except OSError as error:
+        return errno.errorcode.get(error.errno, str(error))
+    return "ok"
+def unix_connect(path):
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    except OSError as error:
+        return errno.errorcode.get(error.errno, str(error))
+    try:
+        sock.settimeout(2)
+        sock.connect(path)
+        sock.sendall(b"EXFIL")
+    except OSError as error:
+        return errno.errorcode.get(error.errno, str(error))
+    finally:
+        sock.close()
+    return "ok"
 result = {"outside": write(outside), "inside": write(inside),
           "devnull": write(os.devnull), "home": write(os.environ["HOME"] + "/h")}
 if shm != "-":
@@ -1781,11 +2009,13 @@ try:
         result["own_loopback"] = connect(own.getsockname())
 except OSError as error:
     result["own_loopback"] = errno.errorcode.get(error.errno, str(error))
+result["unix_make"] = make_unix()
+result["unix_host"] = unix_connect(unix_path)
 print(json.dumps(result))
 """
 
 
-def probe_argv(dirs: Dirs, tmp_path: Path, port: int) -> list[str]:
+def probe_argv(dirs: Dirs, tmp_path: Path, port: int, unix_path: Path) -> list[str]:
     shm = f"/dev/shm/aip-test-{os.getpid()}-{time.monotonic_ns()}"
     return [
         sys.executable,
@@ -1795,6 +2025,7 @@ def probe_argv(dirs: Dirs, tmp_path: Path, port: int) -> list[str]:
         str(dirs.wt / "inside.txt"),
         shm if os.path.isdir("/dev/shm") else "-",
         str(port),
+        str(unix_path),
     ]
 
 
@@ -1805,23 +2036,37 @@ def listener() -> Iterator[int]:
         yield server.getsockname()[1]
 
 
+@pytest.fixture
+def unix_listener(tmp_path: Path) -> Iterator[Path]:
+    """A host AF_UNIX listener the sandboxed run must not reach (exfil target)."""
+    path = tmp_path / "host.sock"
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        server.bind(str(path))
+        server.listen(8)
+        yield path
+    finally:
+        server.close()
+
+
 @linux_only
 @pytest.mark.usefixtures("linux_sandbox")
 def test_real_launcher_confines_writes_and_network(
-    dirs: Dirs, tmp_path: Path, listener: int
+    dirs: Dirs, tmp_path: Path, listener: int, unix_listener: Path
 ) -> None:
     """
     GIVEN the real launcher under unshare with both modes required
-    WHEN the workload writes inside and outside, and connects out and to
-        its own loopback
+    WHEN the workload writes inside and outside, connects out and to its own
+        loopback, and tries to reach a host AF_UNIX socket
     THEN outside is EACCES, inside, HOME and /dev/null (with O_TRUNC) work,
         /dev/shm is now denied (shared across runs, removed from the rules),
-        the parent's listener is unreachable, its own lo works, and the report
-        says both are isolated
+        the parent's listener is unreachable, its own lo works, creating an
+        AF_UNIX socket and reaching the host unix socket are both denied by the
+        seccomp filter (no breach), and the report says both are isolated
     """
     run = launch(
         dirs,
-        probe_argv(dirs, tmp_path, listener),
+        probe_argv(dirs, tmp_path, listener, unix_listener),
         network="required",
         fs="required",
         port=listener,
@@ -1835,6 +2080,8 @@ def test_real_launcher_confines_writes_and_network(
     assert results.get("shm", "EACCES") in ("EACCES", "EPERM")
     assert results["parent"] in ("ECONNREFUSED", "ENETUNREACH")
     assert results["own_loopback"] == "ok"
+    assert results["unix_make"] in ("EACCES", "EPERM")
+    assert results["unix_host"] in ("EACCES", "EPERM")
     assert run.report is not None
     assert (run.report["fs_isolated"], run.report["net_isolated"]) == (True, True)
     assert (run.report["exit"], run.report["error"]) == (0, None)
@@ -1843,24 +2090,27 @@ def test_real_launcher_confines_writes_and_network(
 @linux_only
 @pytest.mark.usefixtures("linux_sandbox")
 def test_real_launcher_control_run_is_not_isolated(
-    dirs: Dirs, tmp_path: Path, listener: int
+    dirs: Dirs, tmp_path: Path, listener: int, unix_listener: Path
 ) -> None:
     """
     GIVEN the same workload with both modes off (the control)
     WHEN it runs
-    THEN the outside write and the parent connect succeed and both flags are
-        false, so the confined run above proves something
+    THEN the outside write, the parent connect and reaching the host AF_UNIX
+        socket all succeed and both flags are false, so the confined run above
+        proves something
     """
     run = launch(
         dirs,
-        probe_argv(dirs, tmp_path, listener),
+        probe_argv(dirs, tmp_path, listener, unix_listener),
         network="off",
         fs="off",
         port=listener,
     )
 
     assert run.code == 0, run.err
-    assert run.results()["outside"] == run.results()["parent"] == "ok"
+    results = run.results()
+    assert results["outside"] == results["parent"] == "ok"
+    assert results["unix_make"] == results["unix_host"] == "ok"
     assert run.report is not None
     assert (run.report["fs_isolated"], run.report["net_isolated"]) == (False, False)
 
@@ -2391,17 +2641,18 @@ def darwin_sandbox() -> None:
 @darwin_only
 @pytest.mark.usefixtures("darwin_sandbox")
 def test_real_launcher_under_sandbox_exec(
-    dirs: Dirs, tmp_path: Path, listener: int
+    dirs: Dirs, tmp_path: Path, listener: int, unix_listener: Path
 ) -> None:
     """
     GIVEN the real launcher under sandbox-exec with both modes required
     WHEN the workload writes inside and outside and connects out
     THEN outside is denied, inside, HOME and /dev/null work, the parent's
-        listener is unreachable and the report says both are isolated
+        listener and the host AF_UNIX socket are unreachable ((deny network*)
+        covers AF_UNIX connect) and the report says both are isolated
     """
     run = launch(
         dirs,
-        probe_argv(dirs, tmp_path, listener),
+        probe_argv(dirs, tmp_path, listener, unix_listener),
         network="required",
         fs="required",
         port=listener,
@@ -2414,3 +2665,4 @@ def test_real_launcher_under_sandbox_exec(
     assert results["outside"] in ("EPERM", "EACCES")
     assert results["inside"] == results["home"] == results["devnull"] == "ok"
     assert results["parent"] != "ok"
+    assert results["unix_host"] != "ok"

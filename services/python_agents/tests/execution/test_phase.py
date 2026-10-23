@@ -7,9 +7,12 @@ from a small double.
 
 from __future__ import annotations
 
+import fcntl
 import os
 import shutil
+import signal
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -18,8 +21,10 @@ import pytest
 from autonomous_ai_agents.common.config import settings
 from autonomous_ai_agents.common.errors import EngineError, RepoTamperedError
 from autonomous_ai_agents.execution import git as git_module
+from autonomous_ai_agents.execution import phase as phase_module
 from autonomous_ai_agents.execution.git import GitError, GitWorkspace
 from autonomous_ai_agents.execution.phase import (
+    RUN_LOCK,
     PhaseDirs,
     PhaseGit,
     cleanup_phases,
@@ -27,6 +32,7 @@ from autonomous_ai_agents.execution.phase import (
     phase_dirs,
     raise_left,
     require_dir_name,
+    sweep_stale_runs,
 )
 from autonomous_ai_agents.execution.protocols import WorktreeHandle
 
@@ -457,3 +463,257 @@ def test_owned_phases_returns_normally_when_all_is_clean(root: Path) -> None:
         pass
 
     assert not dirs.run.exists()
+
+
+# ---------------------------------------------------------------------------
+# Crash recovery: the run lock and the stale-run sweep
+# ---------------------------------------------------------------------------
+
+_KILLED_CHILD = """
+import os, signal, sys
+from pathlib import Path
+from autonomous_ai_agents.execution.git import GitWorkspace
+from autonomous_ai_agents.execution.phase import owned_phases, phase_dirs
+
+git = GitWorkspace(Path(sys.argv[1]))
+dirs = phase_dirs(sys.argv[2], "trial-h1")
+with owned_phases(git, "the trial", dirs):
+    git.add_worktree(dirs.worktree, git.head_commit())
+    (dirs.scratch / "home").mkdir(parents=True)
+    dirs.probe.mkdir(parents=True)
+    os.kill(os.getpid(), signal.SIGKILL)
+"""
+
+
+def _kill_mid_phase(git: GitWorkspace, root: Path, run: str) -> PhaseDirs:
+    """A child process that owns a trial phase and is killed with -9 in it."""
+    env = {**os.environ, "WORKTREE_ROOT": str(root)}
+    child = subprocess.run(
+        [sys.executable, "-c", _KILLED_CHILD, str(git.repo), run],
+        env=env,
+        check=False,
+        timeout=120,
+    )
+    assert child.returncode == -signal.SIGKILL
+    return phase_dirs(run, "trial-h1")
+
+
+def _admin_dirs(git: GitWorkspace) -> list[str]:
+    admin = git.common_dir() / "worktrees"
+    return sorted(os.listdir(admin)) if admin.is_dir() else []
+
+
+def test_an_owner_marks_its_run_while_it_works_and_leaves_nothing(root: Path) -> None:
+    dirs = made(phase_dirs(RUN, "baseline"))
+
+    with owned_phases(Recorder(), "the baseline", dirs):
+        assert (dirs.run / RUN_LOCK).is_file()
+
+    assert not dirs.run.exists()
+
+
+def test_a_run_killed_with_minus_9_is_recovered_by_the_next_sweep(
+    root: Path, tmp_path: Path
+) -> None:
+    """
+    GIVEN a process killed with SIGKILL in the middle of a trial phase: its
+        worktree, its registration, its scratch and probe dirs and the
+        run's marker are left
+    WHEN the next run sweeps WORKTREE_ROOT
+    THEN the registration and every dir are gone, git lists only the main
+        worktree, and one note says what was removed
+    """
+    git = _repo(tmp_path)
+    dirs = _kill_mid_phase(git, root, "killed")
+    assert dirs.worktree.is_dir() and (dirs.run / RUN_LOCK).is_file()
+    assert _admin_dirs(git) == ["trial-h1"]
+
+    [note] = sweep_stale_runs(git)
+
+    assert "killed" in note and "trial-h1" in note
+    assert not dirs.run.exists()
+    assert _admin_dirs(git) == []
+    assert _registered(git).count("worktree ") == 1
+    assert sweep_stale_runs(git) == []
+
+
+def test_a_live_owners_run_is_never_swept(root: Path, tmp_path: Path) -> None:
+    """
+    GIVEN an owner working in its phase (its lock held), and a dir with a
+        marker that another process holds
+    WHEN a sweep runs meanwhile
+    THEN nothing of either is touched
+    """
+    git = _repo(tmp_path)
+    dirs = phase_dirs(RUN, "baseline")
+    other = made(phase_dirs("other", "profile"))
+    held = os.open(other.run / RUN_LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(held, fcntl.LOCK_SH)
+    try:
+        with owned_phases(git, "the baseline", dirs):
+            git.add_worktree(dirs.worktree, git.head_commit())
+
+            assert sweep_stale_runs(git) == []
+
+            assert dirs.worktree.is_dir() and _admin_dirs(git) == ["baseline"]
+        assert other.worktree.is_dir() and other.scratch.is_dir()
+    finally:
+        os.close(held)
+    assert not dirs.run.exists()
+
+
+def test_the_sweep_leaves_unmarked_dirs_links_and_odd_names_alone(
+    root: Path, tmp_path: Path
+) -> None:
+    """
+    GIVEN under WORKTREE_ROOT: a user's dir without the marker, a link to a
+        marked run outside the root, a marked dir whose name no run can
+        have, a plain file, and the preflight probe's dir
+    WHEN a sweep runs
+    THEN none of them is touched and no note is made
+    """
+    (root / "mine" / "work").mkdir(parents=True)
+    (root / "preflight-x1" / "preflight").mkdir(parents=True)
+    outside = made(phase_dirs("away", "baseline"))
+    shutil.move(outside.run, tmp_path / "away")
+    (tmp_path / "away" / RUN_LOCK).write_text("")
+    os.symlink(tmp_path / "away", root / "linked")
+    (root / "_odd").mkdir()
+    (root / "_odd" / RUN_LOCK).write_text("")
+    (root / "file").write_text("x")
+
+    assert sweep_stale_runs(Recorder()) == []
+
+    assert (root / "mine" / "work").is_dir()
+    assert (root / "preflight-x1" / "preflight").is_dir()
+    assert (tmp_path / "away" / "baseline").is_dir()
+    assert (root / "_odd" / RUN_LOCK).is_file() and (root / "file").is_file()
+
+
+def test_the_sweep_with_no_root_yet_has_nothing_to_do(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "WORKTREE_ROOT", tmp_path / "never-made")
+
+    assert sweep_stale_runs(Recorder()) == []
+
+
+def test_a_stale_marker_alone_is_removed_with_its_run(root: Path) -> None:
+    """A run killed after its cleanup but before it dropped the marker."""
+    (root / RUN).mkdir()
+    (root / RUN / RUN_LOCK).write_text("")
+    git = Recorder()
+
+    [note] = sweep_stale_runs(git)
+
+    assert "no phase dirs" in note
+    assert git.events == [] and not (root / RUN).exists()
+
+
+def test_what_the_sweep_cannot_remove_is_reported_and_retried_next_time(
+    root: Path,
+) -> None:
+    """
+    GIVEN a stale marked run with a phase whose worktree cannot be removed
+        and an entry no phase can be named
+    WHEN a sweep runs
+    THEN the note names both, the marker stays (so the next sweep tries
+        again), and once the failure is gone the next sweep removes the rest
+    """
+    dirs = made(phase_dirs(RUN, "trial-h1"))
+    (dirs.run / RUN_LOCK).write_text("")
+    (dirs.run / "_scratch" / "x..y").mkdir()
+    git = Recorder(
+        fail={"remove_worktree": PermissionError(1, "Operation not permitted")}
+    )
+
+    [note] = sweep_stale_runs(git)
+
+    assert str(dirs.worktree) in note and "x..y" in note
+    assert "remove what is left by hand" in note
+    assert (dirs.run / RUN_LOCK).is_file() and dirs.worktree.is_dir()
+    shutil.rmtree(dirs.run / "_scratch" / "x..y")
+
+    [again] = sweep_stale_runs(Recorder())
+
+    assert "trial-h1" in again and not dirs.run.exists()
+
+
+def test_a_marker_replaced_after_it_was_opened_is_left(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sweep that locked a marker an owner has since replaced does nothing."""
+    dirs = made(phase_dirs(RUN, "baseline"))
+    (dirs.run / RUN_LOCK).write_text("")
+    monkeypatch.setattr(phase_module, "_same_file", lambda fd, path: False)
+
+    assert sweep_stale_runs(Recorder()) == []
+
+    assert dirs.worktree.is_dir()
+
+
+def test_same_file_tells_a_replaced_or_missing_marker(tmp_path: Path) -> None:
+    path = tmp_path / RUN_LOCK
+    path.write_text("")
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        assert phase_module._same_file(fd, path)
+        os.unlink(path)
+        assert not phase_module._same_file(fd, path)
+        path.write_text("")
+        assert not phase_module._same_file(fd, path)
+    finally:
+        os.close(fd)
+
+
+def test_an_owner_that_cannot_mark_its_run_still_works_and_cleans_up(
+    root: Path, tmp_path: Path
+) -> None:
+    """
+    GIVEN <run> replaced by a link before the owner starts (fs=off)
+    WHEN the owner works
+    THEN no marker is made through the link, and the cleanup reports <run>
+    """
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    os.symlink(target, root / RUN)
+    dirs = phase_dirs(RUN, "baseline")
+
+    with pytest.raises(EngineError, match="could not clean up"):
+        with owned_phases(Recorder(), "the baseline", dirs):
+            pass
+
+    assert os.listdir(target) == []
+
+
+def test_a_second_owner_of_the_run_keeps_the_marker_for_the_last_one(
+    root: Path,
+) -> None:
+    """
+    GIVEN two owners of one run working at once (the combine's sides, or two
+        resumes)
+    WHEN the first one ends
+    THEN the marker stays while the second works, and goes with it
+    """
+    first, second = made(phase_dirs(RUN, "combine")), made(phase_dirs(RUN, "profile"))
+
+    with owned_phases(Recorder(), "the profiler", second):
+        with owned_phases(Recorder(), "the combine", first):
+            pass
+        assert (second.run / RUN_LOCK).is_file()
+
+    assert not second.run.exists()
+
+
+def test_an_owner_whose_cleanup_left_something_drops_the_marker(root: Path) -> None:
+    """What is left is the owner's error to report; the marker goes with it."""
+    dirs = made(phase_dirs(RUN, "baseline"))
+    git = Recorder(
+        fail={"remove_worktree": PermissionError(1, "Operation not permitted")}
+    )
+
+    with pytest.raises(EngineError, match="could not clean up"):
+        with owned_phases(git, "the baseline", dirs):
+            pass
+
+    assert os.listdir(dirs.run) == ["baseline"]

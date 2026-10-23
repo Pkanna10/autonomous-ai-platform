@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import FrozenInstanceError
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from langchain_core.runnables import RunnableConfig
@@ -28,6 +29,8 @@ from autonomous_ai_agents.common.config import settings
 from autonomous_ai_agents.common.errors import (
     InvalidRecordIdError,
     ProjectConflictError,
+    RepoTamperedError,
+    add_spend,
 )
 from autonomous_ai_agents.common.models import (
     ENGINE_SERDE_ALLOWLIST,
@@ -624,6 +627,60 @@ class TestOrchestrator:
 
             assert seen[-1] is last_phase, run_id
             assert ctx.repository.get_run(run_id) is not None, run_id
+
+    @pytest.mark.parametrize("ending", ["paused", "done", "failed"])
+    def test_a_stream_held_at_its_last_event_no_longer_drives_the_run(
+        self,
+        make_context: ContextFactory,
+        sample_project: Project,
+        sample_workload: Workload,
+        sample_objective: Objective,
+        sample_guardrails: tuple[Guardrail, ...],
+        h1_cache: Hypothesis,
+        h4_behaviour: Hypothesis,
+        ending: str,
+    ) -> None:
+        """
+        GIVEN a consumer that stops at the stream's own last event (paused,
+            done or failed) and still holds the generator
+        WHEN the run is resumed
+        THEN the stream no longer claims the run id: a paused run continues
+            to done, and a finished or failed one is refused only because it
+            is not waiting for approval, never because a call drives it
+        """
+        if ending == "failed":
+            script = ScriptedOutcome(samples={METRIC_WALL_TIME_S: (1.8, 1.8)})
+            ctx = make_context(baseline_runner=StubBaselineRunner(script))
+        else:
+            ctx = make_context([h4_behaviour if ending == "paused" else h1_cache])
+        orchestrator = Orchestrator(context=ctx)
+        run_id = f"run-held-{ending}"
+        events = orchestrator.stream(
+            sample_project,
+            [sample_workload],
+            [sample_objective],
+            sample_guardrails,
+            run_id=run_id,
+        )
+        for event in events:
+            if event.message.startswith(("paused:", "done:")) or event.phase is (
+                RunPhase.failed
+            ):
+                break
+        assert event.message.startswith(ending) or event.level is EventLevel.error
+        saved = ctx.repository.get_run(run_id)
+        assert saved is not None
+        approved = tuple(saved["pending_approval_ids"])
+        decision = ApprovalDecision(approved_verdict_ids=approved, approver="pk")
+
+        if ending == "paused":
+            assert len(approved) == 1
+            assert orchestrator.resume(run_id, decision).status == "done"
+        else:
+            with pytest.raises(ValueError) as refused:
+                orchestrator.resume(run_id, decision)
+            assert str(refused.value) == (f"run {run_id!r} is not waiting for approval")
+        assert next(events, None) is None
 
     def test_stream_stops_at_the_gate_and_resume_continues(
         self,
@@ -1306,3 +1363,306 @@ class TestOrchestratorStep2:
         assert f"Measured commit: {FAKE_COMMIT}" in delivery.report_markdown
         codes = [e.data.get("code") for e in state["events"]]
         assert "isolation" in codes
+
+
+class TestConcurrentCalls:
+    def test_a_second_resume_of_a_run_being_resumed_is_refused(
+        self,
+        make_context: ContextFactory,
+        sample_project: Project,
+        sample_workload: Workload,
+        sample_objective: Objective,
+        sample_guardrails: tuple[Guardrail, ...],
+        h4_behaviour: Hypothesis,
+        design_scripts: dict[str, ScriptedOutcome],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        GIVEN a run paused at the gate, two orchestrators (separate contexts)
+              on its checkpointer, and alice's approval held after resume
+              checked the gate but before the graph continued
+        WHEN bob's rejection arrives meanwhile
+        THEN bob is refused as not waiting for approval, alice's run
+             finishes with her decision only, and state and repository agree
+        """
+        saver = build_checkpointer()
+        combiner = _EchoCombiner()
+
+        def context() -> NodeContext:
+            return make_context(
+                [h4_behaviour],
+                runner=_CommittingRunner(StubTrialRunner(design_scripts)),
+                preflight=FakePreflight(),
+                combiner=combiner,
+                publisher=FakePublisher("diff"),
+                repository=InMemoryRepository(),
+            )
+
+        first = Orchestrator(context=context(), checkpointer=saver)
+        second = Orchestrator(context=context(), checkpointer=saver)
+        paused = first.run(
+            sample_project,
+            [sample_workload],
+            [sample_objective],
+            sample_guardrails,
+            run_id="run-race",
+        )
+        assert paused.approval_request is not None
+        (item,) = paused.approval_request.items
+        entered, release = threading.Event(), threading.Event()
+        invoke = first.graph.invoke
+
+        def held_invoke(*args: Any, **kwargs: Any) -> Any:
+            entered.set()
+            assert release.wait(30)
+            return invoke(*args, **kwargs)
+
+        monkeypatch.setattr(first.graph, "invoke", held_invoke)
+        approve = ApprovalDecision(
+            approved_verdict_ids=(item.verdict_id,), approver="alice"
+        )
+        reject = ApprovalDecision(
+            rejected_verdict_ids=(item.verdict_id,), approver="bob"
+        )
+        results: list[EngineRunResult] = []
+        alice = threading.Thread(
+            target=lambda: results.append(first.resume("run-race", approve))
+        )
+        alice.start()
+        try:
+            assert entered.wait(30)
+            with pytest.raises(ValueError, match="not waiting for approval"):
+                second.resume("run-race", reject)
+        finally:
+            release.set()
+            alice.join(30)
+
+        [result] = results
+        assert result.status == "done"
+        approval = result.state["approval"]
+        assert approval is not None and approval.approver == "alice"
+        delivery = result.state["delivery"]
+        assert delivery is not None and delivery.kind is DeliveryKind.branch
+        assert len(combiner.kept) == 1
+        assert second.context.repository.get_run("run-race") is None
+        verdicts = first.context.repository.list_verdicts("run-race")
+        assert verdicts[-1].outcome is VerdictOutcome.keep
+        with pytest.raises(ValueError, match="not waiting for approval"):
+            second.resume("run-race", reject)
+
+    def test_a_second_run_with_a_run_id_being_started_is_refused(
+        self,
+        make_context: ContextFactory,
+        sample_project: Project,
+        sample_workload: Workload,
+        sample_objective: Objective,
+        sample_guardrails: tuple[Guardrail, ...],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        GIVEN one orchestrator's run held right after its existence check
+        WHEN another orchestrator on the same checkpointer starts that run id
+        THEN the second is refused as already existing, and the first runs
+        """
+        saver = build_checkpointer()
+        first = Orchestrator(context=make_context(), checkpointer=saver)
+        second = Orchestrator(context=make_context(), checkpointer=saver)
+        entered, release = threading.Event(), threading.Event()
+        invoke = first.graph.invoke
+
+        def held_invoke(*args: Any, **kwargs: Any) -> Any:
+            entered.set()
+            assert release.wait(30)
+            return invoke(*args, **kwargs)
+
+        monkeypatch.setattr(first.graph, "invoke", held_invoke)
+        inputs = (
+            sample_project,
+            [sample_workload],
+            [sample_objective],
+            sample_guardrails,
+        )
+        results: list[EngineRunResult] = []
+        starter = threading.Thread(
+            target=lambda: results.append(first.run(*inputs, run_id="run-twin"))
+        )
+        starter.start()
+        try:
+            assert entered.wait(30)
+            with pytest.raises(ValueError, match="already exists"):
+                second.run(*inputs, run_id="run-twin")
+            with pytest.raises(ValueError, match="already exists"):
+                next(second.stream(*inputs, run_id="run-twin"))
+        finally:
+            release.set()
+            starter.join(30)
+
+        [result] = results
+        assert result.run_id == "run-twin"
+
+
+class _AbortingRunner:
+    """Commits each trial (as the real runner does) but raises ``error`` for
+    one title after noting the money that attempt spent on it."""
+
+    def __init__(self, inner: StubTrialRunner, title: str, error: Exception) -> None:
+        self._inner, self._title, self._error = _CommittingRunner(inner), title, error
+
+    def run(
+        self,
+        hypothesis: Hypothesis,
+        workloads: Sequence[Workload],
+        baseline: Baseline,
+        *,
+        round: int,
+        branch: str,
+        budget_usd: float,
+        brief: TrialBrief,
+    ) -> Trial:
+        if hypothesis.title == self._title:
+            add_spend(self._error, 0.05, 30)
+            raise self._error
+        return self._inner.run(
+            hypothesis,
+            workloads,
+            baseline,
+            round=round,
+            branch=branch,
+            budget_usd=budget_usd,
+            brief=brief,
+        )
+
+
+class TestFailedRunsKeepWhatTheyDid:
+    @pytest.fixture
+    def inputs(
+        self,
+        sample_project: Project,
+        sample_workload: Workload,
+        sample_objective: Objective,
+        sample_guardrails: tuple[Guardrail, ...],
+    ) -> tuple[Project, list[Workload], list[Objective], tuple[Guardrail, ...]]:
+        return sample_project, [sample_workload], [sample_objective], sample_guardrails
+
+    @pytest.mark.parametrize("mode", ["run", "stream"])
+    def test_an_abort_mid_trials_keeps_the_money_the_trials_and_the_refs(
+        self,
+        make_context: ContextFactory,
+        inputs: tuple[Project, list[Workload], list[Objective], tuple[Guardrail, ...]],
+        h1_cache: Hypothesis,
+        h3_noise: Hypothesis,
+        design_scripts: dict[str, ScriptedOutcome],
+        mode: str,
+    ) -> None:
+        """
+        GIVEN H1 committed (0.12 USD), then H3 aborted as tampering after
+              spending 0.05 USD
+        WHEN the run fails
+        THEN the failed state and the repository row hold 0.17 USD, the
+             state holds H1's trial, and an event lists H1's ref with a
+             command that deletes exactly it
+        """
+        runner = _AbortingRunner(
+            StubTrialRunner(design_scripts),
+            h3_noise.title,
+            RepoTamperedError("the repository changed while the trial ran"),
+        )
+        ctx = make_context([h1_cache, h3_noise], runner=runner)
+        orchestrator = Orchestrator(context=ctx)
+
+        if mode == "run":
+            result = orchestrator.run(*inputs, run_id="run-abort", max_cost_usd=1.0)
+            assert result.status == "failed"
+        else:
+            events = list(
+                orchestrator.stream(*inputs, run_id="run-abort", max_cost_usd=1.0)
+            )
+            assert events[-1].level is EventLevel.error
+
+        saved = ctx.repository.get_run("run-abort")
+        assert saved is not None and saved["phase"] is RunPhase.failed
+        assert saved["cost_usd"] == pytest.approx(0.17)
+        [trial] = saved["trials"]
+        assert trial.hypothesis_id == h1_cache.id
+        ref = f"refs/heads/engine/trial-run-abort-{h1_cache.id}"
+        [left] = [e for e in saved["events"] if e.data.get("code") == "trial_refs_left"]
+        assert left.level is EventLevel.warning and ref in left.message
+        assert f"delete {ref} {'e' * 40}" in str(left.data["cleanup"])
+
+    @pytest.mark.parametrize("mode", ["run", "stream"])
+    def test_a_bug_mid_trials_saves_the_failed_run_then_propagates(
+        self,
+        make_context: ContextFactory,
+        inputs: tuple[Project, list[Workload], list[Objective], tuple[Guardrail, ...]],
+        h1_cache: Hypothesis,
+        h3_noise: Hypothesis,
+        design_scripts: dict[str, ScriptedOutcome],
+        mode: str,
+    ) -> None:
+        """
+        GIVEN a bug (RuntimeError) in H3's trial after H1 ran
+        WHEN the run is driven
+        THEN the RuntimeError reaches the caller, and the audit row is the
+             failed run with everything charged, not the initial state
+        """
+        runner = _AbortingRunner(
+            StubTrialRunner(design_scripts), h3_noise.title, RuntimeError("bug")
+        )
+        ctx = make_context([h1_cache, h3_noise], runner=runner)
+        orchestrator = Orchestrator(context=ctx)
+
+        with pytest.raises(RuntimeError, match="bug"):
+            if mode == "run":
+                orchestrator.run(*inputs, run_id="run-bug", max_cost_usd=1.0)
+            else:
+                list(orchestrator.stream(*inputs, run_id="run-bug", max_cost_usd=1.0))
+
+        saved = ctx.repository.get_run("run-bug")
+        assert saved is not None and saved["phase"] is RunPhase.failed
+        assert saved["error"] == "RuntimeError: bug"
+        assert saved["cost_usd"] == pytest.approx(0.17)
+
+    def test_a_failure_without_committed_trials_lists_no_refs(
+        self,
+        make_context: ContextFactory,
+        inputs: tuple[Project, list[Workload], list[Objective], tuple[Guardrail, ...]],
+    ) -> None:
+        script = ScriptedOutcome(samples={METRIC_WALL_TIME_S: (1.8, 1.8)})
+        ctx = make_context(baseline_runner=StubBaselineRunner(script))
+
+        result = Orchestrator(context=ctx).run(*inputs, run_id="run-norefs")
+
+        codes = [e.data.get("code") for e in result.state["events"]]
+        assert "trial_refs_left" not in codes
+
+    def test_a_bug_with_no_checkpoint_propagates_and_saves_nothing_more(
+        self,
+        make_context: ContextFactory,
+        inputs: tuple[Project, list[Workload], list[Objective], tuple[Guardrail, ...]],
+    ) -> None:
+        """
+        GIVEN a checkpointer that never returns a checkpoint and a baseline
+              runner with a bug
+        WHEN the orchestrator runs
+        THEN the bug propagates and the repository keeps only the initial row:
+             no failed state is invented from nothing
+        """
+
+        class _Buggy:
+            def measure(
+                self, workloads: Sequence[Workload], *, run_id: str, commit: str | None
+            ) -> tuple[Measurement, ...]:
+                raise RuntimeError("bug")
+
+        ctx = make_context(baseline_runner=_Buggy())
+        saver = _ForgetfulSaver(
+            serde=JsonPlusSerializer(allowed_msgpack_modules=ENGINE_SERDE_ALLOWLIST)
+        )
+
+        with pytest.raises(RuntimeError, match="bug"):
+            Orchestrator(context=ctx, checkpointer=saver).run(
+                *inputs, run_id="run-lost"
+            )
+
+        saved = ctx.repository.get_run("run-lost")
+        assert saved is not None and saved["phase"] is RunPhase.connect

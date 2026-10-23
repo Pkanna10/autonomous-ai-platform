@@ -12,6 +12,7 @@ import logging
 import uuid
 from datetime import UTC, date, datetime
 from enum import StrEnum
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -546,6 +547,31 @@ def test_project_root_path_must_be_absolute_without_parent_segments(
     """
     with pytest.raises(ValidationError):
         Project(name="x", root_path=bad_path)
+
+
+def test_project_root_path_is_one_spelling_per_directory(tmp_path: Path) -> None:
+    """
+    GIVEN one repository spelled with a trailing slash, a doubled slash, a
+        '.' segment, or through a symlink
+    WHEN constructing Projects with those root paths
+    THEN every root_path is the same canonical path (one project per repo
+        root: the persistence clash check compares this string)
+    """
+    repo = tmp_path.resolve() / "repo"
+    repo.mkdir()
+    (tmp_path / "alias").symlink_to(repo)
+    spellings = [
+        f"{repo}/",
+        f"{repo.parent}//repo",
+        f"{repo}/.",
+        str(tmp_path / "alias"),
+    ]
+
+    roots = {Project(name="x", root_path=spelled).root_path for spelled in spellings}
+
+    assert roots == {str(repo)}
+    assert Project(name="x", root_path="/srv/missing/").root_path == "/srv/missing"
+    assert Project(name="x", root_path="/srv/a\0b//").root_path == "/srv/a\0b"
 
 
 def test_project_defaults() -> None:

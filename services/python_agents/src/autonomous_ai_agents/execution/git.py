@@ -583,6 +583,11 @@ class GitWorkspace:
                 current = {}
         return entries
 
+    def registered_worktrees(self) -> tuple[tuple[Path, bool], ...]:
+        """Every worktree git lists (the main one first), with whether git
+        calls it prunable (its directory is gone)."""
+        return tuple((Path(e["worktree"]), "prunable" in e) for e in self._worktrees())
+
     def checked_out_branches(self) -> frozenset[str]:
         return frozenset(e["branch"] for e in self._worktrees() if "branch" in e)
 

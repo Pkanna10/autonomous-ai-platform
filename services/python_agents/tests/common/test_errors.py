@@ -24,6 +24,9 @@ from autonomous_ai_agents.common.errors import (
     PreflightError,
     ProjectConflictError,
     RepoTamperedError,
+    TrialUnaffordable,
+    add_spend,
+    spend_of,
 )
 from autonomous_ai_agents.orchestrator import nodes
 
@@ -88,7 +91,12 @@ def test_every_error_class_has_a_one_line_docstring() -> None:
         and obj.__module__ == errors.__name__
     }
 
-    assert defined == {EngineError, *ENGINE_ERRORS, *TRANSPORT_OUTCOMES}
+    assert defined == {
+        EngineError,
+        *ENGINE_ERRORS,
+        *TRANSPORT_OUTCOMES,
+        TrialUnaffordable,
+    }
     for cls in defined:
         doc = cls.__doc__
         assert doc is not None, cls.__name__
@@ -104,3 +112,27 @@ def test_nodes_re_exports_the_moved_errors() -> None:
     """
     assert nodes.EngineError is EngineError
     assert nodes.DeliveryError is DeliveryError
+
+
+def test_an_unaffordable_trial_is_a_budget_stop() -> None:
+    """
+    GIVEN the error a trial raises when the cap refuses its first request
+    WHEN it is checked against the hierarchy
+    THEN it is a BudgetExceeded, so code that stops on the cap stops on it
+    """
+    assert TrialUnaffordable.__bases__ == (BudgetExceeded,)
+
+
+def test_spend_noted_on_an_exception_adds_up() -> None:
+    """
+    GIVEN an exception with nothing noted, then two spends noted on it
+    WHEN spend_of reads it
+    THEN it is (0.0, 0) first, then the sums
+    """
+    error = RuntimeError("bug")
+    assert spend_of(error) == (0.0, 0)
+
+    add_spend(error, 0.25, 10)
+    add_spend(error, 0.5, 5)
+
+    assert spend_of(error) == (0.75, 15)

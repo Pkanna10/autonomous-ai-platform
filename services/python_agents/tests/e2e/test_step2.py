@@ -27,8 +27,13 @@ a network call.
 from __future__ import annotations
 
 import json
+import os
+import signal
+import subprocess
+import sys
 import uuid
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -140,7 +145,7 @@ def _message(name: str, content: list[Json], stop: str, usage: Json) -> Json:
     }
 
 
-def _understand_reply(workload: Workload) -> Json:
+def _understand_reply(workload: Workload, output: int = 240) -> Json:
     answer = {
         "language": "python",
         "summary": "dedupe: order-preserving de-duplication of integers.",
@@ -153,7 +158,7 @@ def _understand_reply(workload: Workload) -> Json:
         ],
     }
     text: Json = {"type": "text", "text": json.dumps(answer)}
-    return _message("Understand", [text], "end_turn", _usage(3100, 0, 0, 240))
+    return _message("Understand", [text], "end_turn", _usage(3100, 0, 0, output))
 
 
 def _h1_replies() -> list[Json]:
@@ -624,6 +629,150 @@ def test_e2e_c_budget_stops_the_second_trial(
     assert state["cost_usd"] <= state["max_cost_usd"] == cap
     _check_repo_untouched(repo, before, result, [h1, h3], {"h1"})
     _check_isolation(subtests, isolation, result, launches)
+
+
+def test_e2e_c_the_default_floor_never_starts_a_trial_it_cannot_afford(
+    dedupe_repo: RepoFactory,
+    isolation: Isolation,
+    launches: LaunchLog,
+) -> None:
+    """
+    GIVEN the factory's default trial floor, and a cap that lets understand
+          (a long reply) run and then leaves a little more than the floor,
+          but less than the first editor request of a trial (system prompt,
+          tools and brief priced)
+    WHEN the run goes through the factory's context
+    THEN no editor request is sent, no trial, verdict or lesson is recorded
+         for h1 or h3, a budget_exhausted warning counts both, and the run
+         delivers the report only
+    """
+    repo = dedupe_repo(symlink=True)
+    before = repo.snapshot()
+    project = _project(repo)
+    workload = _workload(project)
+    h1, h3 = _candidate(project, "h1", 0.8), _candidate(project, "h3", 0.5)
+    understand = [_understand_reply(workload, output=7000)]
+    transport = ScriptedTransport([*understand, *_h1_replies(), *_h3_replies()])
+    ctx = build_context(
+        project,
+        candidates=[h1, h3],
+        transport=transport,
+        transport_factory=_no_real_transport,
+        network=isolation.mode,
+        fs=isolation.mode,
+        run=launches,
+        sleep=lambda _: None,
+    )
+    cap = _priced(understand) + ctx.min_trial_budget_usd + 0.03
+
+    result = _run(project, workload, Orchestrator(context=ctx), max_cost_usd=cap)
+
+    assert result.status == "done", result.state["error"]
+    state = result.state
+    assert len(transport.requests) == 1  # understand only
+    assert state["trials"] == [] and state["verdicts"] == [] and state["lessons"] == []
+    assert ctx.repository.list_lessons(project.id) == ()
+    (stopped,) = _coded(result, "budget_exhausted")
+    assert stopped.data["not_started"] == 2
+    assert "first request does not fit" in stopped.message
+    delivery = state["delivery"]
+    assert delivery is not None and delivery.kind is DeliveryKind.report_only
+    assert state["cost_usd"] == pytest.approx(_priced(understand), rel=1e-9)
+    _check_repo_untouched(repo, before, result, [h1, h3], set())
+
+
+_KILLED_RUN = """
+import os, signal, sys
+from pathlib import Path
+from autonomous_ai_agents.common.models import (
+    ChangeClass, Guardrail, GuardrailKind, Hypothesis, HypothesisSource, Project,
+    Workload,
+)
+from autonomous_ai_agents.execution.fakes import ScriptedEditor
+from autonomous_ai_agents.execution.procrun import run_once
+from autonomous_ai_agents.orchestrator.factory import build_context
+from autonomous_ai_agents.orchestrator.main import Orchestrator
+
+repo, edits, mode, run_id = sys.argv[1:5]
+project = Project(name="dedupe", root_path=repo, test_command=(
+    "python", "-m", "unittest", "discover", "-s", "tests", "-t", "."))
+workload = Workload(project_id=project.id, name="dedupe",
+                    command=("python", "-m", "dedupe.main"))
+h1 = Hypothesis(project_id=project.id, source=HypothesisSource.playbook, title="h1",
+                rationale="a set", change_class=ChangeClass.efficiency,
+                expected_gain=0.8, provability=0.9, risk=0.1)
+
+def run(argv, cwd, *args, **kwargs):
+    if "/trial-" in str(cwd):  # the first launch of the trial: kill -9
+        os.kill(os.getpid(), signal.SIGKILL)
+    return run_once(argv, cwd, *args, **kwargs)
+
+editor = ScriptedEditor(Path(edits))
+ctx = build_context(project, candidates=[h1], editor=lambda **_: editor,
+                    network=mode, fs=mode, run=run)
+guard = Guardrail(project_id=project.id, kind=GuardrailKind.tests_pass,
+                  description="tests")
+Orchestrator(context=ctx).run(project, [workload], [], [guard], run_id=run_id)
+"""
+
+
+def test_e2e_d_a_run_killed_in_a_trial_is_recovered_by_the_next_run(
+    dedupe_repo: RepoFactory,
+    isolation: Isolation,
+    launches: LaunchLog,
+    engine_settings: Path,
+) -> None:
+    """
+    GIVEN a run killed with -9 in the middle of its trial: its worktree, the
+          registration in the user's .git/worktrees, its scratch and probe
+          dirs and its committed trial ref are left
+    WHEN the next run (a new run id) goes through the factory's context
+    THEN connect recovers the killed run's worktree, registration and dirs
+         and says so; afterwards git lists only the main worktree and
+         WORKTREE_ROOT holds nothing; the killed trial's ref is the only
+         thing kept (for review, as every committed trial's ref)
+    """
+    repo = dedupe_repo()
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in ("ANTHROPIC_API_KEY", "WORKTREE_ROOT")
+    }
+    env["WORKTREE_ROOT"] = str(engine_settings)
+    killed = "killed-run"
+    child = subprocess.run(
+        [sys.executable, "-c", _KILLED_RUN, str(repo.path), str(DEDUPE_EDITS),
+         isolation.mode, killed],
+        env=env, capture_output=True, check=False, timeout=600,
+    )  # fmt: skip
+    assert child.returncode == -signal.SIGKILL, child.stderr.decode(errors="replace")
+    assert len(repo.worktrees()) == 2
+    assert (engine_settings / killed).is_dir()
+    before = repo.snapshot()
+    assert any(
+        ref.startswith(f"refs/heads/engine/trial-{killed}-") for ref in before.refs
+    )
+    project = _project(repo)
+    workload = _workload(project)
+    ctx = build_context(
+        project,
+        candidates=[_candidate(project, "h1", 0.8)],
+        editor=lambda **_: ScriptedEditor(DEDUPE_EDITS),
+        network=isolation.mode,
+        fs=isolation.mode,
+        run=launches,
+    )
+
+    result = _run(project, workload, Orchestrator(context=ctx))
+
+    assert result.status == "done", result.state["error"]
+    notes = [e.message for e in _coded(result, "preflight_note")]
+    assert any(killed in note and "trial-" in note for note in notes), notes
+    assert repo.worktrees() == [f"worktree {repo.path}"]
+    assert os.listdir(engine_settings) == []
+    admin = repo.common_dir() / "worktrees"
+    assert not admin.exists() or os.listdir(admin) == []
+    _check_repo_untouched(repo, before, result, ctx.candidates, {"h1"})
 
 
 # ---------------------------------------------------------------------------

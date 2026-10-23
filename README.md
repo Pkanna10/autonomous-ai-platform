@@ -16,8 +16,9 @@ You give the platform code you run (or an English description of what to build)
 and one goal: **make it better**. The engine then:
 
 1. **Understands** the code and works out what "better" means: by default faster
-   and leaner with outputs unchanged, or a goal you state in plain English
-   ("accuracy may drop at most 0.5%", "memory under 16 GB").
+   and leaner with outputs unchanged (wall time must drop, and peak memory may
+   grow by at most 10%), or a goal you state in plain English ("accuracy may
+   drop at most 0.5%", "memory under 16 GB").
 2. **Measures** a baseline and **profiles** where time and memory actually go.
 3. **Researches** two sources: a playbook of proven engineering techniques, and
    new papers (arXiv, Semantic Scholar) whose claims and preconditions match the
@@ -317,7 +318,7 @@ Engine settings added in Step 2 (defaults shown):
 | `ENGINE_API_BASE_URL`                                                 | `https://api.anthropic.com`   | The only address the key and prompts go to: https, a host, no credentials. The engine ignores the SDK's `ANTHROPIC_BASE_URL`, which a host or tool may set for its own use.                                  |
 | `MAX_COST_USD`                                                        | `5.0`                         | Hard cap on Claude spend per run (0 allows no paid call). `Orchestrator.run(max_cost_usd=...)` sets it per run.                                                                                              |
 | `NETWORK_ISOLATION`, `FS_ISOLATION`                                   | `required`                    | `required` fails the run when the sandbox did not apply (checked on every run); `best_effort` runs anyway and records what applied in each measurement; `off` runs unsandboxed. The report shows both modes. |
-| `WORKTREE_ROOT`                                                       | `~/.cache/aip/worktrees`      | Where every phase's worktree lives. Absolute or starting with `~`; it must not be inside the checkout or contain it.                                                                                         |
+| `WORKTREE_ROOT`                                                       | `~/.cache/aip/worktrees`      | Where every phase's worktree lives. Absolute or starting with `~`; it must not overlap (be inside or contain) the checkout, the repository's `.git` directory or any other worktree of the repository.       |
 | `ENGINE_FALLBACKS`, `ENGINE_FALLBACK_MODELS`                          | `true`, `["claude-opus-4-8"]` | The server-side fallback chain sent with every request. The cost estimate prices the same chain, so each extra model raises the worst case of one request.                                                   |
 | `MODEL_PRICING`                                                       | built-in table                | USD per million tokens per model (`input`, `output`, `cache_write`, `cache_read`). Startup fails if `ENGINE_MODEL`, a fallback or `TRIAGE_MODEL` has no price.                                               |
 | `GIT_EXECUTABLE`                                                      | `git`                         | A bare name looked up on `PATH`, or an absolute path.                                                                                                                                                        |
@@ -387,16 +388,41 @@ linking a file into another directory, so workloads that do that fail under
 Preflight names the problem and the fix. It refuses git older than 2.38,
 submodules, Git LFS, partial clones, dubious ownership (it never sets
 `safe.directory`), a `tests_pass` guardrail without a test command, a
-`WORKTREE_ROOT` that overlaps the checkout, and a custom merge driver the
-combine would run.
+`WORKTREE_ROOT` that overlaps the checkout (or, for a linked worktree, the main
+checkout, the `.git` directory or another worktree of the repository), a
+committed `output_file` (the reset before every run would restore it, so a run
+that never writes it would still look right: `git rm --cached` it and ignore
+it), and a custom merge driver the combine would run.
+
+**A run was killed (`kill -9`, a crash, a reboot)**
+
+Each phase marks its run directory, `<WORKTREE_ROOT>/<run>`, with a lock held
+while it works. The next run's connect removes what an unlocked run left behind
+(its worktrees, their registration in your `.git/worktrees`, the scratch and
+probe dirs) and says so in a `preflight_note`; a run still working elsewhere
+keeps its lock and is left alone. A killed trial that had committed keeps its
+trial ref for review, like every committed trial (see below). A worktree at
+`<WORKTREE_ROOT>/<run>/<phase>` that no run marks (a run whose own cleanup
+failed, or one killed before run markers existed) is not removed: connect
+refuses and names the two commands below for it. To clean up by hand instead:
+
+```bash
+git worktree list                         # the engine's are under WORKTREE_ROOT
+git worktree remove --force <WORKTREE_ROOT>/<run>/<phase>
+rm -rf <WORKTREE_ROOT>/<run>              # then: git worktree prune
+```
 
 **Delete the trial refs**
 
 Every committed trial keeps its ref,
-`refs/heads/engine/trial-<run>-<hypothesis>`, so you can inspect it; the run's
-report prints a cleanup command. To review and then delete the trial refs of one
-run (replace `RUN_ID`; keep the quotes so the shell does not expand the
-pattern):
+`refs/heads/engine/trial-<run>-<hypothesis>`, so you can inspect it. The run's
+report prints a cleanup command naming exactly that run's refs and the commit
+each was left at (one `git update-ref --stdin` transaction); a failed run, which
+has no report, lists the same command in its `trial_refs_left` event. Prefer it
+to a pattern: when one run id is another's prefix followed by `-` (`nightly` and
+`nightly-2`), `trial-nightly-*` matches both runs' refs. To review and then
+delete the trial refs by pattern (replace `RUN_ID`; keep the quotes so the shell
+does not expand it; check the listing first):
 
 ```bash
 git for-each-ref --format='%(refname)' 'refs/heads/engine/trial-RUN_ID-*'
@@ -442,7 +468,20 @@ default `TRIAL_BRANCH_PREFIX` (`engine/`).
   prefetch refs, the config and the hooks are fingerprinted around every phase
   that runs repository code.
 - **Nondeterministic output** fails the baseline when an output-equivalence
-  guardrail is set: add a seed, or an `output_file` the workload writes.
+  guardrail is set: add a seed, or an `output_file` the workload writes (an
+  untracked file; connect refuses a committed one and protects the path).
+- **The test count is verified for unittest and pytest only.** A test command
+  run directly as `python -m unittest ...`, `python -m pytest ...` or `pytest`
+  must pass at least as many tests as at the base. Any other runner (a script
+  such as `./run_tests.sh`, `make test`, `tox`, `nox`) passes on its exit code
+  alone, so a trial that makes a failing test skip is not caught by the count;
+  the report's "Test count" line says which applied. Run the test runner
+  directly where you can.
+- **Concurrent calls on one run id are refused per process.** `run`, `stream`
+  and `resume` claim the run id for the call, so a second `resume` of a run
+  being resumed is told it is not waiting for approval. The checkpointer is in
+  memory today; a shared checkpointer (Step 4) will need the claim in the
+  database.
 - **Workload inputs are not passed yet**: `Workload.inputs` is ignored with a
   warning; put inputs in the command's arguments.
 - **NUL characters in stored text.** Postgres text and JSONB cannot hold U+0000,
