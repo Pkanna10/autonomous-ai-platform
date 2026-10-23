@@ -823,8 +823,9 @@ class _MockApi:
         answer: str = "ok",
         status: int = 200,
         counts: Mapping[str, object] | None = None,
+        refusal: str = "dry run refusal",
     ) -> None:
-        self.answer, self.status = answer, status
+        self.answer, self.status, self.refusal = answer, status, refusal
         self.counts: Mapping[str, object] = counts or {}
         self.sent = 0
 
@@ -838,7 +839,7 @@ class _MockApi:
             )
         self.sent += 1
         if self.status != 200:
-            error = {"type": "invalid_request_error", "message": "dry run refusal"}
+            error = {"type": "invalid_request_error", "message": self.refusal}
             return httpx2.Response(self.status, json={"type": "error", "error": error})
         usage: Json = {"input_tokens": 50, "output_tokens": 5}
         text = "ok"
@@ -887,7 +888,10 @@ CONTRACTS: dict[str, tuple[Contract, _MockApi]] = {
     "fallbacks": (lambda start, _: fallbacks_contract(start), _MockApi()),
     "notice": (notice_contract, _MockApi()),
     "system-accepted": (lambda start, _: system_contract(start), _MockApi()),
-    "system-refused": (lambda start, _: system_contract(start), _MockApi(status=400)),
+    "system-refused": (
+        lambda start, _: system_contract(start),
+        _MockApi(status=400, refusal="messages.3.role: Input should be 'user'"),
+    ),
     "count": (lambda start, _: count_contract(start), _MockApi()),
     "schema": (schema_contract, _MockApi(answer="understanding")),
     "cache": (lambda start, _: cache_contract(start), _MockApi(answer="cache")),
@@ -903,6 +907,21 @@ def test_each_contract_test_passes_against_a_well_behaved_api(
     (the recorder and the budget must agree, as ``_settled`` asserts)."""
     contract, api = CONTRACTS[name]
     contract(dry_live(api), tmp_path)
+
+
+def test_the_system_probe_fails_on_a_refusal_that_is_not_about_the_role(
+    dry_live: Callable[[Handler], StartLive],
+) -> None:
+    """
+    GIVEN the API refuses for another reason (the second live run: a key not
+        scoped to a workspace, and the probe passed, recording "refused")
+    WHEN the role: system probe runs
+    THEN it fails, naming the API's reason
+    """
+    workspace = "This API key is not scoped to a workspace"
+    api = _MockApi(status=400, refusal=workspace)
+    with pytest.raises(pytest.fail.Exception, match="not scoped to a workspace"):
+        system_contract(dry_live(api))
 
 
 @pytest.mark.parametrize("bad", ["not-a-number", -1, True, None])

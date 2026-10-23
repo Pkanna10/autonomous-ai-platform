@@ -254,7 +254,8 @@ def test_operator_notice_after_tool_results_is_accepted(
 
 def test_role_system_notice_is_probed_and_recorded(live: StartLive) -> None:
     """Decision 31: ``role: system`` mid-loop is used only once confirmed.
-    The shape is sent for the record; a refusal is noted, not failed."""
+    The shape is sent for the record; a refusal of the role is noted, not
+    failed, and a refusal for any other reason fails."""
     run = live(SYSTEM_ROLE_CAP_USD)
     cfg = _cfg()
     use = _view_reply(cfg.ENGINE_MODEL)["content"]
@@ -287,7 +288,11 @@ def test_role_system_notice_is_probed_and_recorded(live: StartLive) -> None:
         call(run.transport(cfg), request, run.budget, sleep=time.sleep)
         outcome = "accepted"
     except LLMRequestError as exc:
-        outcome = f"refused ({exc})"
+        errors = run.api_errors()
+        if not any("role" in error for error in errors):
+            # Only a refusal of the shape is the answer this probe records.
+            pytest.fail(f"refused for another reason than the role: {errors or exc}")
+        outcome = f"refused ({errors[-1]})"
 
     (sent,) = run.capture.messages()
     sent_messages = sent.json()["messages"]
