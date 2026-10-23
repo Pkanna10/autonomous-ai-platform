@@ -419,7 +419,15 @@ Step 2 (repository code now runs on the user's machine):
   would pass `LIVE_SUITE_CAP_USD` (12), and writes the cost table to the job
   summary; `tests/live/test_guards.py` tests all of it offline. The older editor
   live test in `tests/execution/test_editor.py` runs only under exactly
-  `-m live`.
+  `-m live`. The benchmark corpus (`tests/fixtures/live_corpus`: 12 slowdowns
+  with reference fixes kept outside the repos in `_solutions`, 3 controls, 3
+  attack repos; `manifest.json`) runs through `tests/live/test_corpus_live.py`
+  and `test_attack_corpus_live.py`, records one `CorpusOutcome` JSON line per
+  run in `LIVE_RESULTS_PATH` and a summary (win rate, known-fix rate, false-win
+  rate on controls, cost per win); `tests/live/test_corpus_guards.py` proves
+  offline that every slowdown is winnable. `live-smoke` takes `suite` (stage-a,
+  corpus, attack, all; caps needed 9, 75, 12, 96 USD), `engine_model` and
+  `suite_cap_usd`.
 - **Postgres tests** (`postgres` marker) skip when `TEST_DATABASE_URL` is unset;
   CI always sets it. Each pytest process creates its own database from
   `infrastructure/schema/*.sql` and drops it at the end, so the role must be
