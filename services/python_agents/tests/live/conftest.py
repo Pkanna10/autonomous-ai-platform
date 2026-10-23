@@ -247,7 +247,7 @@ class Exchange:
     body: bytes
     status: int | None = None
     response_headers: dict[str, str] = field(default_factory=dict)
-    response_body: bytes = b""  # kept for count_tokens replies only
+    response_body: bytes = b""  # count_tokens replies and error replies only
 
     def json(self) -> dict[str, object]:
         try:
@@ -282,8 +282,10 @@ class CapturingTransport(httpx2.BaseTransport):
         response = self._inner.handle_request(request)
         exchange.status = response.status_code
         exchange.response_headers = dict(response.headers)
-        if exchange.path.endswith("/count_tokens"):
+        if exchange.path.endswith("/count_tokens") or response.status_code >= 400:
             # Read once and cached on the response: the SDK reads it again.
+            # The engine's errors keep the status only; the live run needs
+            # the API's reason to say what failed.
             exchange.response_body = response.read()
         return response
 
@@ -293,8 +295,33 @@ class CapturingTransport(httpx2.BaseTransport):
     def messages(self) -> list[Exchange]:
         return [e for e in self.exchanges if e.path.endswith("/v1/messages")]
 
+    def errors(self) -> list[str]:
+        """``HTTP <status> <path>: <type>: <message>`` per refused request."""
+        return [
+            _error_text(e)
+            for e in self.exchanges
+            if e.status is not None and e.status >= 400
+        ]
+
     def counts(self) -> list[Exchange]:
         return [e for e in self.exchanges if e.path.endswith("/count_tokens")]
+
+
+ERROR_MESSAGE_CHARS: Final = 300
+
+
+def _error_text(exchange: Exchange) -> str:
+    """The API's own reason for refusing ``exchange``, capped."""
+    head = f"HTTP {exchange.status} {exchange.path}"
+    try:
+        loaded: object = json.loads(exchange.response_body)
+    except ValueError:
+        loaded = None
+    error = loaded.get("error") if isinstance(loaded, dict) else None
+    if not isinstance(error, dict):
+        return f"{head}: no JSON error body"
+    kind, message = error.get("type"), error.get("message")
+    return f"{head}: {kind}: {str(message)[:ERROR_MESSAGE_CHARS]}"
 
 
 @dataclass(frozen=True)
@@ -424,6 +451,9 @@ class LiveRun:
 
     def note(self, text: str) -> None:
         self.notes.append(text)
+
+    def api_errors(self) -> list[str]:
+        return self.capture.errors()
 
     @property
     def spent_usd(self) -> float:
@@ -677,6 +707,8 @@ def live(
 
     yield start
     for run in runs:
+        for error in run.api_errors():  # into the cost table's notes
+            run.note(error)
         suite_ledger.close(run)
         run.capture.close()
 
@@ -767,13 +799,26 @@ def guardrails(project: Project) -> list[Guardrail]:
     ]
 
 
+def check_answered(run: LiveRun) -> None:
+    """The API answered at least one ``/v1/messages`` request.
+
+    The engine survives a refused request (understand falls back to its
+    stub, a trial fails), so a whole loop with a bad key still ends
+    ``done``; without an answer the run proved nothing about the API.
+    """
+    answered = [e for e in run.capture.messages() if e.status == 200]
+    assert answered, f"the API never answered: {run.api_errors()}"
+
+
 def check_spend(run: LiveRun, result: EngineRunResult) -> None:
-    """The cap held on the wire and in the state, and the two agree.
+    """The API answered, the cap held on the wire and in the state, and the
+    two agree.
 
     Every ``/v1/messages`` request went through the capture (one per
     recorded attempt), what the recorder priced is within the run's cap,
     and the engine's ``cost_usd`` equals it: the run ledger matches the wire.
     """
+    check_answered(run)
     state = result.state
     assert len(run.capture.messages()) == len(run.records)
     assert run.spent_usd <= run.cap_usd

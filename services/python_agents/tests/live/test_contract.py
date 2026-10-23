@@ -74,7 +74,9 @@ NOTICE_CAP_USD = 0.30
 SYSTEM_ROLE_CAP_USD = 0.15
 COUNT_CAP_USD = 0.0  # count_tokens is free
 SCHEMA_CAP_USD = 0.35
-CACHE_CAP_USD = 0.25
+# One request's worst case at the byte bound (count_tokens failing) is about
+# 0.29 USD; the cap must afford it or the contract proves nothing.
+CACHE_CAP_USD = 0.40
 VIEW_ID = "toolu_01LiveContractView00000001"
 FILES = ("dedupe/__init__.py", "dedupe/core.py", "dedupe/main.py")
 
@@ -378,18 +380,23 @@ def test_understand_schema_is_accepted_and_the_reply_validates(
     _settled(run)
 
 
-def test_prompt_caching_reads_the_cache_on_a_repeat(live: StartLive) -> None:
-    run = live(CACHE_CAP_USD)
-    cfg = _cfg()
+def cache_request() -> LLMRequest:
+    """A prompt long enough to cache (the minimum cacheable prompt), cached."""
     reference = (DEDUPE_REPO / "dedupe" / "main.py").read_text(encoding="utf-8")
     text = (
         "Reference material, repeated:\n"
         + "\n".join([reference] * 8)
         + "\nReply with the single word ok."
     )
-    request = LLMRequest(
+    return LLMRequest(
         system=SYSTEM_PROMPT, messages=(_user(text),), max_tokens=256, cache=True
     )
+
+
+def test_prompt_caching_reads_the_cache_on_a_repeat(live: StartLive) -> None:
+    run = live(CACHE_CAP_USD)
+    cfg = _cfg()
+    request = cache_request()
     transport = run.transport(cfg)
 
     call(transport, request, run.budget, sleep=time.sleep)

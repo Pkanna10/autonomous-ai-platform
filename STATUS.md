@@ -919,8 +919,9 @@ E to use what is left before the reset.
 
 ### Live spend ledger
 
-| Date | Window | Run | Stage | Cost (USD) | Notes |
-| ---- | ------ | --- | ----- | ---------- | ----- |
+| Date       | Window | Run                                                                                        | Stage | Cost (USD) | Notes                                                                                                                                                                                                                                                                                                                                              |
+| ---------- | ------ | ------------------------------------------------------------------------------------------ | ----- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-10-23 | 1      | [39939504871](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/39939504871) | A     | 0.00       | Key refused: HTTP 401 `authentication_error` on every request but one HTTP 400 (reason not kept then); 9 failed, 2 passed. Found and fixed: the E2E and attack tests passed with no API answer (now `check_answered`), the cache test's cap was below its byte-bound worst case, error replies kept only the status (now named in the cost table). |
 
 ## Next: finish Step 2, then Step 3
 

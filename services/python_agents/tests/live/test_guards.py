@@ -26,6 +26,7 @@ from pathlib import Path
 import httpx2
 import pytest
 
+from autonomous_ai_agents.clients import transport as transport_module
 from autonomous_ai_agents.clients.budget import Budget
 from autonomous_ai_agents.clients.cost import chain, preflight_estimate, response_cost
 from autonomous_ai_agents.clients.transport import (
@@ -57,6 +58,7 @@ from .conftest import (
     SuiteBudgetRefusedError,
     SuiteLedger,
     added_lines,
+    check_answered,
     live_selected,
     live_skip_reason,
     must_refuse,
@@ -69,6 +71,7 @@ from .conftest import (
     write_cost_summary,
     xdist_refusal,
 )
+from .test_contract import CACHE_CAP_USD, cache_request
 from .test_contract import (
     test_count_tokens_works_and_stays_within_the_byte_bound as count_contract,
 )
@@ -453,6 +456,82 @@ def test_capture_keeps_each_count_reply_body() -> None:
     counted, sent = capture.exchanges
     assert json.loads(counted.response_body) == {"input_tokens": 7}
     assert sent.response_body == b""  # message replies are left to the SDK
+
+
+def _refusing(status: int, error_type: str, message: str) -> httpx2.MockTransport:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        body = {"type": "error", "error": {"type": error_type, "message": message}}
+        return httpx2.Response(status, json=body, request=request)
+
+    return httpx2.MockTransport(handler)
+
+
+def test_capture_keeps_an_error_reply_and_the_run_names_it() -> None:
+    """
+    GIVEN the API refuses a request (the first live run got 400s and 401s
+        and kept only the status)
+    WHEN the run lists its API errors
+    THEN each names the status, the path, the error type and the message
+        (capped), and the SDK can still read the reply
+    """
+    run = LiveRun(
+        "errors", 1.0, wire=_refusing(400, "invalid_request_error", "x" * 900)
+    )
+    sent = httpx2.Request("POST", "https://h/v1/messages", content=b"{}")
+    reply = run.capture.handle_request(sent)
+    assert reply.json()["error"]["type"] == "invalid_request_error"
+
+    (error,) = run.api_errors()
+
+    assert error.startswith("HTTP 400 /v1/messages: invalid_request_error: xxx")
+    assert len(error) <= 400
+
+
+def test_an_error_reply_that_is_not_json_is_named_by_its_status() -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            502, content=b"<html>bad gateway</html>", request=request
+        )
+
+    run = LiveRun("gateway", 1.0, wire=httpx2.MockTransport(handler))
+    run.capture.handle_request(httpx2.Request("POST", "https://h/v1/messages"))
+
+    assert run.api_errors() == ["HTTP 502 /v1/messages: no JSON error body"]
+
+
+def test_a_whole_loop_the_api_never_answered_fails_the_live_test() -> None:
+    """
+    GIVEN every /v1/messages request was refused (the first live run: a bad
+        key, and the E2E and attack tests still passed)
+    WHEN the whole-loop checks run
+    THEN check_answered fails naming the errors; one 200 answer passes it
+    """
+    run = LiveRun(
+        "unanswered", 1.0, wire=_refusing(401, "authentication_error", "bad key")
+    )
+    run.capture.handle_request(httpx2.Request("POST", "https://h/v1/messages"))
+
+    with pytest.raises(AssertionError, match="authentication_error: bad key"):
+        check_answered(run)
+
+    answered = LiveRun("answered", 1.0, wire=httpx2.MockTransport(_wire(count=1)))
+    answered.capture.handle_request(httpx2.Request("POST", "https://h/v1/messages"))
+    check_answered(answered)
+
+
+def test_the_cache_contract_affords_its_request_at_the_byte_bound() -> None:
+    """
+    GIVEN count_tokens fails (the first live run: a refused key), so call()
+        prices the request at its byte bound
+    WHEN the cache contract checks its first request against its cap
+    THEN the worst case fits: a cap below one request's bound fails the
+        contract with BudgetExceeded before it proves anything
+    """
+    request = cache_request()
+    bound = transport_module._byte_bound(request)
+    cfg = _settings()
+    worst = preflight_estimate(bound, request.max_tokens, chain(cfg), cfg.MODEL_PRICING)
+    assert worst <= CACHE_CAP_USD
 
 
 def test_capture_records_a_request_whose_send_failed() -> None:
