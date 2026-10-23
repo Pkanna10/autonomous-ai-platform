@@ -30,10 +30,12 @@ permissions:
   contents: read
 
 # Concurrency: Cancel in-progress runs for PR branches, keep all runs for main.
-# A manual (live smoke) run gets its own group so it never cancels a push run.
+# Each manual (live) run is its own group and is never cancelled: it is paid
+# and approved, and two dispatches on one ref (e.g. attack and corpus) must
+# both run instead of the newer cancelling the older.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && 'dispatch' || 'auto' }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('dispatch-{0}', github.run_id) || 'auto' }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' && github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
 
 jobs:
   # Detect which packages changed for selective execution
