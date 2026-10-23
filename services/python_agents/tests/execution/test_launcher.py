@@ -2037,9 +2037,15 @@ def listener() -> Iterator[int]:
 
 
 @pytest.fixture
-def unix_listener(tmp_path: Path) -> Iterator[Path]:
-    """A host AF_UNIX listener the sandboxed run must not reach (exfil target)."""
-    path = tmp_path / "host.sock"
+def unix_listener() -> Iterator[Path]:
+    """
+    A host AF_UNIX listener the sandboxed run must not reach (exfil target).
+
+    It lives in a short directory under /tmp: macOS caps sun_path at 104 bytes
+    and its per-user tmp_path is already longer than that.
+    """
+    short = Path(tempfile.mkdtemp(prefix="aip-sock-", dir="/tmp"))
+    path = short / "host.sock"
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         server.bind(str(path))
@@ -2047,6 +2053,7 @@ def unix_listener(tmp_path: Path) -> Iterator[Path]:
         yield path
     finally:
         server.close()
+        shutil.rmtree(short)
 
 
 @linux_only
