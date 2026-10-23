@@ -104,6 +104,7 @@ from autonomous_ai_agents.execution.runner import (
 from autonomous_ai_agents.optimization.anticheat import DEFAULT_PROTECTED_PATTERNS
 from autonomous_ai_agents.orchestrator.main import build_checkpointer, run_config
 from autonomous_ai_agents.orchestrator.nodes import (
+    BRIEF_FALLBACK_HOTSPOTS,
     LOOP_NODES,
     NODE_NAMES,
     DeliveryError,
@@ -239,6 +240,54 @@ def _hotspot(project: Project, workload: Workload, *tags: str) -> Hotspot:
         share=0.42,
         tags=tags,
     )
+
+
+def _spots(project: Project, workload: Workload, *shares: float) -> list[Hotspot]:
+    """One hotspot per share, in profile order, each in its own function."""
+    return [
+        Hotspot(
+            project_id=project.id,
+            workload_id=workload.id,
+            file_path=f"src/bridge/m{index}.py",
+            symbol=f"f{index}",
+            self_time_s=share,
+            total_time_s=share,
+            share=share,
+        )
+        for index, share in enumerate(shares)
+    ]
+
+
+class _BriefRecordingRunner:
+    """Delegates to a stub runner, recording each hypothesis and brief."""
+
+    def __init__(self, inner: StubTrialRunner) -> None:
+        self.inner = inner
+        self.hypotheses: list[Hypothesis] = []
+        self.briefs: list[TrialBrief] = []
+
+    def run(
+        self,
+        hypothesis: Hypothesis,
+        workloads: Sequence[Workload],
+        baseline: Baseline,
+        *,
+        round: int,
+        branch: str,
+        budget_usd: float,
+        brief: TrialBrief,
+    ) -> Trial:
+        self.hypotheses.append(hypothesis)
+        self.briefs.append(brief)
+        return self.inner.run(
+            hypothesis,
+            workloads,
+            baseline,
+            round=round,
+            branch=branch,
+            budget_usd=budget_usd,
+            brief=brief,
+        )
 
 
 SEED_TRIAL = Trial(
@@ -1304,6 +1353,179 @@ class TestHypotheses:
 # ---------------------------------------------------------------------------
 
 
+class TestTrialBriefHotspots:
+    """Which profiler hotspots a trial's editor is shown (``TrialBrief``)."""
+
+    @staticmethod
+    def _brief_hotspots(
+        make_context: ContextFactory,
+        base_state: EngineState,
+        hypothesis: Hypothesis,
+        hotspots: Sequence[Hotspot],
+        scripts: dict[str, ScriptedOutcome],
+    ) -> tuple[Hotspot, ...]:
+        runner = StubTrialRunner(scripts)
+        nodes = make_nodes(
+            make_context([hypothesis], runner=runner, hotspots=tuple(hotspots))
+        )
+        nodes["trials"](_advance(nodes, base_state, _before("trials")))
+        assert len(runner.briefs) == 1
+        return runner.briefs[0].hotspots
+
+    def test_the_fallback_is_at_most_five_hotspots(self) -> None:
+        assert BRIEF_FALLBACK_HOTSPOTS == 5
+
+    def test_named_and_matching_ids_give_only_those_in_profile_order(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_project: Project,
+        sample_workload: Workload,
+        h1_cache: Hypothesis,
+        design_scripts: dict[str, ScriptedOutcome],
+    ) -> None:
+        """
+        GIVEN seven profiled hotspots and a hypothesis naming two low-share
+              ones (in reverse order) plus an id from another run
+        WHEN trials runs it
+        THEN the brief holds exactly the two named hotspots, in profile order
+        """
+        spots = _spots(
+            sample_project, sample_workload, 0.05, 0.4, 0.02, 0.2, 0.1, 0.15, 0.08
+        )
+        named = (spots[6].id, "old-run-spot", spots[2].id)
+        hypothesis = h1_cache.model_copy(update={"hotspot_ids": named})
+
+        got = self._brief_hotspots(
+            make_context, base_state, hypothesis, spots, design_scripts
+        )
+
+        assert got == (spots[2], spots[6])
+
+    def test_stale_ids_give_the_top_five_by_share(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_project: Project,
+        sample_workload: Workload,
+        h1_cache: Hypothesis,
+        design_scripts: dict[str, ScriptedOutcome],
+    ) -> None:
+        """
+        GIVEN seven profiled hotspots and a hypothesis generated in an earlier
+              run, whose hotspot_ids name none of them
+        WHEN trials runs it
+        THEN the brief holds this run's five largest-share hotspots, largest
+             first
+        """
+        spots = _spots(
+            sample_project, sample_workload, 0.05, 0.4, 0.02, 0.2, 0.1, 0.15, 0.08
+        )
+        hypothesis = h1_cache.model_copy(
+            update={"hotspot_ids": ("old-run-a", "old-run-b")}
+        )
+
+        got = self._brief_hotspots(
+            make_context, base_state, hypothesis, spots, design_scripts
+        )
+
+        assert got == (spots[1], spots[3], spots[5], spots[4], spots[6])
+
+    def test_no_named_ids_give_the_top_five_by_share(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_project: Project,
+        sample_workload: Workload,
+        h1_cache: Hypothesis,
+        design_scripts: dict[str, ScriptedOutcome],
+    ) -> None:
+        """
+        GIVEN six profiled hotspots and a caller-built candidate naming none
+        WHEN trials runs it
+        THEN the brief holds the five largest-share hotspots, largest first
+        """
+        spots = _spots(sample_project, sample_workload, 0.1, 0.3, 0.01, 0.2, 0.05, 0.25)
+        hypothesis = h1_cache.model_copy(update={"hotspot_ids": ()})
+
+        got = self._brief_hotspots(
+            make_context, base_state, hypothesis, spots, design_scripts
+        )
+
+        assert got == (spots[1], spots[5], spots[3], spots[0], spots[4])
+
+    def test_fewer_than_five_hotspots_are_all_given(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_project: Project,
+        sample_workload: Workload,
+        h1_cache: Hypothesis,
+        design_scripts: dict[str, ScriptedOutcome],
+    ) -> None:
+        """
+        GIVEN three profiled hotspots and a candidate naming none
+        WHEN trials runs it
+        THEN the brief holds all three, largest share first
+        """
+        spots = _spots(sample_project, sample_workload, 0.2, 0.5, 0.3)
+        hypothesis = h1_cache.model_copy(update={"hotspot_ids": ()})
+
+        got = self._brief_hotspots(
+            make_context, base_state, hypothesis, spots, design_scripts
+        )
+
+        assert got == (spots[1], spots[2], spots[0])
+
+    @pytest.mark.parametrize("hotspot_ids", [(), ("old-run-spot",)])
+    def test_no_hotspots_give_an_empty_tuple(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        h1_cache: Hypothesis,
+        design_scripts: dict[str, ScriptedOutcome],
+        hotspot_ids: tuple[str, ...],
+    ) -> None:
+        """
+        GIVEN a run whose profile found no hotspots
+        WHEN trials runs a candidate, naming ids or not
+        THEN the brief's hotspots are an empty tuple
+        """
+        hypothesis = h1_cache.model_copy(update={"hotspot_ids": hotspot_ids})
+
+        got = self._brief_hotspots(
+            make_context, base_state, hypothesis, (), design_scripts
+        )
+
+        assert got == ()
+
+    def test_ties_keep_profile_order(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_project: Project,
+        sample_workload: Workload,
+        h1_cache: Hypothesis,
+        design_scripts: dict[str, ScriptedOutcome],
+    ) -> None:
+        """
+        GIVEN seven hotspots where several share the same share, one of them
+              tied across the fifth-place cut
+        WHEN trials runs a candidate naming none
+        THEN equal shares keep the profile's order, also at the cut
+        """
+        spots = _spots(
+            sample_project, sample_workload, 0.1, 0.3, 0.1, 0.3, 0.1, 0.05, 0.1
+        )
+        hypothesis = h1_cache.model_copy(update={"hotspot_ids": ()})
+
+        got = self._brief_hotspots(
+            make_context, base_state, hypothesis, spots, design_scripts
+        )
+
+        assert got == (spots[1], spots[3], spots[0], spots[2], spots[4])
+
+
 class TestTrials:
     def test_runs_every_proposed_hypothesis_on_its_own_branch(
         self,
@@ -1423,6 +1645,35 @@ class TestTrials:
                 protected=(*DEFAULT_PROTECTED_PATTERNS, "run.sh"),
             )
         ]
+
+    def test_a_hypothesis_naming_none_of_this_runs_hotspots_is_unchanged(
+        self,
+        make_context: ContextFactory,
+        base_state: EngineState,
+        sample_project: Project,
+        sample_workload: Workload,
+        h1_cache: Hypothesis,
+        design_scripts: dict[str, ScriptedOutcome],
+    ) -> None:
+        """
+        GIVEN a candidate whose hotspot_ids belong to an earlier run
+        WHEN trials runs it with the top hotspots as the brief's fallback
+        THEN the hypothesis in the state still carries its own ids, and the
+             runner got that hypothesis, not a copy with this run's ids
+        """
+        spots = _spots(sample_project, sample_workload, 0.3, 0.6)
+        hypothesis = h1_cache.model_copy(update={"hotspot_ids": ("old-run-spot",)})
+        runner = _BriefRecordingRunner(StubTrialRunner(design_scripts))
+        nodes = make_nodes(
+            make_context([hypothesis], runner=runner, hotspots=tuple(spots))
+        )
+        state = _advance(nodes, base_state, _before("trials"))
+
+        nodes["trials"](state)
+
+        assert runner.hypotheses == [state["hypotheses"][0]]
+        assert state["hypotheses"][0].hotspot_ids == ("old-run-spot",)
+        assert runner.briefs[0].hotspots == (spots[1], spots[0])
 
     def test_an_overspent_run_starts_no_trial(
         self,

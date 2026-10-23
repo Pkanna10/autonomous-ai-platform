@@ -272,6 +272,10 @@ with a ``metric_bound`` guardrail: peak RSS may grow by at most this share of
 the baseline mean, so the default "faster and leaner" never ships a change
 that trades memory for speed (unless the user bounds peak RSS themselves)."""
 
+BRIEF_FALLBACK_HOTSPOTS = 5
+"""How many of the run's top hotspots (largest ``share``) a trial's brief
+carries when the hypothesis names none of this run's hotspots."""
+
 
 _STATUS_AFTER_VERDICT: dict[VerdictOutcome, HypothesisStatus] = {
     VerdictOutcome.keep: HypothesisStatus.kept,
@@ -333,6 +337,22 @@ def _require_baseline(state: EngineState) -> Baseline:
     if baseline is None:
         raise EngineError("no baseline measured yet: the baseline node must run first")
     return baseline
+
+
+def _brief_hotspots(
+    hypothesis: Hypothesis, hotspots: Sequence[Hotspot]
+) -> tuple[Hotspot, ...]:
+    """The hotspots a trial's editor is shown: the ones the hypothesis names,
+    in profile order; when it names none of this run's (a caller-built
+    candidate, or one generated in an earlier run whose ids belong to that
+    run), the run's ``BRIEF_FALLBACK_HOTSPOTS`` largest-share hotspots, ties
+    in profile order (``sorted`` is stable). Only the brief changes: the
+    hypothesis keeps its own ids."""
+    named = tuple(h for h in hotspots if h.id in hypothesis.hotspot_ids)
+    if named:
+        return named
+    ranked = sorted(hotspots, key=lambda h: h.share, reverse=True)
+    return tuple(ranked[:BRIEF_FALLBACK_HOTSPOTS])
 
 
 def _by_id(hypotheses: Iterable[Hypothesis]) -> dict[str, Hypothesis]:
@@ -1458,9 +1478,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             budget_usd=remaining,
             brief=TrialBrief(
                 understanding=state["understanding"],
-                hotspots=tuple(
-                    h for h in state["hotspots"] if h.id in hypothesis.hotspot_ids
-                ),
+                hotspots=_brief_hotspots(hypothesis, state["hotspots"]),
                 protected=(*ctx.protected_patterns, *state["extra_protected"]),
             ),
         )

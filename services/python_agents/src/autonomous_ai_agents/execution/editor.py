@@ -481,7 +481,7 @@ def _brief_text(brief: TrialBrief) -> str:
             "Project understanding (written from the repository's own text):",
             *_understanding_lines(brief.understanding),
             "",
-            "Profiler hotspots for this hypothesis:",
+            "Profiler hotspots:",
             *([_hotspot_line(spot) for spot in brief.hotspots] or ["(none)"]),
             "",
             "Protected path patterns (the tool refuses writes to these):",

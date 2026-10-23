@@ -621,6 +621,17 @@ def test_a_brief_without_understanding_or_hotspots_says_so(repo: Path) -> None:
     assert inside.count("(none)") >= 2
 
 
+def test_the_hotspot_heading_does_not_claim_the_hypothesis_named_them(
+    repo: Path,
+) -> None:
+    """The trials node may hand the run's top hotspots (none named matched),
+    so the heading says only that the profiler found them."""
+    run = _run(repo, [_reply("refusal")])
+    inside = _first_text(run.transport.requests[0]).split(OPEN)[1].split(CLOSE)[0]
+    assert "\nProfiler hotspots:\n- /repo/dedupe/core.py" in inside
+    assert "for this hypothesis" not in inside
+
+
 def test_a_hotspot_without_lines_or_calls_is_rendered(repo: Path) -> None:
     run = _run(repo, [_reply("refusal")], task=_task(hotspots=(BARE_HOTSPOT,)))
     inside = _first_text(run.transport.requests[0]).split(OPEN)[1].split(CLOSE)[0]
