@@ -1,0 +1,89 @@
+# Dependabot version updates. Security updates are enabled in the repository
+# settings and need no file; this adds the weekly, grouped version PRs the
+# docs promised from Renovate, which has never opened a PR here (the app is
+# not installed). Keep one of the two: when Renovate is installed, delete this
+# file or they open duplicate PRs.
+#
+# cooldown: a release must be a few days old before it is proposed. The
+# compromised npm and PyPI releases of 2025 were pulled within hours; a
+# cooldown keeps them out of the lockfiles. Security updates ignore it.
+#
+# SHA-pinned actions and digest-pinned images are updated in place (the
+# version comment on each `uses:` line is kept current).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '03:00'
+      timezone: America/Los_Angeles
+    cooldown:
+      default-days: 3
+    groups:
+      github-actions:
+        patterns: ['*']
+    commit-message:
+      prefix: 'ci'
+    labels: ['dependencies', 'ci']
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '03:00'
+      timezone: America/Los_Angeles
+    cooldown:
+      default-days: 3
+    groups:
+      npm-minor-patch:
+        update-types: ['minor', 'patch']
+    commit-message:
+      prefix: 'chore(deps)'
+    labels: ['dependencies']
+
+  - package-ecosystem: uv
+    directory: /services/python_agents
+    schedule:
+      interval: weekly
+      day: monday
+      time: '03:00'
+      timezone: America/Los_Angeles
+    cooldown:
+      default-days: 3
+    groups:
+      python-minor-patch:
+        update-types: ['minor', 'patch']
+    commit-message:
+      prefix: 'chore(deps)'
+    labels: ['dependencies', 'python']
+
+  - package-ecosystem: docker
+    directories:
+      - /services/python_agents
+      - /infrastructure/docker
+    schedule:
+      interval: weekly
+      day: monday
+      time: '03:00'
+      timezone: America/Los_Angeles
+    cooldown:
+      default-days: 3
+    commit-message:
+      prefix: 'build(docker)'
+    labels: ['dependencies', 'docker']
+
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '03:00'
+      timezone: America/Los_Angeles
+    cooldown:
+      default-days: 3
+    commit-message:
+      prefix: 'build(docker)'
+    labels: ['dependencies', 'docker']

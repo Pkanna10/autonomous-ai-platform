@@ -1,32 +1,25 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Dormant until the Renovate app is installed on the repository; .github/dependabot.yml covers version updates until then. Run one of the two, not both.",
   "extends": [
-    "config:base",
+    "config:recommended",
     ":dependencyDashboard",
     ":semanticCommits",
     ":enableVulnerabilityAlertsWithLabel(security)",
+    "helpers:pinGitHubActionDigests",
+    "docker:pinDigests",
     "group:monorepos",
     "schedule:earlyMondays",
     ":preserveSemverRanges"
   ],
   "timezone": "America/Los_Angeles",
   "labels": ["dependencies"],
+  "minimumReleaseAge": "3 days",
   "prConcurrentLimit": 5,
   "prHourlyLimit": 2,
   "separateMajorMinor": true,
   "separateMinorPatch": false,
   "packageRules": [
-    {
-      "description": "Auto-merge security patches",
-      "matchUpdateTypes": ["patch"],
-      "matchCurrentVersion": "!/^0/",
-      "matchPackagePatterns": ["*"],
-      "labels": ["dependencies", "security"],
-      "automerge": true,
-      "automergeType": "pr",
-      "automergeStrategy": "squash",
-      "minimumReleaseAge": "3 days"
-    },
     {
       "description": "Group TypeScript dependencies",
       "matchManagers": ["npm"],
@@ -35,24 +28,10 @@
       "rangeStrategy": "bump"
     },
     {
-      "description": "Group Python dependencies",
-      "matchManagers": ["pip_requirements"],
+      "description": "Group Python dependencies (pyproject.toml, uv.lock)",
+      "matchManagers": ["pep621"],
       "groupName": "Python dependencies",
       "rangeStrategy": "bump"
-    },
-    {
-      "description": "Automerge patch updates",
-      "matchUpdateTypes": ["patch"],
-      "automerge": true,
-      "automergeType": "pr",
-      "ignoreTests": false
-    },
-    {
-      "description": "Automerge dev dependencies (minor)",
-      "matchDepTypes": ["devDependencies"],
-      "matchUpdateTypes": ["minor"],
-      "automerge": true,
-      "automergeType": "pr"
     },
     {
       "description": "Security vulnerability updates (HIGH priority)",
@@ -61,38 +40,42 @@
       "schedule": ["at any time"]
     },
     {
-      "description": "Docker base images",
+      "description": "Container images: tag and digest bumped together",
       "matchDatasources": ["docker"],
-      "enabled": true,
-      "commitMessagePrefix": "chore(docker):",
+      "commitMessagePrefix": "build(docker):",
       "labels": ["docker", "dependencies"]
+    },
+    {
+      "description": "GitHub Actions: SHA pins and their version comments",
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions",
+      "commitMessagePrefix": "ci:"
     },
     {
       "description": "Group ESLint packages",
       "groupName": "ESLint packages",
-      "matchPackagePatterns": ["^eslint", "^@typescript-eslint/"]
+      "matchPackageNames": ["/^eslint/", "/^@typescript-eslint\\//"]
     },
     {
       "description": "Group Vitest packages",
       "groupName": "Vitest packages",
-      "matchPackagePatterns": ["^vitest", "^@vitest/"]
+      "matchPackageNames": ["/^vitest/", "/^@vitest\\//"]
     },
     {
       "description": "Group Prettier packages",
       "groupName": "Prettier packages",
-      "matchPackagePatterns": ["^prettier", "^eslint-.*-prettier"]
+      "matchPackageNames": ["/^prettier/", "/^eslint-.*-prettier/"]
     },
     {
       "description": "Group Commitlint packages",
       "groupName": "Commitlint packages",
-      "matchPackagePatterns": ["^@commitlint/"]
+      "matchPackageNames": ["/^@commitlint\\//"]
     }
   ],
   "vulnerabilityAlerts": {
     "enabled": true,
     "labels": ["security"],
     "addLabels": ["priority-high"],
-    "assignees": [],
     "schedule": ["at any time"],
     "prPriority": 10
   },
