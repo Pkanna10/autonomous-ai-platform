@@ -16,7 +16,8 @@
 #   tests are not in the image.
 # - No secrets are baked in: the key arrives through the environment at run
 #   time (.env.example). The root .dockerignore keeps .env* out of the context.
-# - Runtime: slim base, tini as PID 1, non-root user, no build tools, no pip.
+# - Runtime: slim base, tini as PID 1, non-root user, no build tools; the venv
+#   has no pip (the base image's /usr/local pip stays, unused and root-owned).
 
 # ============================================
 # STAGE 1: Builder
@@ -77,7 +78,9 @@ RUN groupadd -r appuser && \
     useradd -r -g appuser -s /usr/sbin/nologin appuser
 
 # The venv (interpreter path identical in both stages) is the whole payload.
-COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
+# Root-owned and world-readable: the runtime user cannot modify installed
+# code (bytecode is already compiled, so nothing needs to write here).
+COPY --from=builder /app/.venv /app/.venv
 
 USER appuser
 
