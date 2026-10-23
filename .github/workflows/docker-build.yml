@@ -6,6 +6,12 @@ on:
     branches: [master, main]
   workflow_dispatch:
 
+# Least privilege by default; the two build jobs add packages: write for the
+# registry push themselves. No job uploads SARIF, so none needs
+# security-events: write.
+permissions:
+  contents: read
+
 # Concurrency: Cancel in-progress runs for PR branches, keep all runs for main
 concurrency:
   group: docker-${{ github.workflow }}-${{ github.ref }}
@@ -49,12 +55,15 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
+      # The action's default BuildKit image (pinned per release) instead of
+      # the mutable moby/buildkit:latest.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
         with:
           driver-opts: |
-            image=moby/buildkit:latest
             network=host
 
       - name: Log in to Container Registry
@@ -139,6 +148,8 @@ jobs:
     runs-on: ubuntu-22.04
     needs: build-node
     if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
 
     strategy:
       matrix:
@@ -153,6 +164,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
@@ -190,31 +203,37 @@ jobs:
           tags: ${{ matrix.service.name }}:prod
           cache-from: type=gha,scope=node-${{ matrix.service.name }}
 
+      # Workflow values reach the script through env, never through ${{ }}
+      # inside run: (no script injection).
       - name: Validate library package
         if: matrix.service.type == 'library'
+        env:
+          SERVICE_NAME: ${{ matrix.service.name }}
         run: |
-          echo "## 📦 Library Package Validation - ${{ matrix.service.name }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### ✅ Build-Time Tests (Already Passed)" >> $GITHUB_STEP_SUMMARY
-          echo "- Linting (\`pnpm run lint\`)" >> $GITHUB_STEP_SUMMARY
-          echo "- Type checking (\`pnpm run typecheck\`)" >> $GITHUB_STEP_SUMMARY
-          echo "- Unit tests (\`pnpm run test\`)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## 📦 Library Package Validation - ${SERVICE_NAME}"
+            echo ""
+            echo "### ✅ Build-Time Tests (Already Passed)"
+            echo "- Linting (\`pnpm run lint\`)"
+            echo "- Type checking (\`pnpm run typecheck\`)"
+            echo "- Unit tests (\`pnpm run test\`)"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
 
           docker run -d --name test-container \
             -e NODE_ENV=production \
             -e PORT=3000 \
-            ${{ matrix.service.name }}:prod
+            "${SERVICE_NAME}:prod"
 
           sleep 10
           status=$(docker inspect test-container --format='{{.State.Health.Status}}' 2>/dev/null || echo "none")
 
           if [ "$status" = "healthy" ]; then
-            echo "✅ Healthcheck passed" >> $GITHUB_STEP_SUMMARY
+            echo "✅ Healthcheck passed" >> "$GITHUB_STEP_SUMMARY"
             docker stop test-container
             exit 0
           else
-            echo "❌ Healthcheck failed" >> $GITHUB_STEP_SUMMARY
+            echo "❌ Healthcheck failed" >> "$GITHUB_STEP_SUMMARY"
             docker logs test-container
             docker stop test-container
             exit 1
@@ -227,7 +246,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      security-events: write
 
     strategy:
       fail-fast: false
@@ -240,6 +258,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       # QEMU for multi-platform builds
       - name: Set up QEMU
@@ -251,7 +271,6 @@ jobs:
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
         with:
           driver-opts: |
-            image=moby/buildkit:latest
             network=host
 
       - name: Log in to Container Registry
@@ -307,16 +326,10 @@ jobs:
           provenance: mode=max
           sbom: true
 
-      # Cache Trivy database for faster scans
-      - name: Cache Trivy Database
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ~/.cache/trivy
-          key: trivy-db-python-${{ runner.os }}-${{ hashFiles('services/python_agents/Dockerfile') }}
-          restore-keys: |
-            trivy-db-python-${{ runner.os }}-
-
-      # Scan Python image with Trivy
+      # No actions/cache for the Trivy database here: this job publishes
+      # images, and a restored cache is writable state another run could have
+      # planted (zizmor cache-poisoning). A fresh database also means the scan
+      # never runs on stale advisories.
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         if: github.event_name != 'pull_request'
@@ -339,18 +352,27 @@ jobs:
           retention-days: 14
           compression-level: 6
 
-      # Generate security summary
+      # Generate security summary. Workflow values reach the script through
+      # env, never through ${{ }} inside run: (the tag list derives from the
+      # branch name, which is attacker-chosen on a pull request).
       - name: Generate security summary
         if: always()
+        env:
+          SERVICE_NAME: ${{ matrix.service.name }}
+          IMAGE_NAME: ${{ env.IMAGE_BASE }}/${{ matrix.service.name }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
-          echo "# 🔒 Python Docker Image Security Scan - ${{ matrix.service.name }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## Build Information" >> $GITHUB_STEP_SUMMARY
-          echo "- **Image:** \`${{ env.IMAGE_BASE }}/${{ matrix.service.name }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Digest:** \`${{ steps.build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Platforms:** linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## Tags Generated" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "# 🔒 Python Docker Image Security Scan - ${SERVICE_NAME}"
+            echo ""
+            echo "## Build Information"
+            echo "- **Image:** \`${IMAGE_NAME}\`"
+            echo "- **Digest:** \`${IMAGE_DIGEST}\`"
+            echo "- **Platforms:** linux/amd64, linux/arm64"
+            echo ""
+            echo "## Tags Generated"
+            echo "\`\`\`"
+            echo "${IMAGE_TAGS}"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
