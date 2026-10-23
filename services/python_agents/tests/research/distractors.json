@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "slugs": [
+    "process-pool-parallelism",
+    "native-extension-rewrite",
+    "alternative-interpreter",
+    "numpy-vectorization",
+    "asyncio-concurrent-io",
+    "thread-pool-for-cpu-work"
+  ]
+}

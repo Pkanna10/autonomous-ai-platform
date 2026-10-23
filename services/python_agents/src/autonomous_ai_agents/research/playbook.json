@@ -1,0 +1,1393 @@
+{
+  "version": 1,
+  "techniques": [
+    {
+      "id": "set-membership-test",
+      "slug": "set-membership-test",
+      "name": "Hash-based membership tests",
+      "summary": "Replace repeated membership tests against a list, tuple or other sequence with tests against a set or frozenset built once outside the loop. A sequence test scans element by element (O(n) per test, O(n*m) for m tests), while a hash lookup is O(1) on average, so the loop drops from quadratic to linear. This also covers order-preserving de-duplication that checks each item against the output list, where a seen-set kept beside the list does the test. Results are identical because set lookups use the same equality as sequence lookups for hashable elements with a consistent hash.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "set-membership-test-1",
+          "description": "A hot loop (high call count or high cumulative time in the profile) tests membership with the in or not in operator against a list, tuple or other sequence.",
+          "check": "hotspot.membership_test_in_loop",
+          "required": true
+        },
+        {
+          "id": "set-membership-test-2",
+          "description": "The searched sequence holds more than a few dozen elements or is searched many thousands of times, so scanning costs more than building the set once.",
+          "check": "source.container_large_or_probed_often",
+          "required": true
+        },
+        {
+          "id": "set-membership-test-3",
+          "description": "Every element of the searched sequence, and every probed value, is hashable (no lists, dicts or sets as elements).",
+          "check": "source.elements_hashable",
+          "required": true
+        },
+        {
+          "id": "set-membership-test-4",
+          "description": "Must not hold: the sequence is modified between tests in a way a set built once would not mirror (if it is, the set has to be maintained alongside the sequence).",
+          "check": "absent.source.container_mutated_during_loop",
+          "required": true
+        },
+        {
+          "id": "set-membership-test-5",
+          "description": "Must not hold: the elements define custom equality whose hash is inconsistent with it.",
+          "check": "absent.source.eq_inconsistent_with_hash",
+          "required": true
+        },
+        {
+          "id": "set-membership-test-6",
+          "description": "Supporting: the calling function has high self time rather than time in callees, as expected from inline sequence scans (the in operator on a list has no separate profile row).",
+          "check": "hotspot.self_time_dominant",
+          "required": false
+        }
+      ],
+      "expected_gain": 0.6,
+      "provability": 0.9,
+      "risk": 0.05,
+      "references": [
+        "https://wiki.python.org/moin/TimeComplexity",
+        "https://docs.python.org/3/library/stdtypes.html#set-types-set-frozenset"
+      ]
+    },
+    {
+      "id": "dict-index-for-repeated-lookup",
+      "slug": "dict-index-for-repeated-lookup",
+      "name": "Index records by key instead of scanning",
+      "summary": "Replace a linear search that scans a collection for the record matching a key (a nested loop, next over a generator, or list.index on a parallel list) with a dictionary from key to record built once in a single pass. Each lookup goes from O(n) to O(1) on average, so joining m probes against n records drops from O(n*m) to O(n+m). To keep identical results when keys repeat, the index keeps the first matching record (insert only when the key is absent), and a miss takes the same fallback path as the scan did.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "dict-index-for-repeated-lookup-1",
+          "description": "A hot function scans a collection inside an outer loop for elements whose field or value equals the current probe, or calls list.index repeatedly (the profile shows a high call count on the index method of list objects).",
+          "check": "hotspot.nested_loop_equality_match",
+          "required": true
+        },
+        {
+          "id": "dict-index-for-repeated-lookup-2",
+          "description": "The key compared in the scan is hashable and compared only by equality, not by a range, a prefix or a custom predicate.",
+          "check": "source.lookup_key_hashable",
+          "required": true
+        },
+        {
+          "id": "dict-index-for-repeated-lookup-3",
+          "description": "The scanned collection is not modified while the probes run, or every modification can be mirrored in the index.",
+          "check": "source.collection_stable_during_probes",
+          "required": true
+        },
+        {
+          "id": "dict-index-for-repeated-lookup-4",
+          "description": "Must not hold: the scan collects every match or keeps the last match, and the index would keep only the first record per key.",
+          "check": "absent.source.scan_collects_all_or_last_match",
+          "required": true
+        },
+        {
+          "id": "dict-index-for-repeated-lookup-5",
+          "description": "Supporting: the scanning function or the index method is called thousands of times or more.",
+          "check": "hotspot.calls_high",
+          "required": false
+        }
+      ],
+      "expected_gain": 0.6,
+      "provability": 0.9,
+      "risk": 0.1,
+      "references": [
+        "https://wiki.python.org/moin/TimeComplexity",
+        "https://docs.python.org/3/library/stdtypes.html#mapping-types-dict"
+      ]
+    },
+    {
+      "id": "memoize-pure-function",
+      "slug": "memoize-pure-function",
+      "name": "Memoize a pure function",
+      "summary": "Cache the results of a deterministic function that is called many times with the same hashable arguments, using functools.lru_cache or functools.cache (or a dictionary owned by the caller), so a repeated call costs one hash lookup instead of a full recomputation. The gain is roughly the fraction of calls that repeat arguments times the cost per call. Use a bounded cache when the argument space is large so peak memory stays within the guardrail, and scope the cache to a lifetime in which its inputs cannot change.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "memoize-pure-function-1",
+          "description": "The function appears in the profile with a high call count and a large share of cumulative time.",
+          "check": "hotspot.calls_high",
+          "required": true
+        },
+        {
+          "id": "memoize-pure-function-2",
+          "description": "The number of calls is much larger than the number of distinct argument combinations, judged from the source (arguments drawn from a small set of words, small integers or a fixed configuration).",
+          "check": "hotspot.repeated_arguments",
+          "required": true
+        },
+        {
+          "id": "memoize-pure-function-3",
+          "description": "The result depends only on the arguments, and the function has no side effects such as I/O, printing, logging, or mutation of its arguments or of global state.",
+          "check": "source.function_is_pure",
+          "required": true
+        },
+        {
+          "id": "memoize-pure-function-4",
+          "description": "All arguments are hashable, or can be turned into a hashable key (a tuple or frozenset) without changing their meaning.",
+          "check": "source.arguments_hashable",
+          "required": true
+        },
+        {
+          "id": "memoize-pure-function-5",
+          "description": "Must not hold: callers mutate the returned object (a list, dict or other mutable value), because a cached result would then be shared and corrupted between calls.",
+          "check": "absent.source.result_mutated_by_caller",
+          "required": true
+        },
+        {
+          "id": "memoize-pure-function-6",
+          "description": "Must not hold: the function reads the clock, random state, the environment, files or a mutable global that can change between calls.",
+          "check": "absent.source.reads_clock_random_or_mutable_global",
+          "required": true
+        },
+        {
+          "id": "memoize-pure-function-7",
+          "description": "Must not hold: the result depends on the argument's type or identity for arguments that compare equal (1, 1.0, True), otherwise use typed=True or a type-aware key.",
+          "check": "absent.source.result_depends_on_type_of_equal_arguments",
+          "required": true
+        },
+        {
+          "id": "memoize-pure-function-8",
+          "description": "Must not hold: the cache would wrap an instance method called on many short-lived instances, which keeps every instance alive and grows memory without bound.",
+          "check": "absent.source.cache_on_many_short_lived_instances",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.5,
+      "provability": 0.85,
+      "risk": 0.15,
+      "references": [
+        "https://docs.python.org/3/library/functools.html#functools.lru_cache"
+      ]
+    },
+    {
+      "id": "dynamic-programming-overlapping-subproblems",
+      "slug": "dynamic-programming-overlapping-subproblems",
+      "name": "Memoize or tabulate overlapping recursion",
+      "summary": "Turn a recursive computation that solves the same subproblems again and again (naive Fibonacci-style, edit-distance-style or path-counting recursion) into memoized recursion or a bottom-up table that solves each subproblem once. Exponential or high-polynomial work becomes proportional to the number of distinct subproblems times the cost of each. A bottom-up table also removes the recursion depth limit and the call overhead, and often only the last row or two of the table must be kept, which bounds memory.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "dynamic-programming-overlapping-subproblems-1",
+          "description": "The profile shows a recursive function whose total call count is far larger than its primitive call count (cProfile reports them as total/primitive, for example 2000000/1) and grows steeply with input size.",
+          "check": "hotspot.recursive_call_explosion",
+          "required": true
+        },
+        {
+          "id": "dynamic-programming-overlapping-subproblems-2",
+          "description": "The recursion calls itself with argument combinations that recur along different branches (the same indices, prefix lengths or remaining amounts).",
+          "check": "source.subproblems_overlap",
+          "required": true
+        },
+        {
+          "id": "dynamic-programming-overlapping-subproblems-3",
+          "description": "Each subproblem result depends only on its arguments, with no side effects and no dependence on mutable state.",
+          "check": "source.function_is_pure",
+          "required": true
+        },
+        {
+          "id": "dynamic-programming-overlapping-subproblems-4",
+          "description": "Must not hold: the subproblem state includes large or mutated structures (whole lists or sets), so there is no compact hashable key and the distinct subproblems are as many as the original calls.",
+          "check": "absent.source.no_compact_subproblem_key",
+          "required": true
+        },
+        {
+          "id": "dynamic-programming-overlapping-subproblems-5",
+          "description": "Must not hold: the result depends on the argument's type or identity for arguments that compare equal (1, 1.0, True), otherwise use typed=True or a type-aware key.",
+          "check": "absent.source.result_depends_on_type_of_equal_arguments",
+          "required": true
+        },
+        {
+          "id": "dynamic-programming-overlapping-subproblems-6",
+          "description": "Supporting: the subproblems have an obvious evaluation order (increasing index or size), which makes a bottom-up table easy and avoids deep recursion.",
+          "check": "source.bottom_up_order_obvious",
+          "required": false
+        }
+      ],
+      "expected_gain": 0.8,
+      "provability": 0.9,
+      "risk": 0.1,
+      "references": [
+        "https://docs.python.org/3/library/functools.html#functools.cache",
+        "https://docs.python.org/3/library/sys.html#sys.setrecursionlimit"
+      ]
+    },
+    {
+      "id": "hoist-loop-invariant-work",
+      "slug": "hoist-loop-invariant-work",
+      "name": "Hoist loop-invariant work",
+      "summary": "Move work whose result does not change across iterations out of the loop and compute it once before it starts: building a constant container, compiling a regular expression whose pattern is fixed or built per call, reading or parsing the same configuration, computing a length, a lookup table or an expensive attribute chain. Each iteration then does only the part that varies. The saving is the invariant cost times the iteration count, which is large when the invariant part allocates, parses or does I/O.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "hoist-loop-invariant-work-1",
+          "description": "A call inside a hot loop has a call count close to the loop's iteration count while its arguments do not depend on the loop variable (re.compile, json.loads, open, sorted or set built from the same input each time).",
+          "check": "hotspot.invariant_call_in_loop",
+          "required": true
+        },
+        {
+          "id": "hoist-loop-invariant-work-2",
+          "description": "Nothing the hoisted expression reads (its arguments, globals or files) is modified inside the loop.",
+          "check": "source.invariant_inputs_unchanged",
+          "required": true
+        },
+        {
+          "id": "hoist-loop-invariant-work-3",
+          "description": "Must not hold: the hoisted call has side effects whose count or timing is visible in the output (printing, logging, writing files, advancing an iterator or random state).",
+          "check": "absent.source.invariant_has_side_effects",
+          "required": true
+        },
+        {
+          "id": "hoist-loop-invariant-work-4",
+          "description": "Supporting: profile rows for built-ins such as len, sorted, compile or loads show call counts equal to an outer loop's iteration count.",
+          "check": "hotspot.builtin_rows_match_iteration_count",
+          "required": false
+        }
+      ],
+      "expected_gain": 0.25,
+      "provability": 0.8,
+      "risk": 0.05,
+      "references": [
+        "https://wiki.python.org/moin/PythonSpeed/PerformanceTips",
+        "https://docs.python.org/3/library/re.html#re.compile"
+      ]
+    },
+    {
+      "id": "join-instead-of-repeated-concatenation",
+      "slug": "join-instead-of-repeated-concatenation",
+      "name": "Join pieces instead of repeated concatenation",
+      "summary": "Build a string or bytes result by collecting the pieces in a list and joining them once with str.join or bytes.join (or writing them to io.StringIO or io.BytesIO) instead of concatenating onto an accumulator in a loop. Repeated concatenation copies the growing result each time, which is O(n squared) in the total length. CPython sometimes resizes a str in place when the accumulator is a local variable with no other references, so the gain for str ranges from small to very large, while bytes accumulators and accumulators held in attributes, containers or other names are always quadratic.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "join-instead-of-repeated-concatenation-1",
+          "description": "A hot loop extends a str or bytes accumulator with the plus or augmented plus operator once per element.",
+          "check": "hotspot.repeated_concatenation_in_loop",
+          "required": true
+        },
+        {
+          "id": "join-instead-of-repeated-concatenation-2",
+          "description": "The accumulated text grows to tens of kilobytes or more, or the loop runs many thousands of times, so the copying is measurable.",
+          "check": "workload.accumulated_text_large",
+          "required": true
+        },
+        {
+          "id": "join-instead-of-repeated-concatenation-3",
+          "description": "Must not hold: intermediate values of the accumulator are read inside the loop (its length or a prefix test) and cannot be served from a running counter.",
+          "check": "absent.source.intermediate_accumulator_read",
+          "required": true
+        },
+        {
+          "id": "join-instead-of-repeated-concatenation-4",
+          "description": "Supporting: the accumulator is bytes, an attribute, a global or an element of a container, where the in-place resize never applies and the cost is certainly quadratic.",
+          "check": "source.accumulator_bytes_or_non_local",
+          "required": false
+        }
+      ],
+      "expected_gain": 0.3,
+      "provability": 0.85,
+      "risk": 0.05,
+      "references": [
+        "https://docs.python.org/3/library/stdtypes.html#str.join",
+        "https://wiki.python.org/moin/PythonSpeed/PerformanceTips"
+      ]
+    },
+    {
+      "id": "deque-for-fifo-queue",
+      "slug": "deque-for-fifo-queue",
+      "name": "Use a deque for queue operations",
+      "summary": "Replace a list used as a queue, where elements are removed or inserted at the front (pop at index 0, insert at index 0), with collections.deque and its popleft and appendleft methods. Front operations on a list shift every remaining element, O(n) each, so a breadth-first search or work queue becomes quadratic, whereas a deque does them in O(1). Iteration order and contents are unchanged, so outputs stay identical as long as the queue object itself never reaches the output.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "deque-for-fifo-queue-1",
+          "description": "The profile shows a high call count and noticeable time on the pop or insert method of list objects, called with index 0 in the source.",
+          "check": "hotspot.list_front_operations",
+          "required": true
+        },
+        {
+          "id": "deque-for-fifo-queue-2",
+          "description": "The queue holds hundreds of elements or more at a time, so the shifting cost matters.",
+          "check": "source.queue_grows_large",
+          "required": true
+        },
+        {
+          "id": "deque-for-fifo-queue-3",
+          "description": "Must not hold: the code slices the queue, indexes into its middle often (O(n) on a deque), passes it to code that requires a list, or returns, prints or compares the queue itself (a deque never equals a list with the same items).",
+          "check": "absent.source.queue_sliced_indexed_or_exposed",
+          "required": true
+        },
+        {
+          "id": "deque-for-fifo-queue-4",
+          "description": "Supporting: the structure is a breadth-first traversal frontier, a sliding window or a producer-consumer work list.",
+          "check": "source.breadth_first_or_work_queue",
+          "required": false
+        }
+      ],
+      "expected_gain": 0.5,
+      "provability": 0.9,
+      "risk": 0.05,
+      "references": [
+        "https://docs.python.org/3/library/collections.html#collections.deque",
+        "https://wiki.python.org/moin/TimeComplexity"
+      ]
+    },
+    {
+      "id": "heap-for-repeated-min-or-max",
+      "slug": "heap-for-repeated-min-or-max",
+      "name": "Use a heap for repeated min or max extraction",
+      "summary": "When a loop repeatedly takes the smallest or largest element of a changing collection (sorting again after every insertion, or calling min or max and removing the result), keep the collection as a binary heap with heapq.heappush and heapq.heappop. Each step costs O(log n) instead of O(n) or O(n log n), which turns priority-queue algorithms such as shortest paths, event simulation or k-way merging from quadratic into n log n. Ties must be broken by a total order (an insertion counter or an explicit secondary key in each entry) so the extraction order matches the original exactly.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "heap-for-repeated-min-or-max-1",
+          "description": "The profile shows sorted, list.sort, min or max called once per outer iteration on a collection that changes by only a few elements between calls.",
+          "check": "hotspot.repeated_sort_or_min_in_loop",
+          "required": true
+        },
+        {
+          "id": "heap-for-repeated-min-or-max-2",
+          "description": "Between extractions the code only inserts or removes a few elements rather than rebuilding the whole collection.",
+          "check": "source.collection_changes_incrementally",
+          "required": true
+        },
+        {
+          "id": "heap-for-repeated-min-or-max-3",
+          "description": "Must not hold: the output depends on the order among equal-priority elements and that order cannot be reproduced with an explicit secondary key such as an insertion counter.",
+          "check": "absent.source.tie_order_not_reproducible",
+          "required": true
+        },
+        {
+          "id": "heap-for-repeated-min-or-max-4",
+          "description": "Must not hold: elements other than the minimum are often removed or reprioritized and lazy deletion is not acceptable.",
+          "check": "absent.source.arbitrary_removal_or_reprioritization",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.5,
+      "provability": 0.85,
+      "risk": 0.1,
+      "references": ["https://docs.python.org/3/library/heapq.html"]
+    },
+    {
+      "id": "bisect-for-sorted-search",
+      "slug": "bisect-for-sorted-search",
+      "name": "Binary search in sorted sequences",
+      "summary": "When code searches a sorted list linearly (to find a position, a range boundary or the first element at least as large as a key) or appends and re-sorts to keep it ordered, use the bisect module instead. Each search drops from O(n) to O(log n). Insertion with bisect.insort is still O(n) for the element shift, but that shift is a fast memory move rather than a Python-level loop or a full sort. The bisect functions accept a key argument since Python 3.10.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "bisect-for-sorted-search-1",
+          "description": "A hot loop walks a sequence to find the first position where an element reaches a key, or appends and then sorts again to keep the sequence ordered.",
+          "check": "hotspot.linear_scan_of_sorted_data",
+          "required": true
+        },
+        {
+          "id": "bisect-for-sorted-search-2",
+          "description": "The searched sequence is kept sorted by the same key and comparison that the search uses.",
+          "check": "source.sequence_sorted_by_search_key",
+          "required": true
+        },
+        {
+          "id": "bisect-for-sorted-search-3",
+          "description": "Must not hold: equal keys occur and the code depends on landing before or after them in a way that has not been matched to bisect_left versus bisect_right.",
+          "check": "absent.source.duplicate_key_position_unmatched",
+          "required": true
+        },
+        {
+          "id": "bisect-for-sorted-search-4",
+          "description": "Supporting: the sequence holds thousands of elements or more.",
+          "check": "workload.sequence_large",
+          "required": false
+        }
+      ],
+      "expected_gain": 0.4,
+      "provability": 0.85,
+      "risk": 0.1,
+      "references": ["https://docs.python.org/3/library/bisect.html"]
+    },
+    {
+      "id": "sort-once-not-repeatedly",
+      "slug": "sort-once-not-repeatedly",
+      "name": "Sort once, with a key function",
+      "summary": "Remove sorts repeated on unchanged data (sorting inside a loop, or sorting the same list on every call) by sorting once and reusing the result, and replace comparison-function sorting through functools.cmp_to_key with a key function such as operator.itemgetter or attrgetter. A key function is called once per element, while a comparison function is called O(n log n) times through Python. Python's sort is stable, so a key that orders by the same criteria gives the same output.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "sort-once-not-repeatedly-1",
+          "description": "The profile shows sorted or the sort method of list objects with a call count much higher than the number of times the data changes, or a comparison function wrapped by cmp_to_key called millions of times.",
+          "check": "hotspot.sort_calls_high",
+          "required": true
+        },
+        {
+          "id": "sort-once-not-repeatedly-2",
+          "description": "The data being sorted is unchanged between the repeated sorts, or the comparison function can be expressed as an equivalent key.",
+          "check": "source.sort_inputs_unchanged_or_key_expressible",
+          "required": true
+        },
+        {
+          "id": "sort-once-not-repeatedly-3",
+          "description": "Must not hold: the comparison function is not a consistent total order (it is intransitive or depends on external state), so no key function reproduces its output.",
+          "check": "absent.source.comparator_not_total_order",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.45,
+      "provability": 0.85,
+      "risk": 0.1,
+      "references": [
+        "https://docs.python.org/3/howto/sorting.html",
+        "https://docs.python.org/3/library/functools.html#functools.cmp_to_key"
+      ]
+    },
+    {
+      "id": "heapq-nsmallest-for-top-k",
+      "slug": "heapq-nsmallest-for-top-k",
+      "name": "Partial selection for top-k",
+      "summary": "When only the k smallest or largest elements are used after sorting a large collection (sorting and then slicing the first k), select them with heapq.nsmallest or heapq.nlargest, or with min or max when k is one. Selection costs O(n log k) instead of O(n log n) and avoids allocating the full sorted copy. The heapq documentation states these functions are equivalent to sorting and slicing, so outputs, including the order of ties, stay the same.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "heapq-nsmallest-for-top-k-1",
+          "description": "A hot function sorts a large collection and then keeps only a short prefix of the result (a slice of the first few elements, or index zero).",
+          "check": "hotspot.full_sort_then_slice",
+          "required": true
+        },
+        {
+          "id": "heapq-nsmallest-for-top-k-2",
+          "description": "The number of elements kept is much smaller than the collection size (k a few dozen, n thousands or more).",
+          "check": "source.k_much_smaller_than_n",
+          "required": true
+        },
+        {
+          "id": "heapq-nsmallest-for-top-k-3",
+          "description": "Must not hold: the remainder of the sorted list is used elsewhere, so the full sort is needed anyway.",
+          "check": "absent.source.rest_of_sorted_list_used",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.3,
+      "provability": 0.85,
+      "risk": 0.05,
+      "references": [
+        "https://docs.python.org/3/library/heapq.html#heapq.nsmallest"
+      ]
+    },
+    {
+      "id": "single-pass-counting",
+      "slug": "single-pass-counting",
+      "name": "Count in one pass",
+      "summary": "Replace counting that rescans a sequence for each value (calling the count method of a list inside a loop over its own elements, or nested loops that tally equal elements) with one pass that fills a collections.Counter or a dictionary of counts, then reads the counts. The work drops from O(n squared), or O(n*k) for k distinct values, to O(n). A Counter keeps first-seen insertion order, so iterating over the counts can match the original order of first occurrence.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "single-pass-counting-1",
+          "description": "The profile shows the count method of list or tuple objects with a call count close to the length of the sequence it is called on, or a nested loop tallying equal elements.",
+          "check": "hotspot.count_method_in_loop",
+          "required": true
+        },
+        {
+          "id": "single-pass-counting-2",
+          "description": "The counted elements are hashable.",
+          "check": "source.elements_hashable",
+          "required": true
+        },
+        {
+          "id": "single-pass-counting-3",
+          "description": "Must not hold: the code counts substrings in text with str.count (non-overlapping occurrences), which a per-token counter reproduces only when the text is tokenized identically.",
+          "check": "absent.source.substring_count_semantics",
+          "required": true
+        },
+        {
+          "id": "single-pass-counting-4",
+          "description": "Must not hold: the sequence changes between the count calls, so each count is over different data.",
+          "check": "absent.source.sequence_mutated_between_counts",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.6,
+      "provability": 0.9,
+      "risk": 0.05,
+      "references": [
+        "https://docs.python.org/3/library/collections.html#collections.Counter"
+      ]
+    },
+    {
+      "id": "builtin-aggregates-over-python-loops",
+      "slug": "builtin-aggregates-over-python-loops",
+      "name": "Use built-in aggregates and C-level iteration",
+      "summary": "Replace explicit Python loops that compute a sum, a minimum, a maximum, any, all, a filter or a mapping with the corresponding built-ins (sum, min, max, any, all, map, filter) or itertools and operator helpers, which run the iteration in C. The replaced loop typically gets 1.5 to 5 times faster, since each element no longer costs several bytecode instructions. any and all also stop at the first decisive element, like a loop with break.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "builtin-aggregates-over-python-loops-1",
+          "description": "A hot function's self time is dominated by a simple loop that accumulates a single value or builds a filtered or mapped sequence, with no other work per element.",
+          "check": "hotspot.simple_reduction_loop",
+          "required": true
+        },
+        {
+          "id": "builtin-aggregates-over-python-loops-2",
+          "description": "The loop body has no side effects besides the accumulation (no printing, logging or mutation of other state).",
+          "check": "source.loop_body_side_effect_free",
+          "required": true
+        },
+        {
+          "id": "builtin-aggregates-over-python-loops-3",
+          "description": "Must not hold: the loop sums floats and the output must match bit for bit, because the built-in sum uses compensated (Neumaier) summation for floats since Python 3.12 and can differ slightly from naive left-to-right addition.",
+          "check": "absent.source.float_sum_bit_exact",
+          "required": true
+        },
+        {
+          "id": "builtin-aggregates-over-python-loops-4",
+          "description": "Must not hold: equal elements are distinguishable and the loop keeps the last of several equal minima or maxima, whereas min and max keep the first.",
+          "check": "absent.source.last_of_equal_extremes_selected",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.2,
+      "provability": 0.8,
+      "risk": 0.1,
+      "references": [
+        "https://docs.python.org/3/library/functions.html#sum",
+        "https://wiki.python.org/moin/PythonSpeed/PerformanceTips"
+      ]
+    },
+    {
+      "id": "local-binding-in-hot-loop",
+      "slug": "local-binding-in-hot-loop",
+      "name": "Bind hot lookups to local names",
+      "summary": "Inside a very hot loop, bind repeatedly looked-up globals, built-ins, module attributes and bound methods (the append method of an output list, a function from another module) to local names before the loop, and iterate directly or with enumerate and zip instead of indexing through range of len. Local loads are cheaper than global and attribute lookups. Since Python 3.11 the specializing interpreter already makes many of these lookups cheap, so the expected gain is small and often inside the measurement noise. Apply it only to tight loops that dominate the runtime.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "local-binding-in-hot-loop-1",
+          "description": "A single function holds most of the self time, its body is a tight loop of a few lines run millions of times, and the loop repeatedly uses dotted names, globals or index lookups.",
+          "check": "hotspot.tight_loop_self_time_dominant",
+          "required": true
+        },
+        {
+          "id": "local-binding-in-hot-loop-2",
+          "description": "Must not hold: the global, attribute or method being cached can be rebound or monkeypatched while the loop runs, so a local copy would go stale.",
+          "check": "absent.source.names_rebound_during_loop",
+          "required": true
+        },
+        {
+          "id": "local-binding-in-hot-loop-3",
+          "description": "Supporting: the workload runs on Python 3.10 or earlier, where global and attribute lookups are slower and the gain is larger.",
+          "check": "env.python_older_than_3_11",
+          "required": false
+        }
+      ],
+      "expected_gain": 0.05,
+      "provability": 0.45,
+      "risk": 0.02,
+      "references": [
+        "https://wiki.python.org/moin/PythonSpeed/PerformanceTips",
+        "https://docs.python.org/3/whatsnew/3.11.html"
+      ]
+    },
+    {
+      "id": "comprehension-over-append-loop",
+      "slug": "comprehension-over-append-loop",
+      "name": "Comprehensions instead of append loops",
+      "summary": "Rewrite loops whose only job is to build a list, set or dict by appending or assigning one element per iteration as the equivalent comprehension, or pass a generator expression to the constructor. Comprehensions avoid the per-iteration method lookup and call and use specialised bytecode, and since Python 3.12 list, dict and set comprehensions are inlined into the enclosing function (PEP 709), removing their call overhead. Gains are modest, about 10 to 30 percent of the loop itself.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "comprehension-over-append-loop-1",
+          "description": "A hot loop's body only computes a value and appends it to a list, adds it to a set or stores it in a dict, optionally under a simple condition.",
+          "check": "hotspot.append_loop_builds_container",
+          "required": true
+        },
+        {
+          "id": "comprehension-over-append-loop-2",
+          "description": "Must not hold: the loop body also mutates other state, breaks early on a condition, or reads the partially built container.",
+          "check": "absent.source.loop_has_other_effects",
+          "required": true
+        },
+        {
+          "id": "comprehension-over-append-loop-3",
+          "description": "Supporting: the append method of list objects appears in the profile with millions of calls.",
+          "check": "hotspot.append_calls_high",
+          "required": false
+        }
+      ],
+      "expected_gain": 0.1,
+      "provability": 0.6,
+      "risk": 0.02,
+      "references": [
+        "https://docs.python.org/3/tutorial/datastructures.html#list-comprehensions",
+        "https://peps.python.org/pep-0709/"
+      ]
+    },
+    {
+      "id": "avoid-exceptions-for-common-misses",
+      "slug": "avoid-exceptions-for-common-misses",
+      "name": "Avoid exceptions on the common path",
+      "summary": "When a hot loop handles a frequent miss by catching an exception (KeyError on a dictionary lookup, ValueError from list.index or int conversion, IndexError, AttributeError), test the condition directly or use a non-raising alternative such as dict.get, dict.setdefault, collections.defaultdict or a membership test. Since Python 3.11 a handler costs almost nothing when nothing is raised, but raising and catching costs on the order of a microsecond each time, so this pays only when misses are common. Prefer get or setdefault to a membership test followed by indexing, which does a second lookup.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "avoid-exceptions-for-common-misses-1",
+          "description": "The source wraps a hot lookup or conversion in try and except, and the input makes the except branch common (a large fraction of iterations), which shows as high self time in the function holding the handler.",
+          "check": "hotspot.exceptions_raised_frequently",
+          "required": true
+        },
+        {
+          "id": "avoid-exceptions-for-common-misses-2",
+          "description": "A non-raising check or method gives exactly the same result for both hit and miss (dict.get with the same default the handler used).",
+          "check": "source.non_raising_equivalent_exists",
+          "required": true
+        },
+        {
+          "id": "avoid-exceptions-for-common-misses-3",
+          "description": "Must not hold: the except clause also catches errors raised deeper inside the guarded call (a KeyError from a custom mapping or a nested function), which a direct test would no longer handle.",
+          "check": "absent.source.handler_catches_deeper_errors",
+          "required": true
+        },
+        {
+          "id": "avoid-exceptions-for-common-misses-4",
+          "description": "Must not hold: the raising call accepts inputs that the direct test does not (int() takes whitespace, a sign, underscores and non-ASCII digits).",
+          "check": "absent.source.raising_call_accepts_more_inputs",
+          "required": true
+        },
+        {
+          "id": "avoid-exceptions-for-common-misses-5",
+          "description": "Must not hold: a defaultdict replacement would reach code that reads missing keys or prints the mapping, since a defaultdict inserts a key on every missing read.",
+          "check": "absent.source.defaultdict_leaks_inserted_keys",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.15,
+      "provability": 0.7,
+      "risk": 0.05,
+      "references": [
+        "https://docs.python.org/3/library/stdtypes.html#dict.get",
+        "https://docs.python.org/3/library/collections.html#collections.defaultdict"
+      ]
+    },
+    {
+      "id": "avoid-quadratic-sequence-building",
+      "slug": "avoid-quadratic-sequence-building",
+      "name": "Avoid quadratic list building",
+      "summary": "Replace loops that rebuild a list or tuple every time an element is added (binding the old list plus a one-element list to the same name, concatenating tuples, or calling sum over lists with an empty list as the start value) with in-place append or extend, itertools.chain, or one construction at the end. Each rebuild copies the whole sequence, so n additions cost O(n squared) time and churn memory, while append and extend are amortized O(1) per element.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "avoid-quadratic-sequence-building-1",
+          "description": "A hot loop creates a new list or tuple by concatenation on every iteration, or sum is called with a list start value over many lists, and the sequence grows to thousands of elements.",
+          "check": "hotspot.sequence_rebuilt_per_element",
+          "required": true
+        },
+        {
+          "id": "avoid-quadratic-sequence-building-2",
+          "description": "Must not hold: other code keeps a reference to the previous version of the sequence and relies on it staying unchanged, which in-place extension would break (copy once at the end instead).",
+          "check": "absent.source.previous_sequence_still_referenced",
+          "required": true
+        },
+        {
+          "id": "avoid-quadratic-sequence-building-3",
+          "description": "Supporting: the final sequence holds thousands of elements or more.",
+          "check": "workload.sequence_large",
+          "required": false
+        }
+      ],
+      "expected_gain": 0.5,
+      "provability": 0.9,
+      "risk": 0.05,
+      "references": [
+        "https://wiki.python.org/moin/TimeComplexity",
+        "https://docs.python.org/3/library/itertools.html#itertools.chain"
+      ]
+    },
+    {
+      "id": "batch-small-writes",
+      "slug": "batch-small-writes",
+      "name": "Batch many small writes",
+      "summary": "When a workload emits its output through a very large number of tiny print or write calls (one per item or per field), assemble the output in memory in bounded chunks and write each chunk with one call, or use the writelines method of the file. Each print call handles its arguments, joins separators and the line end, and passes through the text layer, so per-call overhead dominates for tiny items. The bytes written stay identical, so the equivalence judge can confirm the result.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "batch-small-writes-1",
+          "description": "The profile shows print or the write method of a file or stream with a call count in the hundreds of thousands or more and a significant share of total time.",
+          "check": "hotspot.write_calls_high",
+          "required": true
+        },
+        {
+          "id": "batch-small-writes-2",
+          "description": "Output goes to one stream in program order, with no interleaving with another stream whose relative order is observable.",
+          "check": "source.single_stream_program_order",
+          "required": true
+        },
+        {
+          "id": "batch-small-writes-3",
+          "description": "Must not hold: the code relies on output appearing incrementally (progress reports, prompts, a flush per line) or interleaves standard output with standard error where the combined order is checked.",
+          "check": "absent.source.incremental_output_or_interleaving_needed",
+          "required": true
+        },
+        {
+          "id": "batch-small-writes-4",
+          "description": "Must not hold: buffering the output would exceed the peak-memory guardrail (buffer in bounded chunks instead).",
+          "check": "absent.workload.buffered_output_exceeds_memory_guardrail",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.2,
+      "provability": 0.75,
+      "risk": 0.1,
+      "references": [
+        "https://docs.python.org/3/library/io.html",
+        "https://docs.python.org/3/library/functions.html#print"
+      ]
+    },
+    {
+      "id": "avoid-deepcopy-in-hot-path",
+      "slug": "avoid-deepcopy-in-hot-path",
+      "name": "Avoid deep copies in the hot path",
+      "summary": "Remove or narrow copy.deepcopy calls that run per item or per iteration on data that is never mutated afterwards, or that only needs a shallow copy (a new outer list or dict over shared immutable elements) or a copy of one nested level. deepcopy walks the entire object graph in Python with a memo dictionary, so it is often among the slowest calls in a profile, and it also doubles peak memory for large structures. Safe only when the code shows that the shared parts are never mutated.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "avoid-deepcopy-in-hot-path-1",
+          "description": "The profile shows copy.deepcopy and its internal helpers with a high call count or a large share of cumulative time.",
+          "check": "hotspot.deepcopy_time_high",
+          "required": true
+        },
+        {
+          "id": "avoid-deepcopy-in-hot-path-2",
+          "description": "The copied structure, or every part below the level that is still copied, is never mutated by the receiving code (it is read only, or only the outer container changes).",
+          "check": "source.copied_data_not_mutated",
+          "required": true
+        },
+        {
+          "id": "avoid-deepcopy-in-hot-path-3",
+          "description": "Must not hold: any code path mutates a nested part of the copy or of the original afterwards, which sharing would make visible on the other side.",
+          "check": "absent.source.aliased_mutation_possible",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.4,
+      "provability": 0.8,
+      "risk": 0.3,
+      "references": ["https://docs.python.org/3/library/copy.html"]
+    },
+    {
+      "id": "str-methods-instead-of-regex",
+      "slug": "str-methods-instead-of-regex",
+      "name": "String methods instead of simple regexes",
+      "summary": "Where a regular expression performs a fixed-text operation (a literal prefix or suffix test, a literal substring search, splitting on one literal separator, replacing literal characters), use the equivalent str method such as startswith, endswith, the in operator, find, split, replace, or translate with a table from str.maketrans. These run as specialised C loops without regex engine overhead, and a chain of replace calls can become one translate pass when every replaced value is one character and no replacement's output can be matched by a later replace. Gains are moderate and depend on how hot the regex calls are.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "str-methods-instead-of-regex-1",
+          "description": "The profile shows calls into the re module (match, search, sub, split or the methods of compiled pattern objects) with high call counts.",
+          "check": "hotspot.regex_calls_high",
+          "required": true
+        },
+        {
+          "id": "str-methods-instead-of-regex-2",
+          "description": "The pattern contains no metacharacters, character classes or flags that change its meaning, so a literal string operation is exactly equivalent.",
+          "check": "source.pattern_is_literal",
+          "required": true
+        },
+        {
+          "id": "str-methods-instead-of-regex-3",
+          "description": "Must not hold: the code relies on behaviour the str method lacks or treats differently, such as splitting on runs of whitespace with a class, case-insensitive matching, multiline anchors, or the different handling of empty strings by re.split and str.split.",
+          "check": "absent.source.regex_specific_semantics",
+          "required": true
+        },
+        {
+          "id": "str-methods-instead-of-regex-4",
+          "description": "Must not hold: a translate rewrite would merge replace calls whose replaced values are longer than one character, or where one replacement's output is matched by a later replace (replace calls run in sequence, translate maps each character once).",
+          "check": "absent.source.replacements_interact_or_multi_character",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.15,
+      "provability": 0.75,
+      "risk": 0.15,
+      "references": [
+        "https://docs.python.org/3/library/stdtypes.html#string-methods",
+        "https://docs.python.org/3/library/re.html"
+      ]
+    },
+    {
+      "id": "early-exit-search",
+      "slug": "early-exit-search",
+      "name": "Stop searching at the first answer",
+      "summary": "When a loop or comprehension computes a full result only to test whether any element qualifies, to take the first qualifying element, or to compare a count with zero, stop at the first decisive element instead (any or all over a generator, next over a generator with a default, or a loop with break). When the answer is found early the work drops from the full length to the position of the first match, and the intermediate list is never built.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "early-exit-search-1",
+          "description": "A hot function builds a list or a count over a whole collection and then uses only its truthiness, its first element or a comparison with zero.",
+          "check": "hotspot.full_scan_for_existence",
+          "required": true
+        },
+        {
+          "id": "early-exit-search-2",
+          "description": "Must not hold: the predicate or the loop body has side effects (printing, mutation, advancing a shared iterator) that the skipped iterations would have produced.",
+          "check": "absent.source.skipped_iterations_have_side_effects",
+          "required": true
+        },
+        {
+          "id": "early-exit-search-3",
+          "description": "Supporting: in the measured workloads the first match tends to come early, so the saving is large (it is zero when nothing ever matches).",
+          "check": "workload.matches_found_early",
+          "required": false
+        }
+      ],
+      "expected_gain": 0.3,
+      "provability": 0.8,
+      "risk": 0.1,
+      "references": [
+        "https://docs.python.org/3/library/functions.html#any",
+        "https://docs.python.org/3/library/functions.html#next"
+      ]
+    },
+    {
+      "id": "three-argument-pow",
+      "slug": "three-argument-pow",
+      "name": "Modular exponentiation with three-argument pow",
+      "summary": "Replace a large integer power followed by a modulo (raising to a big exponent and then reducing, or reducing only after a loop of repeated multiplication) with the built-in pow called with a modulus, which reduces at every step of square-and-multiply. The plain form builds an integer whose size grows with the exponent, so time and memory grow much faster than linearly, while the three-argument form keeps every intermediate below the modulus and needs O(log exponent) multiplications. Results are identical for integer operands with a non-negative exponent.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "three-argument-pow-1",
+          "description": "A hot expression raises an integer to a large exponent (hundreds or more) and then takes the result modulo another integer, or multiplies repeatedly and reduces only at the end.",
+          "check": "hotspot.big_power_then_modulo",
+          "required": true
+        },
+        {
+          "id": "three-argument-pow-2",
+          "description": "Base, exponent and modulus are all integers, the exponent is not negative and the modulus is not zero.",
+          "check": "source.integer_operands",
+          "required": true
+        },
+        {
+          "id": "three-argument-pow-3",
+          "description": "Must not hold: the unreduced power itself is used elsewhere in the computation.",
+          "check": "absent.source.unreduced_power_used",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.85,
+      "provability": 0.95,
+      "risk": 0.02,
+      "references": ["https://docs.python.org/3/library/functions.html#pow"]
+    },
+    {
+      "id": "lazy-logging-arguments",
+      "slug": "lazy-logging-arguments",
+      "name": "Defer logging message formatting",
+      "summary": "When a hot path calls the logging module at a disabled level but builds the message eagerly (an f-string, str.format or percent formatting, or expensive argument computation before the call), pass the format string and its arguments to the logger so formatting happens only when a record is emitted, and guard truly expensive argument computation with the isEnabledFor method of the logger. A disabled call then costs little more than a level check. The logging HOWTO describes exactly this optimization.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "lazy-logging-arguments-1",
+          "description": "The profile shows high call counts on logger methods such as debug together with string formatting or repr calls made from the same lines, while the configured level suppresses those records.",
+          "check": "hotspot.disabled_logging_formatting",
+          "required": true
+        },
+        {
+          "id": "lazy-logging-arguments-2",
+          "description": "Must not hold: building the log arguments has side effects the program depends on (consuming an iterator, mutating state), which deferring would skip.",
+          "check": "absent.source.argument_side_effects",
+          "required": true
+        },
+        {
+          "id": "lazy-logging-arguments-3",
+          "description": "Must not hold: the records are actually emitted in the measured configuration (the formatting is then needed and the gain is near zero).",
+          "check": "absent.workload.records_emitted",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.15,
+      "provability": 0.7,
+      "risk": 0.05,
+      "references": [
+        "https://docs.python.org/3/howto/logging.html#optimization"
+      ]
+    },
+    {
+      "id": "gc-pause-during-bulk-allocation",
+      "slug": "gc-pause-during-bulk-allocation",
+      "name": "Pause cyclic garbage collection during bulk allocation",
+      "summary": "When a phase allocates millions of container objects that stay alive (loading a large data structure, building a big graph of tuples, dicts or objects), disable the cyclic garbage collector for that phase with gc.disable and enable it again afterwards, or call gc.freeze after loading long-lived data. Otherwise the generational collector runs repeated collections that traverse the growing live set, which can take a noticeable share of an allocation-heavy phase. Reference counting still frees non-cyclic garbage. Collector changes across Python versions alter these costs, so the gain must be measured on the target interpreter.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "gc-pause-during-bulk-allocation-1",
+          "description": "The workload builds a large number of long-lived lists, dicts, tuples or objects in one phase, and profile time is spread over allocation-heavy code rather than one algorithmic hotspot.",
+          "check": "hotspot.allocation_heavy_phase",
+          "required": true
+        },
+        {
+          "id": "gc-pause-during-bulk-allocation-2",
+          "description": "The data created in the phase forms few or no reference cycles, so pausing the collector does not let cyclic garbage pile up.",
+          "check": "source.few_reference_cycles",
+          "required": true
+        },
+        {
+          "id": "gc-pause-during-bulk-allocation-3",
+          "description": "Must not hold: the program depends on finalizers, weak-reference callbacks or the timing of object destruction for its output.",
+          "check": "absent.source.relies_on_collection_timing",
+          "required": true
+        },
+        {
+          "id": "gc-pause-during-bulk-allocation-4",
+          "description": "Must not hold: the phase produces cyclic garbage and the peak-memory guardrail is tight, since memory held by cycles would not be reclaimed until the collector is enabled again.",
+          "check": "absent.workload.cyclic_garbage_under_tight_memory_guardrail",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.1,
+      "provability": 0.55,
+      "risk": 0.05,
+      "references": ["https://docs.python.org/3/library/gc.html"]
+    },
+    {
+      "id": "generator-streaming-pipeline",
+      "slug": "generator-streaming-pipeline",
+      "name": "Stream with generators instead of materializing lists",
+      "summary": "When a large intermediate list is built only to be iterated once (passed to sum, to a join, to a for loop or to the next stage of a pipeline), produce its elements lazily with a generator expression, a generator function or itertools (map, filter, islice, chain). Peak memory for that stage drops from O(n) to O(1) in the number of elements, and runtime often improves slightly from less allocation. Outputs are unchanged when each stage is consumed exactly once and in order.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "generator-streaming-pipeline-1",
+          "description": "Peak memory is an optimization objective of the run, not only a guardrail, and one or more large intermediate lists (hundreds of thousands of elements or more) are alive at the moment of the peak.",
+          "check": "workload.peak_memory_objective",
+          "required": true
+        },
+        {
+          "id": "generator-streaming-pipeline-2",
+          "description": "Each intermediate list is consumed exactly once, sequentially, and is never indexed, measured with len, sliced or reused.",
+          "check": "source.intermediate_consumed_once",
+          "required": true
+        },
+        {
+          "id": "generator-streaming-pipeline-3",
+          "description": "Must not hold: producing the elements has side effects or depends on state that later code changes, so evaluating them lazily would change the order of effects or the values produced.",
+          "check": "absent.source.lazy_evaluation_reorders_effects",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.5,
+      "provability": 0.8,
+      "risk": 0.1,
+      "references": [
+        "https://docs.python.org/3/howto/functional.html#generator-expressions-and-list-comprehensions",
+        "https://docs.python.org/3/library/itertools.html"
+      ]
+    },
+    {
+      "id": "slots-or-tuples-for-many-records",
+      "slug": "slots-or-tuples-for-many-records",
+      "name": "Compact records for many small objects",
+      "summary": "When very many small records are alive at once as instances of ordinary classes or as dictionaries with the same fixed keys, store them compactly: declare __slots__ on the class (or use a dataclass with slots enabled), or use tuples or collections.namedtuple for read-only records. A slotted instance has no per-instance attribute dictionary, which saves roughly a third of the memory per object against an ordinary class on Python 3.11 and later (more on older versions) and about half against one dict per record, and attribute access gets slightly faster. Field values and output are unchanged.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "slots-or-tuples-for-many-records-1",
+          "description": "Peak memory is an optimization objective of the run, not only a guardrail, and is dominated by a very large number of small instances of one class, or of dicts sharing the same keys (hundreds of thousands or more alive at once).",
+          "check": "workload.peak_memory_objective",
+          "required": true
+        },
+        {
+          "id": "slots-or-tuples-for-many-records-2",
+          "description": "The set of attributes or keys per record is fixed and known from the source.",
+          "check": "source.record_fields_fixed",
+          "required": true
+        },
+        {
+          "id": "slots-or-tuples-for-many-records-3",
+          "description": "Must not hold: code adds attributes dynamically, reads the instance dictionary through vars or __dict__, needs weak references without a slot for them, uses the records as mutable dicts, or relies on pickling or class layout details that slots change.",
+          "check": "absent.source.dynamic_attributes_or_dict_api",
+          "required": true
+        },
+        {
+          "id": "slots-or-tuples-for-many-records-4",
+          "description": "Must not hold: the class takes part in multiple inheritance with other classes that define non-empty slots, which raises a layout conflict.",
+          "check": "absent.source.multiple_inheritance_slot_conflict",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.35,
+      "provability": 0.8,
+      "risk": 0.15,
+      "references": [
+        "https://docs.python.org/3/reference/datamodel.html#slots",
+        "https://docs.python.org/3/library/dataclasses.html"
+      ]
+    },
+    {
+      "id": "array-for-homogeneous-numbers",
+      "slug": "array-for-homogeneous-numbers",
+      "name": "Typed arrays for large numeric sequences",
+      "summary": "Store large homogeneous sequences of numbers (integers in a known range, or floats) in array.array or bytearray instead of lists of Python numbers. A list holds an 8-byte pointer per element plus a separate object of about 24 to 32 bytes for each distinct number, while an array stores raw machine values of 1 to 8 bytes, so memory for the sequence often drops by 70 percent or more. Reading an element is slightly slower because the value is boxed on every access, so this targets peak memory rather than speed.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "array-for-homogeneous-numbers-1",
+          "description": "Peak memory is an optimization objective of the run, not only a guardrail, and is dominated by one or a few lists holding hundreds of thousands or more ints or floats.",
+          "check": "workload.peak_memory_objective",
+          "required": true
+        },
+        {
+          "id": "array-for-homogeneous-numbers-2",
+          "description": "Every value is an int within a fixed machine range (64-bit signed, for example) or a float, so an array type code represents it exactly.",
+          "check": "source.values_fit_machine_type",
+          "required": true
+        },
+        {
+          "id": "array-for-homogeneous-numbers-3",
+          "description": "Must not hold: the sequence mixes types, holds None, holds integers that can exceed the chosen type's range, or is passed to code that requires a list (an array raises OverflowError or TypeError where a list would not).",
+          "check": "absent.source.mixed_types_or_unbounded_ints",
+          "required": true
+        },
+        {
+          "id": "array-for-homogeneous-numbers-4",
+          "description": "Must not hold: runtime is the primary objective and the hot loop reads the elements many times, since boxing on each read can make it slower.",
+          "check": "absent.workload.speed_primary_and_access_heavy",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.5,
+      "provability": 0.8,
+      "risk": 0.15,
+      "references": ["https://docs.python.org/3/library/array.html"]
+    },
+    {
+      "id": "stream-file-lines",
+      "slug": "stream-file-lines",
+      "name": "Stream input instead of reading it whole",
+      "summary": "When a workload reads a whole file or stream into memory (reading the entire contents, calling readlines, or building a list of all lines) only to process it line by line or record by record, iterate over the file object directly or read fixed-size chunks, so only one line or chunk is alive at a time. Peak memory drops from the size of the input (several times larger once held as Python strings) to the size of the largest record, and runtime is usually unchanged or slightly better.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "stream-file-lines-1",
+          "description": "Peak memory is an optimization objective of the run, not only a guardrail, and grows with input size, and the source reads a large input completely before processing it.",
+          "check": "workload.peak_memory_objective",
+          "required": true
+        },
+        {
+          "id": "stream-file-lines-2",
+          "description": "Records are processed in one sequential pass without random access to earlier or later lines.",
+          "check": "source.processing_is_sequential",
+          "required": true
+        },
+        {
+          "id": "stream-file-lines-3",
+          "description": "Must not hold: the processing needs the whole input at once (sorting all lines, looking ahead or back, or counting lines before starting).",
+          "check": "absent.source.needs_whole_input",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.6,
+      "provability": 0.85,
+      "risk": 0.05,
+      "references": [
+        "https://docs.python.org/3/tutorial/inputoutput.html#methods-of-file-objects",
+        "https://docs.python.org/3/library/io.html"
+      ]
+    },
+    {
+      "id": "release-large-intermediates",
+      "slug": "release-large-intermediates",
+      "name": "Release large intermediates early",
+      "summary": "Lower peak memory by not keeping two large versions of the data alive at once: drop references to big intermediate structures as soon as they are no longer needed (delete the name, or narrow its scope into a helper function), transform data in place instead of building a full copy next to the original, and avoid holding both a raw and a parsed copy of the same input. Peak memory is the maximum of the live set over time, so overlapping lifetimes of large objects set the peak, and shortening one of them lowers it directly.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "release-large-intermediates-1",
+          "description": "Peak memory is an optimization objective of the run, not only a guardrail, and at the peak two or more large structures derived from the same data are alive while only the newest is still used.",
+          "check": "workload.peak_memory_objective",
+          "required": true
+        },
+        {
+          "id": "release-large-intermediates-2",
+          "description": "After a clear point in the code the large intermediate is never read again, and no other reference keeps it alive.",
+          "check": "source.intermediate_unused_after_point",
+          "required": true
+        },
+        {
+          "id": "release-large-intermediates-3",
+          "description": "Must not hold: the intermediate is shared with a caller or stored in a long-lived object, so deleting a local name frees nothing, or an in-place transform would change data a caller still reads.",
+          "check": "absent.source.intermediate_shared_with_caller",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.3,
+      "provability": 0.7,
+      "risk": 0.05,
+      "references": ["https://docs.python.org/3/library/tracemalloc.html"]
+    },
+    {
+      "id": "intern-duplicate-values",
+      "slug": "intern-duplicate-values",
+      "name": "Share duplicate immutable values",
+      "summary": "When a workload keeps many equal immutable values alive as separate objects (the same category strings, keys or small tuples created again for every parsed record), make equal values share one object by passing strings through sys.intern or through a dictionary that maps each value to its canonical instance. Memory drops by the size of every duplicate (about 50 bytes or more per short string), and later dictionary lookups and comparisons on shared strings can short-circuit on identity.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "intern-duplicate-values-1",
+          "description": "Peak memory is an optimization objective of the run, not only a guardrail, and is dominated by many records holding strings or tuples drawn from a small set of distinct values (a low ratio of distinct to total values).",
+          "check": "workload.peak_memory_objective",
+          "required": true
+        },
+        {
+          "id": "intern-duplicate-values-2",
+          "description": "The duplicated values are immutable (str, bytes, tuples of immutables) and the program compares them only by equality.",
+          "check": "source.values_immutable_compared_by_equality",
+          "required": true
+        },
+        {
+          "id": "intern-duplicate-values-3",
+          "description": "Must not hold: the code compares these values by identity or uses their id, or mutates objects reachable from shared tuples, which sharing would change.",
+          "check": "absent.source.identity_semantics_used",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.3,
+      "provability": 0.7,
+      "risk": 0.05,
+      "references": ["https://docs.python.org/3/library/sys.html#sys.intern"]
+    },
+    {
+      "id": "process-pool-parallelism",
+      "slug": "process-pool-parallelism",
+      "name": "Process pool for independent work",
+      "summary": "Split independent, CPU-bound work items across worker processes with concurrent.futures.ProcessPoolExecutor or multiprocessing.Pool and collect the results in submission order. Wall time can drop by up to the number of cores for coarse-grained items, but every item and result is pickled across process boundaries, workers take time to start and import, total CPU time and peak memory across processes rise, and the gain vanishes for fine-grained items. Results must be gathered in submission order to keep the output identical.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "process-pool-parallelism-1",
+          "description": "Wall time is the only speed objective, and neither CPU time nor peak memory is judged, since a pool raises both.",
+          "check": "workload.wall_time_only_objective",
+          "required": true
+        },
+        {
+          "id": "process-pool-parallelism-2",
+          "description": "The run environment lets a trial spawn child processes, and more than one CPU core is available to the workload.",
+          "check": "env.process_spawning_permitted",
+          "required": true
+        },
+        {
+          "id": "process-pool-parallelism-3",
+          "description": "The hot loop processes independent items that each take at least tens of milliseconds and share no mutable state.",
+          "check": "hotspot.coarse_independent_items",
+          "required": true
+        },
+        {
+          "id": "process-pool-parallelism-4",
+          "description": "The work function is importable at module top level, and its arguments and results can be pickled.",
+          "check": "source.items_and_results_picklable",
+          "required": true
+        },
+        {
+          "id": "process-pool-parallelism-5",
+          "description": "Must not hold: items update shared state, write output as they go, or depend on one another's results.",
+          "check": "absent.source.shared_state_or_ordered_side_effects",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.5,
+      "provability": 0.3,
+      "risk": 0.25,
+      "references": [
+        "https://docs.python.org/3/library/concurrent.futures.html#processpoolexecutor",
+        "https://docs.python.org/3/library/multiprocessing.html"
+      ]
+    },
+    {
+      "id": "native-extension-rewrite",
+      "slug": "native-extension-rewrite",
+      "name": "Rewrite the hotspot as a native extension",
+      "summary": "Reimplement the hottest function in C, C++, Rust or Cython as a compiled extension module, or call into an existing compiled library through ctypes, so the inner loop runs as machine code without interpreter overhead. Speedups of 10 to 100 times on the rewritten loop are common, but the change adds a build toolchain and a compiled artifact to the project, changes integer overflow, floating point and error behaviour unless matched carefully, and is much harder to review.",
+      "change_class": "behaviour",
+      "preconditions": [
+        {
+          "id": "native-extension-rewrite-1",
+          "description": "A compiler toolchain and any new build dependency (Cython or a binding generator) are available in the run environment and approved for the project.",
+          "check": "env.build_toolchain_and_new_dependency_approved",
+          "required": true
+        },
+        {
+          "id": "native-extension-rewrite-2",
+          "description": "The project accepts compiled binary artifacts such as shared libraries in a change, and the trial capture rules allow them.",
+          "check": "env.compiled_artifacts_permitted",
+          "required": true
+        },
+        {
+          "id": "native-extension-rewrite-3",
+          "description": "One small function with a simple numeric or byte-level inner loop holds most of the runtime.",
+          "check": "hotspot.single_numeric_kernel_dominant",
+          "required": true
+        },
+        {
+          "id": "native-extension-rewrite-4",
+          "description": "Must not hold: the hot function relies on arbitrary Python objects, unbounded integers, exceptions as control flow or dynamic dispatch, which a native rewrite cannot reproduce exactly.",
+          "check": "absent.source.dynamic_python_semantics_in_kernel",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.7,
+      "provability": 0.4,
+      "risk": 0.4,
+      "references": [
+        "https://docs.python.org/3/extending/extending.html",
+        "https://docs.python.org/3/library/ctypes.html"
+      ]
+    },
+    {
+      "id": "alternative-interpreter",
+      "slug": "alternative-interpreter",
+      "name": "Run on a JIT-compiling interpreter",
+      "summary": "Run the workload on an alternative interpreter with a tracing JIT, such as PyPy, instead of CPython. Long-running pure-Python loops often get several times faster without code changes, but startup and warm-up are slower, C extensions may be unsupported or slow, memory use and garbage collection timing differ, and the change is to the execution environment rather than to the code under test.",
+      "change_class": "behaviour",
+      "preconditions": [
+        {
+          "id": "alternative-interpreter-1",
+          "description": "A compatible alternative interpreter is installed, and the project permits changing the interpreter its workloads run under.",
+          "check": "env.alternative_interpreter_installed",
+          "required": true
+        },
+        {
+          "id": "alternative-interpreter-2",
+          "description": "The workload command or its interpreter can be changed without touching protected benchmark, test or configuration files.",
+          "check": "env.workload_interpreter_changeable",
+          "required": true
+        },
+        {
+          "id": "alternative-interpreter-3",
+          "description": "Each workload run lasts seconds or more, long enough for JIT warm-up to pay off, and spends its time in pure-Python code.",
+          "check": "workload.long_running_pure_python",
+          "required": true
+        },
+        {
+          "id": "alternative-interpreter-4",
+          "description": "Must not hold: the project depends on C extensions or CPython-specific behaviour (finalization timing from reference counting, implementation details of id or of sys functions).",
+          "check": "absent.env.depends_on_cpython_specifics",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.6,
+      "provability": 0.3,
+      "risk": 0.3,
+      "references": ["https://wiki.python.org/moin/PythonImplementations"]
+    },
+    {
+      "id": "numpy-vectorization",
+      "slug": "numpy-vectorization",
+      "name": "Vectorize numeric loops with NumPy",
+      "summary": "Replace element-wise Python loops over numeric data with whole-array NumPy operations, so the arithmetic runs in compiled loops over contiguous memory. Gains of 10 to 100 times are typical for large arrays, but converting between lists and arrays costs time, small inputs get slower, fixed-width integers overflow silently, floating point reductions may add in a different order (pairwise summation), and NumPy scalars print differently from Python numbers.",
+      "change_class": "behaviour",
+      "preconditions": [
+        {
+          "id": "numpy-vectorization-1",
+          "description": "NumPy is already a declared and installed dependency of the project, so the change adds no new package.",
+          "check": "env.numpy_already_a_dependency",
+          "required": true
+        },
+        {
+          "id": "numpy-vectorization-2",
+          "description": "The hot loop performs arithmetic element by element over large sequences of numbers (tens of thousands or more) without per-element branching on Python objects.",
+          "check": "hotspot.numeric_elementwise_loop",
+          "required": true
+        },
+        {
+          "id": "numpy-vectorization-3",
+          "description": "Must not hold: results must match exactly where NumPy semantics differ (unbounded integers, left-to-right float summation, Python number formatting in the output).",
+          "check": "absent.source.exact_python_numeric_semantics_required",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.6,
+      "provability": 0.6,
+      "risk": 0.3,
+      "references": ["https://wiki.python.org/moin/NumericAndScientific"]
+    },
+    {
+      "id": "asyncio-concurrent-io",
+      "slug": "asyncio-concurrent-io",
+      "name": "Overlap I/O waits with asyncio",
+      "summary": "Restructure code that waits on many slow, independent I/O operations (network requests, subprocess pipes, sockets) so that asyncio runs them concurrently and the waits overlap instead of adding up. Wall time can drop toward the longest single wait. It gives no gain for CPU-bound work, because coroutines run on one thread and switch only at await points, and it adds event-loop overhead to every operation.",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "asyncio-concurrent-io-1",
+          "description": "The profile shows most wall time inside blocking I/O waits (select, poll, socket receive or read calls with little CPU time), not in Python computation.",
+          "check": "hotspot.io_wait_dominant",
+          "required": true
+        },
+        {
+          "id": "asyncio-concurrent-io-2",
+          "description": "The workload really performs slow external I/O in the measured run, which an isolated sandbox without network access does not allow.",
+          "check": "env.slow_external_io_in_measured_run",
+          "required": true
+        },
+        {
+          "id": "asyncio-concurrent-io-3",
+          "description": "The waiting operations are independent of one another, so they can be issued concurrently.",
+          "check": "source.io_operations_independent",
+          "required": true
+        },
+        {
+          "id": "asyncio-concurrent-io-4",
+          "description": "Must not hold: the output depends on the completion order of the operations, or they must happen strictly in sequence.",
+          "check": "absent.source.completion_order_matters",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.4,
+      "provability": 0.4,
+      "risk": 0.15,
+      "references": [
+        "https://docs.python.org/3/library/asyncio.html",
+        "https://docs.python.org/3/library/asyncio-task.html"
+      ]
+    },
+    {
+      "id": "thread-pool-for-cpu-work",
+      "slug": "thread-pool-for-cpu-work",
+      "name": "Thread pool for CPU-bound work",
+      "summary": "Spread independent CPU-bound items over threads with concurrent.futures.ThreadPoolExecutor. On the standard CPython build the global interpreter lock lets only one thread run Python bytecode at a time, so pure-Python work gains nothing and usually slows down from contention. It helps only on a free-threaded build of Python 3.13 or later, or when the work per item is spent in C code that releases the lock (hashing or compressing large buffers).",
+      "change_class": "efficiency",
+      "preconditions": [
+        {
+          "id": "thread-pool-for-cpu-work-1",
+          "description": "The workload runs on a free-threaded CPython build, or the hot per-item work is in built-in C code that releases the global interpreter lock on large inputs (hashlib, zlib).",
+          "check": "env.free_threaded_build_or_gil_released",
+          "required": true
+        },
+        {
+          "id": "thread-pool-for-cpu-work-2",
+          "description": "The hot loop processes independent items that each take at least milliseconds and share no mutable state.",
+          "check": "hotspot.coarse_independent_items",
+          "required": true
+        },
+        {
+          "id": "thread-pool-for-cpu-work-3",
+          "description": "More than one CPU core is available to the workload.",
+          "check": "env.multiple_cores_available",
+          "required": true
+        },
+        {
+          "id": "thread-pool-for-cpu-work-4",
+          "description": "Must not hold: items read and write shared mutable state without locks, or emit output whose order matters.",
+          "check": "absent.source.unsynchronized_shared_state",
+          "required": true
+        }
+      ],
+      "expected_gain": 0.3,
+      "provability": 0.3,
+      "risk": 0.2,
+      "references": [
+        "https://docs.python.org/3/library/concurrent.futures.html#threadpoolexecutor",
+        "https://docs.python.org/3/howto/free-threading-python.html"
+      ]
+    }
+  ]
+}
