@@ -1,0 +1,27 @@
+diff --git a/configlookup/core.py b/configlookup/core.py
+index b333920..dce707a 100644
+--- a/configlookup/core.py
++++ b/configlookup/core.py
+@@ -1,14 +1,20 @@
+ """Pricing line items."""
+ 
++import functools
+ import json
+ 
+ from configlookup.rules import RULES_JSON
+ 
+ 
++@functools.cache
++def _categories() -> dict[str, dict[str, int]]:
++    categories: dict[str, dict[str, int]] = json.loads(RULES_JSON)["categories"]
++    return categories
++
++
+ def rule_for(category: str) -> dict[str, int]:
+     """The rule of ``category`` in the published rule set."""
+-    document = json.loads(RULES_JSON)
+-    rule: dict[str, int] = document["categories"][category]
++    rule = dict(_categories()[category])
+     return rule
+ 
+ 

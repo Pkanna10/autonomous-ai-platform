@@ -1,0 +1,24 @@
+diff --git a/tagfilter/core.py b/tagfilter/core.py
+index f828c11..602697f 100644
+--- a/tagfilter/core.py
++++ b/tagfilter/core.py
+@@ -1,7 +1,7 @@
+ """Matching records against the allowlist."""
+ 
+ 
+-def matches(tags: list[str], allowed: list[str]) -> bool:
++def matches(tags: list[str], allowed: list[str] | set[str]) -> bool:
+     """True when any of ``tags`` is in ``allowed``."""
+     for tag in tags:
+         if tag in allowed:
+@@ -14,8 +14,9 @@ def count_by_kind(
+ ) -> dict[str, int]:
+     """How many records of each kind match, kinds in sorted order."""
+     counts: dict[str, int] = {}
++    allowed_set = set(allowed)
+     for kind, tags in records:
+         counts.setdefault(kind, 0)
+-        if matches(tags, allowed):
++        if matches(tags, allowed_set):
+             counts[kind] += 1
+     return dict(sorted(counts.items()))

@@ -1,0 +1,16 @@
+diff --git a/wordcount/core.py b/wordcount/core.py
+index 7958cf7..c14373e 100644
+--- a/wordcount/core.py
++++ b/wordcount/core.py
+@@ -3,7 +3,10 @@
+ 
+ def frequencies(words: list[str]) -> dict[str, int]:
+     """Each distinct word and how often it occurs, words in sorted order."""
+-    return {word: words.count(word) for word in sorted(set(words))}
++    counts: dict[str, int] = {}
++    for word in words:
++        counts[word] = counts.get(word, 0) + 1
++    return dict(sorted(counts.items()))
+ 
+ 
+ def most_common(freq: dict[str, int], limit: int) -> list[tuple[str, int]]:

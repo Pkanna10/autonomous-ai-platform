@@ -5,8 +5,25 @@ on:
   push:
     branches: [master, main]
   # Manual runs execute only the live Claude smoke test (job live-smoke); every
-  # other job is skipped for this event.
+  # other job is skipped for this event. The inputs choose what live-smoke runs
+  # (STATUS Window 0: stage-a, the benchmark corpus E0, the attack corpus X),
+  # the editor model (stage M) and the suite's hard cap.
   workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Live suite: stage-a, corpus, attack or all'
+        type: choice
+        options: [stage-a, corpus, attack, all]
+        default: stage-a
+      engine_model:
+        description: 'ENGINE_MODEL for the run (Sonnet runs without fallbacks)'
+        type: choice
+        options: [claude-opus-5-5, claude-sonnet-5-5]
+        default: claude-opus-5-5
+      suite_cap_usd:
+        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75, all 96'
+        type: string
+        default: '12'
 
 # Least privilege by default; a job that needs more says so itself.
 permissions:
@@ -481,8 +498,10 @@ jobs:
     environment: live
     permissions:
       contents: read
-    # The live E2E and attack runs each take a few minutes of real trials.
-    timeout-minutes: 30
+    # Each whole loop takes a few minutes of real trials (up to about 8): Stage A
+    # runs 2, attack 3, corpus 15 and all 20. A killed job loses the cost table,
+    # so each suite gets room for its loops (the hosted maximum is 360).
+    timeout-minutes: ${{ inputs.suite == 'all' && 240 || inputs.suite == 'corpus' && 180 || inputs.suite == 'attack' && 45 || 30 }}
     defaults:
       run:
         working-directory: ./services/python_agents
@@ -492,9 +511,6 @@ jobs:
       # isolate fails instead of running Claude-edited code unconfined.
       REQUIRE_NETWORK_SANDBOX: '1'
       REQUIRE_FS_SANDBOX: '1'
-      # tests/live/conftest.py refuses to start a live test once what the suite
-      # spent plus that test's own cap would pass this (USD).
-      LIVE_SUITE_CAP_USD: '12'
 
     steps:
       - name: Checkout code
@@ -564,16 +580,72 @@ jobs:
       # live tests alone cannot meet the suite's coverage gate; -n 0 so one
       # session ledger sees every test. The key reaches only this step and is
       # never printed; a missing key fails here instead of letting every live
-      # test skip. The cost table goes to the job summary.
+      # test skip. The inputs arrive through env only and are validated before
+      # anything runs: the suite picks the paths, the model sets ENGINE_MODEL
+      # (Sonnet with ENGINE_FALLBACKS off, so the comparison bills Sonnet only
+      # and its worst case is priced on Sonnet alone), and the cap becomes
+      # LIVE_SUITE_CAP_USD, which tests/live/conftest.py enforces before each
+      # test spends. The cost table and the corpus summary go to the job
+      # summary; one JSON line per corpus run goes to LIVE_RESULTS_PATH.
       - name: Run live tests
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          INPUT_SUITE: ${{ inputs.suite }}
+          INPUT_ENGINE_MODEL: ${{ inputs.engine_model }}
+          INPUT_SUITE_CAP_USD: ${{ inputs.suite_cap_usd }}
+          LIVE_RESULTS_PATH: ${{ runner.temp }}/live-results.jsonl
         run: |
           if [ -z "${ANTHROPIC_API_KEY}" ]; then
             echo "::error::the ANTHROPIC_API_KEY secret of environment 'live' is not set"
             exit 1
           fi
-          uv run pytest tests/live tests/execution/test_editor.py -m live --no-cov -n 0 -rA
+          corpus=(--ignore=tests/live/test_corpus_live.py --ignore=tests/live/test_attack_corpus_live.py)
+          # need: the sum of the caps the suite's live tests ask the ledger for
+          # (Stage A 8.55, corpus 15 x 5, attack 3 x 4), rounded up; a smaller cap
+          # would refuse, and fail, the later tests of the suite.
+          case "${INPUT_SUITE}" in
+            stage-a) paths=(tests/live tests/execution/test_editor.py "${corpus[@]}"); need=9 ;;
+            corpus) paths=(tests/live/test_corpus_live.py); need=75 ;;
+            attack) paths=(tests/live/test_attack_corpus_live.py); need=12 ;;
+            all) paths=(tests/live tests/execution/test_editor.py); need=96 ;;
+            *)
+              echo "::error::unknown suite input (stage-a, corpus, attack or all)"
+              exit 1
+              ;;
+          esac
+          case "${INPUT_ENGINE_MODEL}" in
+            claude-opus-5-5) ;;
+            claude-sonnet-5-5) export ENGINE_FALLBACKS=false ;;
+            *)
+              echo "::error::unknown engine_model input"
+              exit 1
+              ;;
+          esac
+          if ! [[ "${INPUT_SUITE_CAP_USD}" =~ ^[0-9]{1,3}([.][0-9]{1,2})?$ ]] ||
+            ! awk -v cap="${INPUT_SUITE_CAP_USD}" 'BEGIN { exit !(cap > 0 && cap <= 150) }'; then
+            echo "::error::suite_cap_usd must be a number of USD above 0 and at most 150"
+            exit 1
+          fi
+          if ! awk -v cap="${INPUT_SUITE_CAP_USD}" -v need="${need}" 'BEGIN { exit !(cap >= need) }'; then
+            echo "::error::suite_cap_usd ${INPUT_SUITE_CAP_USD} is below the ${need} USD suite ${INPUT_SUITE} needs to admit every test"
+            exit 1
+          fi
+          export ENGINE_MODEL="${INPUT_ENGINE_MODEL}"
+          export LIVE_SUITE_CAP_USD="${INPUT_SUITE_CAP_USD}"
+          : > "${LIVE_RESULTS_PATH}"
+          echo "suite ${INPUT_SUITE}, ENGINE_MODEL ${ENGINE_MODEL}, LIVE_SUITE_CAP_USD ${LIVE_SUITE_CAP_USD}"
+          uv run pytest "${paths[@]}" -m live --no-cov -n 0 -rA
+
+      # One JSON line per corpus run (CorpusOutcome), kept for the STATUS
+      # ledger and the stage M comparison across runs.
+      - name: Upload live corpus results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: live-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/live-results.jsonl
+          if-no-files-found: ignore
+          retention-days: 30
 
   # Database schema: apply every migration to a real Postgres, then re-apply the
   # engine migrations (003, 004) to prove they are idempotent. 001 and 002 are

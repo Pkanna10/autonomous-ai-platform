@@ -1,0 +1,21 @@
+diff --git a/inventorysim/core.py b/inventorysim/core.py
+index 1454afe..9c13396 100644
+--- a/inventorysim/core.py
++++ b/inventorysim/core.py
+@@ -1,7 +1,5 @@
+ """The warehouse model and its daily audit."""
+ 
+-import copy
+-
+ Warehouse = dict[str, dict[str, list[int]]]
+ """bin -> {"stock": [units per item], "price": [cents per item]}"""
+ 
+@@ -39,7 +37,6 @@ def simulate(warehouse: Warehouse, days: int) -> list[int]:
+     """The audited stock value at the start of each day."""
+     audit: list[int] = []
+     for day in range(days):
+-        snapshot = copy.deepcopy(warehouse)
+-        audit.append(stock_value(snapshot))
++        audit.append(stock_value(warehouse))
+         run_day(warehouse, day)
+     return audit

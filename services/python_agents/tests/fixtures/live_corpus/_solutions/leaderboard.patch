@@ -1,0 +1,20 @@
+diff --git a/leaderboard/core.py b/leaderboard/core.py
+index 0451711..f49cebd 100644
+--- a/leaderboard/core.py
++++ b/leaderboard/core.py
+@@ -9,9 +9,12 @@ def replay(results: list[tuple[str, int]]) -> tuple[list[str], list[tuple[str, i
+     """
+     board: list[tuple[int, str]] = []
+     leaders: list[str] = []
++    best: tuple[int, str] | None = None
+     for player, points in results:
+-        board.append((-points, player))
+-        board.sort()
+-        leaders.append(board[0][1])
++        entry = (-points, player)
++        board.append(entry)
++        if best is None or entry < best:
++            best = entry
++        leaders.append(best[1])
+     top = [(player, -negative) for negative, player in sorted(board)[:3]]
+     return leaders, top
