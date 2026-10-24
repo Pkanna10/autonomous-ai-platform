@@ -61,16 +61,16 @@ The 2025 design (`documentation_guide/`) defined seven layers. All seven are
 kept. The table says where each lives and whether we build it, buy it or
 integrate it.
 
-| Layer                     | Where                                         | Decision                                          |
-| ------------------------- | --------------------------------------------- | ------------------------------------------------- |
-| L1 Interfaces             | CLI (Step 4), web console, GitHub App, plugin | Integrate with the tools developers already use   |
-| L2 Orchestrator           | `services/python_agents/.../orchestrator/`    | LangGraph 1.x: checkpointing, interrupts, retries |
-| L3 Capability acquisition | `capabilities/` (planned)                     | Vet and approval-gate packages a trial needs      |
-| L4 Research               | `services/python_agents/.../research/`        | **Build**: playbook, papers, claims, matcher      |
-| L5 Execution              | local runner, `packages/execution-engine`     | Trials on your hardware (CPU, CUDA, Apple MPS)    |
-| L6 Optimization           | `optimization/` (planned)                     | **Build**: hypotheses, trials, judges, verdicts   |
-| L7 Self-improvement       | `learning/` (planned)                         | **Build**: lessons store, evaluator-gated         |
-| Persistence               | `infrastructure/schema/`                      | PostgreSQL 16 + pgvector; Redis; Qdrant           |
+| Layer                     | Where                                         | Decision                                                                                                    |
+| ------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| L1 Interfaces             | CLI (Step 4), web console, GitHub App, plugin | Integrate with the tools developers already use                                                             |
+| L2 Orchestrator           | `services/python_agents/.../orchestrator/`    | LangGraph 1.x: checkpointing, interrupts, retries                                                           |
+| L3 Capability acquisition | `capabilities/` (planned)                     | Acquire packages, MCP servers and APIs automatically under an automatic policy; ask only when a check fails |
+| L4 Research               | `services/python_agents/.../research/`        | **Build**: playbook, papers, claims, matcher                                                                |
+| L5 Execution              | local runner, `packages/execution-engine`     | Trials on your hardware (CPU, CUDA, Apple MPS)                                                              |
+| L6 Optimization           | `optimization/` (planned)                     | **Build**: hypotheses, trials, judges, verdicts                                                             |
+| L7 Self-improvement       | `learning/` (planned)                         | **Build**: lessons store, evaluator-gated; self-healing (a failing test or crash becomes a hypothesis)      |
+| Persistence               | `infrastructure/schema/`                      | PostgreSQL 16 + pgvector; Redis; Qdrant                                                                     |
 
 ```
 CONNECT → UNDERSTAND → DEFINE "BETTER" → BASELINE → PROFILE → RESEARCH

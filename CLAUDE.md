@@ -1,6 +1,6 @@
 # Autonomous AI Platform - Claude Code Configuration
 
-**Version:** 4.2.0 **Last Updated:** 2026-10-22 **Status:** Engine rebuild, Step
+**Version:** 4.3.0 **Last Updated:** 2026-10-24 **Status:** Engine rebuild, Step
 2 (core loop) built on PR #12; Verifier and stage gate next
 
 ---
@@ -34,8 +34,12 @@ improvement it can **prove** and keeps only what wins.
 
 ```
 CONNECT -> UNDERSTAND -> DEFINE "BETTER" -> BASELINE -> PROFILE -> RESEARCH
-  -> HYPOTHESES -> TRIALS (one git worktree each) -> JUDGES -> VERDICTS
-  -> COMBINE + re-test -> DELIVER (branch/PR + report) -> LEARN -> WATCH
+  -> HYPOTHESES -> ACQUIRE (packages, tools) -> TRIALS (one git worktree each)
+  -> JUDGES -> VERDICTS -> COMBINE + re-test -> DELIVER (branch/PR + report)
+  -> LEARN -> WATCH
+
+HEAL enters the same loop: a failing test, a crash or an error report becomes
+a hypothesis whose judge is "the failing case now passes, nothing regresses".
 ```
 
 - **Define "better".** Default objective: minimize runtime and peak memory;
@@ -50,23 +54,43 @@ CONNECT -> UNDERSTAND -> DEFINE "BETTER" -> BASELINE -> PROFILE -> RESEARCH
   hacking). Results need N >= 5 runs and a gain larger than the measured noise.
 - **Autonomy is proportional to verifiability.** Efficiency wins are delivered
   automatically; changes that alter model or algorithm behaviour are flagged;
-  novel or capability changes are proposals that need human approval. The engine
-  never pushes to the default branch.
+  novel changes are proposals that need human approval. Autonomy comes from
+  automatic checks, not from a human: the user is asked when a check fails or
+  cannot run. The engine never pushes to the default branch.
+- **Acquire capabilities automatically** (vision update 2026-10-24). When a
+  hypothesis needs a dependency, an engine-owned capability step finds, vets,
+  pins and installs it into the trial's own environment, never the user's:
+  fetching is a separate network-on step (exact versions with hashes, wheels
+  only), trials stay network-off. The policy is automatic (the name exists and
+  is no near-miss of a popular one, minimum age and downloads, no known
+  vulnerability, licence allowlist); the user is asked only when a check fails.
+  The editor still cannot touch manifests or lockfiles; the delivered branch
+  shows the lockfile diff and why each package was added, and a package with no
+  proven gain against a baseline without it is dropped. MCP servers and APIs are
+  discovered and ranked the same way: read-only, credential-free servers are
+  connected automatically and sandboxed like trials; credentials or write access
+  need the user's approval, and every tool description is untrusted input.
+- **Self-healing.** The user's code: a failing test, a crash or an error report
+  becomes a hypothesis judged by "the failing case passes, and the full suite
+  and the other judges show no regression"; a fix changes behaviour, so it is
+  delivered as a flagged branch. The engine itself: a trial that fails for a
+  fixable reason (syntax, import or type error) gets a bounded retry with that
+  error fed back, inside the cost cap.
 - **Learn.** Every verdict becomes a lesson ("frozen encoder + repeated epochs
   -> cache embeddings") that feeds the next hypothesis ranking.
 
 ### The 7 layers and where they live
 
-| Layer                     | Repo home                                                                                   | Decision                                                     |
-| ------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| L1 Interfaces             | `services/python_agents` CLI (planned), `apps/` (later)                                     | Integrate: CLI first, then web console, GitHub App, plugin   |
-| L2 Orchestrator           | `services/python_agents/.../orchestrator/`                                                  | Build on LangGraph 1.x (checkpointing, interrupts, retries)  |
-| L3 Capability acquisition | `capabilities/` (planned) + `packages` table                                                | Vet and approval-gate any package a trial needs              |
-| L4 Research               | `services/python_agents/.../research/`                                                      | **Build**: playbook, paper search, claim extraction, matcher |
-| L5 Execution              | `services/python_agents/.../execution/` (built, Step 2)                                     | Local runner on the user's hardware; cloud sandbox later     |
-| L6 Optimization           | `services/python_agents/.../optimization/` (Steps 1-2)                                      | **Build**: hypotheses, trials, judges, verdicts, combine     |
-| L7 Self-improvement       | `services/python_agents/.../learning/` + `lessons` table (`user_feedback` table unused yet) | **Build**: lessons store; evaluator-gated, no fine-tuning    |
-| Persistence               | `infrastructure/schema/` (Postgres + pgvector), Redis, Qdrant                               | Existing tables reused and extended via new migrations       |
+| Layer                     | Repo home                                                                                   | Decision                                                                                                                                                                                                            |
+| ------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| L1 Interfaces             | `services/python_agents` CLI (planned), `apps/` (later)                                     | Integrate: CLI first, then web console, GitHub App, plugin                                                                                                                                                          |
+| L2 Orchestrator           | `services/python_agents/.../orchestrator/`                                                  | Build on LangGraph 1.x (checkpointing, interrupts, retries)                                                                                                                                                         |
+| L3 Capability acquisition | `capabilities/` (planned) + `packages` table                                                | **Build**: automatic package acquisition under an automatic policy (user asked only on a failed check); MCP server and API discovery, auto-connect only read-only and credential-free                               |
+| L4 Research               | `services/python_agents/.../research/`                                                      | **Build**: playbook, paper search, claim extraction, matcher                                                                                                                                                        |
+| L5 Execution              | `services/python_agents/.../execution/` (built, Step 2)                                     | Local runner on the user's hardware; cloud sandbox later; per-trial environments with offline installs; bounded self-retry on fixable trial errors                                                                  |
+| L6 Optimization           | `services/python_agents/.../optimization/` (Steps 1-2)                                      | **Build**: hypotheses, trials, judges, verdicts, combine                                                                                                                                                            |
+| L7 Self-improvement       | `services/python_agents/.../learning/` + `lessons` table (`user_feedback` table unused yet) | **Build**: lessons store; evaluator-gated, no fine-tuning; self-healing of the user's code (failing case -> hypothesis -> flagged branch); production error intake and gradual rollout later (Steps 4-5 interfaces) |
+| Persistence               | `infrastructure/schema/` (Postgres + pgvector), Redis, Qdrant                               | Existing tables reused and extended via new migrations                                                                                                                                                              |
 
 ---
 
@@ -154,7 +178,10 @@ Trivy and Docker Scout in CI; keep them green.
 1. Prompt injection: validate and constrain all user and paper-derived input.
 2. Sensitive data: no API keys, passwords or secrets in code. `.env` only.
 3. Supply chain: audit dependencies (`pnpm audit`, `pip-audit`); any package a
-   trial wants to install is vetted and approval-gated (slopsquatting defence).
+   trial needs passes the automatic capability policy (registry existence and
+   near-miss names against slopsquatting, age, downloads, OSV, licence, wheels
+   only, hash-pinned) and installs only into the trial's environment; a failed
+   check asks the user.
 4. Data and model poisoning: validate inputs, sanitize data from papers and
    registries.
 5. Insecure output handling: sanitize outputs; no XSS or SQL injection.
@@ -292,8 +319,8 @@ Shape Up for bets, Kanban for flow, XP for engineering, DORA for measurement.
    must be clean. `security.yml` (OSV, Trivy, secret scanning) runs on every
    push and every Monday. Fix or justify each finding in the PR.
 3. **Security review of the new code** against the OWASP list above; add the
-   protections the step needs (worktree isolation, URL validation, approval
-   gates for package installs).
+   protections the step needs (worktree isolation, URL validation, the automatic
+   capability policy for package installs and MCP connections).
 4. **Docs.** `README.md` (what and how), `STATUS.md` (development-log row:
    planned, started, completed, PR, gate; decisions; lessons), the relevant
    `CLAUDE.md` if conventions changed.
@@ -372,6 +399,11 @@ directory:
 
 ## Changelog
 
+- **4.3.0 (2026-10-24):** Vision update from the user: automatic package
+  acquisition (an automatic policy replaces the approval gate), self-healing of
+  the user's code and of the engine's own trials, and MCP server and API
+  discovery join the vision, the loop (ACQUIRE, HEAL) and the L3, L5 and L7
+  rows; step placement is proposed in STATUS and waits for approval.
 - **4.2.0 (2026-10-22):** Step 2 built: reality check updated to the real core
   loop on CPU Python workloads; build-order row 2 marks the pending gate and PR
   #12; the layer table points L5-L7 at the built service packages.

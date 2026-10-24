@@ -274,6 +274,64 @@ branch coverage of 7,297 statements and 2,000 branches.
 
 ## Decisions
 
+### 2026-10-24 (vision update: packages, self-healing, MCP discovery)
+
+The user's November 2025 documents describe a broader vision than CLAUDE.md 4.1;
+two parts never reached the plan and one was narrowed. All three are now in
+scope (CLAUDE.md 4.3.0). Recorded now; nothing is built before Step 2 closes,
+and the placement below waits for the user's approval.
+
+- **Automatic package acquisition replaces "vet and approval-gate".** Why:
+  research hypotheses often need a library (a faster parser, a data structure),
+  leading coding agents install what they need, and a human gate on every
+  package stalls the loop for no added proof. Autonomy comes from automatic
+  checks: the name exists on the registry and is no near-miss of a popular name
+  (slopsquatting), minimum age and downloads, no known vulnerability (OSV,
+  pip-audit), a licence allowlist, wheels only (no install scripts run), exact
+  versions with hashes. The user is asked only when a check fails or cannot run.
+- **Self-healing, framed so it can be verified.** The user's code: a failing
+  test, a crash or an error report becomes a hypothesis; its judge is "the
+  failing case now passes, and the full suite and the other judges show no
+  regression"; delivered as a branch. The engine: a trial that fails for a
+  fixable reason (syntax, import or type error) gets a bounded retry with the
+  error fed back, inside the cost cap. Why: both turn a failure into a checkable
+  claim instead of a judgment call.
+- **MCP server and API discovery (L3).** The engine discovers and ranks
+  candidate servers and APIs for a goal; it connects automatically only to
+  read-only, credential-free ones, sandboxed like trials; credentials or write
+  access need the user's approval. Why: tool descriptions are untrusted input
+  (tool poisoning), and what a server can do with the user's credentials cannot
+  be proved by a judge.
+- **The multi-agent org doc's 100/100 revision loops and 10-200+ agents are not
+  adopted.** Why: Step 2 showed that risk-scaled review (one correctness
+  Reviewer per unit, a security Reviewer at trust boundaries) found the
+  blockers, and every further loop or agent spends tokens without a measured
+  gain; the token budgets and the role rules in CLAUDE.md stay.
+
+Conflicts with existing decisions, and how each is resolved:
+
+| Existing decision                                                         | Conflict                                                | Resolution                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Manifests and lockfiles are protected paths; the editor cannot touch them | A package must change them                              | Kept. The capability step (engine code, not the editor) writes the manifest and lockfile as its own commit on the trial branch, before the editor runs. The protected-path check runs on the editor's commit only; the capability commit must equal what the resolver produced for the approved package list (recomputed and compared), so neither can smuggle the other's change. |
+| Trials are network-off                                                    | Installing needs the network                            | Kept. Fetch is a separate phase, network on to an allowlisted registry host only, download-only into a run-owned wheelhouse, no repo or package code executed; the trial installs offline (`--no-index --find-links`, `--require-hashes`) into its own venv.                                                                                                                       |
+| "Capability changes are proposals that need approval" (CLAUDE.md 4.2)     | Packages are now automatic                              | Narrowed: a package that passes every check is delivered like the change it serves; MCP connections with credentials or write access, and any failed check, still ask the user.                                                                                                                                                                                                    |
+| Frozen judges against one baseline                                        | The trial runs in a different environment               | Judges unchanged. The baseline is measured in the base environment without the package; the trial with it; the environment (lockfile hash) is recorded with every measurement. A package no kept change imports is removed before combine, and the combination is re-tested without it.                                                                                            |
+| Output equivalence judge                                                  | A heal changes the output of the failing case by design | For a heal run the equivalence judge covers every workload except the declared failing case, whose judge is "now passes"; a heal is class `behaviour`, so it is flagged, never auto-delivered as an efficiency win.                                                                                                                                                                |
+| Tests are protected; the editor cannot add one                            | An error report has no failing test                     | A reproducer is written by an engine-owned step before trials, must fail on the baseline, and is then frozen with the judges for the run; it ships on the branch as its own commit, flagged for review.                                                                                                                                                                            |
+| Anti reward hacking                                                       | Feeding errors back to the editor                       | Only the trial's own execution errors (syntax, import, type, a crash traceback) are fed back; never judge verdicts, timings or benchmark output. One or two retries, each through `Budget.check`.                                                                                                                                                                                  |
+| The per-run cost cap                                                      | Retries, package selection and MCP ranking spend        | Every paid call goes through `Budget`; registry and OSV lookups cost no tokens; the retry count and the packages per hypothesis are bounded settings.                                                                                                                                                                                                                              |
+
+Proposed placement (awaiting approval):
+
+| Piece                                                 | Proposed step                                | Why there                                                                                                                                       |
+| ----------------------------------------------------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Engine self-retry on fixable trial errors             | Step 3 (small, in the editor loop)           | A few dozen lines in `ClaudeEditor`'s loop and `GitTrialRunner`; Step 3's generated hypotheses will fail more often than aimed ones             |
+| Automatic package acquisition                         | Step 3b, right after the research core       | Research hypotheses ("use library X") are generated in Step 3 and parked with a `needs_package` mark until 3b; it needs its own security review |
+| Self-healing of the user's code                       | Step 3c, after 3b                            | Reuses the loop, the judges and the reproducer rule; needs failing-case judging and the `behaviour` delivery path                               |
+| MCP server and API discovery                          | Step 4, with the interfaces                  | Ranking needs the goal parsing (`--goal`) and the connectors the CLI and GitHub App bring                                                       |
+| Production error intake (error reports as heal input) | Step 4 (connectors) feeding Step 3c's healer | Needs a connector to the user's error monitoring                                                                                                |
+| Gradual rollout and production monitoring             | After Step 5, a new step                     | Needs a deployment target and the user's real workload (the Step 5 dogfood); the engine itself never deploys                                    |
+
 ### 2026-10-22 (Step 2: the spec's 44 decisions)
 
 The approved Step 2 spec (`.claude/handoff/step2/spec.md`, deleted before merge)
