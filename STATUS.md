@@ -1129,17 +1129,24 @@ E to use what is left before the reset.
   cap.
 - Each CI live run writes its real cost to the job summary; the ledger below is
   updated after every run.
-- Live runs go through the `live` environment. The user asked for runs without
-  per-run approval (2026-10-24); dispatches have started within seconds since
-  03:53 UTC that day, so the environment no longer waits for a reviewer. The
-  per-test and per-suite caps are the guard. **Before any Window 1 spend, the
-  user restores the required reviewers on `live`** (the user's instruction,
-  2026-10-24); the Lead reminds them when Window 0's last run (the A/B) ends.
+- Live runs go through the `live` environment without per-run approval: the user
+  removed the required reviewers on 2026-10-24 and decided the same day to keep
+  it that way. The Lead dispatches live suites itself; the per-test and
+  per-suite caps (each the sum of its worst cases) are the guard.
+- **Spend rule (the user, 2026-10-24): spend past the $200 windows is fine when
+  it is useful.** Every live run must be effective and efficient: before it is
+  dispatched, the Lead names what it measures and which decision or build step
+  it feeds, picks the cheapest arm that answers it (Sonnet before Opus, one
+  suite before many, reruns only when a fix changed what is measured), and
+  afterwards records the cost and the finding in the ledger. A run that would
+  teach nothing new is not dispatched. Why: the credit buys learning that makes
+  the engine stronger; spend without a question behind it buys nothing.
 - Cost reconciliation (E9) is manual: the Usage and Cost Admin API is not
   available on an individual account (403), so the ledger is checked against the
   Console's Cost page.
-- Recommended backstop: a $200 monthly spend limit on the key's workspace in the
-  Anthropic console.
+- Optional backstop: a monthly spend limit on the key's workspace in the
+  Anthropic console, set by the user at whatever level they choose (no longer
+  tied to $200).
 - Live tests never run from a Claude Code container; the engine ignores the
   container's `ANTHROPIC_BASE_URL`.
 
