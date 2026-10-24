@@ -1001,7 +1001,36 @@ E to use what is left before the reset.
   not with the earlier ledger rows.
 - **Effort is an explicit per-role setting** (`UNDERSTAND_EFFORT`,
   `EDITOR_EFFORT`). Why: unset, Opus 5.5 ran at medium and Sonnet 5.5 at high,
-  so the M comparison was not like for like.
+  so the M comparison was not like for like. | 2026-10-24 | 0 |
+  [39998493959](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/39998493959)
+  | E1 | 0.02 | Probes 7/7 (0.0152, 7 % of the worst case). Citations +
+  `output_config.format` and `fallbacks` in a batch are refused (400), as
+  designed for; citations + strict tool, a PDF in a `tool_result`, web search +
+  format on Haiku, and `xhigh`/`max` on Opus 4.8 and Haiku 5.5 are accepted. | |
+  2026-10-24 | 0 |
+  [40056352236](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40056352236)
+  | E2 | 0.00 | Triage failed before any spend: the arXiv category search
+  returned nothing, and the reason went only to the job summary (the API does
+  not return it). Fixed in `a02e55e`: retries with backoff, and every summary is
+  printed to the log too. | | 2026-10-24 | 0 |
+  [40056353986](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40056353986)
+  | E7 | 1.32 | Papers 6/6 passed (the opt-in 50-paper scale-up skipped): 4
+  papers gave 1-3 candidate cards each (one paper above the 30-page bound was
+  skipped); the planted-instruction PDFs ran. Per-paper metrics are in the job
+  summary (this run predates the log echo). | | 2026-10-24 | 0 |
+  [40056355592](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40056355592)
+  | E8b | < 0.10 | Pre-screen 2/2 (fresh and reused code-execution containers vs
+  local runs); timings in the job summary (predates the log echo). | |
+  2026-10-24 | 0 |
+  [40056357297](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40056357297)
+  | E8a | 0.59 | Escalation 15/15: Sonnet 5.5 at `EDITOR_EFFORT=low` delivered
+  12/12 slowdowns on the first pass (no escalation needed) and 0/3 controls,
+  about 0.04 USD a run (Sonnet at its default high: 0.045; Opus at medium:
+  0.10). | | 2026-10-24 | 0 |
+  [40057574628](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40057574628)
+  | E2 | 0.00 | Triage failed again before spend: HTTP 429 on every arXiv search
+  attempt from the runner, while E7's lookups by id answered. Fixed in
+  `51a6beb`: E2 falls back to a fixed id sample (2509.00001 onward). |
 
 ## Next: finish Step 2, then Step 3
 
