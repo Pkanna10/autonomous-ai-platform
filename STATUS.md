@@ -309,6 +309,23 @@ that runs on real code under a hard cost cap.
 
 ## Decisions
 
+### 2026-10-24 (standing permissions for PRs and branches)
+
+- **The Lead may mark a step's PR ready and merge it into `master` with a merge
+  commit** once its stage gate is recorded as a clean pass, every required CI
+  check on the head is green and the PR is mergeable; it may create a branch per
+  step (from `master`, or stacked on the open step), open its draft PR, retarget
+  stacked PRs, merge `master` into a step branch and delete merged branches.
+  Why: these steps follow mechanically from gates the user already defined, and
+  waiting on a click cost hours of idle time. **Still the user's:** spec and
+  build-plan approval for every phase, any push to `master`, any force-push,
+  merging with a red, skipped-required or pending check, deleting an unmerged
+  branch, and repository, branch-protection or `live` environment settings. The
+  rule text is in CLAUDE.md, Development Workflow.
+- **Merge commits, not squash.** Why: the history keeps every unit's commit and
+  review, and references into it (`5ce95a4` for the Step 2 handoff notes) stay
+  valid on `master`.
+
 ### 2026-10-24 (vision update: packages, self-healing, MCP discovery)
 
 The user's November 2025 documents describe a broader vision than CLAUDE.md 4.1;
@@ -1109,7 +1126,9 @@ E to use what is left before the reset.
 - Live runs go through the `live` environment. The user asked for runs without
   per-run approval (2026-10-24); dispatches have started within seconds since
   03:53 UTC that day, so the environment no longer waits for a reviewer. The
-  per-test and per-suite caps are the guard.
+  per-test and per-suite caps are the guard. **Before any Window 1 spend, the
+  user restores the required reviewers on `live`** (the user's instruction,
+  2026-10-24); the Lead reminds them when Window 0's last run (the A/B) ends.
 - Cost reconciliation (E9) is manual: the Usage and Cost Admin API is not
   available on an individual account (403), so the ledger is checked against the
   Console's Cost page.

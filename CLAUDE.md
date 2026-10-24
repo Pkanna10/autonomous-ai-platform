@@ -314,6 +314,27 @@ Shape Up for bets, Kanban for flow, XP for engineering, DORA for measurement.
 - DORA-style tracking per step in `STATUS.md`: lead time, CI-red pushes, rework
   commits, reverts.
 
+### Standing permissions for PRs and branches (user, 2026-10-24)
+
+Phase approvals are unchanged: the user approves each step's spec and build plan
+before building starts. Within that, the Lead may, without asking:
+
+- mark a step's PR ready and merge it into `master` with a merge commit, once
+  its stage gate is recorded as a clean pass in `STATUS.md`, every required CI
+  check on the PR head is green, and the PR is mergeable with no conflicts;
+- create a branch per step (`claude/<step-name>`) from the latest `master`, or
+  stacked on the open step's head when the previous step is not merged yet, and
+  open a draft PR for it;
+- retarget a stacked PR after its base merges, and merge `master` into a step
+  branch to keep it current;
+- delete a branch after its PR is merged.
+
+Still ask the user first: any direct push to `master`; any force-push; merging
+with a red, skipped-required or pending check; deleting an unmerged branch;
+changing repository or branch-protection settings, or the `live` environment.
+After each merge, report the PR number, the merge commit and the CI result on
+`master`.
+
 ### Stage gate (end of every step)
 
 1. **Upgrades.** Review `pnpm outdated -r` and `uv tree --outdated --depth 1`
@@ -410,7 +431,9 @@ directory:
   discovery join the vision, the loop (ACQUIRE, HEAL) and the L3, L5 and L7
   rows; the build order gains Steps 3b (capability acquisition), 3c
   (self-healing) and 6 (production loop), Step 3 the engine self-retry and Step
-  4 MCP/API discovery (approved by the user the same day).
+  4 MCP/API discovery (approved by the user the same day). Standing permissions
+  for PRs and branches (mark ready, merge with a merge commit, branch per step,
+  retarget, delete merged branches) under Development Workflow.
 - **4.2.0 (2026-10-22):** Step 2 built: reality check updated to the real core
   loop on CPU Python workloads; build-order row 2 marks the pending gate and PR
   #12; the layer table points L5-L7 at the built service packages.
