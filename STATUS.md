@@ -322,6 +322,12 @@ that runs on real code under a hard cost cap.
   merging with a red, skipped-required or pending check, deleting an unmerged
   branch, and repository, branch-protection or `live` environment settings. The
   rule text is in CLAUDE.md, Development Workflow.
+- **Extended the same day:** the Lead may merge any of its PRs (not only a
+  step's) under the same conditions, and branches land on `master` in order,
+  each through its own PR, with conflicts resolved on the branch. The `live`
+  environment's deployment rule is `claude/*` (set by the user), so every step
+  and experiment branch can dispatch live suites. Why: experiment branches close
+  in hours and would otherwise wait on a click or ride inside a step's PR.
 - **Merge commits, not squash.** Why: the history keeps every unit's commit and
   review, and references into it (`5ce95a4` for the Step 2 handoff notes) stay
   valid on `master`.
