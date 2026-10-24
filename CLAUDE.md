@@ -110,14 +110,17 @@ cost cap. Research, the CLI, the live log and hardware detection do not exist
 yet; hypotheses are supplied by the caller. Treat anything else described in
 older docs as a plan, not a feature.
 
-| Step | Deliverable                                                                                          | Model / setting to select               |
-| ---- | ---------------------------------------------------------------------------------------------------- | --------------------------------------- |
-| 0    | Repair & upgrade: DB init fix, dependency bumps, current model IDs, truthful docs (PR #11)           | Opus 5.5, High                          |
-| 1    | Engine design: typed state, data models, judges, anti-cheating, migration 003 (PR #11)               | Fable 5.1, Extra                        |
-| 2    | Core loop end to end on CPU Python workloads, with an E2E fixture test (built; gate pending, PR #12) | Opus 5.5, Ultracode                     |
-| 3    | Research: arXiv monitor, PDF parser, playbook, claim/precondition extraction, matcher                | Opus 5.5, Ultracode (Fable for matcher) |
-| 4    | Interfaces + runner: live CLI log, hardware detection (CPU/CUDA/MPS), `--goal` English parsing       | Opus 5.5, Ultracode                     |
-| 5    | Dogfood on fixtures, OSS repos, then the user's VLM bridge on an M4 Pro                              | Opus 5.5, High                          |
+| Step | Deliverable                                                                                                                                                                                                     | Model / setting to select               |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| 0    | Repair & upgrade: DB init fix, dependency bumps, current model IDs, truthful docs (PR #11)                                                                                                                      | Opus 5.5, High                          |
+| 1    | Engine design: typed state, data models, judges, anti-cheating, migration 003 (PR #11)                                                                                                                          | Fable 5.1, Extra                        |
+| 2    | Core loop end to end on CPU Python workloads, with an E2E fixture test (built; gate pending, PR #12)                                                                                                            | Opus 5.5, Ultracode                     |
+| 3    | Research: generator and matcher wired into the hypotheses node, playbook, PDF parser, claim/precondition extraction, arXiv monitor (off GitHub runners); bounded engine self-retry on fixable trial errors      | Opus 5.5, Ultracode (Fable for matcher) |
+| 3b   | Capability acquisition: automatic package policy, network-on fetch into a hash-pinned wheelhouse, offline per-trial installs, engine-owned lockfile commit, drop a package with no proven gain                  | Opus 5.5, Ultracode                     |
+| 3c   | Self-healing of the user's code: failing test or crash -> hypothesis, engine-written reproducer frozen with the judges, "now passes, nothing regresses" judge, flagged delivery                                 | Opus 5.5, High                          |
+| 4    | Interfaces + runner: live CLI log, hardware detection (CPU/CUDA/MPS), `--goal` English parsing; MCP server and API discovery (auto-connect read-only, credential-free only); error-report intake for the healer | Opus 5.5, Ultracode                     |
+| 5    | Dogfood on fixtures, OSS repos, then the user's VLM bridge on an M4 Pro                                                                                                                                         | Opus 5.5, High                          |
+| 6    | Production loop: error monitoring into the healer, gradual rollout through the user's deployment (the engine never deploys)                                                                                     | Opus 5.5, High                          |
 
 Runtime models called by the engine itself (`services/python_agents` settings):
 `ENGINE_MODEL=claude-opus-5-5` for understanding, extraction and trial edits;
@@ -403,7 +406,9 @@ directory:
   acquisition (an automatic policy replaces the approval gate), self-healing of
   the user's code and of the engine's own trials, and MCP server and API
   discovery join the vision, the loop (ACQUIRE, HEAL) and the L3, L5 and L7
-  rows; step placement is proposed in STATUS and waits for approval.
+  rows; the build order gains Steps 3b (capability acquisition), 3c
+  (self-healing) and 6 (production loop), Step 3 the engine self-retry and Step
+  4 MCP/API discovery (approved by the user the same day).
 - **4.2.0 (2026-10-22):** Step 2 built: reality check updated to the real core
   loop on CPU Python workloads; build-order row 2 marks the pending gate and PR
   #12; the layer table points L5-L7 at the built service packages.

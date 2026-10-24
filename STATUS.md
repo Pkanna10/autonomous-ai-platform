@@ -278,8 +278,8 @@ branch coverage of 7,297 statements and 2,000 branches.
 
 The user's November 2025 documents describe a broader vision than CLAUDE.md 4.1;
 two parts never reached the plan and one was narrowed. All three are now in
-scope (CLAUDE.md 4.3.0). Recorded now; nothing is built before Step 2 closes,
-and the placement below waits for the user's approval.
+scope (CLAUDE.md 4.3.0). Recorded now; nothing is built before Step 2 closes.
+The user approved the placement below the same day.
 
 - **Automatic package acquisition replaces "vet and approval-gate".** Why:
   research hypotheses often need a library (a faster parser, a data structure),
@@ -321,7 +321,7 @@ Conflicts with existing decisions, and how each is resolved:
 | Anti reward hacking                                                       | Feeding errors back to the editor                       | Only the trial's own execution errors (syntax, import, type, a crash traceback) are fed back; never judge verdicts, timings or benchmark output. One or two retries, each through `Budget.check`.                                                                                                                                                                                  |
 | The per-run cost cap                                                      | Retries, package selection and MCP ranking spend        | Every paid call goes through `Budget`; registry and OSV lookups cost no tokens; the retry count and the packages per hypothesis are bounded settings.                                                                                                                                                                                                                              |
 
-Proposed placement (awaiting approval):
+Placement (approved by the user, 2026-10-24; CLAUDE.md build order):
 
 | Piece                                                 | Proposed step                                | Why there                                                                                                                                       |
 | ----------------------------------------------------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
