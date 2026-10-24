@@ -51,12 +51,25 @@ retry with the largest attempt and crash), proved offline in ``test_heal``;
 the suite needs ``heal_need()`` (6.00; ``-k`` on repository names splits it
 at 0.75 each). Expected about 0.02 to 0.06 USD a repository (a few thousand
 tokens in, one to three thousand out per request).
+
+The hard set (``LIVE_HEAL_SET=hard``, ``heal.HARD_REPOS``: eight bugs a
+shallow fix does not heal and two controls with no bug): the same body, the
+hard fix prompt (``heal.NO_BUG_CLAUSE``: an empty change for "no bug"), and
+after an applied final fix one more sandboxed run, the hidden check on the
+stored shallow patch, so the note can say ``shallow-trap y/n`` (the model's
+fix passes its reproducer and fails every hidden test the shallow patch
+fails); a control's note adds its verdict (``declined``, ``no-fix-sent``,
+``fixed-anyway``) and a third summary note counts both. Each repository is
+capped at ``HARD_REPO_CAP_USD`` (0.75: the same worst-case rule, proved
+offline on the hard fixtures, whose worst is about 0.725 USD); the suite
+needs ``heal_need(heal_plan({"LIVE_HEAL_SET": "hard"}))`` (7.50 for ten).
 """
 
 from __future__ import annotations
 
+import math
 import os
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
@@ -78,6 +91,7 @@ from .heal import (
     HealRepo,
     Sandbox,
     fix_request,
+    heal_set,
     overlay,
     read_fix,
     read_report,
@@ -86,6 +100,8 @@ from .heal import (
     retry_fits,
     retry_request,
     seed_tree,
+    set_repos,
+    shallow_tree,
     solution_tree,
     summarise,
     summary_notes,
@@ -96,13 +112,26 @@ from .test_probes_live import finish
 pytestmark = pytest.mark.live
 
 HEAL_REPO_CAP_USD: Final = 0.75  # request 1 + request 2 + the one retry, worst
+HARD_REPO_CAP_USD: Final = 0.75  # the same three worst cases on the hard fixtures
 SUITE_NEED_USD: Final = len(REPOS) * HEAL_REPO_CAP_USD
+
+
+def repo_cap(repo: HealRepo) -> float:
+    """One repository's cap: the sum of its three worst cases (proved per
+    set in ``test_heal``)."""
+    return HARD_REPO_CAP_USD if repo.hard else HEAL_REPO_CAP_USD
+
+
+def heal_plan(environ: Mapping[str, str]) -> tuple[HealRepo, ...]:
+    """The repositories one run covers: the set ``LIVE_HEAL_SET`` selects
+    (easy unless it says hard); ``ValueError`` on an unknown set."""
+    return set_repos(environ)
 
 
 def heal_need(repos: tuple[HealRepo, ...] = REPOS) -> float:
     """The suite total: one run per repository, each capped at the sum of
-    its worst cases (``HEAL_REPO_CAP_USD``, proved offline in ``test_heal``)."""
-    return len(repos) * HEAL_REPO_CAP_USD
+    its worst cases (``repo_cap``, proved offline in ``test_heal``)."""
+    return math.fsum(repo_cap(repo) for repo in repos)
 
 
 UNAFFORDABLE: Final = "unaffordable"  # the run's cap refused the call; not sent
@@ -132,7 +161,7 @@ def run_repo(
     tree, report = seed_tree(repo), read_report(repo)
     sandbox = Sandbox(base, run=run)
     outcome = HealOutcome(repo)
-    live = start(HEAL_REPO_CAP_USD)
+    live = start(repo_cap(repo))
     with ExperimentClient(live, recorder=recorder) as client:
         params, notes = repro_request(repo, tree, report, Fence.new())
         outcome.notes.extend(notes)
@@ -143,6 +172,7 @@ def run_repo(
         outcome.reproducer = repro
         if repro is not None:  # frozen from here on
             outcome.seed_runs = sandbox.reproducer(tree, repo.package, repro)
+        if repro is not None and not repo.control:  # a control's fix: no change
             reference = overlay(tree, solution_tree(repo))
             outcome.reference_runs = sandbox.reproducer(reference, repo.package, repro)
         if repro is not None and outcome.valid:
@@ -166,6 +196,9 @@ def run_repo(
                 outcome.retry_cost_usd = answer.cost_usd
                 retry = read_fix(answer, repo, tree, repro)
                 outcome.take(sandbox.attempt(tree, repo, repro, retry))
+            if repo.hard and outcome.fix_applied:  # engine-owned code only
+                shallow = overlay(tree, shallow_tree(repo))
+                outcome.shallow_run = sandbox.hidden(shallow, repo)
     outcome.cost_usd = live.spent_usd
     recorder.record("HEAL", "repo", repo.name, outcome.metrics())
     for note in [*outcome.log_notes(), *summary_notes(summarise([*earlier, outcome]))]:
@@ -187,14 +220,22 @@ def close_log(log: HealLog, config: pytest.Config) -> None:
     finish(log.recorder, config)
 
 
+PLAN: Final = heal_plan(os.environ)
+
+
+def log_title(environ: Mapping[str, str]) -> str:
+    title = "HEAL self-healing feasibility"
+    return title if heal_set(environ) == "easy" else f"{title} (hard set)"
+
+
 @pytest.fixture(scope="module")
 def heal_log(pytestconfig: pytest.Config) -> Iterator[HealLog]:
-    log = HealLog(ExperimentRecorder("HEAL self-healing feasibility", os.environ))
+    log = HealLog(ExperimentRecorder(log_title(os.environ), os.environ))
     yield log
     close_log(log, pytestconfig)
 
 
-@pytest.mark.parametrize("name", [repo.name for repo in REPOS])
+@pytest.mark.parametrize("name", [repo.name for repo in PLAN])
 def test_heal_repo(
     live: StartLive,
     live_isolation: Isolation,
@@ -203,7 +244,7 @@ def test_heal_repo(
     name: str,
 ) -> None:
     assert live_isolation.mode == "required"
-    repo = next(r for r in REPOS if r.name == name)
+    repo = next(r for r in PLAN if r.name == name)
     base = Path(os.path.realpath(tmp_path)) / "heal"
     outcome = run_repo(
         live, repo, base, recorder=heal_log.recorder, earlier=heal_log.outcomes

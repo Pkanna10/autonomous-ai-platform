@@ -1,0 +1,5 @@
+Our nightly evaluation is flaky. evaluate() on the mail data set (8 spam,
+8 ham and 3 phishing rows, the default test_fraction of 0.25) dies with
+ZeroDivisionError: division by zero roughly one night in three, and simply
+re-running it usually gets through. We don't pass a seed. My guess is that
+recall() needs to return 0 when there is nothing to divide by.

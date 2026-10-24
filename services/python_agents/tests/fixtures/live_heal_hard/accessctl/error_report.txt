@@ -1,0 +1,13 @@
+An admin made bob an editor in the admin screen, but bob still cannot
+publish: the publish button keeps failing until we restart the CMS. After a
+restart it works.
+
+Traceback (most recent call last):
+  File "/srv/cms/views/articles.py", line 88, in publish
+    access.require(request.user, "publish")
+  File "/srv/cms/vendor/accessctl/accessctl/access.py", line 26, in require
+    raise PermissionDeniedError(f"{user} may not {permission}")
+accessctl.access.PermissionDeniedError: bob may not publish
+
+The CMS keeps one AccessControl for the whole process; the admin screen calls
+roles.grant(user, role) on the same Roles object.

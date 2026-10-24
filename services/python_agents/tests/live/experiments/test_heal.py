@@ -15,6 +15,14 @@ Three groups, none of which spends anything:
   test's own body on the fake API (production wiring, only the wire
   swapped) with scripted replies, including a fix that passes the
   reproducer and fails the hidden check.
+- **The hard set** (``tests/fixtures/live_heal_hard``, ``LIVE_HEAL_SET=hard``):
+  per bug, in the sandbox, the hidden check fails at the seed for the
+  manifest's reason, the reference fix passes it and the own suite, and the
+  stored shallow patch passes the own suite and the report's scenario but
+  fails a hidden test; per control, the hidden check passes at the seed and
+  fails on the "fix" the report asks for. Then the set selection, the hard
+  prompt, the shallow-trap and control verdicts, the notes, the cap, and the
+  live body dry on hard repositories.
 
 Sandboxed tests skip when the host cannot isolate; ``REQUIRE_NETWORK_SANDBOX=1``
 or ``REQUIRE_FS_SANDBOX=1`` (CI) turn the skip into a failure.
@@ -59,7 +67,14 @@ from .heal import (
     FIX_SCHEMA,
     FIX_SYSTEM,
     FIXABLE,
+    HARD_DIR,
+    HARD_FIX_SYSTEM,
+    HARD_KINDS,
+    HARD_REPOS,
+    HARD_RETRY_SYSTEM,
     HEAL_DIR,
+    HEAL_SET_ENV,
+    NO_BUG_CLAUSE,
     NOTE_MAX,
     REPORT_FILE,
     REPOS,
@@ -83,7 +98,9 @@ from .heal import (
     check_fix,
     check_reason,
     crash_line,
+    failing_tests,
     fix_request,
+    heal_set,
     overlay,
     parse_manifest,
     parse_result,
@@ -94,7 +111,10 @@ from .heal import (
     repro_request,
     retry_fits,
     retry_request,
+    scenario_reproducer,
     seed_tree,
+    set_repos,
+    shallow_tree,
     solution_tree,
     summarise,
     summary_notes,
@@ -1752,3 +1772,571 @@ def test_close_log_records_the_summary_then_finishes(
     (row,) = log.recorder.rows
     assert (row.arm, row.item, row.metrics["healed"]) == ("summary", "all", 1)
     assert finished == [0, 1]
+
+
+# ---------------------------------------------------------------------------
+# The hard set: the fixtures
+# ---------------------------------------------------------------------------
+
+HARD = {repo.name: repo for repo in HARD_REPOS}
+HARD_NAMES = sorted(HARD)
+BUG_NAMES = sorted(n for n, r in HARD.items() if not r.control)
+CONTROL_NAMES = sorted(n for n, r in HARD.items() if r.control)
+SCENARIO_PATH = "tests/test_reported_scenario.py"
+
+
+def test_the_hard_manifest_lists_every_fixture_directory() -> None:
+    dirs = {
+        p.name for p in HARD_DIR.iterdir() if p.is_dir() and not p.name.startswith(".")
+    } - {"_hidden", "_solutions", "_shallow", "_repro"}
+    assert dirs == set(HARD_NAMES)
+    for kept in ("_hidden", "_repro"):
+        files = {p.name for p in (HARD_DIR / kept).iterdir()}
+        assert files == {f"{n}.py" for n in HARD_NAMES}, kept
+    assert {p.name for p in (HARD_DIR / "_shallow").iterdir()} == set(HARD_NAMES)
+    assert {p.name for p in (HARD_DIR / "_solutions").iterdir()} == set(BUG_NAMES)
+
+
+def test_eight_hard_bugs_two_controls_and_both_report_styles() -> None:
+    assert len(HARD_REPOS) == 10 and (len(BUG_NAMES), len(CONTROL_NAMES)) == (8, 2)
+    assert sorted(r.kind for r in HARD_REPOS) == sorted(HARD_KINDS)
+    assert {r.kind for r in HARD_REPOS if r.control} == {
+        "control_intended",
+        "control_user_error",
+    }
+    styles = [r.report for r in HARD_REPOS]
+    assert styles.count("traceback") == styles.count("symptom") == 5
+    assert all(r.corpus == "hard" and r.hard and r.root == HARD_DIR for r in HARD_REPOS)
+    assert not {r.name for r in REPOS} & set(HARD_NAMES)
+    assert not any(r.hard or r.control for r in REPOS)
+
+
+def test_the_sets_keep_their_own_kinds() -> None:
+    hard_entry = _entry(kind="multi_file")
+    (repo,) = parse_manifest({"version": 1, "repos": [hard_entry]}, "hard")
+    assert repo.corpus == "hard" and repo.path == HARD_DIR / "toy"
+    assert repo.shallow == HARD_DIR / "_shallow" / "toy"
+    assert repo.scenario == HARD_DIR / "_repro" / "toy.py"
+    with pytest.raises(ValueError):
+        parse_manifest({"version": 1, "repos": [hard_entry]})
+    with pytest.raises(ValueError):
+        parse_manifest({"version": 1, "repos": [_entry()]}, "hard")
+    with pytest.raises(ValueError):
+        parse_manifest({"version": 1, "repos": [_entry()]}, cast(heal.Corpus, "x"))
+
+
+@pytest.mark.parametrize("name", HARD_NAMES)
+def test_the_hard_repo_is_well_formed(name: str) -> None:
+    repo = HARD[name]
+    tree = seed_tree(repo)
+    assert f"{repo.package}/__init__.py" in tree and "tests/__init__.py" in tree
+    assert any(p.startswith("tests/test_") and p.endswith(".py") for p in tree)
+    assert REPORT_FILE not in tree and SCENARIO_PATH not in tree
+    assert all(not p.endswith(".pyc") and "__pycache__" not in p for p in tree)
+    report = read_report(repo)
+    short = repo.exception.rsplit(".", 1)[1]
+    assert short in report and repo.message in report
+    if repo.report == "traceback":
+        assert "Traceback (most recent call last):" in report
+        assert f"in {repo.frame.rsplit('.', 1)[1]}\n" in report
+    else:
+        assert "Traceback" not in report and "File " not in report
+    assert scenario_reproducer(repo).path == SCENARIO_PATH
+
+
+@pytest.mark.parametrize("name", HARD_NAMES)
+def test_the_hard_patches_replace_package_files_only(name: str) -> None:
+    """The reference fix (none for a control) and the shallow patch are
+    whole package files the fix policy would accept, each a real change,
+    and never the same change."""
+    repo = HARD[name]
+    tree, fix, shallow = seed_tree(repo), solution_tree(repo), shallow_tree(repo)
+    assert bool(fix) is not repo.control
+    repro = Reproducer("tests/test_probe_only.py", "")
+    for patch in (fix, shallow):
+        accepted, refused = check_fix(list(patch.items()), repo, tree, repro)
+        assert (accepted, refused) == (patch, [])
+        assert all(patch[p] != tree[p] for p in patch)
+    assert overlay(tree, fix) != overlay(tree, shallow)
+
+
+def test_only_the_hard_set_stores_shallow_patches_and_scenarios() -> None:
+    with pytest.raises(ValueError, match="hard set"):
+        shallow_tree(SHIP)
+    with pytest.raises(ValueError, match="hard set"):
+        scenario_reproducer(SHIP)
+    assert solution_tree(HARD["durations"]) == {}
+
+
+@pytest.mark.usefixtures("sandboxed")
+@pytest.mark.parametrize("name", HARD_NAMES)
+def test_the_hard_fixture_holds_in_the_sandbox(name: str, tmp_path: Path) -> None:
+    """Own tests pass at the seed, on the reference fix and on the shallow
+    patch (the same count: both are plausible). A bug's hidden check fails
+    at the seed for the manifest's reason and passes on the reference fix; a
+    control's passes at the seed (no change is the right fix). The shallow
+    patch fails a hidden test, yet passes the report's scenario, which fails
+    at the seed ``RUNS`` of ``RUNS`` times for the reported reason."""
+    repo = HARD[name]
+    sandbox = Sandbox(_base(tmp_path))
+    seed = seed_tree(repo)
+    fixed = overlay(seed, solution_tree(repo))
+    shallow = overlay(seed, shallow_tree(repo))
+    scenario = scenario_reproducer(repo)
+
+    own = sandbox.suite(seed, repo.package)
+    assert own.status == "passed" and own.tests >= 2, own
+    hidden = sandbox.hidden(seed, repo)
+    if repo.control:
+        assert hidden.status == "passed", hidden
+    else:
+        assert hidden.status == "failed", hidden
+        assert any(
+            r.type == repo.exception
+            and r.frame == repo.frame
+            and repo.message in r.message
+            for r in hidden.reasons
+        ), hidden.reasons
+        after = sandbox.suite(fixed, repo.package)
+        assert after.status == "passed" and after.tests == own.tests, after
+        assert sandbox.hidden(fixed, repo).status == "passed"
+
+    plausible = sandbox.suite(shallow, repo.package)
+    assert plausible.status == "passed" and plausible.tests == own.tests, plausible
+    trapped = sandbox.hidden(shallow, repo)
+    assert trapped.status == "failed" and failing_tests(trapped), trapped
+
+    check = check_reason(sandbox.reproducer(seed, repo.package, scenario), repo)
+    assert check.reason_match and check.consistent, check
+    (on_shallow,) = sandbox.reproducer(shallow, repo.package, scenario, times=1)
+    assert on_shallow.status == "passed", on_shallow
+    if not repo.control:
+        (on_fix,) = sandbox.reproducer(fixed, repo.package, scenario, times=1)
+        assert on_fix.status == "passed", on_fix
+
+
+INTERMITTENT = """import unittest
+
+from evalsplit.evaluate import evaluate
+from evalsplit.split import train_test_split
+
+MAIL = (
+    [{"id": i, "label": "spam"} for i in range(8)]
+    + [{"id": 10 + i, "label": "ham"} for i in range(8)]
+    + [{"id": 20 + i, "label": "phish"} for i in range(3)]
+)
+
+
+class Intermittent(unittest.TestCase):
+    def test_some_seeds_crash_and_others_do_not(self):
+        crashed = 0
+        for seed in range(200):
+            try:
+                evaluate(MAIL, lambda row: row["label"], seed=seed)
+            except ZeroDivisionError:
+                crashed += 1
+        self.assertTrue(20 <= crashed <= 180, crashed)
+
+    def test_without_a_seed_every_call_draws_afresh(self):
+        tests = {tuple(r["id"] for r in train_test_split(MAIL)[1]) for _ in range(20)}
+        self.assertGreater(len(tests), 1)
+"""
+
+
+@pytest.mark.usefixtures("sandboxed")
+def test_the_seed_dependent_symptom_is_intermittent(tmp_path: Path) -> None:
+    """evalsplit crashes for some seeds only, and an unseeded call draws a
+    fresh split: a reproducer must pin a seed to fail N of N times."""
+    repo = HARD["evalsplit"]
+    assert repo.kind == "seed_dependent"
+    tree = {**seed_tree(repo), "tests/test_intermittent.py": INTERMITTENT}
+    result = Sandbox(_base(tmp_path)).execute(
+        tree, repo.package, "names", ["tests.test_intermittent"]
+    )
+    assert (result.status, result.tests) == ("passed", 2), result
+
+
+# ---------------------------------------------------------------------------
+# The hard set: selection, prompts, verdicts and notes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("environ", "corpus"),
+    [({}, "easy"), ({HEAL_SET_ENV: ""}, "easy"), ({HEAL_SET_ENV: "easy"}, "easy"),
+     ({HEAL_SET_ENV: "hard"}, "hard")],
+)  # fmt: skip
+def test_the_set_selection(environ: dict[str, str], corpus: str) -> None:
+    assert HEAL_SET_ENV == "LIVE_HEAL_SET"
+    assert heal_set(environ) == corpus
+    assert set_repos(environ) == (HARD_REPOS if corpus == "hard" else REPOS)
+    assert live_heal.heal_plan(environ) == set_repos(environ)
+
+
+@pytest.mark.parametrize("value", ["Hard", "medium", " hard", "hard,easy"])
+def test_an_unknown_set_is_refused(value: str) -> None:
+    with pytest.raises(ValueError, match="LIVE_HEAL_SET"):
+        heal_set({HEAL_SET_ENV: value})
+    with pytest.raises(ValueError):
+        live_heal.heal_plan({HEAL_SET_ENV: value})
+
+
+def test_the_hard_need_and_the_default_plan() -> None:
+    hard = live_heal.heal_plan({HEAL_SET_ENV: "hard"})
+    assert live_heal.heal_need(hard) == pytest.approx(
+        len(HARD_REPOS) * live_heal.HARD_REPO_CAP_USD
+    )
+    assert live_heal.heal_need(hard) <= 10.0  # "within a few USD"
+    assert live_heal.heal_need(hard) <= 150.0  # live-smoke's ceiling
+    assert [live_heal.repo_cap(r) for r in (SHIP, HARD["depot"])] == [
+        live_heal.HEAL_REPO_CAP_USD,
+        live_heal.HARD_REPO_CAP_USD,
+    ]
+    assert live_heal.heal_need() == pytest.approx(6.0)  # the easy set's, unchanged
+    assert live_heal.log_title({}) == "HEAL self-healing feasibility"
+    assert live_heal.log_title({HEAL_SET_ENV: "hard"}).endswith("(hard set)")
+    if not os.environ.get(HEAL_SET_ENV):
+        assert live_heal.PLAN == REPOS
+
+
+def test_the_hard_prompt_adds_only_the_no_bug_clause() -> None:
+    assert HARD_FIX_SYSTEM == FIX_SYSTEM + NO_BUG_CLAUSE
+    assert HARD_RETRY_SYSTEM.startswith(HARD_FIX_SYSTEM)
+    assert HARD_RETRY_SYSTEM.removeprefix(HARD_FIX_SYSTEM) == RETRY_SYSTEM.removeprefix(
+        FIX_SYSTEM
+    )
+    assert "empty files list" in NO_BUG_CLAUSE
+    repo = HARD["durations"]
+    tree, report = seed_tree(repo), read_report(repo)
+    repro = scenario_reproducer(repo)
+    fix, _ = fix_request(repo, tree, report, repro, Fence.new())
+    assert fix["system"] == HARD_FIX_SYSTEM
+    easy, _ = fix_request(SHIP, seed_tree(SHIP), read_report(SHIP), REPRO, Fence.new())
+    assert easy["system"] == FIX_SYSTEM
+    crash = replace(NAME_ERROR, frame="durations.parse.parse_duration")
+    retry, _ = retry_request(
+        repo, tree, report, repro, {"durations/parse.py": "x\n"}, crash, Fence.new()
+    )
+    assert retry["system"] == HARD_RETRY_SYSTEM
+    first, _ = repro_request(repo, tree, report, Fence.new())
+    assert first["system"] == REPRO_SYSTEM  # the reproducer request is the same
+    assert "README.md" in _texts(first)  # the documented contract is sent
+
+
+PAGE = HARD["pagekit"]
+DUR = HARD["durations"]
+
+
+def _test_id(name: str) -> str:
+    return f"aip_heal_check.HiddenCheck.{name}"
+
+
+def _failing(*names: str) -> RunResult:
+    return RunResult(
+        "failed",
+        4,
+        tuple(
+            Reason("failure", _test_id(n), "builtins.AssertionError", "x", None, None)
+            for n in names
+        ),
+        0,
+    )
+
+
+def _hard_outcome(
+    repo: HealRepo = PAGE,
+    *,
+    fix: str = "ok",
+    repro_pass: bool = True,
+    hidden: RunResult = PASS,
+    shallow: RunResult | None = None,
+    cost: float = 0.05,
+) -> HealOutcome:
+    out = HealOutcome(repo, repro_outcome="ok", reproducer=REPRO, cost_usd=cost)
+    out.seed_runs = (_failed(_reason(repo.exception, repo.frame, repo.message)),) * RUNS
+    out.fix = Fix(
+        fix, {f"{repo.package}/__init__.py": "x\n"} if fix == "ok" else {}, ()
+    )
+    if fix == "ok":
+        out.fix_repro_runs = (PASS if repro_pass else _failed(_reason()),) * RUNS
+        out.suite_run, out.hidden_run = PASS, hidden
+        out.shallow_run = shallow or _failing("test_an_empty_result_has_one_page")
+    return out
+
+
+@pytest.mark.parametrize(
+    ("hidden", "repro_pass", "shallow", "trap"),
+    [
+        (_failing("test_an_empty_result_has_one_page"), True, None, True),
+        (_failing("test_an_empty_result_has_one_page", "test_b"), True, None, True),
+        (_failing("test_an_empty_result_has_one_page"), False, None, False),
+        (PASS, True, None, False),
+        (_failing("test_b"), True, None, False),
+        (_failing("test_a", "test_b"), True, _failing("test_a", "test_c"), False),
+        (_failing("test_a"), True, PASS, None),  # the guard: it always fails
+        (_failing("test_an_empty_result_has_one_page"), True, RunResult("run_failure"), None),
+        (_failing("test_an_empty_result_has_one_page"), True, RunResult("no_result"), None),
+        (_failing("test_an_empty_result_has_one_page"), True, RunResult("empty"), None),
+    ],
+)  # fmt: skip
+def test_the_shallow_trap(
+    hidden: RunResult, repro_pass: bool, shallow: RunResult | None, trap: bool | None
+) -> None:
+    """Only a shallow run that failed can say y or n: any other status is
+    the sandbox's outcome, not the model's, so the flag is unknown."""
+    out = _hard_outcome(hidden=hidden, repro_pass=repro_pass, shallow=shallow)
+    assert out.shallow_trap is trap and out.shallow_run is not None
+    assert out.hard_metrics()["shallow_status"] == out.shallow_run.status
+    if trap is None:
+        assert ", shallow-trap -, " in out.note()
+
+
+def test_no_shallow_trap_without_an_applied_fix_or_a_shallow_run() -> None:
+    assert _hard_outcome(fix="empty").shallow_trap is None
+    out = _hard_outcome()
+    out.shallow_run = None
+    assert out.shallow_trap is None
+    assert failing_tests(None) == frozenset()
+
+
+def test_the_control_verdicts() -> None:
+    assert _hard_outcome(PAGE).control_verdict is None
+    assert _hard_outcome(DUR, fix="empty").control_verdict == "declined"
+    assert _hard_outcome(DUR).control_verdict == "fixed-anyway"
+    assert _hard_outcome(DUR, fix="refused").control_verdict == "refused"
+    assert _hard_outcome(DUR, fix="x" * 300).control_verdict == "x" * heal.VERDICT_MAX
+    none = HealOutcome(DUR, repro_outcome="ok")
+    assert none.control_verdict == "no-fix-sent" and not none.declined
+
+
+def test_the_hard_notes_and_row() -> None:
+    trapped = _hard_outcome(hidden=_failing("test_an_empty_result_has_one_page"))
+    assert trapped.note() == (
+        "HEAL pagekit: repro valid y reason-match y, fix: repro p suite p hidden f, "
+        "shallow-trap y, 0.0500 USD"
+    )
+    declined = _hard_outcome(DUR, fix="empty")
+    assert declined.note() == (
+        "HEAL durations: repro valid y reason-match y, fix: repro - suite - hidden -, "
+        "shallow-trap -, control declined, 0.0500 USD"
+    )
+    row = trapped.metrics()
+    assert (row["corpus"], row["control"], row["shallow_trap"]) == ("hard", False, True)
+    assert (
+        row["shallow_fails"]
+        == row["hidden_fails"]
+        == _test_id("test_an_empty_result_has_one_page")
+    )
+    assert declined.metrics()["control_verdict"] == "declined"
+    assert declined.metrics()["declined"] is True
+    assert row["shallow_status"] == "failed"
+    assert declined.metrics()["shallow_status"] is None  # no shallow run
+    easy = _outcome().metrics()
+    assert "corpus" not in easy and "shallow_trap" not in easy  # easy rows unchanged
+
+
+def test_the_hard_summary() -> None:
+    outcomes = [
+        _hard_outcome(hidden=_failing("test_an_empty_result_has_one_page")),
+        _hard_outcome(),  # healed
+        _hard_outcome(HARD["gradebook"], fix="empty"),  # a bug declined: wrong
+        _hard_outcome(DUR, fix="empty"),
+        _hard_outcome(HARD["depot"], hidden=_failing("test_an_empty_result_has_one_page")),
+        HealOutcome(DUR, repro_outcome="ok"),
+    ]  # fmt: skip
+    summary = summarise(outcomes)
+    assert (summary["bugs"], summary["bugs_healed"], summary["shallow_trap"]) == (
+        3,
+        1,
+        1,
+    )
+    assert (summary["bugs_declined"], summary["controls"]) == (1, 3)
+    assert (
+        summary["control_declined"],
+        summary["control_no_fix_sent"],
+        summary["control_fixed_anyway"],
+        summary["control_shallow_trap"],
+    ) == (1, 1, 1, 1)
+    notes = summary_notes(summary)
+    assert len(notes) == 3 and notes[2] == (
+        "HEAL hard summary: bugs healed 1/3 shallow-trap 1 declined 1; controls "
+        "declined 1/3 no-fix-sent 1 fixed-anyway 1 (shallow-trap 1)"
+    )
+    assert "controls" not in summarise([_outcome()])
+    assert len(summary_notes(summarise([_outcome()]))) == 2
+
+
+def test_the_reference_count_leaves_the_controls_out() -> None:
+    """A control has no true fix to run its reproducer on, so even a stray
+    passing reference on one is not counted."""
+    bug, control = _hard_outcome(), _hard_outcome(DUR)
+    bug.reference_runs = control.reference_runs = (PASS,) * RUNS
+    assert summarise([bug, control])["repro_passes_reference"] == 1
+    assert summarise([control])["repro_passes_reference"] == 0
+
+
+def test_every_hard_note_fits_its_cell_whole() -> None:
+    """The longest names (the hard manifest's and the most the manifest
+    allows), the widest verdict, retried with the widest crash, and the
+    summary notes over ten repositories and over 99: every one whole."""
+    longest = max(HARD_REPOS, key=lambda r: len(r.name))
+    notes: list[str] = []
+    for base in (longest, DUR):
+        for repo in (base, replace(base, name="n" * 40)):
+            for fix in ("ok", "empty", "y" * 300):
+                out = _hard_outcome(repo, fix=fix, cost=123.4567)
+                out.first_attempt, out.crash, out.retry_outcome = (
+                    BROKEN,
+                    WIDEST,
+                    "retried",
+                )
+                notes.extend(out.log_notes())
+    summary = summarise([_hard_outcome(r, cost=0.8) for r in HARD_REPOS])
+    notes.extend(summary_notes(summary))
+    huge = {k: 99 if isinstance(v, int) else v for k, v in summary.items()}
+    huge |= {"reason_match_traceback": "99/99", "reason_match_symptom": "99/99"}
+    huge |= {"cost_usd": 99.9999}
+    notes.extend(summary_notes(huge))
+    assert len(notes) == 2 * 2 * 3 * 4 + 3 + 3
+    assert [(len(n), n) for n in notes if not _whole(n)] == []
+
+
+# ---------------------------------------------------------------------------
+# The hard set: the cap and the live body, dry
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("count_status", [200, 500], ids=["counted", "count-failed"])
+@pytest.mark.parametrize("name", HARD_NAMES)
+def test_the_hard_cap_holds_every_request_at_its_worst(
+    name: str, count_status: int, host_key: str
+) -> None:
+    """As for the easy set: request 1 as sent, request 2 with the largest
+    reproducer, and the one retry with the largest reproducer, attempt and
+    crash, on the hard prompt, within ``HARD_REPO_CAP_USD``."""
+    repo = HARD[name]
+    tree, report = seed_tree(repo), read_report(repo)
+    api = HealApi()
+    api.count_status = count_status
+    client = ExperimentClient(LiveRun("dry", 100.0, wire=httpx2.MockTransport(api)))
+    first, _ = repro_request(repo, tree, report, Fence.new())
+    name_59 = "tests/test_" + "x" * 59 + ".py"
+    filler = '"' * ((REPRO_LINE_MAX - len(Reproducer(name_59, "").line())) // 2)
+    biggest = Reproducer(name_59, filler)
+    assert len(biggest.line()) <= REPRO_LINE_MAX
+    second, _ = fix_request(repo, tree, report, biggest, Fence.new())
+    assert second["system"] == HARD_FIX_SYSTEM
+    path = f"{repo.package}/__init__.py"
+    empty = len(heal.attempt_lines({path: ""})[0]) + 1
+    attempt = {path: '"' * ((RETRY_ATTEMPT_MAX - empty) // 2)}
+    assert retry_fits(attempt)
+    retries = []
+    for char in CRASH_FILLERS:
+        wide = char * (CRASH_FIELD_CHARS * 13)
+        crash = Reason("error", wide, wide, wide, wide, wide)
+        retries.append(
+            retry_request(repo, tree, report, biggest, attempt, crash, Fence.new())[0]
+        )
+
+    def estimate(params: Json) -> float:
+        api.count = structural_tokens(params, {})
+        return client.estimate(params)
+
+    need = estimate(first) + estimate(second) + max(estimate(p) for p in retries)
+    assert need <= live_heal.HARD_REPO_CAP_USD
+
+
+def _scenario_reply(repo: HealRepo) -> Json:
+    return _message(_repro_reply("test_reported.py", scenario_reproducer(repo).content))
+
+
+def _patch_reply(files: Mapping[str, str]) -> Json:
+    return _message(_fix_reply(*sorted(files.items())))
+
+
+@pytest.mark.usefixtures("sandboxed")
+def test_a_hard_fix_like_the_shallow_patch_is_a_shallow_trap(
+    tmp_path: Path, host_key: str
+) -> None:
+    outcome, api, start, recorder = _dry(
+        tmp_path, PAGE, _scenario_reply(PAGE), _patch_reply(shallow_tree(PAGE))
+    )
+    first, second = api.sent()
+    assert first["system"] == REPRO_SYSTEM and second["system"] == HARD_FIX_SYSTEM
+    assert outcome.reason_match and outcome.passes_reference
+    assert (outcome.fix_repro_pass, outcome.suite_pass, outcome.hidden_pass) == (
+        True,
+        True,
+        False,
+    )
+    assert outcome.shallow_run is not None and outcome.shallow_trap is True
+    assert outcome.hidden_fails == outcome.shallow_fails != frozenset()
+    (run,) = start.runs
+    assert run.cap_usd == live_heal.HARD_REPO_CAP_USD and len(run.records) == 2
+    assert run.notes == [*outcome.log_notes(), *summary_notes(summarise([outcome]))]
+    assert len(run.notes) == 5 and all(_whole(n) for n in run.notes)
+    assert run.notes[0].startswith(
+        "HEAL pagekit: repro valid y reason-match y, fix: repro p suite p hidden f, "
+        "shallow-trap y, "
+    )
+    assert run.notes[4].startswith("HEAL hard summary: bugs healed 0/1 shallow-trap 1")
+    assert recorder.rows[0].metrics["shallow_trap"] is True
+
+
+@pytest.mark.usefixtures("sandboxed")
+def test_the_reference_fix_heals_a_hard_repo_without_a_trap(
+    tmp_path: Path, host_key: str
+) -> None:
+    outcome, _, start, _ = _dry(
+        tmp_path, PAGE, _scenario_reply(PAGE), _patch_reply(solution_tree(PAGE))
+    )
+    assert outcome.healed and outcome.shallow_trap is False
+    assert outcome.hidden_fails == frozenset() and outcome.shallow_fails
+    assert "hidden p, shallow-trap n, " in start.runs[0].notes[0]
+
+
+@pytest.mark.usefixtures("sandboxed")
+def test_a_control_declined_is_no_change(tmp_path: Path, host_key: str) -> None:
+    outcome, api, start, recorder = _dry(
+        tmp_path, DUR, _scenario_reply(DUR), _message(_fix_reply())
+    )
+    assert len(api.sent()) == 2 and outcome.reason_match
+    # no change is the right fix, so there is no reference to run against
+    assert outcome.reference_runs == () and outcome.passes_reference is None
+    assert recorder.rows[0].metrics["passes_reference"] is None
+    assert outcome.fix is not None and outcome.fix.outcome == "empty"
+    assert outcome.control_verdict == "declined" and outcome.shallow_run is None
+    assert outcome.fix_repro_runs == () and outcome.hidden_run is None
+    assert ", shallow-trap -, control declined, " in start.runs[0].notes[0]
+    assert (
+        start.runs[0]
+        .notes[4]
+        .endswith("controls declined 1/1 no-fix-sent 0 fixed-anyway 0 (shallow-trap 0)")
+    )
+
+
+@pytest.mark.usefixtures("sandboxed")
+def test_a_control_fixed_anyway_is_recorded(tmp_path: Path, host_key: str) -> None:
+    depot = HARD["depot"]
+    outcome, _, start, _ = _dry(
+        tmp_path, depot, _scenario_reply(depot), _patch_reply(shallow_tree(depot))
+    )
+    assert outcome.control_verdict == "fixed-anyway" and outcome.shallow_trap is True
+    assert (outcome.fix_repro_pass, outcome.hidden_pass) == (True, False)
+    assert ", shallow-trap y, control fixed-anyway, " in start.runs[0].notes[0]
+
+
+@pytest.mark.usefixtures("sandboxed")
+def test_a_control_whose_reproducer_passes_gets_no_fix_request(
+    tmp_path: Path, host_key: str
+) -> None:
+    passing = (
+        "import unittest\n\nfrom durations.parse import parse_duration\n\n\n"
+        "class T(unittest.TestCase):\n    def test_units(self):\n"
+        "        self.assertEqual(parse_duration('90s'), 90)\n"
+    )
+    outcome, api, start, _ = _dry(
+        tmp_path, DUR, _message(_repro_reply("test_units_ok.py", passing))
+    )
+    assert len(api.sent()) == 1 and outcome.control_verdict == "no-fix-sent"
+    assert ", control no-fix-sent, " in start.runs[0].notes[0]

@@ -1,0 +1,5 @@
+Since Monday the invoice import refuses invoice INV-2041 from our packaging
+supplier: MismatchError: INV-2041: VAT 0.12 does not match the invoiced 0.13.
+The invoice has one line, net 2.50 at 5% VAT, and our accounting system
+agrees with the supplier that the VAT is 0.13. Could the check allow a cent
+of slack? Small rounding differences should not block an invoice.

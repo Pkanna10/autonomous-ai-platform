@@ -1,0 +1,5 @@
+Our worker no longer starts after moving its settings to load_settings():
+it fails with ValueError: duration '90' has no unit (use s, m or h). The
+timeout has been "timeout = 90" for years and every other tool we use reads
+a plain number as seconds. parse_duration() should do the same instead of
+crashing on a perfectly normal setting.
