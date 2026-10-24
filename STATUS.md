@@ -1223,6 +1223,17 @@ on 2026-10-24 agreed):
 
 ### Known gaps carried to later steps
 
+- **Non-UUID candidate ids fail late on Postgres** (found by the Step 3 design's
+  research, 2026-10-24). `Hypothesis.id` accepts any safe id (`h1`), but the
+  `lessons` table stores `hypothesis_id` and `technique_id` as UUIDs and
+  `PostgresRepository.save_lesson` refuses anything else (pinned on purpose in
+  `tests/persistence/test_postgres.py`). `save_run` validates the project,
+  objective and workload ids before any node runs, but candidates are not in the
+  state, so a Postgres run with caller ids like `h1` (or a playbook slug as
+  `technique_id`) spends on trials and then fails at learn. No current caller
+  hits it (the live suites use the in-memory repository; the E2E ids are UUIDs).
+  Owner: Step 3's first unit (uuid5 mapping or UUID-only candidates, decided in
+  its spec).
 - **Answer memorisation is accepted for Step 2**: the editor never sees a
   workload's output, and the test suite and human review stand guard; held-out
   inputs arrive with Step 5.
