@@ -1023,6 +1023,7 @@ SUITES = (
     "web",
     "prescreen",
     "sweep",
+    "sweep-fable",
     "ab",
     "escalation",
 )
@@ -1033,12 +1034,17 @@ DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
 )
 EXPERIMENT_MINUTES = {
     "sweep": 240,
+    "sweep-fable": 180,
     "ab": 360,
     "escalation": 90,
     "triage": 90,
     "papers": 60,
     "web": 90,
 }  # batch wait; 5 papers; 18 web runs
+SWEEP_FABLE_ENV = {  # Fable 5.1 beside the one arm whose run phase 1 shares
+    "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
+    "LIVE_SWEEP_FABLE": "1",
+}
 EXPERIMENTS = "tests/live/experiments"  # the Window 0 experiments: never in Stage A
 CAP_CEILING_USD = 150  # the most suite_cap_usd may be
 OSS_LIVE = "tests/live/test_oss_live.py"  # U24's suite, built in parallel
@@ -1634,6 +1640,7 @@ def _suite_needs() -> dict[str, float]:
     escalation = importlib.import_module(f"{__package__}.discovery_escalation")
     return {
         "sweep": sweep.sweep_need(sweep.sweep_plan({})),
+        "sweep-fable": sweep.sweep_need(sweep.sweep_plan(SWEEP_FABLE_ENV)),
         "ab": ab.ab_need(ab.ab_plan({})),
         "escalation": escalation.escalation_need(),
         "web": web.E6_NEED_USD,
@@ -1934,3 +1941,18 @@ def test_a_whole_loop_on_the_production_wiring_offline(
     (outcome,) = recorder.outcomes
     assert (outcome.status, outcome.delivered, outcome.cost_usd) == ("failed", False, 0)
     assert "401 authentication_error" in outcome.guard
+
+
+def test_the_fable_sweep_exports_its_arms_only_for_its_own_suite() -> None:
+    """``sweep-fable`` is the sweep module with Fable on and one other arm;
+    every other suite leaves both variables unset."""
+    script = _run_script()
+    exports = " ".join(f"{k}={v}" for k, v in SWEEP_FABLE_ENV.items())
+    guarded = re.search(
+        r'if \[ "\$\{INPUT_SUITE\}" = sweep-fable \]; then\n'
+        rf"(?:  #.*\n)*  export {re.escape(exports)}\nfi\n",
+        script,
+    )
+    assert guarded is not None, script
+    assert script.count("LIVE_SWEEP_") == len(SWEEP_FABLE_ENV)
+    assert "sweep-fable) paths=(tests/live/test_sweep_live.py);" in script
