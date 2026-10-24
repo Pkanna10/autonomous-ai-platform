@@ -58,7 +58,7 @@ on:
         type: string
         default: '12'
       oss_repo:
-        description: 'oss-ab only, and required there: the one OSS library this dispatch runs (LIVE_OSS_AB_REPOS), e.g. tabulate'
+        description: 'oss-ab only, and required there: the one OSS library this dispatch runs (LIVE_OSS_AB_REPOS), from the first or second set, e.g. tabulate or toml'
         type: string
         default: ''
 

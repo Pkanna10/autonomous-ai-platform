@@ -37,13 +37,14 @@ from .discovery_ab import load_distractors
 from .discovery_io import ResultsSink
 from .discovery_oss import (
     OSS_AB_MAX_REPS,
+    OSS_SELECTABLE,
     REPOS_ENV,
     REPS_ENV,
     OssAbRecorder,
     oss_ab_plan,
     run_task,
 )
-from .oss import OSS_CORPUS, OssRepo
+from .oss import OssRepo
 
 pytestmark = pytest.mark.live
 
@@ -59,7 +60,7 @@ def oss_ab() -> Iterator[OssAbRecorder]:
 
 
 @pytest.mark.parametrize("rep", range(1, OSS_AB_MAX_REPS + 1))
-@pytest.mark.parametrize("repo", OSS_CORPUS, ids=[r.name for r in OSS_CORPUS])
+@pytest.mark.parametrize("repo", OSS_SELECTABLE, ids=[r.name for r in OSS_SELECTABLE])
 def test_oss_discovery_ab(
     repo: OssRepo,
     rep: int,

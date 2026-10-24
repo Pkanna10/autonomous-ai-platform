@@ -6,9 +6,10 @@ libraries) delivered 6/10 with gains of 3-14 % (run 40061541473). This
 suite asks the same question where blind generation does not saturate, and
 searches wide: how the win rate grows with the number of ideas tried.
 
-Per library (``$LIVE_OSS_AB_REPOS``, default the whole ``oss.OSS_CORPUS``)
-and repetition (``$LIVE_OSS_AB_REPS``, default 2, at most
-``OSS_AB_MAX_REPS``), one task:
+Per library (``$LIVE_OSS_AB_REPOS``, default the whole ``oss.OSS_CORPUS``;
+it may also name libraries of the second set, ``oss_v2.OSS_CORPUS_V2``,
+for the technique-list re-test, see ``OSS_SELECTABLE``) and repetition
+(``$LIVE_OSS_AB_REPS``, default 2, at most ``OSS_AB_MAX_REPS``), one task:
 
 1. Phase 1 on a fresh clone: ``start_oss_loop`` with zero candidates (as
    ``discovery.phase_one`` does for a corpus repository): connect,
@@ -56,8 +57,8 @@ the byte bound applies; then the request is refused before it is sent and
 the task fails its guard, never billed past the cap. ``oss_ab_need`` is the
 suite total; a plan past live-smoke's 150 USD ceiling is refused in the
 module fixture: the default plan needs about 1026 USD, one library about
-103, so the Lead dispatches one library (or a few, at a lower trial cap)
-at a time.
+103 (of either set: the need depends on the counts, not the library), so
+the Lead dispatches one library (or a few, at a lower trial cap) at a time.
 
 Recorded, never asserted, per (library, repetition, arm): delivered, the
 kept titles, the primary metric's gain, generation and loop cost, the guard
@@ -165,6 +166,7 @@ from .oss import (
     OssRepo,
     start_oss_loop,
 )
+from .oss_v2 import OSS_CORPUS_V2
 
 REPS_ENV: Final = "LIVE_OSS_AB_REPS"
 ARMS_ENV: Final = "LIVE_OSS_AB_ARMS"
@@ -202,6 +204,22 @@ OSS_PHASE_ONE_WORST_USD: Final = worst_usd(
     OSS_UNDERSTAND_PROMPT_BOUND, settings.UNDERSTAND_MAX_TOKENS, PHASE_ONE_MODEL
 )
 OSS_PHASE_ONE_CAP_USD: Final = ceil_usd(OSS_PHASE_ONE_WORST_USD)
+
+
+def selectable(*sets: Sequence[OssRepo]) -> tuple[OssRepo, ...]:
+    """The libraries ``$LIVE_OSS_AB_REPOS`` may name, in set order; a name
+    in two sets is refused (a name must pick one library)."""
+    repos = tuple(repo for group in sets for repo in group)
+    names = [repo.name for repo in repos]
+    shared = sorted({name for name in names if names.count(name) > 1})
+    if shared:
+        raise ValueError(f"the OSS library sets share a name: {', '.join(shared)}")
+    return repos
+
+
+# The first set, then the second (the technique-list re-test); the default
+# plan stays the first set alone, so its guards and notes are unchanged.
+OSS_SELECTABLE: Final = selectable(OSS_CORPUS, OSS_CORPUS_V2)
 
 # ---------------------------------------------------------------------------
 # Arms, caps and the plan
@@ -289,12 +307,13 @@ def oss_ab_arms(environ: Mapping[str, str]) -> tuple[OssArm, ...]:
 
 
 def oss_ab_repos(environ: Mapping[str, str]) -> tuple[OssRepo, ...]:
-    """``$LIVE_OSS_AB_REPOS``: distinct manifest names, comma separated, in
-    the manifest's order; unset means every library."""
-    names = _keys(environ, REPOS_ENV, [repo.name for repo in OSS_CORPUS])
+    """``$LIVE_OSS_AB_REPOS``: distinct names of ``OSS_SELECTABLE`` (the
+    first set or the second), comma separated, in its order; unset means
+    every library of the first set."""
+    names = _keys(environ, REPOS_ENV, [repo.name for repo in OSS_SELECTABLE])
     if names is None:
         return OSS_CORPUS
-    return tuple(repo for repo in OSS_CORPUS if repo.name in names)
+    return tuple(repo for repo in OSS_SELECTABLE if repo.name in names)
 
 
 def oss_ab_need(plan: OssAbPlan) -> float:

@@ -71,7 +71,7 @@ from autonomous_ai_agents.research.playbook import (
     match_techniques,
 )
 
-from . import corpus, oss
+from . import corpus, oss, oss_v2
 from . import discovery_ab as ab
 from . import discovery_oss as dx
 from . import test_discovery_guards as dg
@@ -95,6 +95,7 @@ from .discovery import (
 )
 from .discovery_io import ResultsSink
 from .oss import OSS_CORPUS, OSS_RUN_CAP_USD, OssRepo
+from .oss_v2 import OSS_CORPUS_V2
 
 # Fixtures shared with the discovery and OSS guards (registered by name).
 dry = dg.dry
@@ -312,7 +313,7 @@ def _widest_facts(root: Path) -> RepoFacts:
     """Every field the generator and the matcher show at its cap: 30 hotspots
     on paths of ``OSS_MAX_PATH_CHARS`` and symbols of the profiler's cap,
     every understanding field full (one workload: one note)."""
-    repo = max(OSS_CORPUS, key=lambda r: len(r.name))
+    repo = max(dx.OSS_SELECTABLE, key=lambda r: len(r.name))  # either set
     project = repo.project(root)
     spots = tuple(
         Hotspot(
@@ -426,7 +427,7 @@ def test_the_understand_bound_holds_at_every_read_limit(
     """Repository-independent: what the understander may send is capped by
     ``ReadLimits`` (12 files, 40,000 content bytes, 24,000 listing bytes),
     so the widest paths and escape-only text bound every clone."""
-    repo = max(OSS_CORPUS, key=lambda r: len(r.name))
+    repo = max(dx.OSS_SELECTABLE, key=lambda r: len(r.name))  # either set
     project = repo.project(tmp_path)
     limits = ReadLimits()
     paths = (
@@ -484,6 +485,10 @@ def test_each_pinned_clone_fits_the_oss_bounds(
     """The bounds' one assumption on real clones: tracked paths of at most
     ``OSS_MAX_PATH_CHARS`` printable ASCII and ASCII function and class
     names; and the real understand request on the clone within its bound."""
+    _check_clone_fits(repo, network_root)
+
+
+def _check_clone_fits(repo: OssRepo, network_root: Path) -> None:
     user = oss.prepare_repo(repo, network_root / "user")  # the production policy
     assert dx.clone_problems(user.path) == []
     project = repo.project(user.path)
@@ -504,6 +509,224 @@ def test_the_network_case_is_gated_on_its_variable() -> None:
         )
     }
     assert {"slow", "skipif", "parametrize"} <= marks, marks
+
+
+# ---------------------------------------------------------------------------
+# The second library set (oss_v2): the technique-list re-test
+# ---------------------------------------------------------------------------
+
+V2_IDS = [repo.name for repo in OSS_CORPUS_V2]
+REPO_NEED_BOUND = 103.0  # the per-library need at the default knobs, either set
+
+
+def test_the_second_set_is_eight_libraries_disjoint_from_the_first() -> None:
+    """Eight more libraries, parsed as strictly as the first set, each with
+    its own workload in its own folder, none sharing a name, URL, package,
+    pin or workload with ``OSS_CORPUS``."""
+    assert len(OSS_CORPUS_V2) == oss_v2.V2_REPOS == 8
+    assert oss.MIN_REPOS <= len(OSS_CORPUS_V2) <= oss.MAX_REPOS
+    raw = json.loads(oss_v2.MANIFEST_V2.read_text(encoding="utf-8"))
+    assert oss_v2.parse_manifest_v2(raw) == OSS_CORPUS_V2
+    assert all(type(repo) is oss_v2.OssRepoV2 for repo in OSS_CORPUS_V2)
+    names = {repo.name for repo in OSS_CORPUS_V2}
+    assert {p.stem for p in oss_v2.WORKLOADS_V2_DIR.glob("*.py")} == names
+    for key in ("name", "url", "package", "commit"):
+        first = {getattr(repo, key) for repo in OSS_CORPUS}
+        second = [getattr(repo, key) for repo in OSS_CORPUS_V2]
+        assert len(set(second)) == len(second), key  # distinct within the set
+        assert first.isdisjoint(second), key  # and from the first set
+    for repo in OSS_CORPUS_V2:
+        assert oss.PIN.fullmatch(repo.commit), repo.commit  # a full 40-hex sha
+        assert repo.workload_source.parent == oss_v2.WORKLOADS_V2_DIR
+        assert not (oss.WORKLOADS_DIR / f"{repo.name}.py").exists()
+        assert repo.workload_source.read_bytes() != b""
+    # The bounds' widest name (the understand and generate prompts carry
+    # the project name and the bench path) is still the first set's.
+    widest = max(len(r.name) for r in OSS_CORPUS)
+    assert max(len(r.name) for r in OSS_CORPUS_V2) <= widest
+
+
+def test_the_second_manifest_is_validated_as_strictly_as_the_first(
+    tmp_path: Path,
+) -> None:
+    raw = json.loads(oss_v2.MANIFEST_V2.read_text(encoding="utf-8"))
+    entry = dict(raw["repos"][0])
+    for key, value in (
+        ("commit", entry["commit"][:12]),  # a short pin
+        ("url", "http://github.com/pypa/packaging.git"),  # off the allowlist
+        ("license", "GPL-3.0-only"),
+        ("module_root", "lib/packaging"),
+    ):
+        with pytest.raises(ValueError, match=key):
+            oss_v2.parse_manifest_v2({"repos": [{**entry, key: value}]})
+    with pytest.raises(ValueError, match="no workload"):
+        oss_v2.parse_manifest_v2(raw, tmp_path)  # a folder without the workloads
+    with pytest.raises(ValueError, match="duplicate"):
+        oss_v2.parse_manifest_v2({"repos": [entry, entry]})
+
+
+@pytest.mark.parametrize("repo", OSS_CORPUS_V2, ids=V2_IDS)
+def test_v2_entry_is_pinned_permissive_and_complete(repo: OssRepo) -> None:
+    """The first set's entry checks, on the second set's entry."""
+    og.test_entry_is_pinned_permissive_and_complete(repo)
+    built = repo.candidates(repo.project(Path("/nonexistent")))
+    assert [h.title for h in built] == [s.title for s in repo.hypotheses]
+    assert {h.change_class for h in built} == {ChangeClass.efficiency}
+
+
+@pytest.mark.parametrize("repo", OSS_CORPUS_V2, ids=V2_IDS)
+def test_v2_workload_is_deterministic_and_times_the_checkout(
+    repo: OssRepo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first set's workload checks: only the library and pure stdlib
+    modules, seeded generators, and a library that is not the checkout's
+    package refused before anything is timed."""
+    og.test_workload_is_deterministic_and_times_the_checkout(repo)
+    og.test_workload_refuses_a_library_that_is_not_the_checkouts_package(
+        repo, tmp_path, monkeypatch
+    )
+
+
+@pytest.mark.parametrize("repo", OSS_CORPUS_V2, ids=V2_IDS)
+def test_each_v2_library_is_selectable_alone_within_the_need_bound(
+    repo: OssRepo,
+) -> None:
+    """``$LIVE_OSS_AB_REPOS`` may name it alone: the plan is that library at
+    the default reps, arms, N and trial cap, needing what one library of the
+    first set needs, within ``REPO_NEED_BOUND`` and live-smoke's ceiling."""
+    plan = dx.oss_ab_plan({dx.REPOS_ENV: repo.name})
+    assert plan == dx.OssAbPlan(
+        dx.OSS_AB_REPS, dx.DEFAULT_ARMS, dx.OSS_AB_N, dx.OSS_TRIAL_CAP_USD, (repo,)
+    )
+    need = dx.oss_ab_need(plan)
+    assert need == pytest.approx(ONE_REPO_NEED)
+    assert need <= REPO_NEED_BOUND <= dx.CAP_CEILING_USD
+    assert need == pytest.approx(dx.oss_ab_need(replace(plan, repos=FIRST)))
+
+
+def test_the_selectable_libraries_are_both_sets_and_the_default_is_unchanged() -> None:
+    assert dx.OSS_SELECTABLE == (*OSS_CORPUS, *OSS_CORPUS_V2)
+    assert dx.oss_ab_repos({}) == OSS_CORPUS  # unset: the first set alone
+    assert dx.oss_ab_plan({dx.TRIAL_CAP_ENV: ONE_DISPATCH_TRIAL_CAP}).repos == (
+        OSS_CORPUS
+    )
+    first, last = OSS_CORPUS[0], OSS_CORPUS_V2[-1]
+    picked = dx.oss_ab_repos({dx.REPOS_ENV: f"{last.name},{first.name}"})
+    assert picked == (first, last)  # OSS_SELECTABLE's order, either set
+    two = dx.oss_ab_repos({dx.REPOS_ENV: ",".join(V2_IDS[:2])})
+    assert two == OSS_CORPUS_V2[:2]
+    for value in (
+        "",
+        "nope",
+        "chardet",  # evaluated, left out
+        "pygments",
+        f"{last.name},{last.name}",
+        last.name.upper(),
+        f"{first.name}, {last.name}",
+    ):
+        with pytest.raises(ValueError, match=dx.REPOS_ENV):
+            dx.oss_ab_repos({dx.REPOS_ENV: value})
+    # Every library of the second set alone fits; all eight at once do not.
+    with pytest.raises(ValueError, match="ceiling"):
+        dx.oss_ab_plan({dx.REPOS_ENV: ",".join(V2_IDS)})
+    whole = dx.oss_ab_plan(
+        {dx.REPOS_ENV: ",".join(V2_IDS), dx.TRIAL_CAP_ENV: "0.36"}
+    )  # 2 x 8 x (1.30 + 2 x 3.60) = 136
+    assert dx.oss_ab_need(whole) == pytest.approx(136.0)
+
+
+def test_a_name_in_both_sets_is_refused() -> None:
+    clash = replace(OSS_CORPUS_V2[0], name=OSS_CORPUS[0].name)
+    with pytest.raises(ValueError, match=f"share a name: {OSS_CORPUS[0].name}$"):
+        dx.selectable(OSS_CORPUS, (clash,))
+    assert dx.selectable(OSS_CORPUS, OSS_CORPUS_V2) == dx.OSS_SELECTABLE
+
+
+@pytest.mark.slow
+@og.NETWORK
+@pytest.mark.parametrize("repo", OSS_CORPUS_V2, ids=V2_IDS)
+def test_each_pinned_v2_clone_fits_the_oss_bounds(
+    repo: OssRepo, network_root: Path
+) -> None:
+    """As ``test_each_pinned_clone_fits_the_oss_bounds``, on the second set."""
+    _check_clone_fits(repo, network_root)
+
+
+@pytest.mark.slow
+@og.NETWORK
+@pytest.mark.parametrize("repo", OSS_CORPUS_V2, ids=V2_IDS)
+def test_pinned_v2_repo_clones_runs_and_passes(
+    repo: OssRepo, network_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The first set's network check on the second set: the pin cloned
+    with the production policy, its licence, the workload twice (same
+    output, 0.3 to 5 s), its tests green, preflight, and no hypothesis
+    target the ``process_spawn`` rule flags."""
+    og.test_pinned_repo_clones_runs_and_passes(repo, network_root, capsys)
+
+
+@pytest.mark.slow
+@og.NETWORK
+@pytest.mark.parametrize("repo", OSS_CORPUS_V2, ids=V2_IDS)
+def test_pinned_v2_repo_dress_rehearsal_in_the_sandbox(
+    repo: OssRepo,
+    network_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The whole loop in the ``required`` sandbox with no Claude and a no-op
+    editor (the first set's dress rehearsal), on the second set."""
+    og.test_pinned_repo_dress_rehearsal_in_the_sandbox(
+        repo, network_root, monkeypatch, capsys
+    )
+
+
+V2_IMPORT_SHARE_BOUND = 0.20  # of a workload run: the rest is library work
+V2_TIMING_RUNS = 3
+
+
+@pytest.mark.slow
+@og.NETWORK
+@pytest.mark.parametrize("repo", OSS_CORPUS_V2, ids=V2_IDS)
+def test_pinned_v2_workload_is_library_work_not_its_import(
+    repo: OssRepo, network_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A trial on a target cannot change what importing the package costs
+    (no bytecode cache: ``child_env`` forbids writing one), so an import
+    that is a large share of the workload dilutes every measured gain
+    toward the noise floor. The fastest bare import, in the engine's own
+    child environment, is at most ``V2_IMPORT_SHARE_BOUND`` of the fastest
+    workload run."""
+    user = oss.prepare_repo(repo, network_root / "user")  # the production policy
+    bare = ("python", "-c", f"import {repo.package}")
+    imports: list[float] = []
+    runs: list[float] = []
+    for _ in range(V2_TIMING_RUNS):  # interleaved, so both see the same load
+        proc, took = og._run(user.path, bare)
+        assert proc.returncode == 0, proc.stderr
+        imports.append(took)
+        proc, took = og._run(user.path, repo.workload_argv)
+        assert proc.returncode == 0, proc.stderr
+        runs.append(took)
+    share = min(imports) / min(runs)
+    with capsys.disabled():
+        print(
+            f"\n[oss-v2] {repo.name}: import {min(imports):.2f}s of a "
+            f"{min(runs):.2f}s workload ({share:.0%})"
+        )
+    assert share <= V2_IMPORT_SHARE_BOUND, (repo.name, imports, runs)
+
+
+def test_the_v2_network_cases_are_gated_on_their_variable() -> None:
+    for test in (
+        test_each_pinned_v2_clone_fits_the_oss_bounds,
+        test_pinned_v2_repo_clones_runs_and_passes,
+        test_pinned_v2_repo_dress_rehearsal_in_the_sandbox,
+        test_pinned_v2_workload_is_library_work_not_its_import,
+    ):
+        marks = {mark.name for mark in getattr(test, "pytestmark", [])}
+        assert {"slow", "skipif", "parametrize"} <= marks, (test.__name__, marks)
+    assert og.NETWORK.kwargs["reason"].endswith(f"{oss.NETWORK_ENV}=1")
 
 
 # ---------------------------------------------------------------------------
@@ -1130,6 +1353,29 @@ def test_the_live_module_is_marked_parses_its_plan_first_and_runs_tasks() -> Non
         if isinstance(node, ast.Call)
     }
     assert "run_task" in calls and "live" not in calls
+    # A v2 name is selectable only if the live cases range over both sets:
+    # over OSS_CORPUS alone, every v2 case skips and the job records nothing.
+    repo_params = [
+        (ast.unparse(d.args[1]), {k.arg: ast.unparse(k.value) for k in d.keywords})
+        for d in tests[0].decorator_list
+        if isinstance(d, ast.Call)
+        and ast.unparse(d.func) == "pytest.mark.parametrize"
+        and len(d.args) >= 2
+        and isinstance(d.args[0], ast.Constant)
+        and d.args[0].value == "repo"
+    ]
+    assert repo_params == [
+        ("OSS_SELECTABLE", {"ids": "[r.name for r in OSS_SELECTABLE]"})
+    ]
+    imported = {
+        alias.name
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.level == 1
+        and node.module == "discovery_oss"
+        for alias in node.names
+    }
+    assert "OSS_SELECTABLE" in imported
 
 
 # ---------------------------------------------------------------------------
