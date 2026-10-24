@@ -1033,6 +1033,8 @@ SUITES = (
     "oss-ab",
     "evolve",
     "evolve-more",
+    "heal-hard",
+    "build",
 )
 DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_sweep_live.py",
@@ -1041,6 +1043,7 @@ DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_noise_live.py",  # Window 0's last suites
     "tests/live/test_oss_ab_live.py",
     "tests/live/test_evolution_live.py",
+    "tests/live/test_build_live.py",
 )
 EXPERIMENT_MINUTES = {
     "sweep": 240,
@@ -1051,6 +1054,7 @@ EXPERIMENT_MINUTES = {
     "oss-ab": 120,  # one library, 2 reps x 2 arms x 10 trials
     "evolve": 300,
     "evolve-more": 300,
+    "build": 120,
     "escalation": 90,
     "triage": 90,
     "papers": 60,
@@ -1060,6 +1064,7 @@ SWEEP_FABLE_ENV = {  # Fable 5.1 beside the one arm whose run phase 1 shares
     "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
     "LIVE_SWEEP_FABLE": "1",
 }
+HEAL_HARD_ENV = {"LIVE_HEAL_SET": "hard"}
 EVOLVE_MORE_ENV = {"LIVE_EVOLVE_REPOS": "idna,mistune,sqlparse,pycparser"}
 OSS_AB_DISPATCH_REPO = "tabulate"  # oss-ab runs one library a dispatch
 SWEEP_RECORD_ENV = {  # one arm, recorded for hand labels and offline replay
@@ -1664,6 +1669,7 @@ def _suite_needs() -> dict[str, float]:
     heal = importlib.import_module(f"{__package__}.experiments.test_heal_live")
     oss_ab = importlib.import_module(f"{__package__}.discovery_oss")
     evolve = importlib.import_module(f"{__package__}.evolution")
+    build = importlib.import_module(f"{__package__}.build_improve")
     one_library = {oss_ab.REPOS_ENV: OSS_AB_DISPATCH_REPO}
     return {
         "noise": noise.noise_need(noise.noise_plan({})),
@@ -1671,6 +1677,8 @@ def _suite_needs() -> dict[str, float]:
         "oss-ab": oss_ab.oss_ab_need(oss_ab.oss_ab_plan(one_library)),
         "evolve": evolve.evolve_need(evolve.evolve_plan({})),
         "evolve-more": evolve.evolve_need(evolve.evolve_plan(EVOLVE_MORE_ENV)),
+        "heal-hard": heal.heal_need(heal.heal_plan(HEAL_HARD_ENV)),
+        "build": build.build_need(build.build_plan({})),
         "sweep": sweep.sweep_need(sweep.sweep_plan({})),
         "sweep-fable": sweep.sweep_need(sweep.sweep_plan(SWEEP_FABLE_ENV)),
         "sweep-record": sweep.sweep_need(sweep.sweep_plan(SWEEP_RECORD_ENV)),
@@ -2051,6 +2059,20 @@ def test_evolve_more_exports_its_four_libraries_only_for_its_own_suite() -> None
     ((name, value),) = EVOLVE_MORE_ENV.items()
     guarded = re.search(
         r'if \[ "\$\{INPUT_SUITE\}" = evolve-more \]; then\n'
+        rf"(?:  #.*\n)*  export {re.escape(name)}={re.escape(value)}\nfi\n",
+        script,
+    )
+    assert guarded is not None, script
+    assert script.count(name) == 1
+
+
+def test_heal_hard_exports_its_set_only_for_its_own_suite() -> None:
+    """``heal-hard`` is the heal module on the hard set; every other suite
+    leaves ``LIVE_HEAL_SET`` unset (the easy set)."""
+    script = _run_script()
+    ((name, value),) = HEAL_HARD_ENV.items()
+    guarded = re.search(
+        r'if \[ "\$\{INPUT_SUITE\}" = heal-hard \]; then\n'
         rf"(?:  #.*\n)*  export {re.escape(name)}={re.escape(value)}\nfi\n",
         script,
     )
