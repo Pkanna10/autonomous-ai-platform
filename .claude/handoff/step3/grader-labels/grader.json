@@ -1,0 +1,452 @@
+[
+ {
+  "repo": "tagfilter",
+  "rank": 1,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "tagfilter",
+  "rank": 2,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "keywordscan",
+  "rank": 1,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "keywordscan",
+  "rank": 2,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "keywordscan",
+  "rank": 3,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "reportbuild",
+  "rank": 1,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "reportbuild",
+  "rank": 2,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "reportbuild",
+  "rank": 3,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "scorenorm",
+  "rank": 1,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "scorenorm",
+  "rank": 2,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "leaderboard",
+  "rank": 1,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "leaderboard",
+  "rank": 2,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "leaderboard",
+  "rank": 3,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "orderlookup",
+  "rank": 1,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "orderlookup",
+  "rank": 2,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "inventorysim",
+  "rank": 1,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "inventorysim",
+  "rank": 2,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "inventorysim",
+  "rank": 3,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "tokenparse",
+  "rank": 1,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "tokenparse",
+  "rank": 2,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "tokenparse",
+  "rank": 3,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "wordcount",
+  "rank": 1,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "wordcount",
+  "rank": 2,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "wordcount",
+  "rank": 3,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "configlookup",
+  "rank": 1,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "configlookup",
+  "rank": 2,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "configlookup",
+  "rank": 3,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "stairways",
+  "rank": 1,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "stairways",
+  "rank": 2,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "graphwalk",
+  "rank": 1,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "graphwalk",
+  "rank": 2,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "graphwalk",
+  "rank": 3,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "graphwalk",
+  "rank": 4,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "blockhash",
+  "rank": 1,
+  "verdict": "control",
+  "parts": "none"
+ },
+ {
+  "repo": "blockhash",
+  "rank": 2,
+  "verdict": "control",
+  "parts": "none"
+ },
+ {
+  "repo": "sortstats",
+  "rank": 1,
+  "verdict": "control",
+  "parts": "none"
+ },
+ {
+  "repo": "sortstats",
+  "rank": 2,
+  "verdict": "control",
+  "parts": "none"
+ },
+ {
+  "repo": "sortstats",
+  "rank": 3,
+  "verdict": "control",
+  "parts": "none"
+ },
+ {
+  "repo": "lettertally",
+  "rank": 1,
+  "verdict": "control",
+  "parts": "none"
+ },
+ {
+  "repo": "lettertally",
+  "rank": 2,
+  "verdict": "control",
+  "parts": "none"
+ },
+ {
+  "repo": "shipmerge",
+  "rank": 1,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "shipmerge",
+  "rank": 2,
+  "verdict": "hit",
+  "parts": "2"
+ },
+ {
+  "repo": "shipmerge",
+  "rank": 3,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "ledgerclose",
+  "rank": 1,
+  "verdict": "hit",
+  "parts": "2"
+ },
+ {
+  "repo": "ledgerclose",
+  "rank": 2,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "ledgerclose",
+  "rank": 3,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "deliveryround",
+  "rank": 1,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "deliveryround",
+  "rank": 2,
+  "verdict": "hit",
+  "parts": "2"
+ },
+ {
+  "repo": "deliveryround",
+  "rank": 3,
+  "verdict": "hit",
+  "parts": "3"
+ },
+ {
+  "repo": "invoicekit",
+  "rank": 1,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "invoicekit",
+  "rank": 2,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "invoicekit",
+  "rank": 3,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "invoicekit",
+  "rank": 4,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "fleetsim",
+  "rank": 1,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "fleetsim",
+  "rank": 2,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "fleetsim",
+  "rank": 3,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "fleetsim",
+  "rank": 4,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "textindex",
+  "rank": 1,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "textindex",
+  "rank": 2,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "textindex",
+  "rank": 3,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "textindex",
+  "rank": 4,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "textindex",
+  "rank": 5,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "topicmerge",
+  "rank": 1,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "topicmerge",
+  "rank": 2,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "topicmerge",
+  "rank": 3,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "sensormean",
+  "rank": 1,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "sensormean",
+  "rank": 2,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "sensormean",
+  "rank": 3,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "eventagg",
+  "rank": 1,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "eventagg",
+  "rank": 2,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "eventagg",
+  "rank": 3,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "eventagg",
+  "rank": 4,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "distmatrix",
+  "rank": 1,
+  "verdict": "hit",
+  "parts": "1"
+ },
+ {
+  "repo": "distmatrix",
+  "rank": 2,
+  "verdict": "miss",
+  "parts": "none"
+ },
+ {
+  "repo": "distmatrix",
+  "rank": 3,
+  "verdict": "miss",
+  "parts": "none"
+ }
+]
