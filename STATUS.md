@@ -660,16 +660,17 @@ Where a decision changed the spec, the code follows the decision.
 
 ### 2026-10-24 (Step 2 close-out: stage gate and second security review)
 
-- **Stage gate on `ea891e6`** (`pnpm stage-gate`, the Lead's container): every
-  check passes (pnpm audit, pip-audit, bandit, secret grep, typecheck, lint,
-  format, Vitest, uv sync, interpreters 3.8-3.12, the sandbox, ruff, mypy)
-  except one test,
-  `test_a_fix_that_leaves_one_hot_spot_falls_short[ledgerclose]`, the
-  machine-dependent fixture recorded under Known gaps (green on CI). Postgres is
-  absent from the container, so coverage there is 99.33 %; CI runs the
-  repository tests. 4,838 passed, 79 skipped. Upgrades: only majors are outdated
-  (commitlint 21, TypeScript 7, ESLint 10, Vitest 5, Vite 8 and others), left to
-  their own Dependabot PRs.
+- **Stage gate on `ea891e6`: passed except 1 known flaky test (fix pending).**
+  `pnpm stage-gate` in the Lead's container passed pnpm audit, pip-audit,
+  bandit, the secret grep, typecheck, lint, format, Vitest, uv sync, the
+  interpreters 3.8-3.12, the sandbox, ruff and mypy; one test failed,
+  `test_a_fix_that_leaves_one_hot_spot_falls_short[ledgerclose]`, which was
+  machine-dependent (green on CI). Its fix (`9db3c77`, a same-run ratio against
+  the full fix) is in; the gate reruns on that head before PR #12 is marked
+  ready. Postgres is absent from the container, so coverage there is 99.33 %; CI
+  runs the repository tests. 4,838 passed, 79 skipped. Upgrades: only majors are
+  outdated (commitlint 21, TypeScript 7, ESLint 10, Vitest 5, Vite 8 and
+  others), left to their own Dependabot PRs.
 - **The first gate run on this head found two real failures, both fixed**:
   pip-audit reported three CVEs in `filelock` 3.32.7, held below the 4.2.1 fix
   by `safety`, which left the dev extra (`f0ca54a`; it runs through `uvx`); the
