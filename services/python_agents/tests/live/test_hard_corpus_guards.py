@@ -435,12 +435,25 @@ def _parts(repo: CorpusRepo) -> list[Path]:
     return sorted(HARD_SOLUTIONS_DIR.glob(f"{repo.name}.part*.patch"))
 
 
+# A fix that leaves one hot spot must stay at least this many times slower
+# than the full fix, both measured in the same interleaved run. Measured on
+# 2026-10-24: 5.0-7.4x for shipmerge and deliveryround, and 3.2x and 35x for
+# ledgerclose's two partials in the Lead's container, where pop(0) is
+# memory-bound and the window maximum compute-bound. A ratio within one run
+# cancels the machine; the absolute ``fix_gain`` bar did not (ledgerclose's
+# settle-only fix gained 0.92 there against 0.67).
+PARTIAL_OVER_FULL_MIN = 2.0
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("repo", MULTI, ids=_ids(MULTI))
 def test_a_fix_that_leaves_one_hot_spot_falls_short(
     repo: CorpusRepo, tmp_path: Path
 ) -> None:
-    """So a delivered gain of ``fix_gain`` means every hot spot was removed."""
+    """Every hot spot matters: leaving any one unfixed keeps the workload at
+    least ``PARTIAL_OVER_FULL_MIN`` times slower than the full reference fix,
+    measured side by side, so a partial fix cannot pass for the full one on any
+    machine."""
     parts = _parts(repo)
     assert len(parts) in (2, 3), repo.name
     roots = [_copy(repo, tmp_path / "base")]
@@ -450,11 +463,16 @@ def test_a_fix_that_leaves_one_hot_spot_falls_short(
             if index != left:
                 _apply(partial, patch)
         roots.append(partial)
-    (expected, slow, _), *partials = _runs(roots, repo)
+    full = _copy(repo, tmp_path / "full")
+    _apply(full, repo.solution)
+    roots.append(full)
+    (expected, slow, _), *partials, (fixed, quick_full, _) = _runs(roots, repo)
+    assert fixed == expected, repo.name
+    assert 1 - quick_full / slow >= repo.fix_gain, (repo.name, slow, quick_full)
     for left, (output, quick, _) in enumerate(partials):
         assert output == expected, (repo.name, parts[left].name)
-        gain = 1 - quick / slow
-        assert gain < repo.fix_gain, (repo.name, parts[left].name, gain)
+        ratio = quick / quick_full
+        assert ratio >= PARTIAL_OVER_FULL_MIN, (repo.name, parts[left].name, ratio)
 
 
 @pytest.mark.parametrize("repo", TRAPS, ids=_ids(TRAPS))

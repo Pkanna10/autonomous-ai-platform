@@ -1250,13 +1250,15 @@ on 2026-10-24 agreed):
 - **`ledgerclose`'s two hot spots stress different hardware.** `pop(0)` on a
   60,000-item list is memory-bandwidth bound, the window maximum is compute
   bound, so their ratio varies about tenfold between machines (16:1 in the
-  Lead's container, close to 1:1 on GitHub runners). Where one dominates, a fix
-  that leaves the other still clears `fix_gain`, so
-  `test_a_fix_that_leaves_one_hot_spot_falls_short[ledgerclose]` fails there
-  (green on every CI run so far), and the known-fix rule would credit a partial
-  fix. Follow-up: rebuild the repository with two hot spots of the same kind
-  (both C-level loops over Python objects), keeping its multi category. Owner:
-  Step 3's corpus rework (the sweep also showed the corpus saturates).
+  Lead's container, close to 1:1 on GitHub runners). The guard
+  `test_a_fix_that_leaves_one_hot_spot_falls_short` is machine-independent since
+  2026-10-24: each partial fix must stay at least 2x slower than the full fix
+  measured in the same run (measured minimum 3.2x). What remains: the live
+  hard-corpus scoring's known-fix rule still compares against the absolute
+  `fix_gain`, so on a memory-slow machine a settle-only fix of `ledgerclose`
+  would be credited as the full fix. Follow-up: rebuild the repository with two
+  hot spots of the same kind (both C-level loops over Python objects), keeping
+  its multi category. Owner: Step 3's corpus rework.
 - **Multiprocessing `spawn`/`forkserver` fail in the Linux sandbox.** The
   seccomp filter that closes path-based AF_UNIX egress refuses every
   `socket(AF_UNIX)`, and those start methods need an AF_UNIX listener; `fork`
