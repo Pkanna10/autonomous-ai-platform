@@ -1173,6 +1173,31 @@ E to use what is left before the reset.
 | 2026-10-24 | 0      | [40082852536](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40082852536) | N     | 0.00       | Runner noise, 13 repositories (10 OSS, 3 corpus controls) x 6 baselines, engine's own baseline path and judges, 7 min, no API call. Median within-baseline CV 0.67 % (0.24-1.37 %), between-baseline CV 0.51 %. A/A test, every ordered pair of baselines judged as a trial: 11/390 false wins (2.8 %), all of them also kept by the whole verdict; the p95 difference between identical code is 3.0 %, above the 2 % floor on 4/13 repositories (idna 2/30 false wins, pycparser 3/30, sortstats 1/30). No memory false wins. Step 3 finding: one trial in about 36 is a false keep before the combine re-test, so a run of 9 trials carries one about a quarter of the time; the floor or a paired rule needs revisiting (spec Q7).     |
 | 2026-10-24 | 0      | [40082854689](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40082854689) | 3c    | 0.13       | Self-healing probe, 8 planted bugs, Sonnet 5.5 medium, 74 s: 8/8 reproducers valid and failing 5 of 5 for the reported reason (4 from a traceback, 4 from a symptom), 8/8 fixes pass the reproducer, the suite and hidden tests on the first attempt, 0 hacked, no retry needed, 0.016 USD a bug. Saturated like the first discovery corpus: 3c needs harder bugs (multi-file causes, misleading reports, flaky symptoms) before its gates mean much.                                                                                                                                                                                                                                                                                     |
 | 2026-10-24 | 0      | [40082858972](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40082858972) | E5o   | 0.93       | OSS A/B canary, `tabulate`, 2 reps x arms A (blind) and B (playbook-matched), 10 hypotheses each, 7 min: both arms delivered on both reps. Gains: A 34.1 % and 21.0 %, B 9.9 % and 17.0 % (the aimed run of 40061541473 got 14.3 %). The rank-1 idea was never kept (win@1 0, win@3 2/2 for both arms); kept ranks 2-4. 0.21-0.23 USD a win.                                                                                                                                                                                                                                                                                                                                                                                              |
+| 2026-10-24 | 0      | 40083998469-40084013689 (9 runs)                                                           | E5o   | 12.90      | OSS A/B, the other 9 libraries (one dispatch each, 9-18 min, 1.0-1.7 USD), every guard held. Pooled over all 10 libraries x 2 reps = 20 paired tasks (two independent counts agree): blind A 11/20 won, mean gain 14.1 % (median 12.5 %); playbook-matched B 11/20, mean 12.6 % (median 13.3 %); both won 9, neither 7, b = 2, c = 2, McNemar p = 1.0. On the 9 tasks both won, A's gain was higher in 6. Wins by number of hypotheses tried (win@1/3/5/10): A 6/11/12/12, B 7/11/13/13 (the notes count a kept rank even when the combination was not delivered, 3 tasks). `more_itertools` and `pyparsing` gave no win to either arm. 0.58-0.59 USD a win; 13.83 USD for the 10 libraries.                                              |
+| 2026-10-24 | 0      | [40082857033](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40082857033) | Ev    | 5.22       | Evolution, Sonnet 5.5, 3 libraries, each round generating from the previous round's improved code, 39 min. `tabulate`: 5 delivering rounds (45.6, 8.9, 11.4, 4.6, 11.0 %), claimed 62.7 % total, the final alternating re-test against the original code measured 61.6 %. `markdown`: 6 delivering rounds of 8 (9.9, 15.6, 4.3, 2.1, 3.0 %), claimed 30.9 %, re-test 30.5 %. `tomli`: one round (10.6 %), then two empty ones; re-test 8.6 %. Mean cumulative gain 22.0 % after round 1, 34.7 % at the end; every final re-test held (3/3), so the compound claims are honest. Each library stopped after two empty rounds. Round 1 cost 0.012 USD per percentage point, later rounds 0.117.                                              |
+
+### 2026-10-24 (Window 0 final experiments: what they decide)
+
+- **Retrieval stays off, now on real code too.** The OSS A/B is the re-test the
+  E5 decision asked for: a set blind generation does not saturate (55 % win
+  rate). Playbook-matched generation tied blind generation (11/20 each, b = 2, c
+  = 2); pooled with E5 (b = 3, c = 0), c - b = -1, far from the pre-registered
+  c - b >= 3. The paper pipeline stays deprioritised behind the playbook,
+  lessons and evolution. The Step 3 spec's optional re-test (L5) is now proposed
+  for removal (owner to confirm).
+- **Try several hypotheses, about five.** Wins rose from 6-7/20 with the
+  top-ranked idea alone to 11/20 with three and 12-13/20 with five; ten added
+  nothing more. The generator's default N stays 5.
+- **Evolution compounds and its claims hold.** Later rounds added a further 12.7
+  points on average (22.0 % to 34.7 %), every compound claim survived an
+  alternating re-test against the original code, and later rounds cost about ten
+  times more per point but little in total (5.22 USD for 3 libraries). This
+  supports W4 (evolution) in Step 3's Wave 3.
+- **Runner noise lets false wins through at the 2 % floor** (noise run): the
+  owner approved the alternating measurement, a second check of every winner and
+  a per-project floor for Step 3 (spec revision 4).
+- **Self-healing works on easy bugs** (8/8): 3c needs a harder bug corpus before
+  its gates are meaningful.
 
 ### 2026-10-23 (Window 0 experiments)
 
