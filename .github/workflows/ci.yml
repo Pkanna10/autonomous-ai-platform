@@ -450,9 +450,7 @@ jobs:
         if: hashFiles('services/python_agents/tests/**/*.py') != ''
 
   # The macOS sandbox (sandbox-exec), Apple git and maxrss units, before the
-  # M4 Pro dogfood (spec decision 6). Non-blocking on the first push only:
-  # remove continue-on-error (make it blocking) before the Step 2 PR is marked
-  # ready for review.
+  # M4 Pro dogfood (spec decision 6). Blocking since the Step 2 close-out.
   python-macos:
     name: Python execution tests (macOS)
     runs-on: macos-latest
@@ -464,7 +462,6 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 15
-    continue-on-error: true
     defaults:
       run:
         working-directory: ./services/python_agents
