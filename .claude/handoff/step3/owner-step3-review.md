@@ -21,3 +21,20 @@ The owner approves Wave 1 and Wave 2 with the three conditions below and gives t
 - Q8 (run-level wall cap): add a cheap total-time line to the report now; the real cap waits for the Step 4 CLI.
 - The one-retry limit is per trial. State what happens when the retry itself crashes with a different fixable error: keep the first failure (as the spec does), and say so in the report.
 - Live L2a gates the editor default flip (W5) at "at least 5 of 10"; one repo of noise. Run 2 repetitions before the flip (about 1.50 USD more) and restate the gate over 20.
+
+## Second round of answers (2026-10-24, binding; supersedes the Lead's D35 reading and the open items Q12 and Q13)
+
+1. **Step 3 is approved** (Wave 1 and Wave 2; Wave 3 held as before).
+2. **Quality check on changed output, in Step 3.** Not only "same output": a change that alters the output is judged by a quality check. The owner notes this is important, and that many good quality measures exist that the engine can draw on. Plan the owner approved:
+   - At the start of a run the engine finds the program's quality number (accuracy, an error rate, a match score), or suggests one from known measures for that kind of program; the user confirms it once.
+   - A change that alters output passes only if that number stays the same, improves, or drops no more than the user allows (e.g. "accuracy may drop at most 0.5 %").
+   - Outputs that differ only cosmetically (numbers in the tenth decimal place, the same items in a different order) can be treated as equal.
+   - Such changes always go to the review branch with a clear label (e.g. "changes results: accuracy 91.2 % -> 91.6 %, 30 % faster"); never applied silently.
+   - Fully automatic quality judgement with no number at all (e.g. "is this text better?") stays in Step 4.
+3. **One second chance per run** (EDITOR_FIX_RETRIES_PER_RUN = 1). Raising it to 2 is a later improvement, allowed only after attack tests and added safeguards show the error-message leak path is closed.
+4. **The output check is on by default.** With no quality number, results must stay identical. With a quality number, a change that keeps or improves it is welcome and goes to the review branch marked as a result improvement, not only a speed one.
+5. **Real speedups, not luck** (evidence: noise run 40082852536, 11 of 390 identical-code comparisons judged a win at the 2 % floor):
+   - old and new versions are measured alternately (old, new, old, new);
+   - every winner is re-checked a second time before it is kept;
+   - the bar is set per project from how much that project's timings wobble, never below 2 %;
+   - the report states each gain with its margin and confirmations (e.g. "18 % faster, give or take 2 %, confirmed twice") and a plain label: small (under 5 %), solid (5-20 %), large (over 20 %).
