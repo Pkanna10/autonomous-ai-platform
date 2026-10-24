@@ -1032,6 +1032,7 @@ SUITES = (
     "heal",
     "oss-ab",
     "evolve",
+    "evolve-more",
 )
 DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_sweep_live.py",
@@ -1049,6 +1050,7 @@ EXPERIMENT_MINUTES = {
     "noise": 90,  # noise.NOISE_JOB_MINUTES
     "oss-ab": 120,  # one library, 2 reps x 2 arms x 10 trials
     "evolve": 300,
+    "evolve-more": 300,
     "escalation": 90,
     "triage": 90,
     "papers": 60,
@@ -1058,6 +1060,7 @@ SWEEP_FABLE_ENV = {  # Fable 5.1 beside the one arm whose run phase 1 shares
     "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
     "LIVE_SWEEP_FABLE": "1",
 }
+EVOLVE_MORE_ENV = {"LIVE_EVOLVE_REPOS": "idna,mistune,sqlparse,pycparser"}
 OSS_AB_DISPATCH_REPO = "tabulate"  # oss-ab runs one library a dispatch
 SWEEP_RECORD_ENV = {  # one arm, recorded for hand labels and offline replay
     "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
@@ -1667,6 +1670,7 @@ def _suite_needs() -> dict[str, float]:
         "heal": heal.heal_need(),
         "oss-ab": oss_ab.oss_ab_need(oss_ab.oss_ab_plan(one_library)),
         "evolve": evolve.evolve_need(evolve.evolve_plan({})),
+        "evolve-more": evolve.evolve_need(evolve.evolve_plan(EVOLVE_MORE_ENV)),
         "sweep": sweep.sweep_need(sweep.sweep_plan({})),
         "sweep-fable": sweep.sweep_need(sweep.sweep_plan(SWEEP_FABLE_ENV)),
         "sweep-record": sweep.sweep_need(sweep.sweep_plan(SWEEP_RECORD_ENV)),
@@ -2038,3 +2042,17 @@ def test_the_oss_ab_need_is_one_library_of_the_default_plan() -> None:
     one = oss_ab.oss_ab_plan({oss_ab.REPOS_ENV: OSS_AB_DISPATCH_REPO})
     assert len(one.repos) == 1 and one.reps == 2 and one.n == 10
     assert _suite_needs()["oss-ab"] == oss_ab.oss_ab_need(one) <= CAP_CEILING_USD
+
+
+def test_evolve_more_exports_its_four_libraries_only_for_its_own_suite() -> None:
+    """``evolve-more`` is the evolution module on the four other libraries the
+    OSS A/B improved; every other suite leaves ``LIVE_EVOLVE_REPOS`` unset."""
+    script = _run_script()
+    ((name, value),) = EVOLVE_MORE_ENV.items()
+    guarded = re.search(
+        r'if \[ "\$\{INPUT_SUITE\}" = evolve-more \]; then\n'
+        rf"(?:  #.*\n)*  export {re.escape(name)}={re.escape(value)}\nfi\n",
+        script,
+    )
+    assert guarded is not None, script
+    assert script.count(name) == 1
