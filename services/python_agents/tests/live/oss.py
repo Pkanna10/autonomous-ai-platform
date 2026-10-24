@@ -43,7 +43,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -588,17 +588,22 @@ def start_oss_loop(
     *,
     policy: GitPolicy = PRODUCTION,
     environ: Mapping[str, str] | None = None,
+    candidates: Callable[[Project], Sequence[Hypothesis]] | None = None,
 ) -> Loop:
     """``repo`` prepared under ``root`` and ``build_context`` on the real
-    transport (captured), with ``isolation`` (``required``)."""
+    transport (captured), with ``isolation`` (``required``). ``candidates``
+    builds the hypotheses from the project (a discovery suite's own); without
+    it the manifest's are used."""
     user = prepare_repo(repo, root / "user", policy=policy, environ=environ)
     before = user.snapshot()
     project = repo.project(user.path)
-    candidates: Sequence[Hypothesis] = tuple(repo.candidates(project))
+    chosen: Sequence[Hypothesis] = tuple(
+        repo.candidates(project) if candidates is None else candidates(project)
+    )
     launches = LaunchLog()
     context = build_context(
         project,
-        candidates=candidates,
+        candidates=chosen,
         transport=run.transport(settings),
         transport_factory=_no_factory,
         network=isolation.mode,
@@ -611,7 +616,7 @@ def start_oss_loop(
         before,
         project,
         repo.workload(project),
-        tuple(candidates),
+        tuple(chosen),
         launches,
         context,
         run.cap_usd,

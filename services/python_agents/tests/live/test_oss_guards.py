@@ -58,7 +58,13 @@ from e2e.test_step2 import _check_repo_untouched
 from autonomous_ai_agents.clients.budget import Budget
 from autonomous_ai_agents.clients.transport import LLMTransport
 from autonomous_ai_agents.common.config import IsolationMode, Settings, settings
-from autonomous_ai_agents.common.models import ChangeClass, DeliveryKind
+from autonomous_ai_agents.common.models import (
+    ChangeClass,
+    DeliveryKind,
+    Hypothesis,
+    HypothesisSource,
+    Project,
+)
 from autonomous_ai_agents.execution.preflight import GitPreflight
 from autonomous_ai_agents.execution.protocols import EditResult, EditTask
 from autonomous_ai_agents.execution.sandbox import child_env
@@ -877,6 +883,40 @@ def test_start_oss_loop_is_the_production_wiring_on_the_captured_wire(
     assert run.capture.exchanges == [] and run.records == []
     with pytest.raises(AssertionError, match="captured transport"):
         _no_factory(settings)  # build_context was handed the captured one
+
+
+def test_start_oss_loop_takes_generated_candidates_instead_of_the_manifest(
+    upstream: Upstream, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Discovery suites hand the loop their own hypotheses; the manifest's
+    are used only when none are given."""
+    url, commit = upstream()
+    repo = _local_repo(url, commit)
+    root = Path(os.path.realpath(tmp_path))
+    monkeypatch.setattr(settings, "WORKTREE_ROOT", root / "wt-root")
+    restore_host_key(monkeypatch, "dry-run-key")
+    run = LiveRun("dry", OSS_RUN_CAP_USD, wire=httpx2.MockTransport(_no_wire))
+
+    def mine(project: Project) -> tuple[Hypothesis, ...]:
+        return (
+            Hypothesis(
+                project_id=project.id,
+                source=HypothesisSource.novel,
+                title="generated-idea",
+                rationale="from the generator",
+                change_class=ChangeClass.efficiency,
+                expected_gain=0.1,
+                provability=0.5,
+                risk=0.1,
+            ),
+        )
+
+    loop = start_oss_loop(
+        repo, run, root, Isolation("required", None), policy=LOCAL, candidates=mine
+    )
+    assert [h.title for h in loop.candidates] == ["generated-idea"]
+    assert all(h.project_id == loop.project.id for h in loop.candidates)
+    assert tuple(loop.context.candidates) == loop.candidates
 
 
 def _unauthorized(request: httpx2.Request) -> httpx2.Response:
