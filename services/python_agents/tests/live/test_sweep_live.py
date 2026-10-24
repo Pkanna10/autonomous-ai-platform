@@ -16,6 +16,11 @@ Hits are recorded (JSON lines to ``$LIVE_RESULTS_PATH``, the summary per
 arm in the job summary), never asserted. Asserted: phase 1's corpus guards,
 every arm and grader answered and billed its own model, the spend held the
 caps and matched the wire, and the user's repository is untouched.
+
+``$LIVE_SWEEP_RECORD=1`` (``discovery_sweep``: no request of its own, the
+same caps) also records each hypothesis, its grade, the reference parts and
+the raw generator reply in the JSON row, and notes one line per hypothesis
+and per reference part in the cost table (the CI log).
 """
 
 from __future__ import annotations
@@ -36,7 +41,6 @@ from .discovery import (
     PHASE_ONE_MODEL,
     check_calls,
     check_untouched,
-    generate_arm,
     model_settings,
     phase_one,
 )
@@ -49,13 +53,14 @@ from .discovery_sweep import (
     FABLE_ARM,
     FABLE_REPOS,
     FABLE_RUN_CAP_USD,
-    SWEEP_N,
     SWEEP_REPOS,
     SweepRecorder,
     cache_probe,
     grade_arm,
+    sweep_generate,
     sweep_plan,
     sweep_row,
+    sweep_traces,
 )
 
 pytestmark = pytest.mark.live
@@ -82,10 +87,11 @@ def test_blind_hypothesis_sweep(
     cfg = model_settings(settings, PHASE_ONE_MODEL)
     phase = phase_one(repo, run, live_root / "phase", live_isolation, cfg)
     budget = Budget(run.cap_usd, run.spent_usd)
-    arms = [
-        generate_arm(arm, run, budget, phase.facts, n=SWEEP_N)
+    made = [
+        sweep_generate(sweep.plan, arm, run, budget, phase.facts)
         for arm in sweep.plan.arms
     ]
+    arms = [m.result for m in made]
     grades = [grade_arm(run, budget, repo, patches, arm) for arm in arms]
     sweep.record(
         [
@@ -93,6 +99,7 @@ def test_blind_hypothesis_sweep(
             for a, g in zip(arms, grades, strict=True)
         ],
         run,
+        sweep_traces(sweep.plan, repo, made, grades, patches, phase.facts.hotspots),
     )
     graded = [g for g in grades if g is not None and g.sent]
     assert all(g.answered and g.models == (GRADER_MODEL,) for g in graded), grades
@@ -102,9 +109,14 @@ def test_blind_hypothesis_sweep(
         return
     fable = live(FABLE_RUN_CAP_USD)
     spend = Budget(fable.cap_usd)
-    result = generate_arm(FABLE_ARM, fable, spend, phase.facts, n=SWEEP_N)
+    gen = sweep_generate(sweep.plan, FABLE_ARM, fable, spend, phase.facts)
+    result = gen.result
     mark = grade_arm(fable, spend, repo, patches, result)
-    sweep.record([sweep_row(repo, result, mark, 0.0)], fable)
+    sweep.record(
+        [sweep_row(repo, result, mark, 0.0)],
+        fable,
+        sweep_traces(sweep.plan, repo, [gen], [mark], patches, phase.facts.hotspots),
+    )
     check_calls(fable, spend, [result], answered=int(mark is not None and mark.sent))
     check_untouched(phase)
 
