@@ -610,7 +610,11 @@ def test_write_summary_appends_to_the_step_summary_or_echoes(tmp_path: Path) -> 
     )
     text = target.read_text(encoding="utf-8")
     assert text.startswith("before\n## Benchmark corpus")
-    assert echoed == ["Benchmark corpus: 1 run(s) written to the job summary"]
+    # the log also carries the table: the job summary is not in the API
+    assert echoed == [
+        "Benchmark corpus: 1 run(s) written to the job summary",
+        *text.removeprefix("before\n").splitlines(),
+    ]
     echoed.clear()
     write_summary(
         "Benchmark corpus",

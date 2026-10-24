@@ -106,13 +106,13 @@ class ResultsSink:
 def write_markdown(
     title: str, text: str, environ: Mapping[str, str], echo: Callable[[str], None]
 ) -> None:
-    """Append ``text`` to ``$GITHUB_STEP_SUMMARY`` (absolute), else echo it."""
+    """Append ``text`` to ``$GITHUB_STEP_SUMMARY`` (absolute) and echo it
+    too: the API does not return the job summary, the log it does."""
     target = environ.get(SUMMARY_ENV, "")
     if target and os.path.isabs(target):
         with open(target, "a", encoding="utf-8") as summary:
             summary.write(text + "\n")
         echo(f"{title}: written to the job summary")
-        return
     for line in text.splitlines():
         echo(line)
 

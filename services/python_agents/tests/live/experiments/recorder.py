@@ -114,12 +114,12 @@ class ExperimentRecorder:
         return "\n".join(lines)
 
     def finish(self, echo: Callable[[str], None]) -> None:
-        """Append the table to ``$GITHUB_STEP_SUMMARY`` (absolute), else echo it."""
+        """Append the table to ``$GITHUB_STEP_SUMMARY`` (absolute) and echo it
+        too: the API does not return the job summary, the log it does."""
         text = self.render()
         if self._summary and os.path.isabs(self._summary):
             with open(self._summary, "a", encoding="utf-8") as summary:
                 summary.write(text + "\n")
             echo(f"{self.title}: {len(self.rows)} row(s) written to the job summary")
-            return
         for line in text.splitlines():
             echo(line)

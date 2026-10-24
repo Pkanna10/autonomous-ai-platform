@@ -664,7 +664,7 @@ def test_an_arxiv_failure_is_recorded_and_spends_nothing(
     with pytest.raises(AssertionError, match="returned 0 abstracts"):
         live_e2.run_e2(dry_start, fetcher, {}, recorder=recorder)
     (row,) = [r for r in recorder.rows if r.item == "failed"]
-    assert row.metrics["error"] == "HTTP 503"
+    assert row.metrics["error"] == "HTTP 503 after 4 attempts"
     assert api.requests == [] and dry_start.runs == []
 
 

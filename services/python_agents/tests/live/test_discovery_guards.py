@@ -1320,7 +1320,12 @@ def test_the_recorders_write_lines_notes_and_one_summary(
     text = summary.read_text()
     for title in ("(E3)", "(E5)", "(E8a)"):
         assert title in text
-    assert "cache hit\\: no" in text and len(echoed) == 3
+    assert "cache hit\\: no" in text
+    # each summary goes to the job summary and, line by line, to the log
+    assert sum(line.endswith("written to the job summary") for line in echoed) == 3
+    assert [line for line in echoed if not line.endswith("job summary")] == (
+        text.splitlines()
+    )
     assert len(run.notes) == 4
     echoed.clear()
     esc_rec.finish(echoed.append)  # no summary path: echoed line by line

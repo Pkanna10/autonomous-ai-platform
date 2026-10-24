@@ -59,14 +59,17 @@ def run_e2(
 ) -> TriageReport:
     """Fetch, then triage; nothing is spent unless enough abstracts came."""
     config = triage_config(environ)
+    error = ""
     try:
         entries = recent(fetcher, quotas(config.count))
     except (FetchError, FetchRefusedError) as exc:
-        recorder.record("E2", "fetch", "failed", {"error": str(exc)})
+        error = str(exc)
+        recorder.record("E2", "fetch", "failed", {"error": error})
         entries = ()
     recorder.record("E2", "fetch", "arxiv", {"abstracts": len(entries)})
     assert len(entries) >= max(1, config.sync_count), (
-        f"arXiv returned {len(entries)} abstracts; E2 needs at least {config.sync_count}"
+        f"arXiv returned {len(entries)} abstracts; E2 needs at least "
+        f"{config.sync_count} ({error[:200] or 'no fetch error'})"
     )
     labels = ExperimentRecorder("E2 labelled set", environ)
     run = start(E2_CAP_USD)

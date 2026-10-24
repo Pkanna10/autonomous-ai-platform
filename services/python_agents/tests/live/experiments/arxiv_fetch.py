@@ -56,9 +56,15 @@ QUERY_KEYS: Final = frozenset(
 )
 CATEGORY: Final = re.compile(r"[a-z]{2,8}\.[A-Z]{2}")
 MIN_SPACING_S: Final = 3.0
-TIMEOUT_S: Final = 30.0
+TIMEOUT_S: Final = 90.0  # a sorted category search can take a minute
 BODY_DEADLINE_S: Final = 300.0
 MAX_REDIRECTS: Final = 2
+RETRIES: Final = 3
+"""Extra attempts after a busy (429, 5xx) or silent answer; arXiv asks
+clients to back off and retry rather than fail."""
+RETRY_BACKOFF_S: Final = 10.0  # doubled after each attempt
+RETRY_AFTER_MAX_S: Final = 60.0
+_RETRY_STATUSES: Final = frozenset({429, 500, 502, 503, 504})
 _MIB: Final = 1024 * 1024
 METADATA_MAX_BYTES: Final = 5 * _MIB
 PDF_MAX_BYTES: Final = 20 * _MIB
@@ -87,9 +93,20 @@ class FetchRefusedError(Exception):
 class FetchError(Exception):
     """arXiv did not answer (status ``None``) or answered with an error."""
 
-    def __init__(self, status: int | None, text: str) -> None:
+    def __init__(
+        self, status: int | None, text: str, *, retry_after: float | None = None
+    ) -> None:
         super().__init__(text)
         self.status = status
+        self.retry_after = retry_after
+
+
+def _retry_after(value: str) -> float | None:
+    """``Retry-After`` in seconds (capped), or None for a date or nonsense."""
+    value = value.strip()
+    if not value.isdigit():
+        return None
+    return min(float(value), RETRY_AFTER_MAX_S)
 
 
 @dataclass(frozen=True)
@@ -237,7 +254,26 @@ class ArxivFetcher:
         self._last = self._clock()
 
     def get(self, url: str, kind: Kind) -> bytes:
-        """One allowlisted GET (redirects checked hop by hop), capped."""
+        """One allowlisted GET (redirects checked hop by hop), capped; a busy
+        or silent answer is retried up to ``RETRIES`` times with backoff
+        (``Retry-After`` when given, at most ``RETRY_AFTER_MAX_S``). A refusal
+        and any other error are final."""
+        attempt = 0
+        while True:
+            try:
+                return self._get_once(url, kind)
+            except FetchError as exc:
+                retryable = exc.status is None or exc.status in _RETRY_STATUSES
+                if not retryable:
+                    raise
+                if attempt == RETRIES:
+                    raise FetchError(
+                        exc.status, f"{exc} after {RETRIES + 1} attempts"
+                    ) from None
+                self._sleep(exc.retry_after or RETRY_BACKOFF_S * 2**attempt)
+                attempt += 1
+
+    def _get_once(self, url: str, kind: Kind) -> bytes:
         for _ in range(MAX_REDIRECTS + 1):
             if check_url(url) != kind:
                 raise FetchRefusedError(f"{url[:120]!r} is not a {kind} URL")
@@ -262,7 +298,11 @@ class ArxivFetcher:
 
     def _body(self, response: httpx2.Response, kind: Kind) -> bytes:
         if response.status_code != 200:
-            raise FetchError(response.status_code, f"HTTP {response.status_code}")
+            raise FetchError(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                retry_after=_retry_after(response.headers.get("retry-after", "")),
+            )
         media = response.headers.get("content-type", "").split(";")[0].strip()
         if media.casefold() not in _TYPES[kind]:
             raise FetchRefusedError(f"content type {media[:60]!r} for {kind}")
@@ -305,7 +345,7 @@ class ArxivFetcher:
 
 
 def recent(
-    fetcher: ArxivFetcher, quotas: Mapping[str, int], *, page_size: int = 100
+    fetcher: ArxivFetcher, quotas: Mapping[str, int], *, page_size: int = 50
 ) -> tuple[Entry, ...]:
     """Up to ``quotas[category]`` new papers per category, newest first,
     each paper once; a category stops at its first short or empty page."""

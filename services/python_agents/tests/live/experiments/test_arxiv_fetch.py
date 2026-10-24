@@ -558,3 +558,105 @@ def test_a_body_that_trickles_past_the_deadline_is_cut_off() -> None:
     with wire.fetcher() as fetcher, pytest.raises(FetchRefusedError, match="deadline"):
         fetcher.pdf("2501.01234")
     assert af.BODY_DEADLINE_S == 300.0 and len(sent) == 4
+
+
+# ---------------------------------------------------------------------------
+# Retries: a busy, throttled or silent arXiv is retried with backoff
+# ---------------------------------------------------------------------------
+
+
+def _sequence(*answers: httpx2.Response | Exception) -> Handler:
+    """Answer each request with the next item; the last one repeats."""
+    queue = list(answers)
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        answer = queue.pop(0) if len(queue) > 1 else queue[0]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    return handler
+
+
+def _ok() -> httpx2.Response:
+    return httpx2.Response(
+        200, content=feed(("2510.01234v1", "T", "S")), headers={"content-type": ATOM}
+    )
+
+
+@pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
+def test_a_busy_answer_is_retried_with_growing_backoff(status: int) -> None:
+    wire = Wire(_sequence(httpx2.Response(status), httpx2.Response(status), _ok()))
+    with wire.fetcher() as fetcher:
+        entries = fetcher.search("cat:cs.PF", start=0, max_results=1)
+    assert [e.arxiv_id for e in entries] == ["2510.01234v1"]
+    assert len(wire.requests) == 3
+    gaps = [b - a for a, b in zip(wire.sent_at, wire.sent_at[1:], strict=False)]
+    assert gaps[0] >= af.RETRY_BACKOFF_S
+    assert gaps[1] >= 2 * af.RETRY_BACKOFF_S
+
+
+def test_a_timeout_is_retried() -> None:
+    def slow(request: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ReadTimeout("slow", request=request)
+
+    wire = Wire(lambda r: _ok() if len(wire.requests) > 1 else slow(r))
+    with wire.fetcher() as fetcher:
+        assert fetcher.search("cat:cs.PF", start=0, max_results=1)
+    assert len(wire.requests) == 2
+
+
+def test_retry_after_is_honoured_and_capped() -> None:
+    wire = Wire(
+        _sequence(
+            httpx2.Response(429, headers={"retry-after": "20"}),
+            httpx2.Response(429, headers={"retry-after": "100000"}),
+            _ok(),
+        )
+    )
+    with wire.fetcher() as fetcher:
+        fetcher.search("cat:cs.PF", start=0, max_results=1)
+    gaps = [b - a for a, b in zip(wire.sent_at, wire.sent_at[1:], strict=False)]
+    assert gaps[0] >= 20
+    assert af.RETRY_AFTER_MAX_S <= gaps[1] <= af.RETRY_AFTER_MAX_S + MIN_SPACING_S
+
+
+def test_retries_stop_after_the_limit_with_the_last_status() -> None:
+    wire = Wire(lambda _: httpx2.Response(503, content=b"busy"))
+    with wire.fetcher() as fetcher, pytest.raises(FetchError) as caught:
+        fetcher.search("cat:cs.PF", start=0, max_results=1)
+    assert caught.value.status == 503
+    assert len(wire.requests) == 1 + af.RETRIES
+    assert "after 4 attempts" in str(caught.value)
+
+
+@pytest.mark.parametrize("status", [400, 403, 404])
+def test_a_client_error_is_not_retried(status: int) -> None:
+    wire = Wire(lambda _: httpx2.Response(status))
+    with wire.fetcher() as fetcher, pytest.raises(FetchError) as caught:
+        fetcher.search("cat:cs.PF", start=0, max_results=1)
+    assert caught.value.status == status and len(wire.requests) == 1
+
+
+def test_a_refusal_is_never_retried() -> None:
+    wire = Wire(lambda _: httpx2.Response(200, content=b"<x/>"))
+    with wire.fetcher() as fetcher, pytest.raises(FetchRefusedError):
+        fetcher.pdf("2501.01234")
+    assert len(wire.requests) == 1
+
+
+def test_the_read_timeout_suits_a_slow_sorted_search() -> None:
+    fetcher = ArxivFetcher()
+    try:
+        timeout = fetcher.client.timeout
+        assert timeout.read == af.TIMEOUT_S == 90.0 and timeout.connect == 10.0
+    finally:
+        fetcher.close()
+
+
+def test_recent_asks_for_pages_of_fifty() -> None:
+    wire = Wire(_atom(feed()))
+    with wire.fetcher() as fetcher:
+        recent(fetcher, {"cs.PF": 120})
+    sizes = [parse_qs(urlsplit(str(r.url)).query)["max_results"] for r in wire.requests]
+    assert sizes == [["50"]]

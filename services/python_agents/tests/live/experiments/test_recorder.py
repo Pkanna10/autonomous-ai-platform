@@ -85,6 +85,8 @@ def test_the_recorder_writes_json_lines_and_a_sanitised_summary(tmp_path: Path) 
     for bad in ("<b>", "[link](", "\n# heading"):
         assert bad not in text
     assert echoed and "job summary" in echoed[0]
+    # the table reaches the log too: the API does not return the job summary
+    assert echoed[1:] == text.splitlines()
 
 
 def test_the_recorder_redacts_keys_in_names_and_metrics(tmp_path: Path) -> None:
