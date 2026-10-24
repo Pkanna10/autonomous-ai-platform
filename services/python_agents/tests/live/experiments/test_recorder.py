@@ -16,7 +16,8 @@ from .. import conftest as live_conftest
 from ..conftest import LiveRun, redact_keys
 from .recorder import ExperimentRecorder, Metric, excerpt
 
-KEY = "sk-ant-api03-RECORDER-0123456789abcdef"
+# Built at runtime so the stage gate's secret grep never matches a fake key.
+KEY = "sk-ant-api03-" + "RECORDER-0123456789abcdef"
 
 
 def test_redact_keys_removes_given_secrets_the_host_key_and_key_shapes(

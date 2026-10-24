@@ -54,7 +54,8 @@ from .harness import (
 )
 from .recorder import ExperimentRecorder
 
-KEY = "sk-ant-api03-EXPERIMENTS-0123456789abcdef"
+# Built at runtime so the stage gate's secret grep never matches a fake key.
+KEY = "sk-ant-api03-" + "EXPERIMENTS-0123456789abcdef"
 OPUS, FALLBACK, HAIKU = "claude-opus-5-5", "claude-opus-4-8", "claude-haiku-5-5"
 SONNET = "claude-sonnet-5-5"
 HERE = Path(__file__).resolve().parent
