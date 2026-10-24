@@ -817,6 +817,22 @@ def _ab_rows(dry: Path) -> list[ab.AbRow]:
     return rows
 
 
+def test_a_retrieval_win_claims_the_playbook_not_the_papers(dry: Path) -> None:
+    """B's cards come from the playbook: a win there says nothing yet about
+    cards extracted from papers."""
+    produced = _generated(dry, ["a"])
+    rows = [
+        ab.ab_row(repo, 1, label, produced, _outcome(repo, label == "B"), ())
+        for repo in SLOWDOWNS[:3]
+        for label in ("A", "B")
+    ]
+    assert ab.discordant(rows)[1:] == (0, 3)
+    text = ab.render_ab(rows)
+    assert "c - b = 3: B beats A by at least 3" in text
+    assert "retrieved playbook cards help" in text
+    assert "paper-derived cards are untested" in text
+
+
 def test_ab_summary_counts_discordant_pairs_and_prints_the_rule(dry: Path) -> None:
     produced = _generated(dry, ["a"])
     unpaired = ab.ab_row(
@@ -839,6 +855,7 @@ def test_ab_summary_counts_discordant_pairs_and_prints_the_rule(dry: Path) -> No
     assert "b = 1, c = 3" in text and "p = 0.6250" in text
     assert "B must beat A by at least 3 discordant tasks" in text
     assert "c - b = 2: B does not beat A by 3" in text
+    assert "retrieved playbook cards did not help" in text
     assert "Control false-win rate: A 1/1" in text
     more = [*rows, *(r for r in _ab_rows(dry)[:6] if r.arm == "B")]
     assert ab.discordant(more)[1:] == (1, 3)  # a task counts once per (repo, rep)

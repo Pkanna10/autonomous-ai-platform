@@ -34,7 +34,10 @@ ran, excludes the task, and the count is printed): the discordant counts b
 (A won, B lost) and c (A lost, B won)
 and an exact two-sided McNemar p-value, then the research plan's rule: B
 must beat A by at least 3 discordant tasks (c - b >= 3), else the paper
-pipeline is deprioritised behind the playbook, lessons and evolution.
+pipeline is deprioritised behind the playbook, lessons and evolution. B's
+cards are the playbook's, so a win shows that retrieval helps, not that
+paper-derived cards do; a loss is the stronger signal, since paper cards
+would reach the generator the same way and are noisier.
 """
 
 from __future__ import annotations
@@ -400,10 +403,13 @@ def render_ab(rows: Sequence[AbRow]) -> str:
     }
     lead = c - b
     verdict = (
-        f"c - b = {lead}: B beats A by at least {MIN_DISCORDANT_LEAD}"
+        f"c - b = {lead}: B beats A by at least {MIN_DISCORDANT_LEAD}: "
+        "retrieved playbook cards help; paper-derived cards are untested"
         if lead >= MIN_DISCORDANT_LEAD
         else f"c - b = {lead}: B does not beat A by {MIN_DISCORDANT_LEAD}; "
-        "deprioritise the paper pipeline behind playbook, lessons and evolution"
+        "deprioritise the paper pipeline behind playbook, lessons and evolution "
+        "(retrieved playbook cards did not help, and paper cards would reach "
+        "the generator the same way)"
     )
     lines += [
         "",
