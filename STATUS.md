@@ -6,60 +6,51 @@
 
 ## Current Step
 
-**Build step:** 2 of 5 (Core loop), units U1-U21 committed; Verifier, stage gate
-and `/security-review` done, first live run pending **Branch:**
+**Build step:** 2 of 5 (Core loop), closing out: every unit, the Verifier, the
+stage gate, two `/security-review` passes and the Window 0 live experiments are
+done; PR #12 waits on the user to mark it ready **Branch:**
 `claude/adoring-clarke-xpo1py` (draft PR
 [#12](https://github.com/Pkanna10/autonomous-ai-platform/pull/12)) **Vision:** a
 self-improving optimization engine that uses research findings and novel ideas
 to provably improve existing code, or build something new and then improve it
 (see `CLAUDE.md`).
 
-### Resume here (handoff, 2026-10-22)
+### Resume here (handoff, 2026-10-24)
 
-A new session picks up Step 2 from this section. Everything it needs is in the
-repo; nothing lives only in the old session.
+A new session picks up from this section. Everything it needs is in the repo;
+nothing lives only in an old session. The Step 2 spec, Lead notes, research
+notes and Window 0 plan lived in `.claude/handoff/step2/` until the close-out;
+their decisions, accepted trade-offs and verified facts are in "Decisions",
+"Known gaps" and "Next" below, and the files themselves stay readable in git
+history at `5ce95a4` (`git show 5ce95a4:.claude/handoff/step2/spec.md`).
 
-- **Built:** every Step 2 unit, U1-U20, is committed (one commit each, each
-  reviewed for correctness and security on a different model and fixed
-  test-first; U15 was reviewed after it was committed). The list is in "Step 2
-  summary" below; the decisions behind them are in "Decisions".
-- **Done (2026-10-23):** the Verifier (two rounds plus a PHP2Shell-class attack
-  round, findings fixed), the stage gate (passed; minor upgrades in, majors left
-  to their own PRs), `/security-review` (two findings, both fixed: see
-  Decisions, 2026-10-23 security review) and U21, the Stage A live suite.
-- **Next, in order** (the user approves each before it starts):
-  1. the first **live-smoke** run (Stage A, user approval in the `live`
-     environment), its costs in the ledger below, and any fixes;
-  2. remove `continue-on-error` from the `python-macos` job so the macOS job is
-     blocking (green since `bb1981a`);
-  3. the Step 2 report, docs final (root `CLAUDE.md`: Dependabot instead of
-     Renovate in the stage gate, Node.js 22), the draft PR marked ready.
-- **Read first** while `.claude/handoff/step2/` still exists: `spec.md` (44
-  decisions, interfaces, behaviour, security, test plan) and `lead-notes.md`
-  (Lead decisions and per-unit handovers). Both are summarised under "Decisions"
-  below, so nothing is lost when the folder goes.
+- **Step 2 is built and verified**; see "Step 2 summary" and the close-out
+  report under it. Left: the user marks PR #12 ready and merges.
+- **Next: Step 3** (the build order in `CLAUDE.md`, with Steps 3b, 3c and 6
+  approved on 2026-10-24). It opens with a briefing; its first unit wires
+  `generate_hypotheses` and `match_techniques` into the hypotheses node.
 - **Environment:** the database tests need Postgres 16 with pgvector and a role
   that may create databases (`TEST_DATABASE_URL`; the Docker Compose database
   works). The profiler tests also run `python3.8` to `python3.12`
   (`uv python install 3.8 3.9 3.10 3.11 3.12` puts them in `~/.local/bin`); a
   missing one skips locally but runs in CI. Check both before a long run; do not
-  assume an environment setup script ran.
-- **How a unit was built:** the Workflow tool with
-  `scriptPath: .claude/handoff/step2/build-wave.workflow` (absolute path) and
-  `args: {maxOutputTokens: 800000, units: [{id, title, files, tests, security, notes}]}`,
-  one unit per run: Builder (tests first), correctness and security Reviewers
-  (Fable), fixer. The run halts when a review is missing. The Lead then
-  verifies, commits one unit per commit and pushes.
+  assume an environment setup script ran. In the Lead's container the
+  `ledgerclose` partial-fix guard fails (see Known gaps); CI is the reference.
+- **How a unit was built in Step 2:** the Workflow tool ran one unit per run
+  (Builder tests first, correctness and security Reviewers on a different model,
+  fixer; a missing review halts the run); the script is
+  `.claude/handoff/step2/build-wave.workflow` at `5ce95a4`. The Lead verifies,
+  commits one unit per commit and pushes.
 - **Lead verification before every commit** (from `services/python_agents`):
   `uv run ruff check . && uv run ruff format --check . && uv run mypy src tests`,
   `uv run bandit -q -r src -c pyproject.toml`,
   `TEST_DATABASE_URL=postgresql://dev:devpass@localhost:5432/postgres uv run pytest -q`
-  (100 % line and branch coverage today), and the suite on a Python 3.11 venv
-  with `-o addopts="-n auto --no-cov -m 'not live'"`.
-- **Never run live tests**: always pass `-m "not live"` when overriding
-  `addopts`. Cloud containers set `ANTHROPIC_BASE_URL` for their own use; the
-  engine follows only `ENGINE_API_BASE_URL`.
-- **Before merging Step 2**, delete `.claude/handoff/`.
+  (coverage gate 90 %; 100 % line and branch with Postgres), and the suite on a
+  Python 3.11 venv with `-o addopts="-n auto --no-cov -m 'not live'"`.
+- **Never run live tests from a container**: always pass `-m "not live"` when
+  overriding `addopts`. Live suites run only in CI's `live-smoke` job. Cloud
+  containers set `ANTHROPIC_BASE_URL` for their own use; the engine follows only
+  `ENGINE_API_BASE_URL`.
 
 ---
 
@@ -334,9 +325,9 @@ Placement (approved by the user, 2026-10-24; CLAUDE.md build order):
 
 ### 2026-10-22 (Step 2: the spec's 44 decisions)
 
-The approved Step 2 spec (`.claude/handoff/step2/spec.md`, deleted before merge)
-opened with 44 decisions. Each is summarised here with its reason, under its
-spec number; later changes are marked.
+The approved Step 2 spec (`.claude/handoff/step2/spec.md`, in git history at
+`5ce95a4`) opened with 44 decisions. Each is summarised here with its reason,
+under its spec number; later changes are marked.
 
 1. **Every external effect behind a Protocol with a deterministic fake.** The
    whole loop must be provable in CI with no key and no network; this design
@@ -490,6 +481,33 @@ spec number; later changes are marked.
     trial ignore inputs alike, so the comparison stays valid.
 44. **Path patterns and the matcher live in `common/paths.py`.** The editor
     handler and the capture rules must enforce one definition.
+
+#### Recorded at the Step 2 close-out (2026-10-24, from the spec and research notes)
+
+- **A run measures committed HEAD only.** Uncommitted changes are ignored (the
+  `dirty_tree_ignored` event) and gitignored files (`.venv`, data, checkpoints)
+  are absent from every worktree, so workload data must be passed explicitly.
+  Why: a worktree at a pinned commit is what makes baseline and trial
+  comparable; the Step 4 CLI must say so, and the Step 5 VLM dogfood must ship
+  its data path.
+- **Landlock confines writes, not reads** (decisions 2-3). Accepted because
+  trials have no network, so a read cannot leave the machine. Re-check trigger:
+  Step 3b's network-on fetch phase and Step 4's MCP connections must never run
+  repository code with the network on.
+- **A failed combine leaves the lessons unchanged** (decision 25): the
+  individual keep verdicts stand. Why: the trial did win alone. Consequence for
+  Step 3 ranking: a hypothesis whose gain did not reproduce when combined (OSS
+  `sortedcontainers`) is still boosted; the ranking should discount a keep that
+  failed its combine.
+- **How hotspots are ranked** (decision 23): self time plus the time of external
+  callees charged to the repository caller, top N. cProfile overhead inflates
+  call-heavy code, subprocess workers are not profiled, and callbacks can be
+  counted twice (capped at 1). The Step 3 matcher consumes these.
+- **Decision 31 is still open**: the Stage A run (39962457418) sent the
+  `role: system` probe and passed, but the probe records what the API did rather
+  than asserting it, and that record went only to the job summary, which the API
+  does not return. Until a run's log shows the outcome, operator notices stay
+  nonce-tagged text blocks after the tool results.
 
 ### 2026-10-22 (Step 2: Lead decisions and accepted trade-offs)
 
@@ -1014,7 +1032,13 @@ E to use what is left before the reset.
   cap.
 - Each CI live run writes its real cost to the job summary; the ledger below is
   updated after every run.
-- No live run without the user's approval in the `live` environment.
+- Live runs go through the `live` environment. The user asked for runs without
+  per-run approval (2026-10-24); dispatches have started within seconds since
+  03:53 UTC that day, so the environment no longer waits for a reviewer. The
+  per-test and per-suite caps are the guard.
+- Cost reconciliation (E9) is manual: the Usage and Cost Admin API is not
+  available on an individual account (403), so the ledger is checked against the
+  Console's Cost page.
 - Recommended backstop: a $200 monthly spend limit on the key's workspace in the
   Anthropic console.
 - Live tests never run from a Claude Code container; the engine ignores the
@@ -1046,6 +1070,35 @@ E to use what is left before the reset.
 
 ### 2026-10-23 (Window 0 experiments)
 
+- **Claude API facts Step 3 builds on** (verified 2026-10-23/24 against the live
+  API or the docs):
+  - Request shapes: citations with `output_config.format` is a 400; Haiku 5.5
+    rejects `fallbacks` (a triage route turns `ENGINE_FALLBACKS` off); batches
+    reject `fallbacks`; forced `tool_choice` is unsupported on Opus and Sonnet
+    5.5; structured-output schemas take no `minLength`/`maxLength` and need
+    `additionalProperties: false`; a schema field named `reasoning`, `thinking`
+    or `trace` can draw a billed refusal (use `justification_summary`);
+    `messages.parse` takes no `cache_control`; a non-streaming `max_tokens`
+    above about 21,333 needs an explicit timeout or the SDK raises `ValueError`;
+    a 529 maps to `OverloadedError`, not `InternalServerError`.
+  - Caching: changing effort, format, tools or citations invalidates the prefix,
+    so effort is fixed per conversation; a 1 h write costs 2x; the minimum
+    cacheable prefix is 512 tokens. E3's probe confirmed a second generator call
+    with the same prefix reads the cache (21,049 tokens).
+  - Pricing: Haiku 5.5 has a long-context tier above 100K input tokens
+    ($0.50/$2.50 per MTok, cache read $0.05), modelled as
+    `ModelPrice.long_context`; the estimate uses it whenever the prompt bound
+    can cross the threshold. Effort levels are validated per chain model
+    (`EFFORT_LEVELS`). The live docs win over the bundled claude-api skill when
+    they disagree.
+  - Refusals: `frontier_llm` refusals are billed with no output and benign ML
+    code can trigger them (Step 5 VLM); log `stop_details.category` per
+    hypothesis. The `claude-opus-4-8` fallback is valid until 2027-05-28, and
+    Opus 5.5 thinking blocks are dropped when it serves.
+  - Research sources: the Claude Code container's proxy refuses arXiv, Semantic
+    Scholar and OpenAlex; GitHub runners get HTTP 429 from arXiv. Limits: arXiv
+    one request per 3 s, Semantic Scholar one per second with a key, OpenAlex $1
+    a day free with a key.
 - **A raw-SDK harness for API features the engine does not use**
   (`tests/live/experiments/`), not new engine code: batches, citations, web
   tools and code execution are Step 3 candidates, so they are measured before
@@ -1085,9 +1138,11 @@ the judged-trials key question (closed by decision 35). Left:
 
 - [x] Verifier, stage gate, `/security-review`, U21 live suite (2026-10-23).
 - [x] First live-smoke run and its ledger row (2026-10-23).
-- [ ] The macOS job blocking, the Step 2 report, development-log row, decisions
-      still only in `.claude/handoff/` moved here and the folder deleted, PR
-      ready.
+- [x] The macOS job blocking (`59888bd`), the close-out stage gate and second
+      `/security-review` (2026-10-24, below), decisions still only in
+      `.claude/handoff/` moved here and the folder deleted.
+- [ ] The Step 2 report and development-log row (with the A/B result), then the
+      user marks PR #12 ready.
 
 Step 3 starts from the Window 0 findings (a fresh-context review of the branch
 on 2026-10-24 agreed):
@@ -1108,6 +1163,25 @@ on 2026-10-24 agreed):
   snapshot. Paper retrieval waits on the A/B (E5).
 - Playbook slugs map to `techniques.slug` (unique in 003), so no migration is
   needed for the id.
+- **Step 3 design stance** (research report, 2026-10-23): playbook first, with
+  papers feeding the same card format; candidates ranked by verdicts and
+  lessons, never by an LLM novelty score; extraction in two passes (cited prose,
+  then structuring) with a local `cited_text` check; papers arrive as
+  `tool_result` under an untrusted policy and a Haiku screen; hypothesis prompts
+  carry "inspirations" with near-duplicate rejection; the ledger records
+  thinking tokens, server tool use and refusal categories. Skipped, with
+  reasons: the memory tool (a reward-hacking channel), the MCP connector until
+  Step 4, tool search, Managed Agents (an x86 sandbox cannot measure an M4), the
+  Agent SDK (it loads the repository's `.claude/`), fast mode.
+- **Reading the A/B (E5)**: B must beat A by 3 discordant tasks. The playbook
+  has a plausible card for 12/12 benchmark slowdowns and 3/3 attack repos but
+  only 7/10 hard repos (`ledgerclose`, `deliveryround` partial, `sensormean`
+  none), so B cannot win where no card fits.
+- **Noise sets what can be proved**: host CV measured 9-28 % on the Lead's
+  container; the floor uses the sample stdev, so more runs never lower it; 0.5-1
+  s per run is advised; CPU pinning was rejected (no gain, Linux only);
+  `noisy_host` fires above 10 % CV or under a 0.5 s mean. The OSS result (4/10
+  below the noise) is this floor at work; GitHub-runner CV is still unmeasured.
 - **Sonnet 5.5 at medium is the default hypothesis generator** (E3: the best hit
   rate at the lowest cost, 0.014 USD a repo, and no false big-gain claim on a
   control), with Opus 5.5 low as the comparison arm; Opus at high is dropped
@@ -1119,6 +1193,31 @@ on 2026-10-24 agreed):
 
 ### Known gaps carried to later steps
 
+- **Answer memorisation is accepted for Step 2**: the editor never sees a
+  workload's output, and the test suite and human review stand guard; held-out
+  inputs arrive with Step 5.
+- **The child environment is an allowlist** and deny patterns beat explicit
+  extras, so a user's `*_URL` and `*_TOKEN` variables never reach a workload,
+  and on macOS the workload cannot use its own loopback. CUDA, MPS and Hugging
+  Face style variables need an explicit decision in Step 4/5.
+- **Peak RSS is the maximum over waited descendants**; orphans are not counted.
+  If sums are needed (Step 5 DataLoader workers): `PR_SET_CHILD_SUBREAPER`,
+  `/proc` sampling, or cgroup v2 `memory.peak`.
+- **Persistence for Step 4**: the CLI must look a project up by `root_path` and
+  reuse it (else `UniqueViolation`); `user_intent` holds the objectives or "make
+  it better" until `--goal`; `estimated_cost_usd` is a rounded DECIMAL(10,4)
+  copy; JSONB rejects inf/nan and floats of 1e16 or more come back as int.
+- **PostgresSaver** stores str subclasses raw, so the StrEnum `phase` comes back
+  as a plain str: re-type through the per-key adapters, add an E2E on
+  `PostgresSaver`, and take a release at least two weeks old (3.2.0 adds
+  psycopg-pool and orjson). The sqlite saver is untested.
+- **LFS and submodules (Step 5)**: `worktree add` leaves LFS pointers;
+  `unshare -rn git lfs checkout` restores them offline from the shared
+  `.git/lfs`, and LFS paths must be read-only to trials. Submodules are not
+  initialised.
+- **Dependency shadowing**: a trial adding `numpy.py` under a module root is an
+  accepted limitation covered by human review; it matters more once Step 3b adds
+  packages.
 - **`ledgerclose`'s two hot spots stress different hardware.** `pop(0)` on a
   60,000-item list is memory-bandwidth bound, the window maximum is compute
   bound, so their ratio varies about tenfold between machines (16:1 in the
@@ -1218,8 +1317,9 @@ on 2026-10-24 agreed):
   `build-wave.workflow` now stops the unit and names the missing lens
   (`80c1a8d`).
 - **Write the decisions down where they will survive.** The spec and the Lead
-  notes lived in `.claude/handoff/`, which is deleted before merge; the
-  Decisions section above now carries them.
+  notes lived in `.claude/handoff/`, deleted at the close-out; the Decisions,
+  Known gaps and Next sections carry them (24 items found only there were moved
+  on 2026-10-24).
 - **Reviews missed what sits between the units.** The first live run sent a
   placeholder key: the suite's autouse `reset_environment` replaces
   `ANTHROPIC_API_KEY` for every test, and every dry run and review swapped the
@@ -1262,6 +1362,10 @@ on 2026-10-24 agreed):
 
 ## Technical Debt
 
+- `[tool.hatchling.build.targets.wheel]` in `pyproject.toml` is a dead key
+  (hatch reads `[tool.hatch...]`); `playbook.json` ships anyway.
+- `test_the_blind_hypothesis_states_an_intent_never_a_fix[runtime]` is flaky
+  under `-x -n 2`.
 - `pyproject.toml` `[project.scripts]` and `[project.entry-points]` reference
   modules that do not exist yet (`cli`, `codegen`, `tools`, `integrations`).
   Implement or remove in Step 4.

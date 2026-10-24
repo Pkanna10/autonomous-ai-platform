@@ -317,7 +317,8 @@ Shape Up for bets, Kanban for flow, XP for engineering, DORA for measurement.
 
 1. **Upgrades.** Review `pnpm outdated -r` and `uv tree --outdated --depth 1`
    (the gate reports both). Upgrade inside the step unless a major bump needs
-   its own PR. Renovate opens weekly PRs for anything missed.
+   its own PR. Dependabot opens weekly PRs (Actions, npm, uv, Docker) for
+   anything missed.
 2. **Audits.** `pnpm audit --audit-level=moderate`, `pip-audit` and `bandit`
    must be clean. `security.yml` (OSV, Trivy, secret scanning) runs on every
    push and every Monday. Fix or justify each finding in the PR.
@@ -338,7 +339,7 @@ Shape Up for bets, Kanban for flow, XP for engineering, DORA for measurement.
 
 - **Python 3.11+** with `uv`, Hatchling, Ruff, mypy strict, pytest
 - **LangGraph 1.x** for the orchestrator loop; **anthropic 1.x** SDK
-- **Node.js 20+**, TypeScript 5.9, pnpm 10, Vitest, ESLint, Prettier
+- **Node.js 22.12+**, TypeScript 5.9, pnpm 10, Vitest, ESLint, Prettier
 - **Claude** via the Messages API: `claude-opus-5-5` (engine),
   `claude-haiku-5-5` (triage)
 - **PostgreSQL 16 + pgvector**, Redis 7, Qdrant (Docker Compose)

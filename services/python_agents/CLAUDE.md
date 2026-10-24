@@ -1,6 +1,6 @@
 # Python Agents Service - Claude Code Configuration
 
-**Service:** `python_agents` **Version:** 4.2.0 **Primary Language:** Python
+**Service:** `python_agents` **Version:** 4.3.0 **Primary Language:** Python
 3.11+ **Framework:** LangGraph 1.x **Testing:** pytest **Key Libraries:**
 langgraph, langchain, anthropic (1.x), pydantic 2, pydantic-settings, structlog,
 psycopg 3 (the `database` extra)
@@ -21,10 +21,14 @@ store (L7). Persistence talks to PostgreSQL through `infrastructure/schema/`.
 CPU-bound Python workloads. `orchestrator/factory.py` wires the real preflight,
 Claude understander, cProfile profiler, git baseline and trial runners (each
 trial edited by Claude in its own sandboxed worktree), combiner and branch
-publisher; the Postgres repository persists runs. Research (`research` node,
-candidates supplied through `NodeContext.candidates`) and `watch` are still
-stubs (Step 3), and there is no CLI (Step 4). `default_context()` and the
-`langgraph.json` entry point still use the Step 1 stubs.
+publisher; the Postgres repository persists runs. The hypothesis generator
+(`optimization/generate.py`), the playbook and its matcher
+(`research/playbook.py`) and the structured-output client
+(`clients/structured.py`) exist and are measured live (Window 0), but are not
+yet wired into the graph: the `research` node and `watch` are still stubs and
+candidates come through `NodeContext.candidates` (wiring is Step 3's first
+unit). There is no CLI (Step 4). `default_context()` and the `langgraph.json`
+entry point still use the Step 1 stubs.
 
 Models come from settings, never from string literals: `settings.ENGINE_MODEL`
 (default `claude-opus-5-5`) and `settings.TRIAGE_MODEL` (default
@@ -73,11 +77,11 @@ and an untrialled candidate remains. A gate decision always proceeds to
 | Package         | Layer | What it holds                                                                                                                                                                                                                                            |
 | --------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `common/`       | all   | `config.py` settings, `models.py` data model, `errors.py` every engine error, `paths.py` path rules and pattern constants, `refnames.py` branch rules                                                                                                    |
-| `clients/`      | L2/L5 | `transport.py` (the only SDK client, `call()` retry loop, `ScriptedTransport`), `cost.py` (worst-case estimate, response cost), `budget.py` (`Budget`)                                                                                                   |
+| `clients/`      | L2/L5 | `transport.py` (the only SDK client, `call()` retry loop, `ScriptedTransport`), `cost.py` (worst-case estimate, response cost), `budget.py` (`Budget`), `structured.py` (fenced, schema-validated replies)                                               |
 | `orchestrator/` | L2    | `state.py`, `nodes.py`, `main.py` (graph, `Orchestrator`), `factory.py` (`build_context`), `understand.py`, `combine_node.py`, `serde.py`, `events.py`                                                                                                   |
-| `research/`     | L4    | arXiv monitor and PDF parser (placeholders until Step 3)                                                                                                                                                                                                 |
+| `research/`     | L4    | `playbook.py` + `playbook.json` (technique cards, matcher); arXiv monitor and PDF parser (placeholders until Step 3)                                                                                                                                     |
 | `execution/`    | L5    | `runner.py` and `protocols.py` (seams), `fakes.py`, `git.py`, `sandbox.py`, `launcher.py`, `procrun.py`, `measure.py`, `phase.py`, `profiler.py` (+ `_profile_shim.py`), `editor.py`, `editor_tools.py`, `preflight.py`, `trial_runner.py`, `combine.py` |
-| `optimization/` | L6    | `anticheat.py` (protected paths, capture rules), `judges.py`, `ranking.py`                                                                                                                                                                               |
+| `optimization/` | L6    | `anticheat.py` (protected paths, capture rules), `judges.py`, `ranking.py`, `generate.py` (hypothesis generation)                                                                                                                                        |
 | `learning/`     | L7    | `lessons.py` (verdict -> lesson)                                                                                                                                                                                                                         |
 | `persistence/`  | DB    | `Repository` protocol, `InMemoryRepository`, `postgres.py` (`PostgresRepository`)                                                                                                                                                                        |
 
@@ -358,6 +362,11 @@ Step 2 (repository code now runs on the user's machine):
   directory fds with `O_NOFOLLOW` (a directory swapped for a link is
   `RepoTamperedError`, never followed). Preflight refuses submodules, LFS,
   partial clones, dubious ownership, custom merge drivers and `includeIf`.
+- **Git gotchas verified in research**: a plain `git status` or
+  `git stash create` rewrites the user's index (run with
+  `GIT_OPTIONAL_LOCKS=0`); a dirty snapshot works through a copied
+  `GIT_INDEX_FILE` plus `write-tree` and `commit-tree`;
+  `git apply --check --3way` exits 0 on conflicts, so it never detects them.
 - **Fingerprint.** `repo_fingerprint` (config, `config.worktree`, `hooks/`,
   `info/`, the effective config, the HEAD symref, and every ref under `refs/`
   except remote-tracking and prefetch refs, so `refs/replace`, `refs/stash` and
@@ -457,47 +466,51 @@ Step 2 (repository code now runs on the user's machine):
 Paths are relative to `src/autonomous_ai_agents/` unless they start with
 `tests/`.
 
-| File                                        | Status      | Purpose                                                           |
-| ------------------------------------------- | ----------- | ----------------------------------------------------------------- |
-| `common/config.py`                          | real        | pydantic-settings: models, pricing, isolation, limits, DB         |
-| `common/models.py`                          | real        | Data model, enums, serde allowlist                                |
-| `common/errors.py`                          | real        | Every engine error class                                          |
-| `common/paths.py`                           | real        | `normalize_path`, `matches_pattern`, deny lists, reserved modules |
-| `common/refnames.py`                        | real        | Git refname rules, `assert_safe_branch`                           |
-| `clients/transport.py`                      | real        | `AnthropicTransport`, `ScriptedTransport`, `call()` retry loop    |
-| `clients/cost.py`, `clients/budget.py`      | real        | Worst-case estimate, response cost, `Budget`                      |
-| `orchestrator/state.py`                     | real        | `EngineState`, `initial_state`, `REDUCER_KEYS`                    |
-| `orchestrator/nodes.py`                     | real        | One function per node, `after_verdicts`; `research`, `watch` stub |
-| `orchestrator/main.py`                      | real        | `create_graph`, `Orchestrator`; `default_context()` uses stubs    |
-| `orchestrator/factory.py`                   | real        | `build_context`: the real engine for one project                  |
-| `orchestrator/understand.py`                | real        | `ClaudeUnderstander`                                              |
-| `orchestrator/combine_node.py`              | real        | Re-judge the combination, fall back once                          |
-| `orchestrator/serde.py`                     | real        | Typed JSON round trip of `EngineState`                            |
-| `orchestrator/events.py`                    | real        | `make_event`, `emit`                                              |
-| `execution/runner.py`                       | stub        | `TrialRunner`, `BaselineRunner` protocols and their stubs         |
-| `execution/protocols.py`                    | real        | The Step 2 seams and carriers                                     |
-| `execution/fakes.py`                        | test double | Fakes for every seam, `ScriptedEditor`                            |
-| `execution/git.py`                          | real        | Hardened `GitWorkspace`, `repo_fingerprint`                       |
-| `execution/sandbox.py`, `launcher.py`       | real        | Sandbox policy and environment; the measuring launcher            |
-| `execution/procrun.py`                      | real        | `run_once`: one sandboxed, measured run                           |
-| `execution/measure.py`                      | real        | Warm-ups, timed runs, fingerprints, ABAB, the test suite          |
-| `execution/phase.py`                        | real        | Phase dirs and their shared cleanup                               |
-| `execution/profiler.py`, `_profile_shim.py` | real        | `CProfiler` and the shim it runs in the workload's interpreter    |
-| `execution/editor.py`, `editor_tools.py`    | real        | `ClaudeEditor` loop; `WorktreeEditor` tool handler                |
-| `execution/preflight.py`                    | real        | `GitPreflight`                                                    |
-| `execution/trial_runner.py`                 | real        | `GitTrialRunner`, `GitBaselineRunner`                             |
-| `execution/combine.py`                      | real        | `GitCombiner`, `GitBranchPublisher`                               |
-| `optimization/anticheat.py`                 | real        | Protected paths, capture rules, noise rule, fingerprints          |
-| `optimization/judges.py`                    | real        | Judge protocol, five judges, `derive_verdict`                     |
-| `optimization/ranking.py`                   | real        | Hypothesis score with lesson boost                                |
-| `learning/lessons.py`                       | real        | Verdict -> `Lesson`                                               |
-| `persistence/repository.py`                 | real        | `Repository` protocol, `InMemoryRepository`                       |
-| `persistence/postgres.py`                   | real        | `PostgresRepository` (003 + 004 schema)                           |
-| `research/arxiv_monitor.py`                 | placeholder | arXiv monitoring (Step 3)                                         |
-| `research/pdf_parser.py`                    | placeholder | PDF parsing (Step 3)                                              |
-| `tests/e2e/test_step2.py`                   | real        | E2E-A, E2E-B, E2E-C on the `dedupe_repo` fixture                  |
-| `tests/orchestrator/test_graph_e2e.py`      | real        | The Step 1 graph scenarios on stubs (11 tests)                    |
-| `tests/conftest.py`                         | real        | Shared fixtures                                                   |
+| File                                        | Status      | Purpose                                                                                  |
+| ------------------------------------------- | ----------- | ---------------------------------------------------------------------------------------- |
+| `common/config.py`                          | real        | pydantic-settings: models, pricing, isolation, limits, DB                                |
+| `common/models.py`                          | real        | Data model, enums, serde allowlist                                                       |
+| `common/errors.py`                          | real        | Every engine error class                                                                 |
+| `common/paths.py`                           | real        | `normalize_path`, `matches_pattern`, deny lists, reserved modules                        |
+| `common/refnames.py`                        | real        | Git refname rules, `assert_safe_branch`                                                  |
+| `clients/transport.py`                      | real        | `AnthropicTransport`, `ScriptedTransport`, `call()` retry loop                           |
+| `clients/cost.py`, `clients/budget.py`      | real        | Worst-case estimate, response cost, `Budget`                                             |
+| `orchestrator/state.py`                     | real        | `EngineState`, `initial_state`, `REDUCER_KEYS`                                           |
+| `orchestrator/nodes.py`                     | real        | One function per node, `after_verdicts`; `research`, `watch` stub                        |
+| `orchestrator/main.py`                      | real        | `create_graph`, `Orchestrator`; `default_context()` uses stubs                           |
+| `orchestrator/factory.py`                   | real        | `build_context`: the real engine for one project                                         |
+| `orchestrator/understand.py`                | real        | `ClaudeUnderstander`                                                                     |
+| `orchestrator/combine_node.py`              | real        | Re-judge the combination, fall back once                                                 |
+| `orchestrator/serde.py`                     | real        | Typed JSON round trip of `EngineState`                                                   |
+| `orchestrator/events.py`                    | real        | `make_event`, `emit`                                                                     |
+| `execution/runner.py`                       | stub        | `TrialRunner`, `BaselineRunner` protocols and their stubs                                |
+| `execution/protocols.py`                    | real        | The Step 2 seams and carriers                                                            |
+| `execution/fakes.py`                        | test double | Fakes for every seam, `ScriptedEditor`                                                   |
+| `execution/git.py`                          | real        | Hardened `GitWorkspace`, `repo_fingerprint`                                              |
+| `execution/sandbox.py`, `launcher.py`       | real        | Sandbox policy and environment; the measuring launcher                                   |
+| `execution/procrun.py`                      | real        | `run_once`: one sandboxed, measured run                                                  |
+| `execution/measure.py`                      | real        | Warm-ups, timed runs, fingerprints, ABAB, the test suite                                 |
+| `execution/phase.py`                        | real        | Phase dirs and their shared cleanup                                                      |
+| `execution/profiler.py`, `_profile_shim.py` | real        | `CProfiler` and the shim it runs in the workload's interpreter                           |
+| `execution/editor.py`, `editor_tools.py`    | real        | `ClaudeEditor` loop; `WorktreeEditor` tool handler                                       |
+| `execution/preflight.py`                    | real        | `GitPreflight`                                                                           |
+| `execution/trial_runner.py`                 | real        | `GitTrialRunner`, `GitBaselineRunner`                                                    |
+| `execution/combine.py`                      | real        | `GitCombiner`, `GitBranchPublisher`                                                      |
+| `optimization/anticheat.py`                 | real        | Protected paths, capture rules, noise rule, fingerprints                                 |
+| `optimization/judges.py`                    | real        | Judge protocol, five judges, `derive_verdict`                                            |
+| `optimization/ranking.py`                   | real        | Hypothesis score with lesson boost                                                       |
+| `optimization/generate.py`                  | real        | `generate_hypotheses` (not yet wired into the graph)                                     |
+| `clients/structured.py`                     | real        | Fenced untrusted input, strict JSON replies (`UnusableReplyError` in `common/errors.py`) |
+| `research/playbook.py`, `playbook.json`     | real        | Technique cards with preconditions, `match_techniques`                                   |
+| `learning/lessons.py`                       | real        | Verdict -> `Lesson`                                                                      |
+| `persistence/repository.py`                 | real        | `Repository` protocol, `InMemoryRepository`                                              |
+| `persistence/postgres.py`                   | real        | `PostgresRepository` (003 + 004 schema)                                                  |
+| `research/arxiv_monitor.py`                 | placeholder | arXiv monitoring (Step 3; not from GitHub runners, which arXiv throttles)                |
+| `tests/live/experiments/`                   | test only   | Window 0 raw-SDK harness: probes, triage, papers, web, prescreen                         |
+| `research/pdf_parser.py`                    | placeholder | PDF parsing (Step 3)                                                                     |
+| `tests/e2e/test_step2.py`                   | real        | E2E-A, E2E-B, E2E-C on the `dedupe_repo` fixture                                         |
+| `tests/orchestrator/test_graph_e2e.py`      | real        | The Step 1 graph scenarios on stubs (11 tests)                                           |
+| `tests/conftest.py`                         | real        | Shared fixtures                                                                          |
 
 "stub" means the module holds a deterministic stand-in kept for tests and the
 default context; "test double" means it exists for tests only.
@@ -518,10 +531,13 @@ uv run pip-audit && uv run bandit -q -r src -c pyproject.toml
 
 ---
 
-**Version:** 4.2.0 **Last Updated:** 2026-10-22
+**Version:** 4.3.0 **Last Updated:** 2026-10-24
 
 **Changelog:**
 
+- **4.3.0 (2026-10-24):** Step 2 close-out: the generator, playbook, matcher and
+  structured client in the current state, package map and key files (not yet
+  wired); the Window 0 experiment harness; git gotchas from the research notes
 - **4.2.0 (2026-10-22):** Step 2 core loop: current state, package map (clients,
   the execution modules, factory, understand, combine node, serde, Postgres),
   Step 2 state keys, capture rules, `NodeContext` seams and the factory, Step 2
