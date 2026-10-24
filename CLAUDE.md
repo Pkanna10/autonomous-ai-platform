@@ -173,8 +173,8 @@ ones in parallel, then integrate.
 
 ## Security Requirements
 
-Check before generating code. The project runs pip-audit, bandit, safety, OSV,
-Trivy and Docker Scout in CI; keep them green.
+Check before generating code. The project runs pip-audit, bandit, OSV and Trivy
+in CI (safety on demand through `uvx`); keep them green.
 
 **OWASP Top 10 for LLM applications:**
 

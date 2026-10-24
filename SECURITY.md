@@ -22,21 +22,21 @@ workflows, and security best practices.
 
 ## 🔒 Security Tools Overview
 
-| Tool            | Purpose                                   | Frequency                 | Cost | Automation |
-| --------------- | ----------------------------------------- | ------------------------- | ---- | ---------- |
-| **pnpm audit**  | Built-in npm vulnerability scanner        | Every commit (pre-commit) | FREE | Automated  |
-| **pip-audit**   | PyPA official Python vulnerability scan   | On-demand + CI            | FREE | Automated  |
-| **bandit**      | Python SAST security linter               | On-demand + CI            | FREE | Automated  |
-| **safety**      | Python dependency security checker        | On-demand (dev extra)     | FREE | Manual     |
-| **mypy**        | Python static type checker (strict mode)  | On-demand + CI            | FREE | Automated  |
-| **OSV-Scanner** | Google's vulnerability database           | Push + PR + weekly        | FREE | Reporting  |
-| **Trivy**       | Config scan (CI) and image scan (publish) | Every PR + master push    | FREE | Automated  |
-| **zizmor**      | GitHub Actions workflow static analysis   | Every push + PR           | FREE | Blocking   |
-| **Dependabot**  | Security alerts + weekly version updates  | Real-time / weekly        | FREE | Automated  |
-| **Renovate**    | Equivalent config, app not installed      | Dormant                   | FREE | Off        |
-| **Commitlint**  | Commit message validation                 | Every commit              | FREE | Automated  |
-| **ESLint**      | Code quality & security linting           | Every commit              | FREE | Automated  |
-| **Ruff**        | Ultra-fast Python linter (10-100x faster) | On-demand + CI            | FREE | Automated  |
+| Tool            | Purpose                                   | Frequency                          | Cost | Automation |
+| --------------- | ----------------------------------------- | ---------------------------------- | ---- | ---------- |
+| **pnpm audit**  | Built-in npm vulnerability scanner        | Every commit (pre-commit)          | FREE | Automated  |
+| **pip-audit**   | PyPA official Python vulnerability scan   | On-demand + CI                     | FREE | Automated  |
+| **bandit**      | Python SAST security linter               | On-demand + CI                     | FREE | Automated  |
+| **safety**      | Python dependency security checker        | On-demand (`uvx`, not in the lock) | FREE | Manual     |
+| **mypy**        | Python static type checker (strict mode)  | On-demand + CI                     | FREE | Automated  |
+| **OSV-Scanner** | Google's vulnerability database           | Push + PR + weekly                 | FREE | Reporting  |
+| **Trivy**       | Config scan (CI) and image scan (publish) | Every PR + master push             | FREE | Automated  |
+| **zizmor**      | GitHub Actions workflow static analysis   | Every push + PR                    | FREE | Blocking   |
+| **Dependabot**  | Security alerts + weekly version updates  | Real-time / weekly                 | FREE | Automated  |
+| **Renovate**    | Equivalent config, app not installed      | Dormant                            | FREE | Off        |
+| **Commitlint**  | Commit message validation                 | Every commit                       | FREE | Automated  |
+| **ESLint**      | Code quality & security linting           | Every commit                       | FREE | Automated  |
+| **Ruff**        | Ultra-fast Python linter (10-100x faster) | On-demand + CI                     | FREE | Automated  |
 
 ---
 
@@ -108,16 +108,17 @@ pip-audit --fix          # Auto-upgrade vulnerable packages
 bandit -r src/           # Scan for security issues in source code
 bandit -r src/ --format json -o bandit-report.json  # JSON report
 
-# Dependency security checker
-safety check             # Check dependencies against safety database
-safety check --json      # JSON output
+# Dependency security checker (on demand: not a project dependency, because it
+# pins filelock below 4.0 and that blocked filelock's CVE fixes)
+uvx safety check         # Check dependencies against safety database
+uvx safety check --json  # JSON output
 
 # Type safety (prevents runtime errors)
 mypy src/                # Type check with strict mode enabled
 mypy --install-types     # Install missing type stubs
 
 # All Python scans in one command
-pip-audit && bandit -r src/ && safety check && mypy src/
+pip-audit && bandit -r src/ && mypy src/
 ```
 
 ### Pre-Commit Security Checks

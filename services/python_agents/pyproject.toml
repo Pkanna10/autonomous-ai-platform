@@ -149,7 +149,8 @@ dev = [
     # Security scanning
     "pip-audit>=2.7.0",                 # PyPA official vulnerability scanner
     "bandit[toml]>=1.7.0",              # SAST security linter
-    "safety>=3.0.0",                    # Dependency security checker
+    # safety runs on demand (`uvx safety check`): it pins filelock below 4.0,
+    # which blocked filelock 4.2.1's fixes for three CVEs.
 
     # Profiling (Tier 4: Import optimization)
     "pyinstrument>=4.6.0",              # Statistical profiler
