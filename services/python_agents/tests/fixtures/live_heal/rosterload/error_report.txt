@@ -1,0 +1,15 @@
+The nightly roster sync failed. This week's export is the first one with names
+that are not plain ASCII (José Ruiz and Zoë Park joined). The HR system writes
+the export as UTF-8.
+
+Traceback (most recent call last):
+  File "/opt/teamtools/sync_rosters.py", line 12, in <module>
+    names = load_roster("exports/roster-2026-43.txt")
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/teamtools/rosterload/parse.py", line 17, in load_roster
+    return read_names(handle.read())
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/teamtools/rosterload/parse.py", line 6, in read_names
+    text = raw.decode("ascii")
+           ^^^^^^^^^^^^^^^^^^^
+UnicodeDecodeError: 'ascii' codec can't decode byte 0xc3 in position 11: ordinal not in range(128)

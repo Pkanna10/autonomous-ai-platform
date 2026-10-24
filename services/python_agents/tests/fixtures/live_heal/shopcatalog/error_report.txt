@@ -1,0 +1,4 @@
+price_or_default is documented to fall back to the default price for products
+we do not stock, and the stock list should simply skip SKUs it does not know.
+Instead, any SKU that is not in the catalogue (we tried Z-404) blows up with
+ValueError: unknown sku 'Z-404'.

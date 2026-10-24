@@ -1,0 +1,6 @@
+Exporting the address book to CSV crashes as soon as one contact has no email
+address (some of our contacts only have a phone number). The export just dies
+with AttributeError: 'NoneType' object has no attribute 'strip'.
+
+Contacts without an email address should simply be exported as they are, and
+never merged with another contact.

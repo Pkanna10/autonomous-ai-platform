@@ -1,0 +1,7 @@
+# The heal fixtures are data, linted like the rest of the service, except for
+# the bug one of them is seeded with on purpose (a mutable default argument).
+extend = "../../../pyproject.toml"
+cache-dir = "../../../.ruff_cache"
+
+[lint.per-file-ignores]
+"formcheck/formcheck/rules.py" = ["B006"]

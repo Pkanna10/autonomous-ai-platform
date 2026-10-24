@@ -1,0 +1,7 @@
+Drawing the axis of a chart whose values are larger than the chart height (for
+example values up to 500 on a 200 px chart) crashes with
+"ZeroDivisionError: float division by zero".
+
+Probably related: on charts with small values the bars come out too short. A
+value of 30 on a 200 px chart is the largest value, so its bar should fill the
+whole chart, but it is only 180 px tall.
