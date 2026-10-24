@@ -91,14 +91,8 @@ class ExperimentRecorder:
         )
         self.rows.append(row)
         if self._results:
-            line: dict[str, object] = {
-                "experiment": row.experiment,
-                "arm": row.arm,
-                "item": row.item,
-                "metrics": clean,
-            }
             with open(self._results, "a", encoding="utf-8") as results:
-                results.write(json.dumps(line, sort_keys=True) + "\n")
+                results.write(_json_line(row) + "\n")
 
     def render(self) -> str:
         lines = [
@@ -115,7 +109,9 @@ class ExperimentRecorder:
 
     def finish(self, echo: Callable[[str], None]) -> None:
         """Append the table to ``$GITHUB_STEP_SUMMARY`` (absolute) and echo it
-        too: the API does not return the job summary, the log it does."""
+        too: the API does not return the job summary, the log it does. Each
+        row then goes to the log in full, as a JSON line, because a table cell
+        is capped and the results artifact may be out of the reader's reach."""
         text = self.render()
         if self._summary and os.path.isabs(self._summary):
             with open(self._summary, "a", encoding="utf-8") as summary:
@@ -123,3 +119,15 @@ class ExperimentRecorder:
             echo(f"{self.title}: {len(self.rows)} row(s) written to the job summary")
         for line in text.splitlines():
             echo(line)
+        for row in self.rows:
+            echo("row " + _json_line(row))
+
+
+def _json_line(row: Row) -> str:
+    line: dict[str, object] = {
+        "experiment": row.experiment,
+        "arm": row.arm,
+        "item": row.item,
+        "metrics": row.metrics,
+    }
+    return json.dumps(line, sort_keys=True)

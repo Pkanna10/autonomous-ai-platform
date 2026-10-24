@@ -86,7 +86,13 @@ def test_the_recorder_writes_json_lines_and_a_sanitised_summary(tmp_path: Path) 
         assert bad not in text
     assert echoed and "job summary" in echoed[0]
     # the table reaches the log too: the API does not return the job summary
-    assert echoed[1:] == text.splitlines()
+    table = text.splitlines()
+    assert echoed[1 : 1 + len(table)] == table
+    # and each row in full, since a table cell is capped and the results
+    # artifact may not be reachable from where the log is read
+    rows = echoed[1 + len(table) :]
+    assert [json.loads(r.removeprefix("row ")) for r in rows] == [line]
+    assert all(r.startswith("row ") for r in rows)
 
 
 def test_the_recorder_redacts_keys_in_names_and_metrics(tmp_path: Path) -> None:
