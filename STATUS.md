@@ -24,8 +24,9 @@ their decisions, accepted trade-offs and verified facts are in "Decisions",
 "Known gaps" and "Next" below, and the files themselves stay readable in git
 history at `5ce95a4` (`git show 5ce95a4:.claude/handoff/step2/spec.md`).
 
-- **Step 2 is built and verified**; see "Step 2 summary" and the close-out
-  report under it. Left: the user marks PR #12 ready and merges.
+- **Step 2 is complete**: PR #12 merged into `master` on 2026-10-24 as `311212b`
+  (a merge commit); CI on `master` green (run 40072834645, all 11 jobs). See
+  "Step 2 summary" and the close-out report under it.
 - **Next: Step 3** (the build order in `CLAUDE.md`, with Steps 3b, 3c and 6
   approved on 2026-10-24). It opens with a briefing; its first unit wires
   `generate_hypotheses` and `match_techniques` into the hypotheses node.
