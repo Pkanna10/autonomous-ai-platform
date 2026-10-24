@@ -65,10 +65,13 @@ from . import discovery_escalation as esc
 from . import discovery_grader as grader
 from . import discovery_sweep as sweep
 from .conftest import (
+    _CELL_MAX,
     TESTS_DIR,
     LiveRun,
+    _cell,
     guardrails,
     make_repo,
+    redact_keys,
     restore_host_key,
     xdist_refusal,
 )
@@ -114,6 +117,10 @@ CAP_CEILING_USD = 150  # live-smoke's suite_cap_usd ceiling
 # ledger for); the Lead copies them into ci.yml.
 SWEEP_NEED = 76.15  # 22 slowdowns x 3.15 + 3 controls x 2.05 + probe 0.70
 SWEEP_FABLE_NEED = 92.95  # + 12 Fable runs x 1.40
+# The recorded sweep on one arm (LIVE_SWEEP_ARMS=sonnet-5-5-medium,
+# LIVE_SWEEP_RECORD=1, Fable off): 22 slowdowns x 0.65 + 3 controls x 0.40
+# + probe 0.70. Recording sends no request, so it is the plain one-arm need.
+SWEEP_RECORD_NEED = 16.2
 AB_NEED = 140.0  # 2 reps x 25 repos x (0.80 + 2 x 1.00)
 ESC_NEED = 42.9  # 15 first passes x 0.70 + 12 escalations x 2.70
 SLOWDOWNS = tuple(r for r in CORPUS if r.kind == "slowdown")
@@ -940,6 +947,333 @@ def test_cache_probe_reads_cache_read_input_tokens(dry: Path) -> None:
     assert (probe.first_cache_write, probe.second_cache_read) == (15000, 15000)
     assert probe.hit and probe.answered
     assert "cache hit\\: yes" in sweep.render_sweep([], [probe])
+
+
+# ---------------------------------------------------------------------------
+# The recorded sweep (LIVE_SWEEP_RECORD=1): hand-label and replay material
+# ---------------------------------------------------------------------------
+
+ONE_ARM = {sweep.ARMS_ENV: "sonnet-5-5-medium"}
+KEY = "sk-ant-api03-" + "k" * 24  # key-shaped: the redaction must catch it
+
+
+def _token_free(bodies: Sequence[Json]) -> list[str]:
+    """The bodies with each request's fresh boundary token blanked."""
+    return [
+        re.sub(r"\b[0-9a-f]{16}\b", "TOKEN", json.dumps(b, sort_keys=True))
+        for b in bodies
+    ]
+
+
+def _recorded(facts: RepoFacts, reply: str) -> sweep.Generated:
+    run = Wire(lambda _body: reply).run()
+    plan = replace(sweep.sweep_plan(ONE_ARM), record=True)
+    return sweep.sweep_generate(plan, plan.arms[0], run, Budget(5.0), facts)
+
+
+def test_the_sweep_record_flag_is_strict_and_off_by_default() -> None:
+    assert sweep.RECORD_ENV == "LIVE_SWEEP_RECORD"
+    assert sweep.sweep_plan({}).record is False
+    assert sweep.sweep_plan({sweep.RECORD_ENV: "0"}).record is False
+    assert sweep.sweep_plan({sweep.RECORD_ENV: "1"}).record is True
+    for value in ("yes", "true", " 1", "2"):
+        with pytest.raises(ValueError, match=sweep.RECORD_ENV):
+            sweep.sweep_plan({sweep.RECORD_ENV: value})
+
+
+def test_the_one_arm_recorded_sweep_needs_the_sum_of_its_caps() -> None:
+    plan = sweep.sweep_plan({**ONE_ARM, sweep.RECORD_ENV: "1"})
+    assert [a.label for a in plan.arms] == ["sonnet-5-5-medium"]
+    assert plan.record and not plan.fable
+    phase = _worst(UNDERSTAND_PROMPT_BOUND, settings.UNDERSTAND_MAX_TOKENS, (SONNET,))
+    arm = _worst(BLIND_PROMPT_BOUND, GENERATE_MAX_TOKENS, (SONNET,))
+    grading = _worst(
+        grader.GRADER_PROMPT_BOUND, grader.GRADER_MAX_TOKENS, (grader.GRADER_MODEL,)
+    )
+    for repo in sweep.SWEEP_REPOS:
+        _rounded(
+            phase + arm + (0 if repo.kind == "control" else grading), plan.cap_for(repo)
+        )
+    need = sum(plan.cap_for(r) for r in sweep.SWEEP_REPOS) + sweep.CACHE_PROBE_CAP_USD
+    assert sweep.sweep_need(plan) == pytest.approx(need)
+    assert sweep.sweep_need(plan) == pytest.approx(SWEEP_RECORD_NEED)
+    # recording sends no request of its own: the flag leaves every cap alone
+    plain = replace(plan, record=False)
+    assert sweep.sweep_need(plain) == sweep.sweep_need(plan)
+    assert all(plain.cap_for(r) == plan.cap_for(r) for r in sweep.SWEEP_REPOS)
+    assert SWEEP_RECORD_NEED <= CAP_CEILING_USD
+
+
+def test_recording_sends_exactly_the_requests_of_the_plain_sweep(
+    dry: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    facts = _facts(dry)
+    repo = SLOWDOWNS[0]
+    patches = grader.reference_patches(repo)
+    plain_plan = sweep.sweep_plan(ONE_ARM)
+    seen: list[tuple[sweep.Generated, Wire, LiveRun]] = []
+    for plan in (plain_plan, replace(plain_plan, record=True)):
+        wire = Wire(_answer)
+        run = wire.run()
+        budget = Budget(run.cap_usd)
+        made = sweep.sweep_generate(plan, plan.arms[0], run, budget, facts)
+        assert sweep.grade_arm(run, budget, repo, patches, made.result) is not None
+        check_calls(run, budget, [made.result], answered=1)
+        seen.append((made, wire, run))
+    (plain, plain_wire, plain_run), (recorded, wire, run) = seen
+    assert plain.replies == () and recorded.replies == (_ideas(),)
+    assert len(wire.bodies) == len(plain_wire.bodies) == 2  # generate, grade
+    assert _token_free(wire.bodies) == _token_free(plain_wire.bodies)
+    assert _token_free(wire.counted) == _token_free(plain_wire.counted)
+    assert len(run.records) == len(plain_run.records) == 2
+    assert run.spent_usd == pytest.approx(plain_run.spent_usd)
+    titles = [h.title for h in recorded.result.hypotheses]
+    assert titles == [h.title for h in plain.result.hypotheses]
+    # with the flag off the sweep calls generate_arm itself, unchanged
+    calls: list[tuple[object, ...]] = []
+
+    def fake(*args: object, **kwargs: object) -> ArmResult:
+        calls.append((*args, kwargs))
+        return plain.result
+
+    monkeypatch.setattr(sweep, "generate_arm", fake)
+    budget = Budget(1.0)
+    again = sweep.sweep_generate(plain_plan, plain_plan.arms[0], run, budget, facts)
+    assert again == sweep.Generated(plain.result)
+    assert calls == [
+        (plain_plan.arms[0], run, budget, facts, {"n": sweep.SWEEP_N, "base": settings})
+    ]
+
+
+def test_a_recorded_trace_keeps_each_idea_its_grade_and_the_redacted_reply(
+    dry: Path,
+) -> None:
+    facts = _facts(dry)
+    items = [
+        _item(f"idea {KEY}"),
+        {**_item("b"), "change_summary": "s" * 590},
+        _item("c"),
+    ]
+    reply = json.dumps({"hypotheses": items})
+    made = _recorded(facts, reply)
+    repo = SLOWDOWNS[0]  # tagfilter: one reference part
+    patches = grader.reference_patches(repo)
+    graded = grader.Grade(
+        hits=(True, False, None),
+        cost_usd=0.01,
+        answered=True,
+        error=None,
+        causes=(1, None, None),
+        parts=1,
+    )
+    trace = sweep.sweep_trace(repo, made, graded, patches, facts.hotspots)
+    first, second, third = trace.hypotheses
+    assert (first.index, first.grader, first.part) == (1, "hit", 1)
+    assert KEY not in first.title and "[redacted]" in first.title
+    assert first.hotspots == ("blockhash/core.py:digest",)
+    assert (first.change_class, first.expected_gain) == ("efficiency", 0.5)
+    assert first.rationale == redact_keys(made.result.hypotheses[0].rationale)
+    assert KEY not in first.rationale
+    assert len(second.rationale) == sweep.RATIONALE_CHARS
+    assert (second.index, second.grader, second.part) == (2, "miss", None)
+    assert (third.grader, third.part) == ("ungraded", None)
+    text = "".join(trace.reply_chunks)
+    assert text == redact_keys(reply) and KEY not in text
+    assert all(len(chunk) <= corpus.JSON_TEXT_MAX for chunk in trace.reply_chunks)
+    assert (trace.reply_chars, trace.reply_truncated, trace.replies) == (
+        len(text),
+        False,
+        1,
+    )
+    (part,) = trace.reference_parts
+    assert (part.part, part.name, part.files) == (
+        1,
+        "tagfilter.patch",
+        ("tagfilter/core.py",),
+    )
+    assert part.symbols == ("matches", "count_by_kind")
+    assert (part.removed, part.added) == (2, 3)
+    assert part.removed_lines == (
+        "def matches(tags: list[str], allowed: list[str]) -> bool:",
+        "if matches(tags, allowed):",
+    )
+    # the JSON line keeps the whole reply: no chunk is cut by the sink's cap
+    row = sweep.sweep_row(repo, made.result, graded, 0.03)
+    assert not set(row.record()) & set(trace.record())
+    data = json.loads(json_line({**row.record(), **trace.record()}))
+    assert "".join(data["reply_chunks"]) == text
+    assert data["hypotheses"][0]["grader"] == "hit"
+    # a failed grade leaves every idea ungraded; a control is never graded
+    failed = replace(graded, error="UnusableReplyError: x", hits=(None,) * 3)
+    trace = sweep.sweep_trace(repo, made, failed, patches, facts.hotspots)
+    assert {h.grader for h in trace.hypotheses} == {"ungraded"}
+    trace = sweep.sweep_trace(CONTROLS[0], made, None, (), facts.hotspots)
+    assert {h.grader for h in trace.hypotheses} == {"control"}
+    assert trace.reference_parts == ()
+    # a reply longer than the cap is cut, and says so
+    long = _recorded(facts, reply + " " * sweep.REPLY_CHARS)
+    trace = sweep.sweep_trace(repo, long, graded, patches, facts.hotspots)
+    assert trace.reply_truncated
+    assert trace.reply_chars == len(redact_keys(reply)) + sweep.REPLY_CHARS
+    assert len("".join(trace.reply_chunks)) == sweep.REPLY_CHARS
+    # an unusable reply is kept too (an eval replays it), with no idea
+    broken = _recorded(facts, f"not json {KEY}")
+    assert broken.result.error is not None and broken.result.hypotheses == ()
+    trace = sweep.sweep_trace(repo, broken, graded, patches, facts.hotspots)
+    assert trace.reply_chunks == ("not json [redacted]",) and trace.hypotheses == ()
+
+
+def test_reference_parts_summarise_every_part_the_grader_numbers() -> None:
+    for repo in (*SLOWDOWNS, *HARD_CORPUS):
+        patches = grader.reference_patches(repo)
+        parts = sweep.reference_parts(patches)
+        assert [p.part for p in parts] == list(range(1, len(patches) + 1))
+        for part, patch in zip(parts, patches, strict=True):
+            assert part.name == patch.name and part.files, repo.name
+            assert part.removed_lines or part.added_lines, repo.name
+            assert part.symbols, repo.name  # every fix sits in a def or class
+            assert all(f"b/{f}" in patch.text for f in part.files)
+    # an add-only fix: a changed decorator belongs to the def it decorates
+    (stairs,) = sweep.reference_parts(
+        grader.reference_patches(next(r for r in SLOWDOWNS if r.name == "stairways"))
+    )
+    assert (stairs.removed, stairs.added, stairs.symbols) == (0, 3, ("ways",))
+    assert stairs.added_lines == ("import functools", "@functools.cache")
+    assert sweep.reference_notes("stairways", [stairs]) == [
+        "SWEEP stairways ref 1/1: stairways/core.py ways -0+3 | "
+        "+ import functools / @functools.cache"
+    ]
+    multi = next(r for r in HARD_CORPUS if r.name == "deliveryround")
+    first, second, third = sweep.reference_parts(grader.reference_patches(multi))
+    assert first.symbols == ("main",) and first.files == ("deliveryround/main.py",)
+    assert "a, b = find_stop(stops, start), find_stop(stops, end)" in (
+        first.removed_lines
+    )
+    assert second.symbols == ("distance_so_far",)
+    assert third.symbols == ("pending_views",)
+    assert third.removed_lines == ("pending = sorted([*pending, offer])",)
+    added_only = grader.ReferencePatch(
+        "x.patch",
+        "--- a/x.py\n+++ b/x.py\n@@ -1,2 +1,3 @@ class Box:\n     def get(self):\n"
+        "+        cache = {}\n         return 1\n",
+    )
+    (part,) = sweep.reference_parts([added_only])
+    assert (part.removed, part.added, part.symbols) == (0, 1, ("get",))
+    assert part.removed_lines == () and part.added_lines == ("cache = {}",)
+
+
+def test_the_recorded_sweep_notes_each_idea_and_each_reference_part_once(
+    dry: Path,
+) -> None:
+    facts = _facts(dry)
+    title = "t" * 120  # the generator's longest title
+    made = _recorded(
+        facts, json.dumps({"hypotheses": [_item("first idea"), _item(title)]})
+    )
+    graded = grader.Grade(
+        hits=(True, False),
+        cost_usd=0.01,
+        answered=True,
+        error=None,
+        causes=(1, None),
+        parts=1,
+    )
+    results = dry / "results.jsonl"
+    plan = sweep.sweep_plan({**ONE_ARM, sweep.RECORD_ENV: "1"})
+    recorder = sweep.SweepRecorder(
+        plan, ResultsSink({corpus.RESULTS_ENV: str(results)})
+    )
+    run = LiveRun("dry", 1.0, wire=httpx2.MockTransport(_no_wire))
+    repo = SLOWDOWNS[0]
+    patches = grader.reference_patches(repo)
+    row = sweep.sweep_row(repo, made.result, graded, 0.03)
+    (trace,) = sweep.sweep_traces(plan, repo, [made], [graded], patches, facts.hotspots)
+    recorder.record([row], run, [trace])
+    recorder.record([row], run, [trace])  # a second run of the repo (Fable)
+    arm = "sonnet-5-5-medium"
+    ref, plain, one, two, again, *rest = run.notes
+    assert ref.startswith(
+        "SWEEP tagfilter ref 1/1: tagfilter/core.py matches, count_by_kind -2+3 | "
+        "def matches(tags: list[str], allowed: list[str]) -> bool: / "
+        "if matches(tags, allowed):"
+    )
+    assert plain.startswith(f"sweep tagfilter {arm}: 2 hypotheses")
+    assert one == f"SWEEP tagfilter {arm} #1: first idea | grader: hit parts 1"
+    # the longest corpus name, arm label and title still fit whole
+    assert two == f"SWEEP tagfilter {arm} #2: {title} | grader: miss parts none"
+    assert (again, rest) == (plain, [one, two])  # the reference is noted once
+    assert sweep.NOTE_CHARS == _CELL_MAX
+    for note in run.notes:  # the cost table never cuts a note
+        assert len(note) <= sweep.NOTE_CHARS
+        assert _cell(note).count("…") == note.count("…")
+    longest = max((*sweep.SWEEP_REPOS,), key=lambda r: len(r.name)).name
+    widest = max((*sweep.ARMS, sweep.FABLE_ARM), key=lambda a: len(a.label)).label
+    head = f"SWEEP {longest} {widest} #{sweep.SWEEP_N}: {title}"
+    assert len(head + " | grader: ungraded parts none") <= sweep.NOTE_CHARS
+    # a name past any corpus one: the title gives way, the verdict stays
+    cut = sweep.hypothesis_notes("r" * 60, arm, trace, None)[1]
+    assert len(cut) == sweep.NOTE_CHARS
+    assert cut.endswith("… | grader: miss parts none")
+    lines = [json.loads(x) for x in results.read_text().splitlines()]
+    assert [x["hypotheses"][1]["grader"] for x in lines] == ["miss", "miss"]
+    # a multi-part reference: one note per part; a control: one note, no parts
+    multi = next(r for r in HARD_CORPUS if r.name == "deliveryround")
+    notes = sweep.reference_notes(
+        multi.name, sweep.reference_parts(grader.reference_patches(multi))
+    )
+    assert [n.split(":", 1)[0] for n in notes] == [
+        f"SWEEP deliveryround ref {k}/3" for k in (1, 2, 3)
+    ]
+    assert sweep.reference_notes("blockhash", ()) == [
+        "SWEEP blockhash ref: none (a control, not graded)"
+    ]
+    control = sweep.sweep_trace(CONTROLS[0], made, None, (), facts.hotspots)
+    lines_of = sweep.hypothesis_notes("blockhash", arm, control, None)
+    assert lines_of[0].endswith("| grader: control parts none")
+    failed = replace(made, result=replace(made.result, hypotheses=(), error="E: x"))
+    empty = sweep.sweep_trace(repo, failed, None, patches, facts.hotspots)
+    assert sweep.hypothesis_notes("tagfilter", arm, empty, f"E: {KEY}") == [
+        f"SWEEP tagfilter {arm}: no hypotheses | E: [redacted]"
+    ]
+
+
+def test_the_plain_sweep_records_and_notes_exactly_as_before(dry: Path) -> None:
+    results = dry / "results.jsonl"
+    plan = sweep.sweep_plan(ONE_ARM)
+    recorder = sweep.SweepRecorder(
+        plan, ResultsSink({corpus.RESULTS_ENV: str(results)})
+    )
+    run = LiveRun("dry", 1.0, wire=httpx2.MockTransport(_no_wire))
+    produced = _generated(dry, ["a", "b"])
+    row = sweep.sweep_row(SLOWDOWNS[0], produced, None, 0.0)
+    made = sweep.Generated(produced)
+    patches = grader.reference_patches(SLOWDOWNS[0])
+    traces = sweep.sweep_traces(
+        plan, SLOWDOWNS[0], [made], [None], patches, _facts(dry).hotspots
+    )
+    assert traces == []
+    recorder.record([row], run, traces)
+    recorder.record([row], run)
+    assert (
+        run.notes == [f"sweep {row.repo} {row.arm}: 2 hypotheses, hit@1 -, hit@5 -"] * 2
+    )
+    assert [json.loads(x) for x in results.read_text().splitlines()] == [
+        json.loads(json_line(row.record()))
+    ] * 2
+    with pytest.raises(ValueError, match="trace"):
+        recorder.record(
+            [row, row], run, [sweep.sweep_trace(SLOWDOWNS[0], made, None, patches, ())]
+        )
+
+
+def test_the_live_sweep_generates_and_traces_through_the_record_switch() -> None:
+    called = {
+        node.func.id
+        for node in ast.walk(_tree("test_sweep_live"))
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert {"sweep_generate", "sweep_traces"} <= called
+    assert "generate_arm" not in called  # every arm goes through the switch
 
 
 def _hostile_outcome() -> CorpusOutcome:

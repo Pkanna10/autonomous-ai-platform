@@ -1024,18 +1024,31 @@ SUITES = (
     "prescreen",
     "sweep",
     "sweep-fable",
+    "sweep-record",
     "ab",
     "escalation",
+    "acquire",
+    "noise",
+    "heal",
+    "oss-ab",
+    "evolve",
 )
 DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_sweep_live.py",
     "tests/live/test_ab_live.py",
     "tests/live/test_escalation_live.py",
+    "tests/live/test_noise_live.py",  # Window 0's last suites
+    "tests/live/test_oss_ab_live.py",
+    "tests/live/test_evolution_live.py",
 )
 EXPERIMENT_MINUTES = {
     "sweep": 240,
     "sweep-fable": 180,
+    "sweep-record": 150,
     "ab": 360,
+    "noise": 90,  # noise.NOISE_JOB_MINUTES
+    "oss-ab": 120,  # one library, 2 reps x 2 arms x 10 trials
+    "evolve": 300,
     "escalation": 90,
     "triage": 90,
     "papers": 60,
@@ -1044,6 +1057,11 @@ EXPERIMENT_MINUTES = {
 SWEEP_FABLE_ENV = {  # Fable 5.1 beside the one arm whose run phase 1 shares
     "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
     "LIVE_SWEEP_FABLE": "1",
+}
+OSS_AB_DISPATCH_REPO = "tabulate"  # oss-ab runs one library a dispatch
+SWEEP_RECORD_ENV = {  # one arm, recorded for hand labels and offline replay
+    "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
+    "LIVE_SWEEP_RECORD": "1",
 }
 EXPERIMENTS = "tests/live/experiments"  # the Window 0 experiments: never in Stage A
 CAP_CEILING_USD = 150  # the most suite_cap_usd may be
@@ -1638,9 +1656,21 @@ def _suite_needs() -> dict[str, float]:
     sweep = importlib.import_module(f"{__package__}.discovery_sweep")
     ab = importlib.import_module(f"{__package__}.discovery_ab")
     escalation = importlib.import_module(f"{__package__}.discovery_escalation")
+    acquire = importlib.import_module(f"{__package__}.experiments.test_acquire_live")
+    noise = importlib.import_module(f"{__package__}.noise")
+    heal = importlib.import_module(f"{__package__}.experiments.test_heal_live")
+    oss_ab = importlib.import_module(f"{__package__}.discovery_oss")
+    evolve = importlib.import_module(f"{__package__}.evolution")
+    one_library = {oss_ab.REPOS_ENV: OSS_AB_DISPATCH_REPO}
     return {
+        "noise": noise.noise_need(noise.noise_plan({})),
+        "heal": heal.heal_need(),
+        "oss-ab": oss_ab.oss_ab_need(oss_ab.oss_ab_plan(one_library)),
+        "evolve": evolve.evolve_need(evolve.evolve_plan({})),
         "sweep": sweep.sweep_need(sweep.sweep_plan({})),
         "sweep-fable": sweep.sweep_need(sweep.sweep_plan(SWEEP_FABLE_ENV)),
+        "sweep-record": sweep.sweep_need(sweep.sweep_plan(SWEEP_RECORD_ENV)),
+        "acquire": acquire.POLICY_CAP_USD + acquire.SUGGEST_CAP_USD,
         "ab": ab.ab_need(ab.ab_plan({})),
         "escalation": escalation.escalation_need(),
         "web": web.E6_NEED_USD,
@@ -1712,7 +1742,12 @@ def test_the_job_timeout_fits_every_suite() -> None:
 
 
 def _dispatch(
-    tmp_path: Path, suite: str, model: str, cap: str, mode: str = "aimed"
+    tmp_path: Path,
+    suite: str,
+    model: str,
+    cap: str,
+    mode: str = "aimed",
+    oss_repo: str = "",
 ) -> tuple[int, str, str]:
     """The run step under bash -e with a fake ``uv`` that records its call."""
     bin_dir = tmp_path / "bin"
@@ -1722,7 +1757,8 @@ def _dispatch(
     fake.write_text(
         "#!/bin/sh\n"
         f'printf "%s\\n" "$*" "$ENGINE_MODEL" "${{ENGINE_FALLBACKS:-on}}" '
-        f'"$LIVE_SUITE_CAP_USD" "$LIVE_CORPUS_MODE" > "{called}"\n',
+        f'"$LIVE_SUITE_CAP_USD" "$LIVE_CORPUS_MODE" > "{called}"\n'
+        f'printf "%s" "${{LIVE_OSS_AB_REPOS-unset}}" > "{tmp_path / "repos.txt"}"\n',
         encoding="utf-8",
     )
     fake.chmod(0o755)
@@ -1736,6 +1772,7 @@ def _dispatch(
         "INPUT_ENGINE_MODEL": model,
         "INPUT_SUITE_CAP_USD": cap,
         "INPUT_MODE": mode,
+        "INPUT_OSS_REPO": oss_repo,
         "LIVE_RESULTS_PATH": str(tmp_path / "results.jsonl"),
     }
     proc = subprocess.run(
@@ -1943,16 +1980,61 @@ def test_a_whole_loop_on_the_production_wiring_offline(
     assert "401 authentication_error" in outcome.guard
 
 
-def test_the_fable_sweep_exports_its_arms_only_for_its_own_suite() -> None:
-    """``sweep-fable`` is the sweep module with Fable on and one other arm;
-    every other suite leaves both variables unset."""
+@pytest.mark.parametrize(
+    ("suite", "env"),
+    [("sweep-fable", SWEEP_FABLE_ENV), ("sweep-record", SWEEP_RECORD_ENV)],
+)
+def test_a_sweep_variant_exports_its_variables_only_for_its_own_suite(
+    suite: str, env: dict[str, str]
+) -> None:
+    """``sweep-fable`` (Fable on beside one arm) and ``sweep-record`` (one
+    arm, recorded) are the sweep module with their own variables; every
+    other suite leaves them unset."""
     script = _run_script()
-    exports = " ".join(f"{k}={v}" for k, v in SWEEP_FABLE_ENV.items())
+    exports = " ".join(f"{k}={v}" for k, v in env.items())
     guarded = re.search(
-        r'if \[ "\$\{INPUT_SUITE\}" = sweep-fable \]; then\n'
+        rf'if \[ "\$\{{INPUT_SUITE\}}" = {re.escape(suite)} \]; then\n'
         rf"(?:  #.*\n)*  export {re.escape(exports)}\nfi\n",
         script,
     )
     assert guarded is not None, script
-    assert script.count("LIVE_SWEEP_") == len(SWEEP_FABLE_ENV)
-    assert "sweep-fable) paths=(tests/live/test_sweep_live.py);" in script
+    assert script.count("LIVE_SWEEP_") == len(SWEEP_FABLE_ENV) + len(SWEEP_RECORD_ENV)
+    assert f"{suite}) paths=(tests/live/test_sweep_live.py);" in script
+
+
+def test_oss_ab_runs_exactly_the_one_library_its_input_names(tmp_path: Path) -> None:
+    """``oss-ab`` needs ``oss_repo`` and exports it as ``LIVE_OSS_AB_REPOS``;
+    a missing or malformed name, or the input on another suite, refuses."""
+    code, output, calls = _dispatch(
+        tmp_path, "oss-ab", "claude-sonnet-5-5", "103", oss_repo="tabulate"
+    )
+    assert code == 0 and calls, output
+    assert (tmp_path / "repos.txt").read_text(encoding="utf-8") == "tabulate"
+    for bad in ("", "tabulate,tomli", "Tabulate", "a;id", "../x", "a" * 41):
+        (tmp_path / "called.txt").unlink(missing_ok=True)
+        code, output, calls = _dispatch(
+            tmp_path, "oss-ab", "claude-sonnet-5-5", "103", oss_repo=bad
+        )
+        assert (code, calls) == (1, ""), (bad, output)
+        assert "::error::oss-ab needs oss_repo" in output
+    (tmp_path / "called.txt").unlink(missing_ok=True)
+    code, output, calls = _dispatch(
+        tmp_path, "heal", "claude-sonnet-5-5", "6", oss_repo="tabulate"
+    )
+    assert (code, calls) == (1, "") and "only for the oss-ab suite" in output
+    (tmp_path / "repos.txt").unlink()
+    code, output, calls = _dispatch(tmp_path, "heal", "claude-sonnet-5-5", "6")
+    assert code == 0 and calls, output
+    assert (tmp_path / "repos.txt").read_text(encoding="utf-8") == "unset"
+
+
+def test_the_oss_ab_need_is_one_library_of_the_default_plan() -> None:
+    """The table's oss-ab need is one library at the default reps, arms, N and
+    trial cap; the whole plan is over the ceiling, so it is dispatched per
+    library."""
+    oss_ab = importlib.import_module(f"{__package__}.discovery_oss")
+    with pytest.raises(ValueError, match="past the 150 USD ceiling"):
+        oss_ab.oss_ab_plan({})  # the whole plan is refused
+    one = oss_ab.oss_ab_plan({oss_ab.REPOS_ENV: OSS_AB_DISPATCH_REPO})
+    assert len(one.repos) == 1 and one.reps == 2 and one.n == 10
+    assert _suite_needs()["oss-ab"] == oss_ab.oss_ab_need(one) <= CAP_CEILING_USD

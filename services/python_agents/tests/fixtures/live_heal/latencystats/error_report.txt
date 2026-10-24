@@ -1,0 +1,15 @@
+Asking the report for p100 (the slowest request) crashes it. p50, p90 and p99
+come out fine on the same log; only 100 fails.
+
+$ python -c "from latencystats.report import render; print(render(open('api-latency.log').read(), extra=(99, 100)))"
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "/home/dana/work/latencystats/latencystats/report.py", line 20, in render
+    lines.append(f"p{pct:g}: {percentile(samples, pct):.1f} ms")
+                              ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dana/work/latencystats/latencystats/stats.py", line 12, in percentile
+    return ordered[index]
+           ~~~~~~~^^^^^^^
+IndexError: list index out of range
+
+p100 should just be the largest sample.
