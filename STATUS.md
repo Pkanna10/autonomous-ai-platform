@@ -658,6 +658,35 @@ Where a decision changed the spec, the code follows the decision.
   needs nothing new: `sandbox-exec`'s `(deny network*)` already covers AF_UNIX
   `connect`, so the filter and the AF_UNIX self-check are Linux-only.
 
+### 2026-10-24 (Step 2 close-out: stage gate and second security review)
+
+- **Stage gate on `ea891e6`** (`pnpm stage-gate`, the Lead's container): every
+  check passes (pnpm audit, pip-audit, bandit, secret grep, typecheck, lint,
+  format, Vitest, uv sync, interpreters 3.8-3.12, the sandbox, ruff, mypy)
+  except one test,
+  `test_a_fix_that_leaves_one_hot_spot_falls_short[ledgerclose]`, the
+  machine-dependent fixture recorded under Known gaps (green on CI). Postgres is
+  absent from the container, so coverage there is 99.33 %; CI runs the
+  repository tests. 4,838 passed, 79 skipped. Upgrades: only majors are outdated
+  (commitlint 21, TypeScript 7, ESLint 10, Vitest 5, Vite 8 and others), left to
+  their own Dependabot PRs.
+- **The first gate run on this head found two real failures, both fixed**:
+  pip-audit reported three CVEs in `filelock` 3.32.7, held below the 4.2.1 fix
+  by `safety`, which left the dev extra (`f0ca54a`; it runs through `uvx`); the
+  secret grep matched three fake keys in redaction tests, now built at runtime
+  (`5ce95a4`). Why fix rather than justify: the grep must stay strict, and a
+  dev-only tool is no reason to carry a vulnerable lock.
+- **Second `/security-review`** (diff `79b29ca..ea891e6`: the live CI job, the
+  structured client, generator, playbook, cost and config changes, the networked
+  experiment harness and the OSS cloner), by a fresh reviewer on a different
+  model: no finding clears the bar. Verified: workflow inputs reach the shell
+  only through validated env vars; the key lives in one step; the harness pins
+  every request to the engine host with redirects off; arXiv URLs are
+  allowlisted by shape; OSS clones are pinned to a commit with hooks, submodules
+  and LFS refused and run only in the sandbox. One note below the bar:
+  `CorpusOutcome.to_json` and `discovery_io.json_line` cap strings but do not
+  call `redact_keys`; no field they hold comes from the wire today.
+
 ### 2026-10-23 (Step 2, stage gate and security review)
 
 - **Stage gate passed** with two warnings (outdated packages). Minor upgrades
