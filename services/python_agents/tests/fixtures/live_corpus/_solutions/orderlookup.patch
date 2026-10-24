@@ -1,0 +1,18 @@
+diff --git a/orderlookup/core.py b/orderlookup/core.py
+index e7572ed..27e0dfc 100644
+--- a/orderlookup/core.py
++++ b/orderlookup/core.py
+@@ -14,7 +14,12 @@ def find_customer(people: list[Customer], customer_id: int) -> Customer:
+ def totals_by_region(orders: list[Order], people: list[Customer]) -> dict[str, int]:
+     """Order cents summed per region of the buyer, regions sorted."""
+     totals: dict[str, int] = {}
++    index: dict[int, Customer] = {}
++    for person in people:
++        index.setdefault(person.customer_id, person)
+     for order in orders:
+-        region = find_customer(people, order.customer_id).region
++        if order.customer_id not in index:
++            raise KeyError(order.customer_id)
++        region = index[order.customer_id].region
+         totals[region] = totals.get(region, 0) + order.cents
+     return dict(sorted(totals.items()))

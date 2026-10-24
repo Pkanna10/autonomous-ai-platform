@@ -1,0 +1,18 @@
+diff --git a/topicmerge/merge.py b/topicmerge/merge.py
+index b48135a..6df1ecd 100644
+--- a/topicmerge/merge.py
++++ b/topicmerge/merge.py
+@@ -5,12 +5,7 @@ from topicmerge.data import Post
+ 
+ def unique_topics(posts: list[Post]) -> list[str]:
+     """Every topic once, in the order it was first used."""
+-    seen: list[str] = []
+-    for post in posts:
+-        for topic in post.topics:
+-            if topic not in seen:
+-                seen.append(topic)
+-    return seen
++    return list({topic for post in posts for topic in post.topics})
+ 
+ 
+ def topic_counts(posts: list[Post]) -> dict[str, int]:

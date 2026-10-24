@@ -29,19 +29,25 @@ fi
 echo ""
 
 # 2. OSV-Scanner (Google's vulnerability database)
+# The scanner is a Go binary; install a release from
+# https://github.com/google/osv-scanner/releases (or `brew install osv-scanner`).
+# Never `npx -y <name>`: there is no @google/osv-scanner on npm, and a
+# fetch-and-run of an unknown package name is exactly how typosquats execute.
 echo "🔍 Step 2/4: Running OSV-Scanner..."
-if npx -y @google/osv-scanner -r . 2>/dev/null; then
-  echo -e "${GREEN}✓ OSV-Scanner found no vulnerabilities${NC}"
-else
-  EXIT_CODE=$?
-  if [ $EXIT_CODE -eq 1 ]; then
-    echo -e "${RED}✗ OSV-Scanner found vulnerabilities${NC}"
-    FAILURES=$((FAILURES + 1))
-  elif [ $EXIT_CODE -eq 127 ]; then
-    echo -e "${YELLOW}⚠ OSV-Scanner failed to run (requires Node.js/npm)${NC}"
+if command -v osv-scanner &> /dev/null; then
+  if osv-scanner scan source --recursive .; then
+    echo -e "${GREEN}✓ OSV-Scanner found no vulnerabilities${NC}"
   else
-    echo -e "${YELLOW}⚠ OSV-Scanner completed with warnings${NC}"
+    EXIT_CODE=$?
+    if [ $EXIT_CODE -eq 1 ]; then
+      echo -e "${RED}✗ OSV-Scanner found vulnerabilities${NC}"
+      FAILURES=$((FAILURES + 1))
+    else
+      echo -e "${YELLOW}⚠ OSV-Scanner completed with warnings (exit ${EXIT_CODE})${NC}"
+    fi
   fi
+else
+  echo -e "${YELLOW}⚠ osv-scanner not installed (see the comment above); CI runs it on every push${NC}"
 fi
 echo ""
 

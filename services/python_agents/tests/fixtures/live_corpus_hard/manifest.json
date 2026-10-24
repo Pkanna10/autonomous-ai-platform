@@ -1,0 +1,194 @@
+{
+  "repos": [
+    {
+      "name": "shipmerge",
+      "package": "shipmerge",
+      "category": "multi",
+      "goal": "runtime",
+      "fix_gain": 0.75,
+      "hypotheses": [
+        {
+          "title": "membership-and-rank-maps",
+          "aimed": true,
+          "rationale": "distinct_skus in shipmerge/catalog.py tests every SKU against the list of SKUs seen so far, and arrival_ranks in shipmerge/orders.py finds each order's rank by searching the sorted list of order numbers. Track the SKUs seen with constant-time membership, keeping first-appearance order, and map each order number to its rank once; the output must not change."
+        },
+        {
+          "title": "plain-tuple-lines",
+          "aimed": false,
+          "rationale": "Shipment in shipmerge/data.py is a NamedTuple; generate the shipment lines as plain tuples so field access avoids the named-tuple descriptors."
+        }
+      ]
+    },
+    {
+      "name": "ledgerclose",
+      "package": "ledgerclose",
+      "category": "multi",
+      "goal": "runtime",
+      "fix_gain": 0.67,
+      "hypotheses": [
+        {
+          "title": "front-queue-and-window-max",
+          "aimed": true,
+          "rationale": "settle in ledgerclose/settle.py takes each transfer off the front of a list, which shifts every remaining element, and window_peaks in ledgerclose/peaks.py recomputes the maximum of the whole window at every position. Walk the transfers in order without removing from the front, and maintain the window maximum incrementally with a structure of candidate positions whose values decrease; the output must not change."
+        },
+        {
+          "title": "money-by-slicing",
+          "aimed": false,
+          "rationale": "money in ledgerclose/report.py formats every amount with divmod and an f-string; format the cents as a zero-padded string and insert the decimal point by slicing instead."
+        }
+      ]
+    },
+    {
+      "name": "deliveryround",
+      "package": "deliveryround",
+      "category": "multi",
+      "goal": "runtime",
+      "fix_gain": 0.8,
+      "hypotheses": [
+        {
+          "title": "stop-map-running-total-insort",
+          "aimed": true,
+          "rationale": "main in deliveryround/main.py finds both stops of every leg by scanning the whole stop list, distance_so_far in deliveryround/distance.py re-adds every earlier leg for each leg, and pending_views in deliveryround/pickups.py re-sorts the whole pending list after each offer. Look stops up by code in a mapping built once, carry a running total, and insert each offer at its sorted position; the output must not change."
+        },
+        {
+          "title": "inline-leg-length",
+          "aimed": false,
+          "rationale": "leg_length in deliveryround/distance.py is a separate function call per leg; compute the Manhattan distance inline in the loop of main."
+        }
+      ]
+    },
+    {
+      "name": "invoicekit",
+      "package": "invoicekit",
+      "category": "large",
+      "goal": "runtime",
+      "fix_gain": 0.3,
+      "hypotheses": [
+        {
+          "title": "parse-tax-schedule-once",
+          "aimed": true,
+          "rationale": "tax_rate in invoicekit/rules.py parses the whole tax schedule text again on every call, once per priced line, and then scans every row. Parse the schedule once and keep its rows grouped by region and family; every rate and the report must not change."
+        },
+        {
+          "title": "builtin-digit-grouping",
+          "aimed": false,
+          "rationale": "group_digits in invoicekit/money.py builds the digit groups of an amount in a loop; use the built-in thousands separator of format instead."
+        }
+      ]
+    },
+    {
+      "name": "fleetsim",
+      "package": "fleetsim",
+      "category": "large",
+      "goal": "runtime",
+      "fix_gain": 0.3,
+      "hypotheses": [
+        {
+          "title": "sort-past-waits-once",
+          "aimed": true,
+          "rationale": "per_job in fleetsim/service.py measures every delivered job against the past waits through share_at_most in fleetsim/metrics.py, which sorts the whole list of past waits again for each job. Sort the past waits once and look each job's standing up in that sorted list; the standings and the report must not change."
+        },
+        {
+          "title": "slotted-vehicles",
+          "aimed": false,
+          "rationale": "Vehicle in fleetsim/fleet.py is a regular dataclass; declare it with slots so the dispatcher's attribute reads are cheaper."
+        }
+      ]
+    },
+    {
+      "name": "textindex",
+      "package": "textindex",
+      "category": "large",
+      "goal": "runtime",
+      "fix_gain": 0.3,
+      "hypotheses": [
+        {
+          "title": "stopword-membership-once",
+          "aimed": true,
+          "rationale": "is_stopword in textindex/stopwords.py splits the whole stop-word text into a list and scans it for every token the index sees. Build a constant-time membership structure from the stop words once; which words are indexed must not change."
+        },
+        {
+          "title": "suffix-rules-by-letter",
+          "aimed": false,
+          "rationale": "stem in textindex/stemmer.py tries every suffix rule in turn; group the rules by their last letter so fewer endswith calls run per word."
+        }
+      ]
+    },
+    {
+      "name": "topicmerge",
+      "package": "topicmerge",
+      "category": "trap",
+      "goal": "runtime",
+      "fix_gain": 0.3,
+      "hypotheses": [
+        {
+          "title": "seen-topics-membership",
+          "aimed": true,
+          "rationale": "unique_topics in topicmerge/merge.py tests every topic of every post against the list of topics seen so far. Track the topics seen with constant-time membership instead of scanning the list; the output must not change."
+        },
+        {
+          "title": "count-topics-directly",
+          "aimed": false,
+          "rationale": "topic_counts in topicmerge/merge.py builds a set for every post; count the topics of each post directly from its tuple."
+        }
+      ]
+    },
+    {
+      "name": "sensormean",
+      "package": "sensormean",
+      "category": "trap",
+      "goal": "runtime",
+      "fix_gain": 0.3,
+      "hypotheses": [
+        {
+          "title": "incremental-running-mean",
+          "aimed": true,
+          "rationale": "running_means in sensormean/stats.py recomputes the mean of every prefix of the readings from scratch. Carry the sum from one reading to the next instead of re-adding the whole prefix; every printed digit must stay the same."
+        },
+        {
+          "title": "single-format-call",
+          "aimed": false,
+          "rationale": "main in sensormean/main.py formats each printed line from several repr conversions; build every line with one format call and print the lines in one write."
+        }
+      ]
+    },
+    {
+      "name": "eventagg",
+      "package": "eventagg",
+      "category": "memory",
+      "goal": "peak_memory",
+      "fix_gain": 0.3,
+      "hypotheses": [
+        {
+          "title": "events-one-at-a-time",
+          "aimed": true,
+          "rationale": "main in eventagg/main.py holds every event of the day as a dict in one list before aggregating it. Produce the events one at a time and aggregate them as they are produced, so the whole day is never held in memory at once; the output must not change."
+        },
+        {
+          "title": "intern-event-labels",
+          "aimed": false,
+          "rationale": "Every event dict in eventagg/events.py stores its kind and region as strings; intern them with sys.intern so equal labels share one object."
+        }
+      ]
+    },
+    {
+      "name": "distmatrix",
+      "package": "distmatrix",
+      "category": "memory",
+      "goal": "peak_memory",
+      "fix_gain": 0.3,
+      "hypotheses": [
+        {
+          "title": "summarise-row-by-row",
+          "aimed": true,
+          "rationale": "main in distmatrix/main.py builds the full matrix of pairwise distances before summarising it. Compute and summarise one row of distances at a time so the whole matrix is never held in memory; the output must not change."
+        },
+        {
+          "title": "tuple-points",
+          "aimed": false,
+          "rationale": "generate in distmatrix/points.py builds the points as a list of tuples; build them as two parallel lists of coordinates instead."
+        }
+      ]
+    }
+  ]
+}

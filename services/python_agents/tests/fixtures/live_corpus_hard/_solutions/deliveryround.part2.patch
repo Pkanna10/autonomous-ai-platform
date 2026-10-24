@@ -1,0 +1,15 @@
+diff --git a/deliveryround/distance.py b/deliveryround/distance.py
+index 3914d74..808a426 100644
+--- a/deliveryround/distance.py
++++ b/deliveryround/distance.py
+@@ -10,4 +10,9 @@ def leg_length(a: Stop, b: Stop) -> int:
+ 
+ def distance_so_far(lengths: list[int]) -> list[int]:
+     """For each leg, the distance driven before it starts."""
+-    return [sum(lengths[:i]) for i in range(len(lengths))]
++    out: list[int] = []
++    total = 0
++    for length in lengths:
++        out.append(total)
++        total += length
++    return out

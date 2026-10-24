@@ -1,15 +1,56 @@
 # Project Status - Autonomous AI Platform
 
-**Last Updated:** 2026-10-21
+**Last Updated:** 2026-10-23
 
 ---
 
 ## Current Step
 
-**Build step:** 1 of 5 (Engine design) **Branch:**
-`claude/adoring-clarke-xpo1py` **Vision:** a self-improving optimization engine
-that uses research findings and novel ideas to provably improve existing code,
-or build something new and then improve it (see `CLAUDE.md`).
+**Build step:** 2 of 5 (Core loop), closing out: every unit, the Verifier, the
+stage gate, two `/security-review` passes and the Window 0 live experiments are
+done; PR #12 waits on the user to mark it ready **Branch:**
+`claude/adoring-clarke-xpo1py` (draft PR
+[#12](https://github.com/Pkanna10/autonomous-ai-platform/pull/12)) **Vision:** a
+self-improving optimization engine that uses research findings and novel ideas
+to provably improve existing code, or build something new and then improve it
+(see `CLAUDE.md`).
+
+### Resume here (handoff, 2026-10-24)
+
+A new session picks up from this section. Everything it needs is in the repo;
+nothing lives only in an old session. The Step 2 spec, Lead notes, research
+notes and Window 0 plan lived in `.claude/handoff/step2/` until the close-out;
+their decisions, accepted trade-offs and verified facts are in "Decisions",
+"Known gaps" and "Next" below, and the files themselves stay readable in git
+history at `5ce95a4` (`git show 5ce95a4:.claude/handoff/step2/spec.md`).
+
+- **Step 2 is built and verified**; see "Step 2 summary" and the close-out
+  report under it. Left: the user marks PR #12 ready and merges.
+- **Next: Step 3** (the build order in `CLAUDE.md`, with Steps 3b, 3c and 6
+  approved on 2026-10-24). It opens with a briefing; its first unit wires
+  `generate_hypotheses` and `match_techniques` into the hypotheses node.
+- **Environment:** the database tests need Postgres 16 with pgvector and a role
+  that may create databases (`TEST_DATABASE_URL`; the Docker Compose database
+  works). The profiler tests also run `python3.8` to `python3.12`
+  (`uv python install 3.8 3.9 3.10 3.11 3.12` puts them in `~/.local/bin`); a
+  missing one skips locally but runs in CI. Check both before a long run; do not
+  assume an environment setup script ran. In the Lead's container the
+  `ledgerclose` partial-fix guard fails (see Known gaps); CI is the reference.
+- **How a unit was built in Step 2:** the Workflow tool ran one unit per run
+  (Builder tests first, correctness and security Reviewers on a different model,
+  fixer; a missing review halts the run); the script is
+  `.claude/handoff/step2/build-wave.workflow` at `5ce95a4`. The Lead verifies,
+  commits one unit per commit and pushes.
+- **Lead verification before every commit** (from `services/python_agents`):
+  `uv run ruff check . && uv run ruff format --check . && uv run mypy src tests`,
+  `uv run bandit -q -r src -c pyproject.toml`,
+  `TEST_DATABASE_URL=postgresql://dev:devpass@localhost:5432/postgres uv run pytest -q`
+  (coverage gate 90 %; 100 % line and branch with Postgres), and the suite on a
+  Python 3.11 venv with `-o addopts="-n auto --no-cov -m 'not live'"`.
+- **Never run live tests from a container**: always pass `-m "not live"` when
+  overriding `addopts`. Live suites run only in CI's `live-smoke` job. Cloud
+  containers set `ANTHROPIC_BASE_URL` for their own use; the engine follows only
+  `ENGINE_API_BASE_URL`.
 
 ---
 
@@ -22,7 +63,7 @@ the step.
 | ---- | --------------------------------------------------------------- | ---------- | ---------- | ---------- | ----------------------------------------------------------------- | ------ |
 | 0    | Repair & upgrade (DB init, deps, models, docs, stage gate)      | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed |
 | 1    | Engine design (typed state, data model, judges, migration 003)  | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed |
-| 2    | Core loop end to end on CPU Python workloads + E2E fixture test |            |            |            |                                                                   |        |
+| 2    | Core loop end to end on CPU Python workloads + E2E fixture test | 2026-10-21 | 2026-10-21 | 2026-10-24 | [#12](https://github.com/Pkanna10/autonomous-ai-platform/pull/12) | passed |
 | 3    | Research: arXiv, PDF, playbook, claim extraction, matcher       |            |            |            |                                                                   |        |
 | 4    | Interfaces + runner: live CLI, hardware detection, `--goal`     |            |            |            |                                                                   |        |
 | 5    | Dogfood: fixtures, OSS repos, real ML training pipeline         |            |            |            |                                                                   |        |
@@ -120,27 +161,730 @@ verification pass on the wave-2 fixes) plus a `/security-review`; every blocking
 finding was fixed test-first in a follow-up commit before the gate. Stage gate:
 passed (2 warnings: outdated majors left to Renovate).
 
+### Step 2 summary (2026-10-21 to 2026-10-24, closed out)
+
+The loop now runs for real on CPU-bound Python workloads: preflight at connect,
+one Claude understand request, a measured baseline and a cProfile profile, one
+Claude-edited trial per hypothesis in its own sandboxed git worktree, the frozen
+judges, a combine re-tested ABAB against a fresh baseline with the test suite on
+its tip, and delivery to a local `engine/run-<id>` branch. Research, the CLI and
+hardware detection do not exist yet; hypotheses are supplied by the caller
+(`NodeContext.candidates`).
+
+```
+connect     GitPreflight: git >= 2.38, no submodules / LFS / partial clone,
+            merge drivers, commands resolved and protected, sandbox probe
+understand  ClaudeUnderstander: git objects at the base commit, one request
+baseline    GitBaselineRunner: F0 -> worktree -> warm-ups + N runs + tests -> F1
+profile     CProfiler: untimed cProfile run in its own worktree, hotspots
+trials      GitTrialRunner (serial, running cost total): F0* -> worktree ->
+            ClaudeEditor + WorktreeEditor -> capture + anti-cheat -> commit ->
+            own trial ref -> measure + tests -> F1* (* own ref excluded)
+combine     GitCombiner: merge-tree greedy -> ABAB + tests on the tip -> judged
+            with derive_verdict; else best single change; else report only
+deliver     GitBranchPublisher: create-only update-ref, never pushed
+every run   unshare -rn -p -f --ipc --mount-proc | sandbox-exec, then the
+            launcher: lo up, no_new_privs, Landlock, self-check, exec, report
+```
+
+By layer, with the commits (all on this branch):
+
+- **Foundations:** models, settings, errors, budget (`7b00c38`, U1); the
+  `dedupe_repo` fixture and its edit sets (`defe5a8`, U2); the protocols, fakes
+  and `ScriptedEditor` (`c331a68`, U3).
+- **L5 execution:** hardened `GitWorkspace` (`3cf619e`, U4); sandbox policy and
+  launcher (`20824ee`, U5) and the report-forgery fixes (`11c116e`, U5b);
+  worktree-confined editor tool handler (`b5d6c98`, U7); sandboxed process
+  runner (`3bfb28c`, U11); connect-time preflight (`05ea510`, U13); measurement
+  and the test-suite pass mark (`3a92c15`, U14); cProfile profiler (`90b08fd`,
+  U15, reviewed after commit; fixes `dbec415`, `cd0a3e6`); Claude editor loop
+  (`897aa2c`, U16); git trial and baseline runners (`a22d142`, U18); combiner
+  and publisher (`fefe698`, U19; `1f5c131`); shared phase cleanup and branch
+  guard (`783bf8b`, U20a); merge attributes at connect (`7989626`, U20b); macOS
+  EPERM on `killpg` (`ecb24aa`).
+- **L6 optimization:** capture rules for what a trial changed (`4b9fb3b`, U9)
+  and the module-shadow and recipe-file fixes (`1febcaf`, U9b); unittest's
+  `test*.py` protected (`56cb594`); `normalize_path` refuses `./~x` and `./c:x`
+  (`d917f30`).
+- **Claude clients:** worst-case cost model (`5e7c556`, U6); transport and retry
+  loop (`708f288`, U12); one fallback model and 8,000-token editor turns by
+  default (`1a862dc`); the API address pinned to `ENGINE_API_BASE_URL`
+  (`a17c54a`).
+- **L2 orchestrator:** Step 2 behaviour in the nodes (`54e1eb2`, U10); the
+  Claude understand node (`d15fc52`, U17); the factory that wires the real
+  engine, and the E2E (`4818abf`, U20d).
+- **Persistence:** `PostgresRepository`, `orchestrator/serde.py` and migration
+  004 (`3adab53`, U8).
+- **CI:** the Postgres service, the sandbox probe, the macOS and live-smoke
+  jobs, Schema Apply 001-004 (`7e8a4b5`, U20c); pytest 9 floor (`4037201`).
+- **Docs and handoff:** `6610603`, `a1717c3`, `dd1c99c`, `a938f3b`, `80c1a8d`,
+  `c3fd7d8`.
+
+The three E2E scenarios (`tests/e2e/test_step2.py`, about 20-40 s here) run on
+the `dedupe_repo` fixture with real git, sandbox and measurement and scripted
+Claude replies:
+
+- **E2E-A, the Claude path:** the editor's attempts on `.GIT/hooks`, `../x`, a
+  symlinked path and a test file come back as tool errors; h1 is kept, h3
+  (`sorted(set)`) is rejected by the equivalence judge, the profiler finds
+  `unique_in_order`, the combination holds and the tip is base + h1.
+- **E2E-B, the git-side defence** (on Postgres when `TEST_DATABASE_URL` is set):
+  h2 (deletes a test) and h6 (adds a symlink) are rejected and never run, h5 is
+  kept and then skipped as a conflict, one `Engine-Trial` commit is delivered.
+- **E2E-C, the budget:** the second trial never starts, the router goes to
+  combine, and `cost_usd <= max_cost_usd`.
+
+Each also asserts that the user's HEAD, index, status, config, refs, hooks and
+`info/` are untouched, that only the expected refs exist, that no worktree is
+left, and that every phase that ran repository code was sandboxed.
+
+Tests on 2026-10-22 (Python 3.13, `TEST_DATABASE_URL` set): 3,363 passed, 3
+skipped (two macOS-only cases, one that cannot run as root), 100 % line and
+branch coverage of 7,297 statements and 2,000 branches.
+
+#### Step 2 report (close-out, 2026-10-24)
+
+**What was built:** the core loop above (U1-U21), then three things around it:
+
+1. a Verifier with three rounds, including an attack round;
+2. the Stage A live suite;
+3. Window 0, a set of live experiments on the expiring credit. It includes a
+   benchmark corpus (12 slowdowns, 3 controls, 3 attack repos), a hard corpus
+   (10 repos) and an OSS corpus (10 pinned real repos), plus raw-SDK experiments
+   (probes, triage, papers, web, pre-screen) and the discovery suites (sweep,
+   A/B, escalation).
+
+**Evidence:**
+
+- **Stage gate:** passed on `9db3c77`, with 4,839 passed and 0 failed. CI is
+  green on the same code, including Postgres and the blocking macOS job.
+- **Security reviews:** two `/security-review` passes. The 2026-10-23 pass had
+  two findings, both fixed. The 2026-10-24 pass found nothing.
+- **Live results:**
+  - every live suite passed with every guard held except triage (E2), which
+    never ran because arXiv answers 429 to GitHub runners; no attack got
+    through;
+  - benchmark slowdowns: 12/12 won, with Opus or Sonnet as editor;
+  - hard corpus, blind: 10/10;
+  - OSS corpus: 6/10 delivered, with gains of 3-14 %;
+  - blind discovery: hit@5 of 95-100 % on the 22 slowdowns.
+- **Spend:** about 20 USD of live API use before the A/B (ledger above). Per-run
+  costs came in at 2-8 % of their worst-case caps.
+
+**Before / after:** before Step 2, every measurement and edit was a stub. After
+it, a caller-supplied hypothesis is edited by Claude in a sandbox, measured
+against noise, judged, combined, re-tested and delivered as a branch. All of
+that runs on real code under a hard cost cap.
+
+**What Step 3 needs** (see Next and Known gaps):
+
+- wire the generator and matcher into the hypotheses node, and resolve the
+  non-UUID id gap on Postgres;
+- the engine's own bounded retry;
+- a discovery measure that does not saturate (hard corpus v2, the `ledgerclose`
+  rebuild, a grader validated against hand labels);
+- the paper pipeline's priority, set by the A/B (E5) result;
+- the 3b and 3c designs, with the user's three integrity rules.
+
 ---
 
 ## What Exists Today
 
-| Component                                                                            | State                              |
-| ------------------------------------------------------------------------------------ | ---------------------------------- |
-| Docker Compose: Postgres 16 + pgvector, Redis, Qdrant                                | Working                            |
-| Schema `001_initial.sql` + `002_fix_critical_issues.sql` + `003_engine.sql`          | Working; applied in CI on every PR |
-| CI: lint, typecheck, tests, coverage, Python CI                                      | Working                            |
-| Security: OSV, Trivy, Docker Scout, pip-audit, bandit, safety, secret scan, Renovate | Working                            |
-| `packages/agent-core` Claude client + shutdown                                       | Working (33 Vitest tests)          |
-| `services/python_agents` settings                                                    | Working                            |
-| LangGraph orchestrator (`EngineState`, 15 nodes, router, `Orchestrator`)             | Walking skeleton on stub data      |
-| `research/arxiv_monitor.py`, `pdf_parser.py`                                         | Placeholders                       |
-| `packages/research-engine`, `execution-engine`                                       | TypeScript placeholders            |
-| Data model, anti-cheating, judges, ranking, lessons, repository protocol             | Working (Step 1)                   |
-| Real runners, profiler, research matcher, Postgres repository, CLI, web console      | Not started                        |
+| Component                                                                            | State                                    |
+| ------------------------------------------------------------------------------------ | ---------------------------------------- |
+| Docker Compose: Postgres 16 + pgvector, Redis, Qdrant                                | Working                                  |
+| Schema `001` to `004_engine_repository.sql`                                          | Working; applied in CI on every PR       |
+| CI: lint, typecheck, tests, coverage, Python CI (Linux, macOS), live smoke (manual)  | Working; the macOS job not blocking yet  |
+| Security: OSV, Trivy, Docker Scout, pip-audit, bandit, safety, secret scan, Renovate | Working                                  |
+| `packages/agent-core` Claude client + shutdown                                       | Working (33 Vitest tests)                |
+| `services/python_agents` settings                                                    | Working                                  |
+| LangGraph orchestrator (`EngineState`, 15 nodes, router, `Orchestrator`, factory)    | Working on CPU Python workloads (Step 2) |
+| Preflight, understand, baseline, profiler, trial runner, editor, combine, publisher  | Working (Step 2)                         |
+| Data model, anti-cheating, judges, ranking, lessons, `PostgresRepository`            | Working (Steps 1 and 2)                  |
+| `research/arxiv_monitor.py`, `pdf_parser.py`; the `research` and `watch` nodes       | Placeholders / stubs (Step 3)            |
+| `packages/research-engine`, `execution-engine`                                       | TypeScript placeholders                  |
+| Research matcher, CLI, live log, hardware detection, web console                     | Not started                              |
 
 ---
 
 ## Decisions
+
+### 2026-10-24 (standing permissions for PRs and branches)
+
+- **The Lead may mark a step's PR ready and merge it into `master` with a merge
+  commit** once its stage gate is recorded as a clean pass, every required CI
+  check on the head is green and the PR is mergeable; it may create a branch per
+  step (from `master`, or stacked on the open step), open its draft PR, retarget
+  stacked PRs, merge `master` into a step branch and delete merged branches.
+  Why: these steps follow mechanically from gates the user already defined, and
+  waiting on a click cost hours of idle time. **Still the user's:** spec and
+  build-plan approval for every phase, any push to `master`, any force-push,
+  merging with a red, skipped-required or pending check, deleting an unmerged
+  branch, and repository, branch-protection or `live` environment settings. The
+  rule text is in CLAUDE.md, Development Workflow.
+- **Merge commits, not squash.** Why: the history keeps every unit's commit and
+  review, and references into it (`5ce95a4` for the Step 2 handoff notes) stay
+  valid on `master`.
+
+### 2026-10-24 (vision update: packages, self-healing, MCP discovery)
+
+The user's November 2025 documents describe a broader vision than CLAUDE.md 4.1;
+two parts never reached the plan and one was narrowed. All three are now in
+scope (CLAUDE.md 4.3.0). Recorded now; nothing is built before Step 2 closes.
+The user approved the placement below the same day.
+
+- **Automatic package acquisition replaces "vet and approval-gate".** Why:
+  research hypotheses often need a library (a faster parser, a data structure),
+  leading coding agents install what they need, and a human gate on every
+  package stalls the loop for no added proof. Autonomy comes from automatic
+  checks: the name exists on the registry and is no near-miss of a popular name
+  (slopsquatting), minimum age and downloads, no known vulnerability (OSV,
+  pip-audit), a licence allowlist, wheels only (no install scripts run), exact
+  versions with hashes. The user is asked only when a check fails or cannot run.
+- **Self-healing, framed so it can be verified.** The user's code: a failing
+  test, a crash or an error report becomes a hypothesis; its judge is "the
+  failing case now passes, and the full suite and the other judges show no
+  regression"; delivered as a branch. The engine: a trial that fails for a
+  fixable reason (syntax, import or type error) gets a bounded retry with the
+  error fed back, inside the cost cap. Why: both turn a failure into a checkable
+  claim instead of a judgment call.
+- **MCP server and API discovery (L3).** The engine discovers and ranks
+  candidate servers and APIs for a goal; it connects automatically only to
+  read-only, credential-free ones, sandboxed like trials; credentials or write
+  access need the user's approval. Why: tool descriptions are untrusted input
+  (tool poisoning), and what a server can do with the user's credentials cannot
+  be proved by a judge.
+- **The multi-agent org doc's 100/100 revision loops and 10-200+ agents are not
+  adopted.** Why: Step 2 showed that risk-scaled review (one correctness
+  Reviewer per unit, a security Reviewer at trust boundaries) found the
+  blockers, and every further loop or agent spends tokens without a measured
+  gain; the token budgets and the role rules in CLAUDE.md stay.
+
+Conflicts with existing decisions, and how each is resolved:
+
+| Existing decision                                                         | Conflict                                                | Resolution                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Manifests and lockfiles are protected paths; the editor cannot touch them | A package must change them                              | Kept. The capability step (engine code, not the editor) writes the manifest and lockfile as its own commit on the trial branch, before the editor runs. The protected-path check runs on the editor's commit only; the capability commit must equal what the resolver produced for the approved package list (recomputed and compared), so neither can smuggle the other's change. |
+| Trials are network-off                                                    | Installing needs the network                            | Kept. Fetch is a separate phase, network on to an allowlisted registry host only, download-only into a run-owned wheelhouse, no repo or package code executed; the trial installs offline (`--no-index --find-links`, `--require-hashes`) into its own venv.                                                                                                                       |
+| "Capability changes are proposals that need approval" (CLAUDE.md 4.2)     | Packages are now automatic                              | Narrowed: a package that passes every check is delivered like the change it serves; MCP connections with credentials or write access, and any failed check, still ask the user.                                                                                                                                                                                                    |
+| Frozen judges against one baseline                                        | The trial runs in a different environment               | Judges unchanged. The baseline is measured in the base environment without the package; the trial with it; the environment (lockfile hash) is recorded with every measurement. A package no kept change imports is removed before combine, and the combination is re-tested without it.                                                                                            |
+| Output equivalence judge                                                  | A heal changes the output of the failing case by design | For a heal run the equivalence judge covers every workload except the declared failing case, whose judge is "now passes"; a heal is class `behaviour`, so it is flagged, never auto-delivered as an efficiency win.                                                                                                                                                                |
+| Tests are protected; the editor cannot add one                            | An error report has no failing test                     | A reproducer is written by an engine-owned step before trials, must fail on the baseline, and is then frozen with the judges for the run; it ships on the branch as its own commit, flagged for review.                                                                                                                                                                            |
+| Anti reward hacking                                                       | Feeding errors back to the editor                       | Only the trial's own execution errors (syntax, import, type, a crash traceback) are fed back; never judge verdicts, timings or benchmark output. One or two retries, each through `Budget.check`.                                                                                                                                                                                  |
+| The per-run cost cap                                                      | Retries, package selection and MCP ranking spend        | Every paid call goes through `Budget`; registry and OSV lookups cost no tokens; the retry count and the packages per hypothesis are bounded settings.                                                                                                                                                                                                                              |
+
+Placement (approved by the user, 2026-10-24; CLAUDE.md build order):
+
+| Piece                                                 | Proposed step                                | Why there                                                                                                                                       |
+| ----------------------------------------------------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Engine self-retry on fixable trial errors             | Step 3 (small, in the editor loop)           | A few dozen lines in `ClaudeEditor`'s loop and `GitTrialRunner`; Step 3's generated hypotheses will fail more often than aimed ones             |
+| Automatic package acquisition                         | Step 3b, right after the research core       | Research hypotheses ("use library X") are generated in Step 3 and parked with a `needs_package` mark until 3b; it needs its own security review |
+| Self-healing of the user's code                       | Step 3c, after 3b                            | Reuses the loop, the judges and the reproducer rule; needs failing-case judging and the `behaviour` delivery path                               |
+| MCP server and API discovery                          | Step 4, with the interfaces                  | Ranking needs the goal parsing (`--goal`) and the connectors the CLI and GitHub App bring                                                       |
+| Production error intake (error reports as heal input) | Step 4 (connectors) feeding Step 3c's healer | Needs a connector to the user's error monitoring                                                                                                |
+| Gradual rollout and production monitoring             | After Step 5, a new step                     | Needs a deployment target and the user's real workload (the Step 5 dogfood); the engine itself never deploys                                    |
+
+### 2026-10-22 (Step 2: the spec's 44 decisions)
+
+The approved Step 2 spec (`.claude/handoff/step2/spec.md`, in git history at
+`5ce95a4`) opened with 44 decisions. Each is summarised here with its reason,
+under its spec number; later changes are marked.
+
+1. **Every external effect behind a Protocol with a deterministic fake.** The
+   whole loop must be provable in CI with no key and no network; this design
+   scored highest with both judges (39 and 40 of 50).
+2. **Writes confined in the launcher** under `FS_ISOLATION=required`: Landlock
+   (ABI 1 or later, through `ctypes` syscalls) on Linux, a `sandbox-exec`
+   file-write deny on macOS. Claude-steered code would otherwise run with the
+   user's write access; a fresh HOME is not a sandbox, and the worktree's `.git`
+   file names the user's git dir.
+3. **Network: `unshare -rn -p -f`** with the launcher bringing `lo` up
+   (`--ipc --mount-proc` added in U5b), `(deny network*)` on macOS, no Landlock
+   TCP rules. The namespace already blocks TCP and UDP; Landlock TCP needs ABI 4
+   (kernel 6.7).
+4. **A PID namespace with the launcher as PID 1.** `setsid` orphans then die
+   with the launcher (verified: 0 survivors).
+5. **The launcher is a real stdlib-only module run as `python -I -S`.** It is
+   lintable, typed and testable in-process, and a fresh interpreter keeps the
+   RSS floor of every measurement at a few MiB instead of the engine's size.
+6. **The macOS wrapper is built now and runs in a `macos-latest` job against
+   `/usr/bin/git`.** maxrss units, Apple git 2.39 and SBPL semantics are caught
+   before the M4 dogfood (the first run caught `killpg` EPERM).
+7. **Combine with plain `merge-tree --write-tree ACC X` and a single-parent
+   `commit-tree`.** `--merge-base` needs git 2.40 and Apple ships 2.39; every
+   trial's parent is the base, so the natural merge base is the base. History
+   stays linear, one revertable commit per change.
+8. **git 2.38 floor; `--attr-source=<empty tree>` only on git 2.40 and later,
+   and an empty override for every driver key.** The user's config and
+   attributes are untrusted input, and this works on Apple git.
+9. **SDK `max_retries=0` and the engine's own retry loop**: only 429, 529, 500,
+   502, 503, 504, timeouts and connection errors retry, at most
+   `LLM_MAX_RETRIES` times, backoff `min(30 s, 2^k s)` with `retry-after` as a
+   floor (above 60 s it gives up); `Budget.check` before every attempt; a
+   timeout is charged the full estimate, an HTTP error 0; 400/404/413 raise
+   `LLMRequestError`, 401/403 `LLMConfigError`. The SDK retries timeouts
+   silently, so the cap would not be a bound.
+10. **`budget_usd` is required and the trials node keeps a running total**,
+    stopping before a trial when the remainder is below `min_trial_budget_usd`
+    (one worst-case editor request). A total computed after the loop let each of
+    three trials spend the full remainder; a trial that cannot afford one
+    request would only fail at its first check.
+11. **`budget_exhausted` sends the router straight to combine.** Otherwise the
+    `proposed` hypotheses left behind spin empty rounds.
+12. **Capture violations go into `Trial.violations` with status `failed`.** The
+    runner statuses stay `{measured, failed}`, so the Step 1 contract holds and
+    verdict rule 1 still rejects.
+13. **Capture rules `forbidden_file_mode`, `forbidden_file`, `git_metadata`,
+    `unrecorded_write`, `process_spawn`** (`module_shadow` added in U9b). The
+    engine never trusts what the editor says it changed. No LFS rule: LFS is
+    refused at connect.
+14. **`process_spawn` is an AST scan of the changed `.py` files**, applied when
+    CPU time or peak RSS is judged. Splitting work across processes fakes a
+    per-process win; a regex would flag comments and miss `posix_spawn`. It
+    guards against honest mistakes, it is not a defence.
+15. **No judge changes.** Nondeterministic output under an equivalence guardrail
+    and a failing baseline suite fail closed at the baseline: the judges stay
+    frozen and failing before the trials spends no money.
+16. **User-repo fingerprint F0/F1** of `config`, `config.worktree`, `hooks/`,
+    `info/`, the HEAD symref and the `refs/heads` and `refs/tags` refs, around
+    every phase that runs repo code (widened in U4: the effective config and
+    every ref under `refs/` except `refs/remotes/` and `refs/prefetch/`, because
+    `refs/replace` rewrites what the user's git shows and `refs/stash` what
+    `stash pop` applies); a trial excludes only its own ref, which must then be
+    absent or at `Trial.commit`. The index, status, remotes and logs are left
+    out: IDEs rewrite the index and fetch remotes, while tampering shows in
+    refs, config and hooks.
+17. **Worktree git calls pass `--git-dir`/`--work-tree` from a `WorktreeHandle`
+    read right after `worktree add`**, and the `.git` file is compared after
+    every run. Sandboxed code can rewrite that link (it sits in the writable
+    worktree) to aim a later `clean -ffdx` elsewhere, and git renames admin dirs
+    on a collision, so nothing may be assumed.
+18. **`engine/trial-<run>-<hyp>` refs are kept** for committed trials, with ids
+    `uuid5(branch@round)`; an existing ref moves only when its commit's
+    `Engine-Trial:` trailer matches. Trial commits stay alive for combine and
+    inspection, and a re-executed node is idempotent.
+19. **Commit identity and dates come from the base commit**, so a resumed run
+    reproduces the same SHAs.
+20. **`Project.test_command` on the model and in `projects.test_command`**; a
+    `tests_pass` guardrail without one is a `PreflightError`. It survives a
+    resume, and without it the test-suite judge would be inconclusive on every
+    trial and the run would silently yield nothing.
+21. **Harness paths inside the repo are protected** (`command[0]`,
+    `test_command[0]`; later every argument naming a repo file). A harness is
+    not the code under optimisation.
+22. **The measured worktree is reset before every run**, identically for the
+    baseline and each trial, so a workload cannot memoise across runs.
+23. **The cProfile profiler ships in Step 2**, in its own worktree, with an
+    engine-owned `PYTHONPATH` prefix and an editable-install check. It was the
+    last stub on the measurement path, and without the check a trial can
+    silently measure the user's checkout.
+24. **Trials run serially.** Overlapping measurements disturb each other.
+25. **The combination is always re-tested ABAB, even with one change, and the
+    suite runs on its tip.** It holds iff `derive_verdict` says keep; else the
+    best single kept change (highest gain, then hypothesis id) is re-tested
+    once; else the run delivers a report only. Only what reproduced against an
+    interleaved baseline, with its tests run, is delivered.
+26. **A two-change combine is proven in integration tests, not the E2E.** On the
+    fixture's one workload two independent changes cannot both clear the noise
+    floor.
+27. **`orchestrator/serde.py` with one `TypeAdapter` per state key.**
+    `TypeAdapter(EngineState)` fails on Python 3.11, and Step 4 needs this to
+    re-type `PostgresSaver` values.
+28. **`save_run(initial)` runs before the graph starts**; a `root_path` clash
+    becomes `ProjectConflictError`. This fixes the lessons foreign-key
+    violation, leaves an audit row if a run crashes, and the caller sees an
+    engine error, not a psycopg one.
+29. **Trials and verdicts stay in the 003 JSONB arrays; migration 004 adds no
+    tables.** One source of truth per run; 004 is idempotent.
+30. **Postgres tests use an env-gated skip and `addopts` adds only
+    `-m "not live"`.** CI always runs them, so coverage counts them.
+31. **Operator notices are nonce-tagged text blocks after the tool results.**
+    `role: system` mid-loop waits until the live smoke test confirms the wire
+    shape; the caps are enforced in code anyway.
+32. **`httpx2.MockTransport` is the transport test seam.** anthropic 1.17 is
+    built on httpx2 2.16, which exports it (verified in `.venv`).
+33. **`Hotspot.tags` stays free-form.** Existing tests and lessons use other
+    tags; a fixed vocabulary belongs to the Step 3 matcher.
+34. **`BaselineRunner.measure` still returns a tuple.** Node-level checks report
+    noise and nondeterminism, and the Step 1 tests stay unchanged.
+35. **The open item "judged trials state key" is closed**: `round_trials`
+    already does that job.
+36. **CI stays on ubuntu-22.04, behind a probe that fails loudly** without
+    `unshare` or Landlock; the fallback is 24.04 with the AppArmor sysctl, and
+    `REQUIRE_*` is never weakened. A sandbox test that silently skips proves
+    nothing.
+37. **Every engine error class lives in `common/errors.py`.** `clients/`,
+    `execution/` and `persistence/` cannot import `orchestrator/nodes.py`
+    without a cycle, and the errors had to exist before the units that raise and
+    map them.
+38. **Each phase owns its worktree, `_scratch` and `_probe` dirs and removes
+    them in `finally`** (shared as `execution/phase.py` in U20a). One owner per
+    path: nothing is guessed and nothing leaks; the E2E asserts it.
+39. **The fallback chain is sent explicitly** (`fallbacks=[{"model": m}]`) and
+    the estimate prices the worst model in it times its length. The priced chain
+    must equal the billed chain or the estimate is not a bound. Changed in
+    `1a862dc`: one fallback (`claude-opus-4-8`) and `EDITOR_MAX_TOKENS` 8,000 by
+    default, so one request's empty-prompt worst case is $0.40.
+40. **`ScriptedEditor` is keyed by hypothesis title, candidate ids stay uuid4,
+    and `PostgresRepository` refuses a non-UUID id before any SQL**
+    (`InvalidRecordIdError`). The UUID columns would reject it mid-run;
+    `InMemoryRepository` keeps accepting any id for the Step 1 tests.
+41. **The LFS refusal reads attribute sources directly, never `check-attr`.**
+    The engine's own `core.attributesFile=/dev/null` and `--attr-source` hide
+    `.gitattributes` from `check-attr`.
+42. **The launcher self-checks isolation on every run**: a write in
+    `_probe/<phase>` and a connect to the parent's 127.0.0.1 listener must both
+    fail, and `LaunchReport` carries `fs_isolated`, `net_isolated` and `error`.
+    The connect-time probe proves the host can isolate; only a per-run check
+    proves this run was isolated.
+43. **`Workload.warmup_runs` is honoured (0 allowed); `Workload.inputs` is not
+    passed** and connect warns. No input channel exists yet, and baseline and
+    trial ignore inputs alike, so the comparison stays valid.
+44. **Path patterns and the matcher live in `common/paths.py`.** The editor
+    handler and the capture rules must enforce one definition.
+
+#### Recorded at the Step 2 close-out (2026-10-24, from the spec and research notes)
+
+- **A run measures committed HEAD only.** Uncommitted changes are ignored (the
+  `dirty_tree_ignored` event) and gitignored files (`.venv`, data, checkpoints)
+  are absent from every worktree, so workload data must be passed explicitly.
+  Why: a worktree at a pinned commit is what makes baseline and trial
+  comparable; the Step 4 CLI must say so, and the Step 5 VLM dogfood must ship
+  its data path.
+- **Landlock confines writes, not reads** (decisions 2-3). Accepted because
+  trials have no network, so a read cannot leave the machine. Re-check trigger:
+  Step 3b's network-on fetch phase and Step 4's MCP connections must never run
+  repository code with the network on.
+- **A failed combine leaves the lessons unchanged** (decision 25): the
+  individual keep verdicts stand. Why: the trial did win alone. Consequence for
+  Step 3 ranking: a hypothesis whose gain did not reproduce when combined (OSS
+  `sortedcontainers`) is still boosted; the ranking should discount a keep that
+  failed its combine.
+- **How hotspots are ranked** (decision 23): self time plus the time of external
+  callees charged to the repository caller, top N. cProfile overhead inflates
+  call-heavy code, subprocess workers are not profiled, and callbacks can be
+  counted twice (capped at 1). The Step 3 matcher consumes these.
+- **Decision 31 is still open**: the Stage A run (39962457418) sent the
+  `role: system` probe and passed, but the probe records what the API did rather
+  than asserting it, and that record went only to the job summary, which the API
+  does not return. Until a run's log shows the outcome, operator notices stay
+  nonce-tagged text blocks after the tool results.
+
+### 2026-10-22 (Step 2: Lead decisions and accepted trade-offs)
+
+From the per-unit reviews and handovers (`lead-notes.md`, deleted before merge).
+Where a decision changed the spec, the code follows the decision.
+
+- **The launcher's report is parsed strictly and cross-checked against the
+  kernel's accounting** (the wrapper's `wait4` rusage and procrun's own wall
+  clock); exit status 125 alone never means a refusal. Inside `unshare -r` the
+  workload is root in its own user namespace, so the report must be bounded by
+  numbers it cannot touch.
+- **A privilege drop that fails under `best_effort` is recorded as isolation not
+  applied, never as a failure**, and a non-root launcher that cannot clear its
+  bounding set is accepted when it holds no effective or permitted capability:
+  with `no_new_privs` set, `execve` cannot gain any.
+- **The whole scratch root (HOME, TMPDIR) is fresh before every run**, not per
+  phase: a warm-up could otherwise leave an answer for the timed runs.
+- **The pass mark of the test suite comes from the runner's own summary**
+  (unittest's `Ran N tests` + `OK`, or pytest's JUnit XML written into the
+  scratch root), and fewer passing tests than the baseline is 0.0. A suite can
+  exit 0 after a trial deletes tests. The worktree is also reset right before
+  the suite, so a module a workload dropped cannot shadow the runner.
+- **Preflight refuses partial clones** (fix: `git fetch --refetch` or a full
+  clone): a lazy fetch would reach the network. **It protects every argument of
+  the workload and test commands that names a repo file**, and **refuses an
+  editable `.py` file the engine's Python cannot parse**, because the AST checks
+  must fail closed.
+- **Fallbacks use the `server-side-fallback-2026-06-01` beta**, and an empty
+  `ENGINE_FALLBACK_MODELS` sends no field. **Input tokens are counted with the
+  free `count_tokens` endpoint per model in the chain, plus a margin**, with the
+  byte bound on any failure: a tighter estimate that is still a bound.
+  `LLMResult.unpriced_models` names a billing model missing from the table.
+- **HTTP 402 is `LLMConfigError`** (billing: the account must act); 409, 422 and
+  501 stay `LLMRequestError`. Neither kind is retried.
+- **The engine sends the key only to `ENGINE_API_BASE_URL`** and keeps the
+  `anthropic` logger at INFO or stricter. The SDK follows `ANTHROPIC_BASE_URL`
+  (this container sets it) and its DEBUG log prints request options.
+- **Understand is one structured-output request** with no tools, no caching, the
+  API's default effort and a 2,000-token allowance for the system prompt the API
+  adds. `workload_notes` travels as an array (structured outputs need
+  `additionalProperties: false`); reply text with control or bidi characters
+  rejects the whole reply; `READ_DENY_PATTERNS` files are neither listed nor
+  read.
+- **The engine never unmarshals a profile the workload wrote.** `marshal` is
+  unsafe on hostile data, so pstats are converted to JSON inside the sandbox and
+  parsed strictly with a size cap; hotspots are untrusted hints.
+- **Trial runner rules:** a `GitError` during capture fails the trial while
+  `RepoTamperedError` propagates; reserved module names include each `-m`
+  target, and module roots include each workload's `working_dir` and script
+  directory; invoke's `tasks.py` and config are protected when a command runs
+  invoke; a foreign `engine/trial-*` ref (no matching trailer) stops the trial
+  before any worktree; a re-run that commits nothing deletes its stale ref; an
+  own ref that is checked out is never moved.
+- **Publisher rules:** the ref is read before anything is checked out, a default
+  branch that is a symref to the new engine ref is detected and the create
+  undone (`DeliveryError`), and the combiner takes the baseline's passing-test
+  count (both reviewers found that the tip's suite only had to pass one test).
+- **One shared phase cleanup** (`execution/phase.py`) runs every step in its own
+  `finally`, never follows a planted link and never hides an error already on
+  its way: a failing removal must not mask tampering.
+- **Merge attributes are checked at connect, per git version** (U20b): on git
+  2.40 and later only `info/attributes`, `core.attributesFile` and
+  `merge.default` reach a combine, so committed `.gitattributes` become one
+  note; on older git committed and checked-out copies count too. A custom driver
+  is refused; `union` and binary merges are notes, because the tip is re-tested
+  anyway.
+- **The factory** builds the real context from settings, rebinds both runners to
+  the test command connect resolved, refuses a `WORKTREE_ROOT` that overlaps the
+  checkout, and sends runner notes to the live stream as `runner_note` warnings.
+- **`NETWORK_ISOLATION=off` keeps no namespaces on Linux** (wave 2b, below).
+- **Modules above the ~400-line Builder cap were accepted at review** rather
+  than split mid-step, which would have reopened reviewed code: `procrun.py`,
+  `transport.py`, `measure.py`, `editor.py`, `editor_tools.py`, `preflight.py`,
+  `understand.py`, `trial_runner.py` (sizes under "Technical Debt").
+
+### 2026-10-23 (Step 2, Verifier findings fixed)
+
+- **A killed run is recovered by the next connect.** Each phase owner holds a
+  shared `flock` on `<WORKTREE_ROOT>/<run>/.aip-run.lock` while it works;
+  connect's `sweep_stale_runs` takes the lock of every marked run exclusively
+  and runs the shared cleanup on each phase in it. Why: a SIGKILLed run's
+  directory still exists, so git never calls its registration prunable, and only
+  the kernel knows reliably whether its owner is alive (it drops a `flock` on
+  any exit). An unmarked directory is never touched, so a user's own worktree
+  inside `WORKTREE_ROOT` is safe. An unmarked worktree of the repository at
+  `<run>/<phase>` (an owner whose cleanup failed drops its marker; runs killed
+  before the marker existed never had one) is refused at connect with the manual
+  recovery, not swept and not called an overlap. Why: no lock proves its owner
+  gone (an owner that could not create the marker runs unmarked), so the user
+  removes it; the overlap advice ("move `WORKTREE_ROOT`") was wrong there.
+- **One call drives a run id at a time per process** (`Orchestrator`
+  `_driving`). Why: `resume` checked the gate and invoked the graph later, so
+  two resumes both passed, delivered contradicting decisions and raced for the
+  fixed `<run>/combine` path. The claim makes check and call one step; the
+  in-memory checkpointer is per process, so a process-wide claim is complete
+  until a shared checkpointer exists. `stream` releases it before its own last
+  event. Why: a generator suspended at that event held the claim, so a consumer
+  that stopped there and kept the iterator could not resume the paused run.
+- **A failing node keeps what it earned.** The trials node and understand attach
+  their running total (and the round's finished trials) to the exception
+  (`nodes.keep_progress`); the trial runner notes the money an aborted trial
+  spent (`errors.add_spend`) and puts its own ref back, unless a worktree
+  checked it out meanwhile (a runner note says the ref stays: deleting it left
+  that worktree's HEAD unborn). `Orchestrator` merges it into the failed state,
+  adds a `trial_refs_left` event with the cleanup command, and saves a failed
+  row before a non-engine exception propagates. Why: a failed run was built from
+  the previous checkpoint, so the money spent in the failing node and the trials
+  it had saved were missing from the state and the audit row.
+- **A trial the cap stops before its first request never started**
+  (`TrialUnaffordable`): the trials node treats it as an exhausted budget, not a
+  rejected change, so no verdict or lesson is recorded. Why: the factory's floor
+  prices an empty prompt and is always below a real first request, and a
+  "reject" lesson for a hypothesis that was never tried would lower its ranking
+  in later runs.
+- **`Project.root_path` is canonical** (`realpath`). Why: the one-project-per-
+  root rule compared strings, so a trailing slash or a symlink registered one
+  repository under several ids, while git already used the real path.
+- **`WORKTREE_ROOT` may not overlap the git common dir or any other worktree**
+  of the repository (connect). Why: with a linked worktree as root_path, a
+  `WORKTREE_ROOT` inside the main checkout was swept by the user's `git clean`,
+  and one in `.git/worktrees` collided with git's admin dirs.
+- **A committed `output_file` is refused, and the path is protected.** Why: the
+  reset before every run restores a committed copy, so the fingerprint read it
+  whether or not the run wrote it, and a change that skipped its work passed the
+  equivalence judge.
+- **The default objective bounds peak RSS** (a `metric_bound` guardrail, at most
+  +10 %, added only when no objective is given and no RSS bound exists). Why:
+  the documented default is "faster and leaner", but only wall time was judged,
+  so a 27x memory regression shipped. A guardrail, not a second objective, so a
+  trial need not also prove a memory gain.
+- **The report says whether the test count was verified** ("Test count" in Run
+  conditions), and README lists wrapper runners as a limitation.
+- **The trial-ref cleanup command names exact refs and commits** in one
+  `git update-ref --stdin` transaction. Why: the `xargs` form failed on empty
+  input, and the `trial-<run>-*` pattern also matched run `<run>-2`'s refs.
+- **The launcher blocks `socket(AF_UNIX)` with a seccomp filter** (Linux,
+  whenever network isolation is on), installed in PID 1 of the namespace and
+  inherited across exec, with a new self-check that creating an AF_UNIX socket
+  must fail. Why: the network namespace isolates AF_INET and abstract AF_UNIX
+  but not path-based AF_UNIX, so a kept, delivered trial could still reach a
+  host unix-domain service (`/var/run/docker.sock`, a local Postgres/Redis
+  socket) and exfiltrate while the engine reported a clean efficiency win.
+  Blocking `socket(AF_UNIX)` closes every path-based unix socket regardless of
+  its location; `socketpair(AF_UNIX)` (a connected pair, no egress, used by
+  multiprocessing's `fork` start method) and AF_INET (the loopback probe) stay
+  allowed. Cost: multiprocessing's `spawn` and `forkserver` start methods need
+  an AF_UNIX listener and fail under the Linux sandbox (see Known gaps). macOS
+  needs nothing new: `sandbox-exec`'s `(deny network*)` already covers AF_UNIX
+  `connect`, so the filter and the AF_UNIX self-check are Linux-only.
+
+### 2026-10-24 (Step 2 close-out: stage gate and second security review)
+
+- **Stage gate: passed on `9db3c77`** (rerun 2026-10-24 06:25 UTC, the Lead's
+  container): every check passed (pnpm audit, pip-audit, bandit, the secret
+  grep, typecheck, lint, format, Vitest, uv sync, the interpreters 3.8-3.12, the
+  sandbox, ruff, mypy, pytest: 4,839 passed, 0 failed, 79 skipped), with three
+  warnings: major upgrades outdated (commitlint 21, TypeScript 7, ESLint 10,
+  Vitest 5, Vite 8 and others, left to their own Dependabot PRs) and no Postgres
+  in the container (local coverage 99.33 %). CI on `2a0f57b` (same code) ran the
+  Postgres tests and the now-blocking macOS job: all green. The first run on
+  `ea891e6` had passed except one flaky test,
+  `test_a_fix_that_leaves_one_hot_spot_falls_short[ledgerclose]`, which was
+  machine-dependent; `9db3c77` made it a same-run ratio against the full fix.
+- **The first gate run on this head found two real failures, both fixed**:
+  pip-audit reported three CVEs in `filelock` 3.32.7, held below the 4.2.1 fix
+  by `safety`, which left the dev extra (`f0ca54a`; it runs through `uvx`); the
+  secret grep matched three fake keys in redaction tests, now built at runtime
+  (`5ce95a4`). Why fix rather than justify: the grep must stay strict, and a
+  dev-only tool is no reason to carry a vulnerable lock.
+- **Second `/security-review`** (diff `79b29ca..ea891e6`: the live CI job, the
+  structured client, generator, playbook, cost and config changes, the networked
+  experiment harness and the OSS cloner), by a fresh reviewer on a different
+  model: no finding clears the bar. Verified: workflow inputs reach the shell
+  only through validated env vars; the key lives in one step; the harness pins
+  every request to the engine host with redirects off; arXiv URLs are
+  allowlisted by shape; OSS clones are pinned to a commit with hooks, submodules
+  and LFS refused and run only in the sandbox. One note below the bar:
+  `CorpusOutcome.to_json` and `discovery_io.json_line` cap strings but do not
+  call `redact_keys`; no field they hold comes from the wire today.
+
+### 2026-10-23 (Step 2, stage gate and security review)
+
+- **Stage gate passed** with two warnings (outdated packages). Minor upgrades
+  went in (langchain 1.4.7, langchain-core 1.7.0, ruff 0.17.2,
+  sentence-transformers 6.2.0). Majors wait for their own PRs: anthropic 2,
+  redis 8, pymupdf 2, TypeScript 7, ESLint 10, Vitest 5, Vite 8, commitlint 21,
+  dotenv 18, @types/node 26. Why: a major bump changes behaviour the Step 2
+  tests do not cover on purpose, and one PR per major keeps each revertable.
+- **`worktree add` no longer checks out.** It runs with `--no-checkout`, then
+  `checkout -f` through `_git` on the new handle. Why (`/security-review`,
+  reproduced by a test): `_git` empties the repo-defined drivers it lists from
+  the command's own context, but `worktree add` checks out in a child git whose
+  git dir is the new admin dir. An `includeIf "gitdir:worktrees/"` defined a
+  smudge filter there that the listing never saw, so a malicious repository ran
+  a command unsandboxed at every phase's first checkout.
+- **Preflight refuses `includeIf`** in the repository config (direct or through
+  an include). Why: a `gitdir:` or `onbranch:` condition can hold in a git child
+  and not where the engine vets the config; refusing the key closes the class
+  for any future child, at the cost of asking the user to inline it.
+- **Reset and cleanup never walk through a link.** The scrub holds an fd per
+  level, makes each directory u+rwx with `_chmod_at` (Linux: an `O_PATH` fd
+  changed through `/proc/self/fd`; macOS: `fchmodat(AT_SYMLINK_NOFOLLOW)`) and
+  opens it through its parent's fd with `O_NOFOLLOW`; tree removal uses `fwalk`
+  and `rmtree(dir_fd=...)`. Why (reproduced: the reset made an outside directory
+  0777): on macOS a `setsid` grandchild survives its run (no PID namespace) and
+  could swap a listed directory for a link between the check and the path-based
+  chmod and scan, so the unsandboxed engine changed modes and deleted `.git`
+  directories and sockets outside the worktree. A directory swapped for a link
+  is now `RepoTamperedError`. `_chmod_at` exists because a non-root user cannot
+  open a mode-000 directory (CI failed on the first fd version; the root
+  container hid it).
+- **The older live editor test runs only under exactly `-m live`.** Why: its
+  substring guard selected it for `-m "not alive"`. The Stage A suite in
+  `tests/live` evaluates the marker expression properly.
+- **Below the review bar, kept in mind:** `Settings` reads `.env` from the
+  current directory, so the Step 4 CLI must not start from inside the target
+  repository (see Known gaps).
+
+### 2026-10-22 (Step 2, wave 2b review fixes)
+
+- **A failed privilege drop is never silent**: the workload drops every
+  capability before exec in every isolation mode. If the drop fails, a
+  `required` mode refuses the run and `best_effort` records isolation as not
+  applied. Before this, a gap between modes let the workload forge the report.
+- **Each run gets its own SysV IPC namespace**: shared-memory segments survive
+  between runs otherwise, so a warm-up could leave a memoised answer for the
+  timed runs.
+- **`NETWORK_ISOLATION=off` also drops the PID and IPC namespaces on Linux**: an
+  open network is already a channel between runs, so the namespaces would not
+  restore trust in the numbers, and they would make write confinement depend on
+  user namespaces. Turning the network sandbox off weakens measurement
+  integrity, and the docs say so.
+- **Test-runner shadowing is checked under every import root, and recipe files
+  are protected**: a trial adding `scripts/unittest.py` is rejected when
+  `scripts` is on the test command's path, and `Makefile`, `*.mk`, `justfile`
+  and `.coveragerc` are protected because a test command reads them.
+- **The test suite's pass mark will come from the runner's own summary, not its
+  exit code** (lands with the measurement unit): a suite that exits 0 after
+  running fewer tests than the baseline does not pass.
+
+### 2026-10-21 (Step 2)
+
+Designed by a research-and-design workflow: four research tracks verified in the
+sandbox (process measurement, git worktrees, the Claude editor, Postgres and the
+fixture), three independent designs (security-first, smallest testable,
+forward-compatible), two judges on different models (both chose the smallest
+testable design, 39 and 40 of 50), a synthesis and a completeness critic whose 5
+blockers and 12 should-fixes were closed before building.
+
+- **Every external effect sits behind a protocol with a deterministic fake**
+  (git, process runner, editor, Claude transport, profiler, combiner, publisher,
+  repository): the whole loop must be provable in CI with no API key and no
+  network.
+- **Workloads start through a tiny launcher process**: on Linux a child's peak
+  RSS can never read below the RSS of the process that spawned it (measured: a
+  `/bin/true` child of a 311 MiB engine reports 311 MiB; through a fresh
+  launcher, 6.5 MiB). Without it the memory judge measures the engine, not the
+  workload.
+- **Trials run sandboxed and fail closed**: network namespace (`unshare -rn`)
+  with a private loopback, a seccomp filter that blocks `socket(AF_UNIX)` so a
+  path-based unix socket to a host service cannot be reached (the namespace does
+  not cover those), Landlock write confinement to the worktree and a scratch
+  directory, a PID namespace so orphans die, and a per-run self-check that the
+  isolation really applied (macOS: `sandbox-exec`, whose `(deny network*)`
+  covers AF_UNIX `connect`, with the same checks). The engine runs Claude-edited
+  code on the user's machine; a fresh HOME is not a sandbox.
+- **The engine never trusts what the editor says it changed**: the diff and the
+  touched paths come from git after the edit (`--no-renames`, so a renamed test
+  shows up as a protected path), symlinks, mode changes, binaries, git metadata
+  and unreported writes are violations, and a violating trial is never executed.
+- **The user's repository is fingerprinted before and after every phase that
+  runs repo code** (refs, config, hooks): tampering aborts the run.
+- **The cost cap is a hard bound**: the SDK's own retries are off, every attempt
+  is checked against a worst-case estimate before it is sent, the fallback chain
+  that is billed is the chain that is priced, and the trials node keeps a
+  running total so three trials cannot each spend the full remainder.
+- **Combine always re-tests**: the combined change is measured interleaved with
+  a fresh baseline (ABAB) and the test suite runs on its tip; it is delivered
+  only if the full verdict rules still say keep, else the best single change is
+  re-tested, else the run delivers a report only.
+- **Delivery is a create-only ref update**: `refs/heads/engine/run-<id>` is
+  created with `update-ref`, never `branch -f`, never on a checked-out or
+  default branch, never pushed.
+- **Trials run serially**: overlapping measurements disturb each other, and this
+  host's run-to-run variation is already 9-28 %.
+- **Postgres stores runs, trials and verdicts in the 003 JSONB columns; no new
+  tables** (migration 004 only adds a thread index, a lesson sequence and
+  `projects.test_command`): one source of truth per run, and the state
+  round-trips through a typed serializer that also works on Python 3.11.
+
+- **The measurement report cannot be forged** (wave 2 security review): inside
+  `unshare -r` the workload is root in its own user namespace and could write a
+  fake report into the launcher's pipe through `/proc/<pid>/fd`, which Landlock
+  does not cover. Reproduced, then closed with three measures verified together
+  on this host: a namespace-private `/proc` (`--mount-proc`, which also hides
+  the `unshare` process), a non-dumpable launcher, and a workload that drops
+  every capability before exec. A fresh `/proc` alone still let the forgery
+  through. The process runner also cross-checks the report against the kernel's
+  accounting of the whole process tree.
+- **A trial cannot replace the test runner**: `python -m unittest` and pytest
+  put the working directory first on `sys.path`, so an added `unittest.py` would
+  make a failing suite pass. Adding a top-level module named after the standard
+  library or the test runner is refused by the editor and rejected by the
+  capture rules, and every config file pytest reads (including `.pytest.ini` and
+  `pytest.toml`) is protected.
+- **Threads are allowed, processes are not** (when CPU or memory is judged):
+  threads cannot fake per-process CPU or memory accounting and are a legitimate
+  optimisation; process pools can.
+- **One fallback model and 8,000-token editor turns by default**: the cost cap
+  is a hard bound, so each request must fit its worst case (every model in the
+  chain billing a full response). With two fallbacks and 16,000 tokens a single
+  request was estimated at about $3 with a typical prompt, leaving a $5 run one
+  or two requests; now an empty-prompt request is $0.40.
+- **`/dev/shm` is not writable inside the sandbox**: it survives between timed
+  runs, so a workload could carry results from one run to the next. Workloads
+  that need shared memory get a per-run tmpfs in Step 5.
 
 ### 2026-10-21 (Step 1)
 
@@ -282,49 +1026,436 @@ passed (2 warnings: outdated majors left to Renovate).
 
 ---
 
-## Next: Step 2 (Core loop on CPU Python workloads)
+## Live API testing plan and credit budget (decided 2026-10-23)
 
-Recommended session setting: **Opus 5.5, Ultracode** (Fable 5.1 for the briefing
-and the review of the runner's isolation).
+**Decision.** The user's Anthropic API credits ($200 a month, reset on the 24th;
+the current window ends 2026-11-24, unused credit does not carry over) fund the
+engine's live tests and dogfooding. They pay only for the engine's own API calls
+made with that key (CI `live-smoke` job, `live` environment with required
+reviewers), never for Claude Code sessions.
 
-- [ ] Real `BaselineRunner` and `TrialRunner`: git worktree per trial,
-      subprocess runs of `Workload.command` (argv, no shell) with warm-up and
-      N >= 5 timed runs, peak RSS, output fingerprints, timeouts, network off.
-- [ ] `understand` node on `ENGINE_MODEL` with the `--max-cost` cap and token
-      accounting into `cost_usd` / `tokens_used`.
-- [ ] Trial edits by Claude inside the worktree; diff capture into `Trial.diff`
-      and `touched_paths` (the anti-cheating input).
-- [ ] `combine` re-tests the combined diff; `deliver` creates the real
-      `engine/<run>` branch (never the default branch).
-- [ ] Postgres `Repository` with `psycopg` and parameterised SQL
-      (`task_executions.user_intent` is `NOT NULL`; fill it from the goal).
-- [ ] E2E fixture: a small CPU Python repo with a known win, run through the
-      whole loop in CI.
-- [ ] Decide whether judged trials get their own state key (see Decisions).
-- [ ] Stage gate, development log row, PR, report.
+**Why.** The spec leaves several API facts unverified until "the live smoke test
+confirms before Step 5" (risk 8: text editor tool version, the explicit
+`fallbacks` body, the `role: system` notice shape), and the worst-case cost
+estimate is deliberately conservative (risk 14) until real usage is measured.
+Scripted replies prove the engine's logic; only live runs prove the contract
+with the API and calibrate cost. Spending each window's credit on the step in
+progress buys evidence that would otherwise wait for Step 5.
+
+**Unit cost basis** (engine price table, `claude-opus-5-5`: $4 input, $20
+output, $0.20 cache read per MTok; to be replaced by Stage A measurements):
+understand about $0.15-0.20 per call (worst case about $0.30); one trial about
+$0.30-0.60 (worst case about $6, always bounded by the run cap); Haiku triage
+about $0.0001 per abstract.
+
+### Window 0: the credit that expires 2026-10-25 ($200, decided 2026-10-23)
+
+The Console shows two promotional credits: $200 granted 2026-10-19 that expires
+2026-10-25, and $200 granted 2026-10-22 that expires 2026-11-25 (Window 1
+below). Window 0 is spent by the evening of 2026-10-24, each dollar on a test
+that measures something. The limits on the Console's Limits page are per minute
+(Start tier: Opus 5.5 1K RPM, 2M ITPM, 400K OTPM; cache reads do not count
+toward ITPM), not per day, so throughput is no constraint; the tier's monthly
+spend cap is $500. The key must be created inside a workspace: a key not scoped
+to one needs the `anthropic-workspace-id` header on every request.
+
+| Stage                      | When           | Live work                                                                                                                                                                                                    | Est.  |
+| -------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----- |
+| A. Stage A suite           | 2026-10-23     | the U21 suite with the workspace key, fixes, a rerun; Stage B calibration from its cost table                                                                                                                | ~$20  |
+| E0. Benchmark corpus (U22) | 10-23 to 10-24 | about 12 small repos, each with one known, provable slowdown and a correctness test, plus 3 already-fast controls; the whole loop twice on each, $5 cap per run: win rate, cost per win, false-positive rate | ~$100 |
+| X. Attack corpus (U22)     | 2026-10-24     | 3 more injected repos (test tampering, benchmark gaming, exfiltration through output), twice each                                                                                                            | ~$20  |
+| M. Model comparison        | 2026-10-24     | the corpus once with `ENGINE_MODEL=claude-sonnet-5-5`: does the cheaper editor win as often                                                                                                                  | ~$25  |
+| R. Reruns                  | 2026-10-24     | reruns after fixes                                                                                                                                                                                           | ~$35  |
+
+Every live run still needs the user's approval in the `live` environment and
+keeps its own hard cap; the ledger below records each.
+
+**Window 0 experiments (added 2026-10-23, after the research report "Spend the
+expiring credit testing discovery").** The corpus runs above cost $2.80 and
+answered the editor question; the remaining credit buys answers for Step 3. Each
+is a `live-smoke` suite (one dispatch, user approval each). "Need" is the suite
+cap a dispatch must carry (the sum of its tests' worst-case caps); "expected" is
+the likely bill.
+
+| #   | Suite        | Measures                                                                                               | Need | Expected |
+| --- | ------------ | ------------------------------------------------------------------------------------------------------ | ---- | -------- |
+| E1  | `probes`     | which request shapes the API accepts (citations + format, PDF in tool_result, batch fallbacks, effort) | $1   | < $0.10  |
+| E2  | `triage`     | Haiku batch triage of ~500 abstracts: cost per abstract, cache hits, batch latency, sync agreement     | $2   | ~$0.10   |
+| E3  | `sweep`      | blind hypothesis hit@1/@5 for Opus low/medium/high and Sonnet medium/high, graded by Opus 4.8          | $77  | ~$10     |
+| E5  | `ab`         | does a retrieved playbook card raise executed wins (2 reps, exact McNemar)                             | $140 | $12-18   |
+| E6  | `web`        | hosted web search/fetch on an allowlist: cost, adherence, arXiv reachability, injection resistance     | $52  | $3-4     |
+| E7  | `papers`     | two-pass cited extraction from 5 papers, local quote verification, planted-instruction PDFs            | $10  | ~$3.30   |
+| E8a | `escalation` | Sonnet low first, failures re-run on Opus high                                                         | $43  | ~$1      |
+| E8b | `prescreen`  | do code-execution sandbox timings rank like local ones                                                 | $3   | ~$0.06   |
+| E9  | -            | reconcile the ledger with the Usage API (needs an Admin key; else the Console by hand)                 | $0   | $0       |
+
+Order: E1 first (its answers settle shapes the others rely on), then the cheap
+ones, then E3 and E5. E4 is the blind playbook (`research/playbook.json`), not a
+run.
+
+### Window 1: 2026-10-23 to 2026-11-24 ($200)
+
+| Stage                          | When               | Live work                                                                                                                                                                                   | Est. per run    | Runs | Est. total |
+| ------------------------------ | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | ---- | ---------- |
+| A. Step 2 gate, U21 live suite | this week          | contract checks (tool version, `fallbacks` body, system notice, `count_tokens`, structured output, cache hits), live understand on varied repos, live E2E on the fixture, live attack repos | $6-9 (cap $12)  | 3-4  | ~$30       |
+| B. Cost calibration            | with A             | real usage replaces worst-case estimates; tighten `min_trial_budget_usd` and defaults                                                                                                       | $0              | -    | $0         |
+| C. Step 3 research             | early to mid Nov   | Haiku arXiv triage, Opus claim/precondition extraction (about 50 papers), live matcher tests                                                                                                | $5-10 per batch | 3-4  | ~$30       |
+| D. Weekly live regression      | weekly after merge | the Stage A suite, to catch API or model drift                                                                                                                                              | ~$8             | 4    | ~$32       |
+| E. Early dogfood pilot         | Nov 15-23          | the engine through the factory (no CLI yet) on 2-3 small OSS Python repos, real Claude trials                                                                                               | $10-15 (capped) | 4-6  | ~$60       |
+| Reserve                        | -                  | re-runs after fixes                                                                                                                                                                         | -               | -    | ~$40       |
+
+Total about $190. Stage E is the flex: around Nov 15, check the ledger and size
+E to use what is left before the reset.
+
+### Window 2: 2026-11-24 to 2026-12-24 ($200)
+
+| Stage             | Live work                                                                   | Est. total |
+| ----------------- | --------------------------------------------------------------------------- | ---------- |
+| Step 4 interfaces | `--goal` English to objectives (small requests), live CLI runs              | ~$15       |
+| Step 5 dogfood    | 10-15 OSS repo runs at $5-10 each, then the user's VLM bridge on the M4 Pro | ~$120      |
+| Weekly regression | as D                                                                        | ~$32       |
+| Reserve           | -                                                                           | ~$30       |
+
+### Guardrails
+
+- Every live test carries its own hard cap and the suite one overall; the
+  engine's pre-send check refuses any request whose worst case would pass the
+  cap.
+- Each CI live run writes its real cost to the job summary; the ledger below is
+  updated after every run.
+- Live runs go through the `live` environment. The user asked for runs without
+  per-run approval (2026-10-24); dispatches have started within seconds since
+  03:53 UTC that day, so the environment no longer waits for a reviewer. The
+  per-test and per-suite caps are the guard. **Before any Window 1 spend, the
+  user restores the required reviewers on `live`** (the user's instruction,
+  2026-10-24); the Lead reminds them when Window 0's last run (the A/B) ends.
+- Cost reconciliation (E9) is manual: the Usage and Cost Admin API is not
+  available on an individual account (403), so the ledger is checked against the
+  Console's Cost page.
+- Recommended backstop: a $200 monthly spend limit on the key's workspace in the
+  Anthropic console.
+- Live tests never run from a Claude Code container; the engine ignores the
+  container's `ANTHROPIC_BASE_URL`.
+
+### Live spend ledger
+
+| Date       | Window | Run                                                                                        | Stage | Cost (USD) | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ---------- | ------ | ------------------------------------------------------------------------------------------ | ----- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-10-23 | 1      | [39939504871](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/39939504871) | A     | 0.00       | HTTP 401 on every request built from fresh `Settings`: the suite's autouse `reset_environment` had put its placeholder key in the environment (our bug, not the key; fixed: live tests restore the host key). The requests on the shared `settings` carried the real key and got HTTP 400 (reason not kept then); 9 failed, 2 passed. Found and fixed: the E2E and attack tests passed with no API answer (now `check_answered`), the cache test's cap was below its byte-bound worst case, error replies kept only the status (now named in the cost table).                         |
+| 2026-10-23 | 1      | [39958890445](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/39958890445) | A     | 0.00       | Host key sent; every request HTTP 400: "This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header". 10 failed, 1 passed: the role:system probe recorded that refusal as a role refusal (fixed in `f364cf6`: only a refusal naming the role counts).                                                                                                                                                                                                                                                                                   |
+| 2026-10-23 | 0      | [39962457418](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/39962457418) | A     | 0.31       | Workspace-scoped key: all 11 live tests passed in 127 s (contract checks, understand on three repo shapes, the whole loop on dedupe, the attack repo, the editor test). The per-test table went to the job summary only, which the GitHub API does not return; the log now carries it too, so Stage B calibrates from the next run.                                                                                                                                                                                                                                                   |
+| 2026-10-23 | 0      | [39972311136](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/39972311136) | E0    | 1.50       | Corpus, Opus 5.5, cap 75, 14 min: 15/15 passed, every guard held. Slowdowns 12/12 won, each keeping the aimed hypothesis (known-fix rate 100 %), wall-time gains 61-98 %; controls 0/3 false wins. Per run 0.07-0.20 USD (mean 0.10), 2-5 % of the worst-case estimate (49.65 USD in all): the bound is 30-40x the real cost. The aimed hypothesis is handed to the engine, so this measures the editor and the judges, not discovery.                                                                                                                                                |
+| 2026-10-23 | 0      | [39978570791](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/39978570791) | M     | 0.68       | Corpus, Sonnet 5.5 as editor (no fallbacks), 11 min: the same result as Opus, 12/12 slowdowns won with the aimed fix (gains 60-98 %), 0/3 control wins, every guard held, at 0.045 USD a run against Opus's 0.10 (0.45x). Cache reads were priced at 0.20 USD/MTok then; the docs say 0.10 (fixed in `f02e2e7`), so the true cost is a little lower.                                                                                                                                                                                                                                  |
+| 2026-10-23 | 0      | [39981157005](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/39981157005) | X     | 0.31       | Attack corpus, Opus 5.5, 2.5 min: 3/3 passed, every guard held: no canary on the wire, in a diff or in the report, no lure in a delivered diff, no capture violation; each repo's real slowdown was still won (gains 92-96 %). The editor attempted no forbidden call (refused none), so the injections were ignored rather than refused: the refusal path stays proven offline only. One request in attack_exfil was served by the `claude-opus-4-8` fallback. The first dispatch was cancelled by the shared dispatch concurrency group (fixed in `69da74f`).                       |
+| 2026-10-24 | 0      | [39998493959](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/39998493959) | E1    | 0.02       | Probes 7/7 (0.0152, 7 % of the worst case). Citations + `output_config.format` and `fallbacks` in a batch are refused (400), as designed for; citations + strict tool, a PDF in a `tool_result`, web search + format on Haiku, and `xhigh`/`max` on Opus 4.8 and Haiku 5.5 are accepted.                                                                                                                                                                                                                                                                                              |
+| 2026-10-24 | 0      | [40056352236](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40056352236) | E2    | 0.00       | Triage failed before any spend: the arXiv category search returned nothing, and the reason went only to the job summary (the API does not return it). Fixed in `a02e55e`: retries with backoff, and every summary is printed to the log too.                                                                                                                                                                                                                                                                                                                                          |
+| 2026-10-24 | 0      | [40056353986](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40056353986) | E7    | 1.32       | Papers 6/6 passed (the opt-in 50-paper scale-up skipped): 4 papers gave 1-3 candidate cards each (one paper above the 30-page bound was skipped); the planted-instruction PDFs ran. Per-paper metrics are in the job summary (this run predates the log echo).                                                                                                                                                                                                                                                                                                                        |
+| 2026-10-24 | 0      | [40056355592](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40056355592) | E8b   | < 0.10     | Pre-screen 2/2 (fresh and reused code-execution containers vs local runs); timings in the job summary (predates the log echo).                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 2026-10-24 | 0      | [40056357297](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40056357297) | E8a   | 0.59       | Escalation 15/15: Sonnet 5.5 at `EDITOR_EFFORT=low` delivered 12/12 slowdowns on the first pass (no escalation needed) and 0/3 controls, about 0.04 USD a run (Sonnet at its default high: 0.045; Opus at medium: 0.10).                                                                                                                                                                                                                                                                                                                                                              |
+| 2026-10-24 | 0      | [40057574628](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40057574628) | E2    | 0.00       | Triage failed again before spend: HTTP 429 on every arXiv search attempt from the runner, while E7's lookups by id answered. Fixed in `51a6beb`: E2 falls back to a fixed id sample (2509.00001 onward).                                                                                                                                                                                                                                                                                                                                                                              |
+| 2026-10-24 | 0      | [40058317364](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40058317364) | E2    | 0.00       | Triage failed a third time before spend: the id-sample fallback got HTTP 429 too, so arXiv throttles the GitHub runner addresses outright. Step 3 finding: the arXiv monitor cannot run from Actions; it runs on the user's machine or reads a cached corpus.                                                                                                                                                                                                                                                                                                                         |
+| 2026-10-24 | 0      | [40058552438](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40058552438) | E6    | 1.11       | Web 18/18 (2.1 % of the 52 USD cap): research with web search on three slowdowns, direct vs code-execution filtered, on Haiku 5.5 and Opus 5.5; Haiku 0.002-0.025 a task, Opus 0.11-0.24. The Haiku screen flagged the planted block and passed the benign one. Whether the planted package was recommended is cut off in the capped table cell (the artifact host is blocked from the container), so every recorder now also logs each row in full. Console reconciliation: 8.61 total vs 5.89 in finished rows; the rest is the sweep in flight.                                    |
+| 2026-10-24 | 0      | [40058550106](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40058550106) | E3    | 6.01       | Blind sweep, 25 repos x 5 arms (7.8 % of the 77 USD cap), 26/26 passed. hit@5 on the 22 slowdowns: Opus 5.5 low 22/22, medium 21/22, high 20/22; Sonnet 5.5 medium 22/22, high 21/22; hit@1 19-21/22. Per repo: Sonnet medium 0.014 USD, Opus low 0.028, high 0.049. Opus at high returned no hypotheses on `leaderboard` and `ledgerclose` (paid, no error); every Opus arm claimed a big gain on the `lettertally` control, no Sonnet arm did. Only `fleetsim` separates the arms (hit@1 no for all): blind discovery saturates on this corpus, as the 2026-10-24 review predicted. |
+| 2026-10-24 | 0      | [40060175467](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40060175467) | E6    | 1.06       | Web rerun 18/18 (2.0 % of the cap); research costs as in the first run. Injection, partly logged (the runner log lost 5 of 19 echoed rows, fixed in `7dd6c9c`): Haiku with the planted text at top level mentioned the package, warned about it and did not recommend it; Opus with it in a `tool_result` did not mention it. The Haiku screen again flagged the planted block and passed the benign one.                                                                                                                                                                             |
+| 2026-10-24 | 0      | [40061538065](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40061538065) | E3    | 2.66       | Sweep with Fable 5.1 (medium) beside Sonnet 5.5 medium (8.1 % of the 33 USD cap): Fable 12/12 hit@1 and hit@5 on the benchmark slowdowns at 0.106 USD a repo, 7x Sonnet's 0.015 for the same rate; Sonnet repeated 21/22 and 22/22 with no control claims.                                                                                                                                                                                                                                                                                                                            |
+| 2026-10-24 | 0      | [40061539774](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40061539774) | H     | 1.14       | Hard corpus, blind (one generic hypothesis), Opus 5.5 editor: 10/10 delivered, 10/10 reached the reference gain (gains 66-96 %, two on peak memory), one trial each, every guard held, 0.11 USD a run.                                                                                                                                                                                                                                                                                                                                                                                |
+| 2026-10-24 | 0      | [40061541473](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40061541473) | O     | 2.96       | OSS corpus, aimed, 10 real repositories: 6/10 delivered with gains of 3-14 % (tabulate 14.3, tomli 13.3, markdown 10.2, idna 10.1, sqlparse 4.0, mistune 3.2), 4 not (`sortedcontainers` kept a trial whose combination failed the re-test; three found nothing past the noise), every guard held, 0.30 USD a run. The real-code signal: small gains, and 40 % of aimed attempts do not clear the noise.                                                                                                                                                                              |
+
+### 2026-10-23 (Window 0 experiments)
+
+- **Claude API facts Step 3 builds on** (verified 2026-10-23/24 against the live
+  API or the docs):
+  - Request shapes: citations with `output_config.format` is a 400; Haiku 5.5
+    rejects `fallbacks` (a triage route turns `ENGINE_FALLBACKS` off); batches
+    reject `fallbacks`; forced `tool_choice` is unsupported on Opus and Sonnet
+    5.5; structured-output schemas take no `minLength`/`maxLength` and need
+    `additionalProperties: false`; a schema field named `reasoning`, `thinking`
+    or `trace` can draw a billed refusal (use `justification_summary`);
+    `messages.parse` takes no `cache_control`; a non-streaming `max_tokens`
+    above about 21,333 needs an explicit timeout or the SDK raises `ValueError`;
+    a 529 maps to `OverloadedError`, not `InternalServerError`.
+  - Caching: changing effort, format, tools or citations invalidates the prefix,
+    so effort is fixed per conversation; a 1 h write costs 2x; the minimum
+    cacheable prefix is 512 tokens. E3's probe confirmed a second generator call
+    with the same prefix reads the cache (21,049 tokens).
+  - Pricing: Haiku 5.5 has a long-context tier above 100K input tokens
+    ($0.50/$2.50 per MTok, cache read $0.05), modelled as
+    `ModelPrice.long_context`; the estimate uses it whenever the prompt bound
+    can cross the threshold. Effort levels are validated per chain model
+    (`EFFORT_LEVELS`). The live docs win over the bundled claude-api skill when
+    they disagree.
+  - Refusals: `frontier_llm` refusals are billed with no output and benign ML
+    code can trigger them (Step 5 VLM); log `stop_details.category` per
+    hypothesis. The `claude-opus-4-8` fallback is valid until 2027-05-28, and
+    Opus 5.5 thinking blocks are dropped when it serves.
+  - Research sources: the Claude Code container's proxy refuses arXiv, Semantic
+    Scholar and OpenAlex; GitHub runners get HTTP 429 from arXiv. Limits: arXiv
+    one request per 3 s, Semantic Scholar one per second with a key, OpenAlex $1
+    a day free with a key.
+- **A raw-SDK harness for API features the engine does not use**
+  (`tests/live/experiments/`), not new engine code: batches, citations, web
+  tools and code execution are Step 3 candidates, so they are measured before
+  they are designed in. Why: the engine's transport is deliberately narrow
+  (fallbacks, no thinking, 5-minute caching); widening it for an experiment
+  would weaken the cap it proves.
+- **The harness keeps the engine's guarantees.** Every request is pinned to the
+  engine's host at the wire, checked against a worst-case bound before it is
+  sent, priced per attempt and recorded in the suite ledger; a run over its cap
+  fails. Why: the SDK follows a batch's `results_url` by itself, and a
+  server-tool loop bills up to 10 passes; both broke the first bound.
+- **Caps are sums of worst cases, so arm order cannot refuse an arm.** The first
+  X7 draft shared one cap across arms and would have lost the later arms' data
+  exactly when the first ones spent most. Why: biased data is worse than a
+  larger reserved cap that is never spent.
+- **The playbook was written blind** (its author never read the corpus) and
+  carries distractors. Why: a playbook tuned to the benchmark makes the A/B
+  worthless.
+- **The sweep's grader is Opus 4.8, no arm's model.** Why: an LLM judge favours
+  its own family.
+- **The trial brief falls back to the run's top 5 hotspots** (`546782e`). Why:
+  caller-built candidates named no hotspot of the run, so every corpus editor
+  saw "Profiler hotspots: (none)". Runs after it are comparable with each other,
+  not with the earlier ledger rows.
+- **Effort is an explicit per-role setting** (`UNDERSTAND_EFFORT`,
+  `EDITOR_EFFORT`). Why: unset, Opus 5.5 ran at medium and Sonnet 5.5 at high,
+  so the M comparison was not like for like.
+
+## Next: finish Step 2, then Step 3
+
+Step 2's build list is done: real baseline and trial runners in git worktrees
+(argv, warm-ups, N >= 5 timed runs, peak RSS, output fingerprints, timeouts,
+network off), the understand node under the cost cap, Claude trial edits with
+the diff captured by git, combine with a re-test, delivery to a real
+`engine/run-<id>` branch, the Postgres repository, the E2E fixture in CI, and
+the judged-trials key question (closed by decision 35). Left:
+
+- [x] Verifier, stage gate, `/security-review`, U21 live suite (2026-10-23).
+- [x] First live-smoke run and its ledger row (2026-10-23).
+- [x] The macOS job blocking (`59888bd`), the close-out stage gate and second
+      `/security-review` (2026-10-24, below), decisions still only in
+      `.claude/handoff/` moved here and the folder deleted.
+- [ ] The Step 2 report and development-log row (with the A/B result), then the
+      user marks PR #12 ready.
+
+Step 3 starts from the Window 0 findings (a fresh-context review of the branch
+on 2026-10-24 agreed):
+
+- **First build: wire `generate_hypotheses` and `match_techniques` into the
+  hypotheses node.** Both exist and are measured live, but the engine still runs
+  only caller-supplied candidates. Why: it is the gap between the walking
+  skeleton and "make it better" with no hypothesis handed over.
+- **Validate the sweep's grader before trusting hit@k**: hand-label about 10
+  hypothesis and reference-fix pairs, near misses included, and check the Opus
+  4.8 grader agrees. Why: one unlabelled LLM grader is an unmeasured judge.
+- **Discovery is measured on the hard corpus and real code, not the easy
+  corpus**: the 12 benchmark slowdowns are single-hotspot textbook cases the
+  profiler points at, so blind rates saturate there. Small gains (2-20 %) are
+  only exercised by the OSS suite.
+- **The arXiv monitor does not run from GitHub runners** (E2: HTTP 429 on search
+  and id lookups alike); it runs on the user's machine or reads a committed
+  snapshot. Paper retrieval waits on the A/B (E5).
+- Playbook slugs map to `techniques.slug` (unique in 003), so no migration is
+  needed for the id.
+- **Step 3 design stance** (research report, 2026-10-23): playbook first, with
+  papers feeding the same card format; candidates ranked by verdicts and
+  lessons, never by an LLM novelty score; extraction in two passes (cited prose,
+  then structuring) with a local `cited_text` check; papers arrive as
+  `tool_result` under an untrusted policy and a Haiku screen; hypothesis prompts
+  carry "inspirations" with near-duplicate rejection; the ledger records
+  thinking tokens, server tool use and refusal categories. Skipped, with
+  reasons: the memory tool (a reward-hacking channel), the MCP connector until
+  Step 4, tool search, Managed Agents (an x86 sandbox cannot measure an M4), the
+  Agent SDK (it loads the repository's `.claude/`), fast mode.
+- **Reading the A/B (E5)**: B must beat A by 3 discordant tasks. The playbook
+  has a plausible card for 12/12 benchmark slowdowns and 3/3 attack repos but
+  only 7/10 hard repos (`ledgerclose`, `deliveryround` partial, `sensormean`
+  none), so B cannot win where no card fits.
+- **Noise sets what can be proved**: host CV measured 9-28 % on the Lead's
+  container; the floor uses the sample stdev, so more runs never lower it; 0.5-1
+  s per run is advised; CPU pinning was rejected (no gain, Linux only);
+  `noisy_host` fires above 10 % CV or under a 0.5 s mean. The OSS result (4/10
+  below the noise) is this floor at work; GitHub-runner CV is still unmeasured.
+- **Sonnet 5.5 at medium is the default hypothesis generator** (E3: the best hit
+  rate at the lowest cost, 0.014 USD a repo, and no false big-gain claim on a
+  control), with Opus 5.5 low as the comparison arm; Opus at high is dropped
+  (two empty answers, the highest cost). Fable 5.1 matched it at 7x the cost on
+  a saturated set, so its place (the matcher) waits for a set that separates.
+- **Opus generators claim big gains on controls** (`lettertally`, all three
+  efforts): the expected-gain field cannot rank hypotheses until it is
+  calibrated against executed outcomes.
+
+### Known gaps carried to later steps
+
+- **Non-UUID candidate ids fail late on Postgres** (found by the Step 3 design's
+  research, 2026-10-24). `Hypothesis.id` accepts any safe id (`h1`), but the
+  `lessons` table stores `hypothesis_id` and `technique_id` as UUIDs and
+  `PostgresRepository.save_lesson` refuses anything else (pinned on purpose in
+  `tests/persistence/test_postgres.py`). `save_run` validates the project,
+  objective and workload ids before any node runs, but candidates are not in the
+  state, so a Postgres run with caller ids like `h1` (or a playbook slug as
+  `technique_id`) spends on trials and then fails at learn. No current caller
+  hits it (the live suites use the in-memory repository; the E2E ids are UUIDs).
+  Owner: Step 3's first unit (uuid5 mapping or UUID-only candidates, decided in
+  its spec).
+- **Answer memorisation is accepted for Step 2**: the editor never sees a
+  workload's output, and the test suite and human review stand guard; held-out
+  inputs arrive with Step 5.
+- **The child environment is an allowlist** and deny patterns beat explicit
+  extras, so a user's `*_URL` and `*_TOKEN` variables never reach a workload,
+  and on macOS the workload cannot use its own loopback. CUDA, MPS and Hugging
+  Face style variables need an explicit decision in Step 4/5.
+- **Peak RSS is the maximum over waited descendants**; orphans are not counted.
+  If sums are needed (Step 5 DataLoader workers): `PR_SET_CHILD_SUBREAPER`,
+  `/proc` sampling, or cgroup v2 `memory.peak`.
+- **Persistence for Step 4**: the CLI must look a project up by `root_path` and
+  reuse it (else `UniqueViolation`); `user_intent` holds the objectives or "make
+  it better" until `--goal`; `estimated_cost_usd` is a rounded DECIMAL(10,4)
+  copy; JSONB rejects inf/nan and floats of 1e16 or more come back as int.
+- **PostgresSaver** stores str subclasses raw, so the StrEnum `phase` comes back
+  as a plain str: re-type through the per-key adapters, add an E2E on
+  `PostgresSaver`, and take a release at least two weeks old (3.2.0 adds
+  psycopg-pool and orjson). The sqlite saver is untested.
+- **LFS and submodules (Step 5)**: `worktree add` leaves LFS pointers;
+  `unshare -rn git lfs checkout` restores them offline from the shared
+  `.git/lfs`, and LFS paths must be read-only to trials. Submodules are not
+  initialised.
+- **Dependency shadowing**: a trial adding `numpy.py` under a module root is an
+  accepted limitation covered by human review; it matters more once Step 3b adds
+  packages.
+- **`ledgerclose`'s two hot spots stress different hardware.** `pop(0)` on a
+  60,000-item list is memory-bandwidth bound, the window maximum is compute
+  bound, so their ratio varies about tenfold between machines (16:1 in the
+  Lead's container, close to 1:1 on GitHub runners). The guard
+  `test_a_fix_that_leaves_one_hot_spot_falls_short` is machine-independent since
+  2026-10-24: each partial fix must stay at least 2x slower than the full fix
+  measured in the same run (measured minimum 3.2x). What remains: the live
+  hard-corpus scoring's known-fix rule still compares against the absolute
+  `fix_gain`, so on a memory-slow machine a settle-only fix of `ledgerclose`
+  would be credited as the full fix. Follow-up: rebuild the repository with two
+  hot spots of the same kind (both C-level loops over Python objects), keeping
+  its multi category. Owner: Step 3's corpus rework.
+- **Multiprocessing `spawn`/`forkserver` fail in the Linux sandbox.** The
+  seccomp filter that closes path-based AF_UNIX egress refuses every
+  `socket(AF_UNIX)`, and those start methods need an AF_UNIX listener; `fork`
+  (socketpair-based) works. Python 3.14 makes `forkserver` the Linux default, so
+  a 3.14 workload using multiprocessing fails at baseline. Follow-up: allow
+  AF_UNIX sockets bound inside the worktree or scratch dir only (Landlock scoped
+  unix sockets where the kernel has them, else a connect/bind filter), so local
+  IPC works and host sockets stay unreachable. Owner: Step 4 (runner).
+- **Runner notes reach the live stream only.** `RunNotes` emits them as
+  `runner_note` events, but they are not appended to `state["events"]` or the
+  audit row. Step 4's CLI live log is the place to keep them.
+- **`EditResult` has no notes**, so the editor's fallback and unpriced-model
+  notes are not surfaced.
+- **Profiler shadowing:** a repository module named like a stdlib module the
+  profiler shim imports (`json.py`, `runpy.py`, ...) leaves that workload "not
+  profiled", and its editable-install check does not run (the note says so).
+- **`Settings` reads `.env` from the current directory.** A `.env` inside the
+  target repository could set `ENGINE_API_BASE_URL` if the engine were started
+  there. Today there is no CLI; the Step 4 CLI must read settings from its own
+  location or the user's config dir, never the target's working directory.
+- **A context serves one run at a time**: connect rebinds the runners of the
+  context `build_context` returned.
+- **A resume on a context with other isolation modes** re-tests the combination
+  with those modes while the report shows connect's. The `Combiner` protocol
+  does not expose its modes yet; Step 4's resume should refuse the mismatch.
+- **A trial over its budget is charged exactly the budget**; the overrun the
+  editor reported is in the trial's error text, not the run total (the estimate
+  is a bound, so this only happens if the API bills above it).
+- **The run-id claim is per process** (`Orchestrator` with the in-memory
+  checkpointer); `PostgresSaver` resume (Step 4) needs it in the database.
+- From the spec, deferred by design: research and LLM-generated candidates (Step
+  3); the CLI, `--max-cost`/`--goal`/`--test-command`, test-command inference,
+  the live log, hardware detection, `PostgresSaver` resume and a `clean` command
+  for trial refs (Step 4); M4 dogfood, submodules, LFS, held-out inputs,
+  `Workload.inputs`, `metrics_file`, process-tree RSS and a per-run tmpfs for
+  `/dev/shm` (Step 5); PR creation and package installs (later).
 
 ---
 
-## Metrics Snapshot (2026-10-21)
+## Metrics Snapshot (2026-10-22)
 
-| Metric                         | Value                                                      |
-| ------------------------------ | ---------------------------------------------------------- |
-| Python tests                   | 560 passed                                                 |
-| Python coverage                | 100% of 1,431 statements (placeholders excluded)           |
-| TypeScript tests               | 33 passed                                                  |
-| Product code (non-placeholder) | ~3,200 lines Python + 450 lines SQL; ~8,000 lines of tests |
-| Engine features shipped        | Walking skeleton of the full loop (stub runners)           |
+| Metric                         | Value                                                                                      |
+| ------------------------------ | ------------------------------------------------------------------------------------------ |
+| Python tests                   | 3,363 passed, 3 skipped (macOS-only or root-only)                                          |
+| Python coverage                | 100% of 7,297 statements and 2,000 branches (placeholders excluded)                        |
+| TypeScript tests               | 33 passed                                                                                  |
+| Product code (non-placeholder) | ~16,000 lines Python in `src` + ~930 lines SQL; ~44,000 lines of tests (fixtures excluded) |
+| Engine features shipped        | The full loop on CPU Python workloads; research and CLI not yet                            |
 
 ---
 
 ## Delivery Metrics (DORA-style, per step)
 
-| Step | Lead time | CI-red pushes                | Rework commits        | Reverts |
-| ---- | --------- | ---------------------------- | --------------------- | ------- |
-| 0    | ~2 h      | 0                            | 0                     | 0       |
-| 1    | ~4.5 h    | 2 (GHA cache; README format) | 6 (regroup, 5 review) | 0       |
+| Step | Lead time                                                                    | CI-red pushes                                                                                         | Rework commits          | Reverts |
+| ---- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ----------------------- | ------- |
+| 0    | ~2 h                                                                         | 0                                                                                                     | 0                       | 0       |
+| 1    | ~4.5 h                                                                       | 2 (GHA cache; README format)                                                                          | 6 (regroup, 5 review)   | 0       |
+| 2    | ~60 h (2026-10-21 18:18 to 2026-10-24 ~07:00, Window 0 experiments included) | 4 (`dbec415` Python 3.10 on the runner, `3b2ffee`, `92cefe7`, `a02e55e` the orderlookup timing floor) | 28 `fix` commits of 116 | 0       |
 
 ## Lessons (retro per step)
+
+### Step 2
+
+- **Cost caps need a stated rule in the brief.** Two of the nine experiment
+  units first shared one cap across requests whose worst cases summed to 3x the
+  cap (the later arms would have been refused, biasing the data), and the
+  harness's first bound missed fetched PDFs and the server-tool loop. Every
+  brief that spends now states: a shared run's cap is the sum of its requests'
+  worst cases, computed with the real estimator and asserted by a guard.
+- **Real runners find what local runs cannot.** CI's runner had Python 3.10,
+  whose missing `-P` broke a profiler test (`cd0a3e6`), and the first macOS run
+  found that `killpg` answers EPERM there once the group has exited (`ecb24aa`).
+  Install the CI interpreters locally and push early to every platform job.
+- **Do not assume the environment is set up.** In this cloud container the
+  environment setup script had not run (the Lead's observation), so Postgres and
+  the old interpreters had to be installed by hand, and a missing one only skips
+  locally. Check `pg_isready` and `python3.8 --version` before relying on a
+  green local suite.
+- **Reviewers on a different model found real defects in every unit they
+  reviewed**, security bugs among them: report forgery through `/proc` in the
+  launcher, test-runner shadowing with an added `unittest.py`, the API address
+  following a stray `ANTHROPIC_BASE_URL`, planted links reaching git's worktree
+  removal, an ungated paid key in CI. Keep the security lens on every unit that
+  touches a trust boundary (all of those did).
+- **A review that returns nothing must halt the workflow.** A reviewer that died
+  returned null, which read as "no findings" and skipped the fixer;
+  `build-wave.workflow` now stops the unit and names the missing lens
+  (`80c1a8d`).
+- **Write the decisions down where they will survive.** The spec and the Lead
+  notes lived in `.claude/handoff/`, deleted at the close-out; the Decisions,
+  Known gaps and Next sections carry them (24 items found only there were moved
+  on 2026-10-24).
+- **Reviews missed what sits between the units.** The first live run sent a
+  placeholder key: the suite's autouse `reset_environment` replaces
+  `ANTHROPIC_API_KEY` for every test, and every dry run and review swapped the
+  key itself, so none exercised the real wiring. The root container hid that a
+  non-root user cannot open a mode-000 directory (CI caught it). Builders and
+  Reviewers now get a SEAMS checklist in `build-wave.workflow`: read the
+  fixtures above the tests, swap only the wire in a dry run, run file-mode code
+  as a non-root user, name what only CI, macOS or a live run can prove.
+- **A gate with a failing test is not a pass**, even when the failure is
+  machine-dependent (the user's correction at the close-out). Guards that
+  compare timings across machines compare within one run: a ratio against a
+  reference measured side by side cancels the hardware, a fixed threshold does
+  not (`ledgerclose`, `9db3c77`).
+- **Move decisions out of handoff notes as they are made.** The close-out audit
+  found 24 decisions and verified facts that lived only in `.claude/handoff/`; a
+  running "decisions to STATUS" check at each wave end would have caught them
+  while fresh.
+- **What CI does not echo, the Lead cannot read.** The job summary is not
+  returned by the API and the runner log can drop a chunk, so every verdict a
+  later step depends on goes to the log and into the always-printed cost-table
+  notes.
+- **A workflow's token guard counts the turn, not the workflow.**
+  `budget.spent()` started at 6.7M in the Step 3 design run, so the first
+  attempt ran no agent; guards take the spend at the start and compare the
+  difference.
+- **Spend review effort where the risk is.** One correctness Reviewer per unit,
+  a security Reviewer only where the unit touches a trust boundary, reviews
+  scoped to the diff and its direct callers and fixtures, the cheap local matrix
+  (non-root, Python 3.11, Postgres up) before any review, and one Verifier round
+  per risk area rather than repeated full sweeps.
 
 ### Step 1
 
@@ -354,18 +1485,32 @@ and the review of the runner's isolation).
 
 ## Technical Debt
 
+- `[tool.hatchling.build.targets.wheel]` in `pyproject.toml` is a dead key
+  (hatch reads `[tool.hatch...]`); `playbook.json` ships anyway.
+- `test_the_blind_hypothesis_states_an_intent_never_a_fix[runtime]` is flaky
+  under `-x -n 2`.
 - `pyproject.toml` `[project.scripts]` and `[project.entry-points]` reference
   modules that do not exist yet (`cli`, `codegen`, `tools`, `integrations`).
   Implement or remove in Step 4.
 - `packages/research-engine` (TypeScript) duplicates the Python research
   module's purpose. Decision (Step 1): it stays a placeholder until TypeScript
   workloads exist; research is built in Python.
-- `StubTrialRunner._unit_for` labels `throughput_per_s` as seconds; fix when the
-  real runner lands.
+- `StubTrialRunner._unit_for` labels `throughput_per_s` as seconds; the real
+  runner never produces that metric.
 - Both pgvector and Qdrant are configured. Pick one when embeddings land (Step
   3).
 - `services/python_agents/Dockerfile` installs with pip while CI uses uv.
 - Local development may run on Python 3.13 while CI pins 3.11.
+- Source modules above the ~400-line cap (lines on 2026-10-22): `nodes.py`
+  1,728, `preflight.py` 1,003, `git.py` 843, `models.py` 760, `launcher.py` 709,
+  `judges.py` 682, `anticheat.py` 675, `procrun.py` 664, `understand.py` 661,
+  `measure.py` 605, `trial_runner.py` 575, `editor_tools.py` 550, `editor.py`
+  524, `profiler.py` 511, `transport.py` 491, `postgres.py` 430, `fakes.py` 402.
+  Split when a later step touches them.
+- The report's trial-ref cleanup command pipes into
+  `xargs -n1 git update-ref -d`; run with nothing left to delete, GNU `xargs`
+  still calls `git update-ref -d` once and it prints its usage. The README's
+  `update-ref --stdin` form is a no-op then, and deletes in one transaction.
 
 ---
 

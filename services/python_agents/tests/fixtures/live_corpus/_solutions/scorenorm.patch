@@ -1,0 +1,18 @@
+diff --git a/scorenorm/core.py b/scorenorm/core.py
+index e7e9d4f..527c00e 100644
+--- a/scorenorm/core.py
++++ b/scorenorm/core.py
+@@ -4,9 +4,11 @@
+ def rescale(values: list[float]) -> list[float]:
+     """Map each value to ``(v - min) / (max - min)``; all zeros when flat."""
+     scaled: list[float] = []
++    if not values:
++        return scaled
++    low, high = min(values), max(values)
++    span = high - low
+     for value in values:
+-        low, high = min(values), max(values)
+-        span = high - low
+         scaled.append(0.0 if span == 0 else (value - low) / span)
+     return scaled
+ 

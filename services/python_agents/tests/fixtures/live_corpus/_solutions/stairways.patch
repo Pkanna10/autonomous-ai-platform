@@ -1,0 +1,16 @@
+diff --git a/stairways/core.py b/stairways/core.py
+index 4043502..7958956 100644
+--- a/stairways/core.py
++++ b/stairways/core.py
+@@ -1,8 +1,11 @@
+ """Counting climbs."""
+ 
++import functools
++
+ MOVES = (1, 3, 4)
+ 
+ 
++@functools.cache
+ def ways(height: int) -> int:
+     """The number of move sequences from ``MOVES`` that climb exactly ``height``."""
+     if height < 0:

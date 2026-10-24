@@ -22,11 +22,19 @@ The checkpoint thread is the source of truth for a run: ``run`` and
 ``stream`` refuse a run id whose thread already exists, ``resume`` only
 continues a thread parked at the approval gate, and a failed result is built
 from the last checkpoint, never invented.
+
+``run`` and ``stream`` save the initial state to the repository before the
+graph starts (Step 2, decision 28): the run row exists before any lesson or
+trial refers to it, a crash leaves an audit row, and a repository refusal
+(``ProjectConflictError``, ``InvalidRecordIdError``) reaches the caller
+before any node has run.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+import contextlib
+import threading
+from collections.abc import Generator, Iterator, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
 from typing import Literal, cast
@@ -66,8 +74,14 @@ from autonomous_ai_agents.orchestrator.nodes import (
     NodeContext,
     make_nodes,
     make_router,
+    progress_of,
+    trial_refs_left,
 )
-from autonomous_ai_agents.orchestrator.state import EngineState, initial_state
+from autonomous_ai_agents.orchestrator.state import (
+    REDUCER_KEYS,
+    EngineState,
+    initial_state,
+)
 from autonomous_ai_agents.persistence.repository import InMemoryRepository
 
 EngineGraph = CompiledStateGraph[EngineState, None, EngineState, EngineState]
@@ -87,6 +101,32 @@ _SPARE_STEPS = 5
 _PAUSED_AT_GATE: tuple[str, ...] = ("approval_gate",)
 """``StateSnapshot.next`` of a run waiting for the human."""
 
+_DRIVEN: set[str] = set()
+"""Run ids some ``run``, ``stream`` or ``resume`` call in this process drives."""
+_DRIVEN_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def _driving(run_id: str, refusal: str) -> Iterator[None]:
+    """Claim ``run_id`` for one call; ``ValueError(refusal)`` while another
+    call (any ``Orchestrator`` in this process) drives it.
+
+    The check of the checkpoint thread and the graph call that follows are
+    otherwise check-then-act: two resumes of one paused run would both pass
+    the gate check, deliver contradicting decisions and race for the
+    combine's worktree. The checkpointer is in memory (one process), so a
+    process-wide claim makes the check and the call one step.
+    """
+    with _DRIVEN_LOCK:
+        if run_id in _DRIVEN:
+            raise ValueError(refusal)
+        _DRIVEN.add(run_id)
+    try:
+        yield
+    finally:
+        with _DRIVEN_LOCK:
+            _DRIVEN.discard(run_id)
+
 
 def run_config(run_id: str, max_rounds: int) -> RunnableConfig:
     """The config that binds a run to its checkpoint thread.
@@ -104,6 +144,10 @@ def run_config(run_id: str, max_rounds: int) -> RunnableConfig:
 def _thread(run_id: str) -> RunnableConfig:
     """The config that only names a run's thread (enough for ``get_state``)."""
     return {"configurable": {"thread_id": run_id}}
+
+
+def _exists(run_id: str) -> str:
+    return f"run {run_id!r} already exists"
 
 
 def build_checkpointer() -> InMemorySaver:
@@ -176,12 +220,22 @@ class Orchestrator:
     the human's ``ApprovalDecision``. ``stream`` yields the live log instead.
     An ``EngineError`` raised by a node becomes a ``failed`` result whose
     state is the last checkpoint marked failed; any other exception
-    propagates. Every result's state (and every streamed run's final state)
-    is saved to the context's repository.
+    propagates once the run is saved as failed. Either way the failed state
+    keeps what the failing node had spent and run (``nodes.keep_progress``)
+    and lists the trial refs left. The initial state is saved to the
+    context's repository before the graph starts, and every result's state
+    (and every streamed run's final state) after it; an ``EngineError`` from
+    that first save propagates before any node runs.
 
-    ``run`` and ``stream`` raise ``ValueError`` for a run id whose thread
-    already exists; ``resume`` raises ``ValueError`` unless the run is
-    paused at the approval gate.
+    ``max_cost_usd`` is the run's hard cost cap (default
+    ``settings.MAX_COST_USD``; ``initial_state`` refuses a negative or
+    non-finite one with ``ValueError``). ``run`` and ``stream`` raise
+    ``ValueError`` for a run id whose thread already exists; ``resume``
+    raises ``ValueError`` unless the run is paused at the approval gate.
+    One call at a time drives a run id in this process: a ``run``,
+    ``stream`` or ``resume`` of a run id another call is driving is refused
+    the same way (``_driving``), so of two concurrent resumes one continues
+    and the other is told the run is not waiting for approval.
     """
 
     def __init__(
@@ -204,6 +258,7 @@ class Orchestrator:
         *,
         run_id: str | None = None,
         max_rounds: int | None = None,
+        max_cost_usd: float | None = None,
     ) -> EngineRunResult:
         """Start a run and drive it to completion, approval or failure."""
         state = initial_state(
@@ -213,10 +268,14 @@ class Orchestrator:
             guardrails,
             run_id=run_id,
             max_rounds=max_rounds,
+            max_cost_usd=max_cost_usd,
         )
-        cfg = run_config(state["run_id"], state["max_rounds"])
-        self._refuse_existing(state["run_id"])
-        return self._invoke(state["run_id"], cfg, state)
+        run = state["run_id"]
+        cfg = run_config(run, state["max_rounds"])
+        with _driving(run, _exists(run)):
+            self._refuse_existing(run)
+            self.context.repository.save_run(state)
+            return self._invoke(run, cfg, state)
 
     def resume(self, run_id: str, decision: ApprovalDecision) -> EngineRunResult:
         """Continue a run paused at the approval gate with the human's decision.
@@ -224,15 +283,17 @@ class Orchestrator:
         An invalid decision does not fail the run: the result is
         ``needs_approval`` again and its request carries the error.
         """
-        snapshot = self.graph.get_state(_thread(run_id))
-        if not snapshot.values:
-            raise ValueError(f"run {run_id!r} is unknown")
-        if snapshot.next != _PAUSED_AT_GATE:
-            raise ValueError(f"run {run_id!r} is not waiting for approval")
-        cfg = run_config(run_id, snapshot.values["max_rounds"])
-        return self._invoke(
-            run_id, cfg, Command(resume=decision.model_dump(mode="json"))
-        )
+        busy = f"run {run_id!r} is not waiting for approval: another call drives it"
+        with _driving(run_id, busy):
+            snapshot = self.graph.get_state(_thread(run_id))
+            if not snapshot.values:
+                raise ValueError(f"run {run_id!r} is unknown")
+            if snapshot.next != _PAUSED_AT_GATE:
+                raise ValueError(f"run {run_id!r} is not waiting for approval")
+            cfg = run_config(run_id, snapshot.values["max_rounds"])
+            return self._invoke(
+                run_id, cfg, Command(resume=decision.model_dump(mode="json"))
+            )
 
     def stream(
         self,
@@ -243,6 +304,7 @@ class Orchestrator:
         *,
         run_id: str | None = None,
         max_rounds: int | None = None,
+        max_cost_usd: float | None = None,
     ) -> Iterator[EngineEvent]:
         """Start a run and yield its live events as they happen.
 
@@ -252,7 +314,9 @@ class Orchestrator:
         waits at the gate, or an error-level event when it fails (the run is
         then marked failed). ``resume`` continues a paused run. The final
         state is saved to the repository before that last event is yielded,
-        so a consumer that stops at it loses nothing.
+        so a consumer that stops at it loses nothing, and the run id is no
+        longer claimed (``_driving``) by then: ``resume`` works while the
+        consumer still holds the generator.
         """
         state = initial_state(
             project,
@@ -261,10 +325,21 @@ class Orchestrator:
             guardrails,
             run_id=run_id,
             max_rounds=max_rounds,
+            max_cost_usd=max_cost_usd,
         )
         run = state["run_id"]
         cfg = run_config(run, state["max_rounds"])
-        self._refuse_existing(run)
+        with _driving(run, _exists(run)):
+            self._refuse_existing(run)
+            self.context.repository.save_run(state)
+            last = yield from self._stream(run, cfg, state)
+        yield last
+
+    def _stream(
+        self, run: str, cfg: RunnableConfig, state: EngineState
+    ) -> Generator[EngineEvent, None, EngineEvent]:
+        """Yield the nodes' events; return the stream's own last event, which
+        ``stream`` yields once the run id's claim is released."""
         try:
             for chunk in self.graph.stream(state, cfg, stream_mode="custom"):
                 yield EngineEvent.model_validate(chunk)
@@ -273,8 +348,10 @@ class Orchestrator:
             self.context.repository.save_run(failed)
             event = make_event(run, RunPhase.failed, str(exc), level=EventLevel.error)
             emit(event)
-            yield event
-            return
+            return event
+        except Exception as exc:
+            self._save_crash(cfg, exc)
+            raise
         snapshot = self.graph.get_state(cfg)
         final = cast(EngineState, dict(snapshot.values))
         self.context.repository.save_run(final)
@@ -292,12 +369,12 @@ class Orchestrator:
                 run, RunPhase.done, f"done: {kept} change(s) kept", data={"kept": kept}
             )
         emit(event)
-        yield event
+        return event
 
     def _refuse_existing(self, run_id: str) -> None:
         """Raise ``ValueError`` when ``run_id`` already has a checkpoint thread."""
         if self.graph.get_state(_thread(run_id)).values:
-            raise ValueError(f"run {run_id!r} already exists")
+            raise ValueError(_exists(run_id))
 
     def _invoke(
         self,
@@ -311,6 +388,9 @@ class Orchestrator:
             result = EngineRunResult(
                 run_id, "failed", self._failed_state(cfg, exc), None
             )
+        except Exception as exc:
+            self._save_crash(cfg, exc)
+            raise
         else:
             if output.interrupts:
                 request = ApprovalRequest.model_validate(output.interrupts[0].value)
@@ -327,7 +407,36 @@ class Orchestrator:
         values = self.graph.get_state(cfg).values
         if not values:
             raise exc
-        state = cast(EngineState, dict(values))
+        return self._marked_failed(values, exc, str(exc))
+
+    def _save_crash(self, cfg: RunnableConfig, exc: Exception) -> None:
+        """Save the run as failed before a non-engine exception propagates, so
+        the audit row shows what the run did and spent (decision 28)."""
+        values = self.graph.get_state(cfg).values
+        if values:
+            failed = self._marked_failed(values, exc, f"{type(exc).__name__}: {exc}")
+            self.context.repository.save_run(failed)
+
+    def _marked_failed(
+        self, values: object, exc: BaseException, error: str
+    ) -> EngineState:
+        """``values`` plus what the failing node had earned (``progress_of``:
+        the money it spent, the trials it ran), marked failed with ``error``,
+        and a warning naming the trial refs it keeps."""
+        state = cast(EngineState, dict(cast(dict[str, object], values)))
+        merged = cast(dict[str, object], state)
+        for key, value in progress_of(exc).items():
+            if key in REDUCER_KEYS:
+                merged[key] = [
+                    *cast(list[object], merged[key]),
+                    *cast(list[object], value),
+                ]
+            else:
+                merged[key] = value
         state["phase"] = RunPhase.failed
-        state["error"] = str(exc)
+        state["error"] = error
+        state["events"] = [
+            *state["events"],
+            *trial_refs_left(state, self.context.branch_prefix),
+        ]
         return state

@@ -1,0 +1,648 @@
+"""The real runners: one trial (``GitTrialRunner``) and the baseline (``GitBaselineRunner``).
+
+Both own their phase (decision 38): ``<WORKTREE_ROOT>/<run>/<phase>`` at the
+pinned commit plus ``<run>/_scratch/<phase>`` and ``<run>/_probe/<phase>``
+(``measure.make_phase``: sandbox, environment, the reset before every run),
+fingerprinted before and after (``repo_fingerprint``, decision 16), and
+removed again by the shared ``phase.owned_phases`` cleanup (a dir it cannot
+remove safely is an ``EngineError`` after every step ran, unless an error is
+already on its way).
+
+A trial (spec section 4, steps 1 to 8) is ``trial-<hypothesis id>``: the
+editor edits the worktree; the change is captured (``--no-renames``, strict
+UTF-8, a ``GitError`` fails the trial); ``check_capture`` and
+``check_diff_all`` run; any violation fails it and it is **never executed**.
+Otherwise it is committed with the engine identity, the base dates and an
+``Engine-Trial: <id>`` trailer, ``clean -ffdx``-ed and put on its own ref
+``refs/heads/<prefix>trial-<run>-<hyp>`` (decision 18: the id is
+``uuid5(branch@round)``; an existing ref moves only when its commit carries
+this trial's trailer, else ``EngineError``; a re-run that commits nothing
+drops it), then measured with the baseline's test count. F1 excludes only the
+own ref, which must then be absent or at ``Trial.commit``
+(``RepoTamperedError``). The editor, cost and the run notes: see
+``GitTrialRunner``.
+
+An editor the cost cap stopped before anything was written or spent raises
+``TrialUnaffordable``: the trial never started, so it is no rejected change.
+Any exception that ends a trial carries the money it spent (``add_spend``),
+and the own ref it moved is put back (nothing records that trial any more),
+unless a worktree checked it out meanwhile: that ref stays, with a note.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import functools
+import math
+import os
+import posixpath
+import secrets
+import sys
+import uuid
+from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Set as AbstractSet
+from dataclasses import dataclass, replace
+from pathlib import Path, PurePath
+from typing import Protocol
+
+from autonomous_ai_agents.clients.budget import Budget
+from autonomous_ai_agents.common.config import IsolationMode, settings
+from autonomous_ai_agents.common.errors import (
+    EngineError,
+    RepoTamperedError,
+    TrialUnaffordable,
+    add_spend,
+)
+from autonomous_ai_agents.common.models import (
+    Baseline,
+    Hypothesis,
+    Measurement,
+    Project,
+    Trial,
+    TrialStatus,
+    Violation,
+    Workload,
+    utc_now,
+)
+from autonomous_ai_agents.common.paths import RESERVED_MODULES, normalize_path
+from autonomous_ai_agents.common.refnames import branch_prefix_problem
+from autonomous_ai_agents.execution.editor import STOP_BUDGET
+from autonomous_ai_agents.execution.git import GitError, GitWorkspace, repo_fingerprint
+from autonomous_ai_agents.execution.measure import (
+    Phase,
+    RunOnce,
+    baseline_test_count,
+    make_phase,
+    measure_workload,
+    python_module,
+    run_tests,
+)
+from autonomous_ai_agents.execution.phase import (
+    PhaseDirs,
+    owned_phases,
+    phase_dirs,
+    require_dir_name,
+)
+from autonomous_ai_agents.execution.procrun import RunFailure, run_once
+from autonomous_ai_agents.execution.protocols import (
+    Change,
+    CodeEditor,
+    EditResult,
+    EditTask,
+    TrialBrief,
+    WorktreeHandle,
+)
+from autonomous_ai_agents.optimization.anticheat import (
+    DEFAULT_MODULE_ROOTS,
+    check_capture,
+    check_diff_all,
+    is_utf8,
+)
+
+TRIAL_NAMESPACE = uuid.UUID("3f0c6a52-7d1e-5b9a-8c4f-2e6d9b1a7c30")
+"""uuid5 namespace of trial ids: ``uuid5(TRIAL_NAMESPACE, "<branch>@<round>")``."""
+TRAILER = "Engine-Trial"
+BASELINE_PHASE = "baseline"
+NONDETERMINISTIC_NOTE = "did not agree on one output"
+"""In a note, the measurement's nondeterministic-output warning."""
+INVOKE_PROTECTED: tuple[str, ...] = (
+    "**/tasks.py",
+    "**/tasks/**",
+    "**/invoke.yaml",
+    "**/invoke.yml",
+    "**/invoke.json",
+    "**/invoke.py",
+)
+"""What invoke reads from the working dir up (its tasks and its project config):
+protected when a workload or the test command runs invoke."""
+_INVOKE = frozenset({"invoke", "inv"})
+_EDIT_DONE = "end_turn"
+_REGULAR = frozenset({"100644", "100755"})
+_SUBJECT_CHARS = 72
+
+
+@dataclass
+class _Progress:
+    """What one trial did so far, for when it raises: the editor's budget, the
+    charged trial once the edit ended, and the commit its own ref moved to."""
+
+    budget: Budget
+    trial: Trial | None = None
+    moved: str | None = None
+
+    def spent(self, cap: float) -> tuple[float, int]:
+        """The money spent, never above the trial's budget ``cap``."""
+        usd, tokens = self.budget.spent_usd, self.budget.tokens
+        if self.trial is not None:
+            usd, tokens = (
+                max(usd, self.trial.cost_usd),
+                max(tokens, self.trial.tokens_used),
+            )
+        return min(usd, cap), tokens
+
+
+class EditorFactory(Protocol):
+    """Builds the run's editor; ``functools.partial(ClaudeEditor, transport)`` fits."""
+
+    def __call__(
+        self, *, module_roots: AbstractSet[str], reserved_modules: AbstractSet[str]
+    ) -> CodeEditor: ...
+
+
+@dataclass(frozen=True)
+class RunScope:
+    """What a run's editor and ``check_capture`` guard, and its extra patterns."""
+
+    module_roots: frozenset[str]
+    reserved_modules: frozenset[str]
+    protected: tuple[str, ...]
+
+
+def trial_id_for(branch: str, round: int) -> str:
+    """The trial's deterministic id, so a re-executed node rebuilds the same one."""
+    return str(uuid.uuid5(TRIAL_NAMESPACE, f"{branch}@{round}"))
+
+
+def _root(directory: str) -> str:
+    clean = normalize_path(directory)
+    return "" if clean == "." else clean
+
+
+def run_scope(
+    project: Project,
+    workloads: Sequence[Workload],
+    tracked: Collection[str],
+    *,
+    worktree: Path | None = None,
+) -> RunScope:
+    """Module roots: the repo root, ``src``, every working dir and the dir of every
+    tracked file a command names (``argv[0]`` from the root, the rest from its
+    working dir), plus, for one that is a link in the base ``worktree``, the dir
+    of its resolved target inside it (CPython puts that one on ``sys.path``);
+    reserved: ``RESERVED_MODULES`` plus every ``-m`` target's top-level name;
+    ``INVOKE_PROTECTED`` when a command runs invoke."""
+    roots, reserved = set(DEFAULT_MODULE_ROOTS), set(RESERVED_MODULES)
+    commands = [(w.command, w.working_dir) for w in workloads]
+    if project.test_command is not None:
+        commands.append((project.test_command, "."))
+    invoke = False
+    for argv, workdir in commands:
+        roots.add(_root(workdir))
+        found = python_module(argv)
+        module = None if found is None else found[0].split(".", 1)[0]
+        if module is not None:  # its top-level name, as module_shadow reads it
+            reserved.add(module)
+        invoke |= PurePath(argv[0]).name in _INVOKE or module == "invoke"
+        for index, arg in enumerate(argv):
+            if arg.startswith("-") or os.path.isabs(arg):
+                continue
+            joined = arg if index == 0 else posixpath.join(workdir, arg)
+            with contextlib.suppress(ValueError):  # outside the repo: no root
+                rel = normalize_path(posixpath.normpath(joined))
+                if rel in tracked:
+                    roots.add(_root(posixpath.dirname(rel)))
+                    target = None if worktree is None else _link_target(worktree, rel)
+                    if target is not None:
+                        roots.add(_root(posixpath.dirname(target)))
+    extra = INVOKE_PROTECTED if invoke else ()
+    return RunScope(frozenset(roots), frozenset(reserved), extra)
+
+
+def _link_target(worktree: Path, rel: str) -> str | None:
+    """The repo path a tracked link ``rel`` resolves to; None for a file or a
+    link out of the worktree."""
+    if not os.path.islink(worktree / rel):
+        return None
+    base, real = os.path.realpath(worktree), os.path.realpath(worktree / rel)
+    if os.path.commonpath((base, real)) != base:
+        return None
+    return Path(real).relative_to(base).as_posix()
+
+
+def _base_dirs(tracked: Collection[str]) -> frozenset[str]:
+    """The base tree's directories (as ``ls-tree -d -r``), names normalize keeps."""
+    found: set[str] = set()
+    for path in tracked:
+        parts = path.split("/")
+        for depth in range(1, len(parts)):
+            directory = "/".join(parts[:depth])
+            with contextlib.suppress(ValueError):
+                if normalize_path(directory) == directory:
+                    found.add(directory)
+    return frozenset(found)
+
+
+class _PhaseOwner:
+    """What both runners share: git, the phase factory, notes, the cleanup."""
+
+    _what = "the runner"
+
+    def __init__(
+        self,
+        project: Project,
+        *,
+        git: GitWorkspace | None = None,
+        network: IsolationMode | None = None,
+        fs: IsolationMode | None = None,
+        platform: str = sys.platform,
+        base_env: Mapping[str, str] | None = None,
+        run: RunOnce = run_once,
+        on_note: Callable[[str], None] | None = None,
+    ) -> None:
+        self._project = project
+        self._git = GitWorkspace(Path(project.root_path)) if git is None else git
+        self._phase = functools.partial(
+            make_phase, network=network, fs=fs, platform=platform, base_env=base_env
+        )
+        self._run = run
+        self._on_note = on_note
+
+    @property
+    def git(self) -> GitWorkspace:
+        return self._git
+
+    def _note(self, prefix: str, notes: Sequence[str]) -> None:
+        if self._on_note is not None:
+            for note in notes:
+                self._on_note(f"{prefix}: {note}")
+
+    def _make_phase(self, handle: WorktreeHandle, dirs: PhaseDirs) -> Phase:
+        return self._phase(
+            self._git, handle, scratch=dirs.scratch, probe=dirs.probe, run=self._run
+        )
+
+    def _measure(
+        self,
+        phase: Phase,
+        workloads: Sequence[Workload],
+        *,
+        prefix: str,
+        trial_id: str | None,
+        baseline_count: int | None,
+    ) -> tuple[Measurement, ...]:
+        """``measure_workload`` per workload, then the suite once; notes emitted.
+        ``RunFailure`` propagates, its notes emitted."""
+        rows: list[Measurement] = []
+        try:
+            for workload in workloads:
+                measured = measure_workload(phase, workload, trial_id=trial_id)
+                self._note(prefix, measured.notes)
+                rows.extend(measured.measurements)
+            suite = run_tests(
+                phase,
+                self._project,
+                workloads,
+                baseline_count=baseline_count,
+                trial_id=trial_id,
+            )
+        except RunFailure as failure:
+            self._note(prefix, failure.notes)
+            raise
+        self._note(prefix, suite.notes)
+        return (*rows, *suite.measurements)
+
+    def _checked_out(self, ref: str) -> bool:
+        return ref.casefold() in {
+            b.casefold() for b in self._git.checked_out_branches()
+        }
+
+    def _refuse_checked_out(self, ref: str) -> None:
+        """Moving a branch a worktree has checked out moves that HEAD too."""
+        if self._checked_out(ref):
+            raise EngineError(
+                f"refusing to move {ref}: it is checked out in a worktree; check"
+                " out another branch there, then run the trial again"
+            )
+
+    def _tampered(self, before: str, exclude: frozenset[str] = frozenset()) -> None:
+        if repo_fingerprint(self._git, exclude_refs=exclude) != before:
+            raise RepoTamperedError(
+                f"the repository changed while {self._what} ran: its refs, config"
+                " or hooks differ from before the run"
+            )
+
+
+class GitBaselineRunner(_PhaseOwner):
+    """The real ``BaselineRunner``: every workload at ``commit``, then the suite
+    once (its ``tests_passed`` rows record the passing count trials must reach).
+    A ``RunFailure`` is an ``EngineError`` once F1 held. Notes go to
+    ``on_note`` prefixed ``baseline:``."""
+
+    _what = "the baseline"
+
+    def measure(
+        self, workloads: Sequence[Workload], *, run_id: str, commit: str | None
+    ) -> tuple[Measurement, ...]:
+        if commit is None:
+            raise ValueError("the baseline needs the pinned commit, got None")
+        require_dir_name("run id", run_id)
+        dirs = phase_dirs(run_id, BASELINE_PHASE)
+        before = repo_fingerprint(self._git)
+        failed: RunFailure | None = None
+        rows: tuple[Measurement, ...] = ()
+        with owned_phases(self._git, self._what, dirs):
+            handle = self._git.add_worktree(dirs.worktree, commit)
+            phase = self._make_phase(handle, dirs)
+            try:
+                rows = self._measure(
+                    phase,
+                    workloads,
+                    prefix="baseline",
+                    trial_id=None,
+                    baseline_count=None,
+                )
+            except RunFailure as failure:
+                failed = failure
+            self._tampered(before)
+        if failed is not None:
+            raise EngineError(f"the baseline could not be measured: {failed.reason}")
+        return rows
+
+
+class GitTrialRunner(_PhaseOwner):
+    """The real ``TrialRunner`` for one project (module docstring for the steps).
+
+    ``editor`` builds the run's ``CodeEditor`` from the run's module roots and
+    reserved modules (``run_scope``), so the editor refuses what
+    ``check_capture`` would reject; one is built per distinct scope. Its brief
+    gains ``INVOKE_PROTECTED`` when invoke runs. ``cost_usd`` is the larger of
+    the editor's report and its ``Budget``'s record; above ``budget_usd`` the
+    trial fails charged exactly ``budget_usd`` (and the same share of tokens).
+    Notes (``RunSample``, ``RunFailure``, ``Measured``) go to ``on_note``
+    prefixed ``trial for hypothesis <id>:``. ``prefix`` is the engine branch
+    prefix (default the setting's; the factory passes the context's): the
+    branch must be ``<prefix>trial-<run>-<hyp>`` and only refs under it move.
+    """
+
+    _what = "the trial"
+
+    def __init__(
+        self,
+        project: Project,
+        *,
+        editor: EditorFactory,
+        git: GitWorkspace | None = None,
+        network: IsolationMode | None = None,
+        fs: IsolationMode | None = None,
+        platform: str = sys.platform,
+        base_env: Mapping[str, str] | None = None,
+        run: RunOnce = run_once,
+        on_note: Callable[[str], None] | None = None,
+        prefix: str | None = None,
+    ) -> None:
+        super().__init__(
+            project, git=git, network=network, fs=fs, platform=platform,
+            base_env=base_env, run=run, on_note=on_note,
+        )  # fmt: skip
+        self._prefix = settings.TRIAL_BRANCH_PREFIX if prefix is None else prefix
+        problem = branch_prefix_problem(self._prefix)
+        if problem is not None:
+            raise ValueError(f"branch prefix {self._prefix[:300]!r} {problem}")
+        self._editor_factory = editor
+        self._editors: dict[tuple[frozenset[str], frozenset[str]], CodeEditor] = {}
+
+    def run(
+        self,
+        hypothesis: Hypothesis,
+        workloads: Sequence[Workload],
+        baseline: Baseline,
+        *,
+        round: int,
+        branch: str,
+        budget_usd: float,
+        brief: TrialBrief,
+    ) -> Trial:
+        if not math.isfinite(budget_usd) or budget_usd < 0:
+            raise ValueError(
+                f"budget_usd must be finite and at least 0, got {budget_usd}"
+            )
+        if baseline.commit is None:
+            raise ValueError("the trial needs the baseline's commit, got None")
+        run_id = _run_id(branch, hypothesis.id, self._prefix)
+        dirs = phase_dirs(run_id, f"trial-{hypothesis.id}")
+        own_ref = f"refs/heads/{branch}"
+        exclude = frozenset({own_ref})
+        draft = Trial(
+            id=trial_id_for(branch, round),
+            hypothesis_id=hypothesis.id,
+            round=round,
+            worktree_path=str(dirs.worktree),
+            branch=branch,
+            base_commit=baseline.commit,
+            status=TrialStatus.failed,
+            started_at=utc_now(),
+        )
+        before = repo_fingerprint(self._git, exclude_refs=exclude)
+        prior = self._git.ref_value(own_ref)
+        self._refuse_checked_out(own_ref)
+        if prior is not None and not self._ours(prior, draft.id):
+            raise EngineError(
+                f"{own_ref} exists at {prior}, which is not this trial's commit"
+                f" (no '{TRAILER}: {draft.id}' trailer); delete it to run the trial"
+            )
+        progress = _Progress(Budget(budget_usd))
+        try:
+            with owned_phases(self._git, self._what, dirs):
+                handle = self._git.add_worktree(dirs.worktree, baseline.commit)
+                trial = self._attempt(
+                    handle, dirs, draft, hypothesis, workloads, baseline, brief,
+                    prior, progress,
+                )  # fmt: skip
+                if trial.commit is None and prior is not None:
+                    self._refuse_checked_out(own_ref)
+                    self._git.delete_ref(own_ref, prior, prefix=self._prefix)
+                self._tampered(before, exclude)
+                if self._git.ref_value(own_ref) != trial.commit:
+                    raise RepoTamperedError(
+                        f"the trial's own ref {own_ref} moved while the trial ran"
+                    )
+        except Exception as exc:  # the trial is lost: keep its cost, drop its ref
+            self._undo_own_ref(own_ref, prior, progress.moved, hypothesis.id)
+            add_spend(exc, *progress.spent(budget_usd))
+            raise
+        return trial.model_copy(update={"finished_at": utc_now()})
+
+    def _undo_own_ref(
+        self, ref: str, prior: str | None, moved: str | None, hypothesis_id: str
+    ) -> None:
+        """Put the own ref back where it was before this trial moved it; a ref
+        someone else moved since stays where they put it, and so does one a
+        worktree checked out meanwhile (moving it would move that HEAD; a note
+        says so)."""
+        if moved is None:
+            return
+        with contextlib.suppress(GitError):
+            if self._checked_out(ref):
+                self._note(
+                    f"trial for hypothesis {hypothesis_id}",
+                    [
+                        f"{ref} was left alone (the aborted trial had moved it"
+                        f" to {moved}): a worktree has it checked out"
+                    ],
+                )
+            elif prior is None:
+                self._git.delete_ref(ref, moved, prefix=self._prefix)
+            else:
+                self._git.update_ref(ref, prior, moved, prefix=self._prefix)
+
+    def _ours(self, commit: str, trial_id: str) -> bool:
+        """Whether ``commit``'s last message paragraph has this trial's trailer."""
+        message = self._git.commit_message(commit).rstrip(b"\n")
+        last = message.rsplit(b"\n\n", 1)[-1].split(b"\n")
+        return f"{TRAILER}: {trial_id}".encode() in last
+
+    def _editor(self, scope: RunScope) -> CodeEditor:
+        key = (scope.module_roots, scope.reserved_modules)
+        if key not in self._editors:
+            self._editors[key] = self._editor_factory(
+                module_roots=scope.module_roots, reserved_modules=scope.reserved_modules
+            )
+        return self._editors[key]
+
+    def _attempt(
+        self,
+        handle: WorktreeHandle,
+        dirs: PhaseDirs,
+        trial: Trial,
+        hypothesis: Hypothesis,
+        workloads: Sequence[Workload],
+        baseline: Baseline,
+        brief: TrialBrief,
+        prior: str | None,
+        progress: _Progress,
+    ) -> Trial:
+        """Steps 2 to 6; every outcome but an exception is a Trial (draft: failed).
+        ``progress`` records the spend and the own ref's move as they happen."""
+        base = str(baseline.commit)
+        tracked = self._git.ls_tree(base)
+        scope = run_scope(self._project, workloads, tracked, worktree=handle.path)
+        protected = tuple(dict.fromkeys((*brief.protected, *scope.protected)))
+        task = EditTask(
+            hypothesis, replace(brief, protected=protected), secrets.token_hex(8)
+        )
+        budget = progress.budget
+        result = self._editor(scope).edit(handle.path, task, budget)
+        trial = progress.trial = _charged(trial, result, budget, budget.cap_usd)
+        self._git.check_link(handle)
+        untouched = not result.written and trial.cost_usd == 0 and not trial.tokens_used
+        if result.stop == STOP_BUDGET and untouched:
+            raise TrialUnaffordable(
+                result.error or "the run's cost cap stopped the edit"
+            )
+        if trial.error is not None:
+            return trial
+        if result.error is not None or result.stop != _EDIT_DONE:
+            reason = result.error or "no reason given"
+            return _failed(trial, f"the editor stopped ({result.stop}): {reason}")
+        try:
+            self._git.stage_all(handle)
+            changes = self._git.changes(handle, base)
+            bad = [ascii(c.path) for c in changes if not is_utf8(c.path)]
+            if bad:
+                return _failed(
+                    trial, f"the diff names {bad[0]}, a path that is not valid UTF-8"
+                )
+            if not changes:
+                return _failed(trial, "the editor changed nothing")
+            diff = self._git.diff(handle, base)
+            blobs = {  # what check_capture reads: added or modified regular files
+                c.path: self._git.staged_blob(handle, c.path)
+                for c in changes
+                if c.status in ("A", "M") and c.new_mode in _REGULAR
+            }
+        except GitError as error:  # RepoTamperedError is no GitError: it propagates
+            return _failed(trial, f"the change could not be captured: {error}")
+        touched = tuple(c.path for c in changes)
+        trial = trial.model_copy(update={"diff": diff, "touched_paths": touched})
+        violations = self._violations(
+            changes, result, blobs, baseline, scope, tracked, protected
+        )
+        if violations:
+            text = "; ".join(v.message for v in violations[:3])
+            reason = f"the change breaks {len(violations)} anti-cheat rule(s): {text}"
+            return _failed(trial, reason, violations=violations)
+        message = _message(hypothesis, trial.id)
+        commit = self._git.commit(handle, message, base=base)
+        self._git.clean(handle)
+        if commit != prior:
+            own_ref = f"refs/heads/{trial.branch}"
+            self._refuse_checked_out(own_ref)  # checked out while the editor ran
+            self._git.update_ref(own_ref, commit, prior, prefix=self._prefix)
+            progress.moved = commit
+        trial = trial.model_copy(update={"commit": commit})
+        phase = self._make_phase(handle, dirs)
+        try:
+            rows = self._measure(
+                phase,
+                workloads,
+                prefix=f"trial for hypothesis {hypothesis.id}",
+                trial_id=trial.id,
+                baseline_count=baseline_test_count(baseline.measurements),
+            )
+        except RunFailure as failure:
+            return _failed(trial, failure.reason)
+        return trial.model_copy(
+            update={"status": TrialStatus.measured, "measurements": rows}
+        )
+
+    @staticmethod
+    def _violations(
+        changes: Sequence[Change],
+        result: EditResult,
+        blobs: Mapping[str, bytes],
+        baseline: Baseline,
+        scope: RunScope,
+        tracked: Collection[str],
+        protected: Sequence[str],
+    ) -> tuple[Violation, ...]:
+        judged = {o.metric for o in baseline.objectives}
+        judged |= {g.metric for g in baseline.guardrails if g.metric is not None}
+        captured = check_capture(
+            changes,
+            result.written,
+            blobs,
+            frozenset(judged),
+            reserved_modules=scope.reserved_modules,
+            module_roots=scope.module_roots,
+            existing_dirs=_base_dirs(tracked),
+        )
+        return (*captured, *check_diff_all((c.path for c in changes), protected))
+
+
+def _run_id(branch: str, hypothesis_id: str, prefix: str) -> str:
+    """The run id inside ``<prefix>trial-<run>-<hypothesis id>``."""
+    require_dir_name("hypothesis id", hypothesis_id)
+    head, tail = f"{prefix}trial-", f"-{hypothesis_id}"
+    inner = branch[len(head) : len(branch) - len(tail)]
+    if not (branch.startswith(head) and branch.endswith(tail) and inner):
+        raise ValueError(f"branch {branch!r} is not {head}<run>{tail}")
+    require_dir_name("run id", inner)
+    return inner
+
+
+def _failed(
+    trial: Trial, error: str, *, violations: tuple[Violation, ...] = ()
+) -> Trial:
+    return trial.model_copy(update={"error": error, "violations": violations})
+
+
+def _charged(trial: Trial, result: EditResult, budget: Budget, cap: float) -> Trial:
+    """The money spent; above ``cap``, failed and charged ``cap`` exactly."""
+    spent = max(result.cost_usd, budget.spent_usd)
+    tokens = max(result.tokens_used, budget.tokens)
+    if spent <= cap:
+        return trial.model_copy(update={"cost_usd": spent, "tokens_used": tokens})
+    error = f"the editor reported {spent:.6f} USD, above the trial's budget of {cap:.6f} USD"
+    capped = math.floor(tokens * cap / spent)
+    return trial.model_copy(
+        update={"cost_usd": cap, "tokens_used": capped, "error": error}
+    )
+
+
+def _message(hypothesis: Hypothesis, trial_id: str) -> str:
+    title = "".join(ch if ch.isprintable() else " " for ch in hypothesis.title)
+    subject = title[:_SUBJECT_CHARS].strip() or hypothesis.id
+    return (
+        f"engine trial: {subject}\n\nHypothesis: {hypothesis.id}\n"
+        f"{TRAILER}: {trial_id}\n"
+    )

@@ -22,21 +22,62 @@ workflows, and security best practices.
 
 ## 🔒 Security Tools Overview
 
-| Tool             | Purpose                                   | Frequency                 | Cost | Automation |
-| ---------------- | ----------------------------------------- | ------------------------- | ---- | ---------- |
-| **pnpm audit**   | Built-in npm vulnerability scanner        | Every commit (pre-commit) | FREE | Automated  |
-| **pip-audit**    | PyPA official Python vulnerability scan   | On-demand + CI            | FREE | Automated  |
-| **bandit**       | Python SAST security linter               | On-demand + CI            | FREE | Automated  |
-| **safety**       | Python dependency security checker        | On-demand + CI            | FREE | Automated  |
-| **mypy**         | Python static type checker (strict mode)  | On-demand + CI            | FREE | Automated  |
-| **OSV-Scanner**  | Google's vulnerability database           | Weekly + PR               | FREE | Automated  |
-| **Trivy**        | Container & IaC security scanner          | Every PR + Weekly         | FREE | Automated  |
-| **Docker Scout** | CVE scanning with PR comments             | Every PR                  | FREE | Automated  |
-| **Dependabot**   | Security alerts only                      | Real-time                 | FREE | Automated  |
-| **Renovate**     | Advanced dependency updates               | Weekly                    | FREE | Automated  |
-| **Commitlint**   | Commit message validation                 | Every commit              | FREE | Automated  |
-| **ESLint**       | Code quality & security linting           | Every commit              | FREE | Automated  |
-| **Ruff**         | Ultra-fast Python linter (10-100x faster) | On-demand + CI            | FREE | Automated  |
+| Tool            | Purpose                                   | Frequency                          | Cost | Automation |
+| --------------- | ----------------------------------------- | ---------------------------------- | ---- | ---------- |
+| **pnpm audit**  | Built-in npm vulnerability scanner        | Every commit (pre-commit)          | FREE | Automated  |
+| **pip-audit**   | PyPA official Python vulnerability scan   | On-demand + CI                     | FREE | Automated  |
+| **bandit**      | Python SAST security linter               | On-demand + CI                     | FREE | Automated  |
+| **safety**      | Python dependency security checker        | On-demand (`uvx`, not in the lock) | FREE | Manual     |
+| **mypy**        | Python static type checker (strict mode)  | On-demand + CI                     | FREE | Automated  |
+| **OSV-Scanner** | Google's vulnerability database           | Push + PR + weekly                 | FREE | Reporting  |
+| **Trivy**       | Config scan (CI) and image scan (publish) | Every PR + master push             | FREE | Automated  |
+| **zizmor**      | GitHub Actions workflow static analysis   | Every push + PR                    | FREE | Blocking   |
+| **Dependabot**  | Security alerts + weekly version updates  | Real-time / weekly                 | FREE | Automated  |
+| **Renovate**    | Equivalent config, app not installed      | Dormant                            | FREE | Off        |
+| **Commitlint**  | Commit message validation                 | Every commit                       | FREE | Automated  |
+| **ESLint**      | Code quality & security linting           | Every commit                       | FREE | Automated  |
+| **Ruff**        | Ultra-fast Python linter (10-100x faster) | On-demand + CI                     | FREE | Automated  |
+
+---
+
+## 🧱 Repository Security Controls (2026-10-23)
+
+What the repository itself enforces, independent of the engine's sandbox:
+
+- **GitHub Actions.** Every `uses:` is pinned to a full commit SHA with its
+  version as a comment (Dependabot and Renovate bump both). Workflows start from
+  `permissions: contents: read`; a job that publishes images adds
+  `packages: write` itself. Checkouts set `persist-credentials: false` except
+  the one `paths-filter` needs (documented inline). Workflow values reach `run:`
+  scripts through `env:`, never through `${{ }}` inside the script. The
+  `workflow-lint` job runs zizmor over `.github/workflows` on every push and
+  pull request and fails on any finding.
+- **Container images.** Base images, the uv binary and the dev-stack images are
+  pinned to a tag _and_ its digest. The Python image installs from `uv.lock`
+  (`uv sync --frozen`), without the dev extra or the tests, as a non-root user;
+  the Node image runs the maintained Node 22 LTS line.
+- **Dev stack.** `docker-compose.dev.yml` binds every port to `127.0.0.1`
+  (development credentials must never be reachable from the LAN).
+- **Dependency cooldown.** `pnpm-workspace.yaml` (`minimumReleaseAge`),
+  `.github/dependabot.yml` and `renovate.json` require a release to be seven
+  days old before it is resolved or proposed. Dependabot security updates open
+  immediately (cooldown covers version updates only); pnpm has no such
+  exemption, so a fix younger than a week goes through
+  `minimumReleaseAgeExclude` for that install.
+- **Audits that block.** `pnpm audit --audit-level=high` in CI, `pip-audit` and
+  `bandit` in the stage gate, zizmor on the workflows. OSV-Scanner runs on every
+  push and PR but reports only (`fail-on-vuln: false`; its findings also arrive
+  as Dependabot alerts).
+
+**Alert triage.** The Security tab's Dependabot alerts are computed from
+GitHub's dependency graph, which can lag the lockfiles on `master` (on
+2026-10-23 it still described the November 2025 `uv.lock` and `pnpm-lock.yaml`,
+including packages that are no longer dependencies). Before acting on an alert:
+check the package and version against the current lockfile
+(`uv tree --invert --package <name>`, `pnpm why <name>`), run `uv run pip-audit`
+and `pnpm audit`, and dismiss stale alerts with the reason "vulnerable code is
+not actually used" or "fixed", citing the lockfile commit. Never hide an alert
+by weakening a scan.
 
 ---
 
@@ -67,16 +108,17 @@ pip-audit --fix          # Auto-upgrade vulnerable packages
 bandit -r src/           # Scan for security issues in source code
 bandit -r src/ --format json -o bandit-report.json  # JSON report
 
-# Dependency security checker
-safety check             # Check dependencies against safety database
-safety check --json      # JSON output
+# Dependency security checker (on demand: not a project dependency, because it
+# pins filelock below 4.0 and that blocked filelock's CVE fixes)
+uvx safety check         # Check dependencies against safety database
+uvx safety check --json  # JSON output
 
 # Type safety (prevents runtime errors)
 mypy src/                # Type check with strict mode enabled
 mypy --install-types     # Install missing type stubs
 
 # All Python scans in one command
-pip-audit && bandit -r src/ && safety check && mypy src/
+pip-audit && bandit -r src/ && mypy src/
 ```
 
 ### Pre-Commit Security Checks
@@ -116,8 +158,9 @@ bash scripts/trivy-scan-full.sh
 Runs on every push and PR:
 
 - TypeScript type checking, linting, testing
-- Python linting (Ruff), formatting (Black), type checking (Mypy)
-- npm audit for known vulnerabilities
+- Python linting and formatting (Ruff), type checking (Mypy), the engine suite
+  with its sandbox probe
+- pnpm audit for known vulnerabilities (blocking at high and above)
 - Trivy configuration scanning
 
 #### 2. Security Workflow (`.github/workflows/security.yml`)
@@ -127,43 +170,36 @@ Runs weekly (Monday 9am UTC) and on PR:
 - **OSV-Scanner** - Google's comprehensive vulnerability database (FREE)
 - **npm Audit** - Built-in npm vulnerability scanner (FREE)
 - **License Compliance Check** - OSS license verification (FREE)
+- **Workflow lint (zizmor)** - unpinned actions, template injection, credential
+  persistence, excessive permissions (FREE)
 
 #### 3. Dependabot (`.github/dependabot.yml`)
 
-Automated dependency updates:
+Automated dependency updates (security updates are enabled in the repository
+settings; this file adds version updates):
 
-- **npm Dependencies** - Weekly updates for all packages
-- **Docker Images** - Weekly updates for container images
-- **GitHub Actions** - Weekly updates for workflow dependencies
-- Runs every Monday at 3am PT with automated grouping
+- **npm, uv (Python), GitHub Actions, Docker, Docker Compose** - weekly, grouped
+  minor/patch PRs, every Monday at 3am PT
+- **Seven-day cooldown** on new releases for version updates; security updates
+  open immediately. Majors are excluded from the groups and ignored for
+  container images (a deliberate PR each)
+- `renovate.json` holds the equivalent Renovate configuration for when the
+  Renovate app is installed; run one of the two, not both
 
-#### 4. Trivy Docker Security
+#### 4. Trivy (`ci.yml` job `docker-security`)
 
-Runs on every push/PR with enhanced reporting:
+Runs on every push/PR: a Trivy _config_ scan of the repository (Dockerfiles,
+Compose, workflows), results as a 14-day artifact and a job summary, failing on
+CRITICAL/HIGH misconfigurations.
 
-- Scans HIGH/CRITICAL separately from MEDIUM/LOW
-- Generates detailed summary with badges
-- Uploads artifacts for 30-day retention
-- Fails build on CRITICAL/HIGH vulnerabilities
+#### 5. Docker Build & Push (`docker-build.yml`)
 
-#### 5. Docker Scout Integration
-
-Runs on every Python Docker build:
-
-- CVE scanning with severity filtering (CRITICAL, HIGH)
-- PR comments comparing vulnerability changes vs. baseline
-- SARIF upload to GitHub Security tab
-- Supply chain security (SBOM + provenance attestations)
-
-#### 6. Python Docker Build Workflow
-
-Multi-platform builds with comprehensive security:
-
-- **Platforms:** linux/amd64, linux/arm64 (Apple Silicon support)
-- **Security Scanning:** Dual scanning (Trivy + Docker Scout)
-- **Caching:** Hybrid strategy (GHA + Registry) for 95-98% hit rate
-- **Supply Chain:** SBOM generation and provenance attestations
-- **Image Size:** ~200-250MB (vs 1GB+ single-stage baseline)
+- Builds the Node images (production and distroless) and the Python image
+  (linux/amd64 and linux/arm64) on every PR; pushes to `ghcr.io` on master only,
+  with SBOM and provenance attestations
+- Scans the pushed images with Trivy (fresh database, `cache: 'false'`); results
+  go to a 14-day artifact and the job summary, not to code scanning
+- Digest-pinned BuildKit; no Docker Scout (not configured)
 
 ---
 
@@ -245,22 +281,24 @@ For false positives or accepted risks, document in project documentation
 pnpm security:docker
 
 # Scan specific image
-trivy image pgvector/pgvector:pg15
+trivy image pgvector/pgvector:0.8.7-pg16
 
 # Get JSON report for analysis
-trivy image --format json --output postgres-scan.json pgvector/pgvector:pg15
+trivy image --format json --output postgres-scan.json pgvector/pgvector:0.8.7-pg16
 ```
 
 ### Docker Security Best Practices
 
 1. **Use Official Images:**
-   - ✅ `pgvector/pgvector:pg15` (official PostgreSQL + extension)
-   - ✅ `redis:7-alpine` (official Redis, minimal Alpine variant)
-   - ✅ `qdrant/qdrant:latest` (official Qdrant)
+   - ✅ `pgvector/pgvector:0.8.7-pg16` (official PostgreSQL + extension)
+   - ✅ `redis:7.4-alpine` (official Redis, minimal Alpine variant)
+   - ✅ `qdrant/qdrant:v1.15.5` (official Qdrant)
 
 2. **Pin Versions:**
-   - Avoid `latest` tag in production
-   - Use specific version tags: `postgres:15.3-alpine`
+   - Never `latest`, never a bare major tag
+   - Tag plus digest everywhere: `image:tag@sha256:...`
+     (`docker buildx imagetools inspect image:tag` prints the index digest);
+     Dependabot and Renovate bump both together
 
 3. **Minimize Attack Surface:**
    - Use Alpine-based images when possible
@@ -277,28 +315,33 @@ trivy image --format json --output postgres-scan.json pgvector/pgvector:pg15
 # Good practices in docker-compose.dev.yml
 services:
   postgres:
-    image: pgvector/pgvector:pg15 # Specific version
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-dev} # From .env
-    networks:
-      - backend # Isolated network
-    restart: unless-stopped # Auto-restart on failure
+    image: pgvector/pgvector:0.8.7-pg16@sha256:7b822b0a... # tag and digest
+    ports:
+      - '127.0.0.1:5432:5432' # loopback only; '5432:5432' would bind 0.0.0.0
+    volumes:
+      - ./infrastructure/schema:/docker-entrypoint-initdb.d:ro # read-only
 ```
+
+The stack runs with development credentials (`dev`/`devpass`, no Redis or Qdrant
+authentication), which is acceptable only because nothing outside the machine
+can reach it.
 
 ---
 
 ## 📦 Dependency Management
 
-### Automated Dependency Updates (Renovate)
+### Automated Dependency Updates (Dependabot, Renovate when installed)
 
-Renovate runs weekly (Monday 3am PT) and:
+Dependabot (`.github/dependabot.yml`) runs weekly (Monday 3am PT) and:
 
-- Creates grouped PRs for related dependencies
-- Auto-merges security patches after 3 days
-- Prioritizes security updates (runs any time)
-- Monitors Docker images for updates
+- Creates grouped PRs for npm, uv, GitHub Actions, Docker and Compose
+- Waits three days after a release before proposing it (cooldown)
+- Opens security updates at any time
+- Keeps SHA-pinned actions and digest-pinned images current
 
-**Dashboard:** See `Issues` tab for "🔄 Dependency Updates Dashboard"
+`renovate.json` is the equivalent Renovate configuration (dependency dashboard,
+same cooldown, no auto-merge: nothing merges unattended into a branch without
+required status checks). It is dormant until the app is installed.
 
 ### Manual Dependency Updates
 
@@ -528,29 +571,22 @@ DATABASE_URL=postgresql://user:pass@host:5432/ai_platform?sslmode=require
 
 #### Python Dockerfile Security Checklist
 
-**File:** `services/python_agents/Dockerfile` (11 best practices implemented)
+**File:** `services/python_agents/Dockerfile`
 
-- ✅ **Multi-stage build** - 70-80% image size reduction (1GB → 250MB)
-- ✅ **Non-root user** - appuser (prevents 80%+ container escape
-  vulnerabilities)
-- ✅ **Minimal base image** - python:3.11-slim-bookworm (149MB, ~40 CVEs vs 152
-  in full)
-- ✅ **No secrets baked in** - Docker BuildKit `--secret` flag only, never
-  `COPY .env`
-- ✅ **Tini init system** - Proper PID 1 signal handling, prevents zombie
-  processes
-- ✅ **HEALTHCHECK directive** - Auto-restart on failures, 99.9%+ uptime target
-- ✅ **Pre-compiled bytecode** - Source .py files deleted, only .pyc remains
-  (15-30% faster startup)
-- ✅ **BuildKit cache mounts** - Prevents secrets leaking via layer history,
-  50-80% faster builds
-- ✅ **Optimal layer ordering** - 90% cache hit rate target
-- ✅ **150+ inline comments** - Explains each optimization decision
-- ✅ **.dockerignore patterns** - 100+ patterns prevent secret leaks (.env,
-  credentials.json, .git/)
-
-**Research foundation:** 10 comprehensive reports (20,569 lines) informed
-implementation
+- ✅ **Multi-stage build** - builder with uv, runtime with the venv only
+- ✅ **Digest-pinned base and tooling** - `python:3.11-slim-bookworm@sha256:…`
+  and `ghcr.io/astral-sh/uv:0.11.32@sha256:…`
+- ✅ **Locked dependencies** - `uv sync --frozen` from `uv.lock`, the same
+  resolution CI tests; no dev extra, no tests; the venv has no pip (the base
+  image's root-owned `/usr/local` pip is unused)
+- ✅ **Non-root user** - `appuser`, no shell, no home directory
+- ✅ **No secrets baked in** - the key arrives through the environment at run
+  time; the root `.dockerignore` keeps `.env*` out of the build context
+- ✅ **Tini init system** - PID 1 signal handling, zombie reaping
+- ✅ **HEALTHCHECK** - the interpreter and the package import
+- ✅ **Bytecode compiled at install** - `UV_COMPILE_BYTECODE=1`, no `.pyc`
+  writes at run time
+- ✅ **BuildKit cache mounts** - the uv cache never lands in a layer
 
 #### Node.js Dockerfile Security Checklist
 
@@ -572,7 +608,9 @@ implemented)
 - ✅ **Exec form CMD** - Proper signal handling without shell wrapping
 - ✅ **Production dependencies only** - 60-70% smaller node_modules
 - ✅ **Minimal runtime layers** - Only 3-4 layers in final stage
-- ✅ **Security-optimized base** - node:20-alpine or distroless variants
+- ✅ **Security-optimized base** - `node:22.22.0-bookworm-slim@sha256:…` and
+  `gcr.io/distroless/nodejs22-debian12:nonroot@sha256:…` (Node 20 reached end of
+  life on 2026-04-30)
 - ✅ **OpenTelemetry support** - Observability without security compromise
 - ✅ **Comprehensive documentation** - 224 lines with inline explanations
 
@@ -659,7 +697,7 @@ docker images | grep -E "agent-core|python-agents"
 ### Security Incident Procedure
 
 1. **Identify:**
-   - Security alert from Snyk/GitHub
+   - Security alert from GitHub (Dependabot, code scanning, secret scanning)
    - User report
    - Automated monitoring alert
 
@@ -690,9 +728,9 @@ docker images | grep -E "agent-core|python-agents"
 
 ### Emergency Contacts
 
-- **Project Maintainer:** [GitHub @username]
-- **Security Email:** security@your-domain.com (if applicable)
-- **GitHub Security Advisory:** Use "Security" tab to report privately
+- **Project Maintainer:** the repository owner (`Pkanna10`)
+- **GitHub Security Advisory:** "Security" tab > "Report a vulnerability"
+  (private vulnerability reporting must be enabled in Settings > Code security)
 
 ### Reporting Security Vulnerabilities
 
@@ -701,8 +739,7 @@ docker images | grep -E "agent-core|python-agents"
 **Instead:**
 
 1. Use GitHub Security Advisories (private disclosure)
-2. Email: security@your-domain.com
-3. Provide: Description, reproduction steps, impact assessment
+2. Provide: Description, reproduction steps, impact assessment
 
 **Response Time:** Within 48 hours for acknowledgment
 
@@ -719,5 +756,6 @@ docker images | grep -E "agent-core|python-agents"
 
 ---
 
-**Last Updated:** 2025-11-14 **Version:** 1.2.0 (Docker security hardening +
-CI/CD workflows)
+**Last Updated:** 2026-10-23 **Version:** 1.3.0 (repository security controls:
+pinned actions and images, least-privilege workflows, loopback-only dev stack,
+dependency cooldowns, alert triage)

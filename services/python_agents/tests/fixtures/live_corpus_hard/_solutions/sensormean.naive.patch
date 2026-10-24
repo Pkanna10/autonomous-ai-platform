@@ -1,0 +1,22 @@
+diff --git a/sensormean/stats.py b/sensormean/stats.py
+index b17bbd2..0c66d70 100644
+--- a/sensormean/stats.py
++++ b/sensormean/stats.py
+@@ -1,11 +1,14 @@
+ """Running statistics over a series of readings."""
+ 
+-from statistics import fmean
+-
+ 
+ def running_means(values: list[float]) -> list[float]:
+     """After each reading, the mean of every reading so far."""
+-    return [fmean(values[: i + 1]) for i in range(len(values))]
++    means: list[float] = []
++    total = 0.0
++    for count, value in enumerate(values, start=1):
++        total += value
++        means.append(total / count)
++    return means
+ 
+ 
+ def running_extremes(values: list[float]) -> list[tuple[float, float]]:

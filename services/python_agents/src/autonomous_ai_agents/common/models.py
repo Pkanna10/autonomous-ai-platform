@@ -57,10 +57,26 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-class EngineModel(BaseModel):
-    """Base for every engine model: frozen, strict about unknown fields."""
+def _project_file(field: str, value: str) -> str:
+    """``normalize_path`` for a field that must name a file, not the root itself.
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    ``normalize_path`` maps ``""`` and ``"."`` to ``"."``, which is right for
+    ``working_dir`` but would make a file field point at the project root.
+    """
+    normalized = normalize_path(value)
+    if normalized == ".":
+        raise ValueError(f"{field} must name a file, got {value!r}")
+    return normalized
+
+
+class EngineModel(BaseModel):
+    """Base for every engine model: frozen, strict about unknown fields.
+
+    ``allow_inf_nan=False``: JSONB cannot store inf or NaN, and neither is a
+    measurement, a price or a cost the judges or the budget can reason about.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +176,13 @@ class ViolationRule(StrEnum):
     missing_fingerprint = "missing_fingerprint"
     missing_measurement = "missing_measurement"
     duplicate_measurement = "duplicate_measurement"
+    # Capture rules (Step 2): problems only the runner sees in the git diff.
+    forbidden_file_mode = "forbidden_file_mode"
+    forbidden_file = "forbidden_file"
+    git_metadata = "git_metadata"
+    unrecorded_write = "unrecorded_write"
+    process_spawn = "process_spawn"
+    module_shadow = "module_shadow"
 
 
 class DeliveryKind(StrEnum):
@@ -199,7 +222,15 @@ ENGINE_ENUM_CLASSES: tuple[type[StrEnum], ...] = (
 
 
 class Project(EngineModel):
-    """A codebase the engine improves. Long-lived across runs."""
+    """A codebase the engine improves. Long-lived across runs.
+
+    ``root_path`` is stored canonical (``os.path.realpath``), the form every
+    git call already uses.
+
+    ``test_command`` is the argv of the project's test suite (never a shell
+    string). The caller supplies it; ``None`` means no suite is run, which
+    preflight refuses when a ``tests_pass`` guardrail exists.
+    """
 
     id: str = Field(default_factory=new_id)
     name: str = Field(min_length=1)
@@ -207,18 +238,29 @@ class Project(EngineModel):
     default_branch: str = "main"
     language: str = "python"
     hardware: ScalarDict = Field(default_factory=dict)
+    test_command: tuple[str, ...] | None = Field(default=None, min_length=1)
     created_at: datetime = Field(default_factory=utc_now)
 
     @field_validator("root_path")
     @classmethod
     def _absolute_without_parent_segments(cls, value: str) -> str:
+        """Absolute, no ``..``, and canonical (``realpath``: no trailing slash,
+        ``.`` or link), so one repository has one spelling and the
+        repository's one-project-per-root check cannot be bypassed."""
         if not os.path.isabs(value) or ".." in PurePath(value).parts:
             raise ValueError("root_path must be absolute and must not contain '..'")
-        return value
+        try:
+            return os.path.realpath(value)
+        except ValueError:  # a NUL names no directory: spelled canonically only
+            return os.path.normpath(value)
 
 
 class Workload(EngineModel):
-    """Something the engine can run and time: an argv command, never a shell string."""
+    """Something the engine can run and time: an argv command, never a shell string.
+
+    ``output_file`` is a project-relative file the workload writes; its bytes
+    join stdout in the output fingerprint.
+    """
 
     id: str = Field(default_factory=new_id)
     project_id: str
@@ -226,6 +268,7 @@ class Workload(EngineModel):
     command: tuple[str, ...] = Field(min_length=1)
     working_dir: str = "."
     entrypoint: str | None = None
+    output_file: str | None = None
     inputs: ScalarDict = Field(default_factory=dict)
     timeout_s: float = Field(default=600.0, gt=0)
     warmup_runs: int = Field(default=1, ge=0)
@@ -236,6 +279,11 @@ class Workload(EngineModel):
     @classmethod
     def _working_dir_inside_project(cls, value: str) -> str:
         return normalize_path(value)
+
+    @field_validator("output_file")
+    @classmethod
+    def _output_file_inside_project(cls, value: str | None) -> str | None:
+        return None if value is None else _project_file("output_file", value)
 
 
 class Objective(EngineModel):
@@ -357,7 +405,7 @@ class Hotspot(EngineModel):
     @field_validator("file_path")
     @classmethod
     def _file_path_inside_project(cls, value: str) -> str:
-        return normalize_path(value)
+        return _project_file("file_path", value)
 
 
 # ---------------------------------------------------------------------------
@@ -471,7 +519,13 @@ class Violation(EngineModel):
 
 
 class Trial(EngineModel):
-    """One attempt at a hypothesis, in its own worktree, with its measurements."""
+    """One attempt at a hypothesis, in its own worktree, with its measurements.
+
+    ``commit`` is the measured trial commit (``None`` until committed).
+    ``violations`` are capture-time problems only the runner can see in the
+    git diff (modes, binaries, git metadata, unrecorded writes); a trial with
+    any is ``failed`` and never executed.
+    """
 
     id: str = Field(default_factory=new_id)
     hypothesis_id: str
@@ -479,8 +533,10 @@ class Trial(EngineModel):
     worktree_path: str | None = None
     branch: str | None = None
     base_commit: str | None = None
+    commit: str | None = None
     diff: str = ""
     touched_paths: tuple[str, ...] = ()
+    violations: tuple[Violation, ...] = ()
     status: TrialStatus = TrialStatus.pending
     measurements: tuple[Measurement, ...] = ()
     judge_results: tuple[JudgeResult, ...] = ()
@@ -530,6 +586,7 @@ class Delivery(EngineModel):
     project_id: str
     kind: DeliveryKind
     branch: str | None = None
+    commit: str | None = None
     pr_url: str | None = None
     verdict_ids: tuple[str, ...] = ()
     combined_diff: str = ""
@@ -602,6 +659,100 @@ class EngineEvent(EngineModel):
     data: ScalarDict = Field(default_factory=dict)
 
 
+# ---------------------------------------------------------------------------
+# Step 2: pricing, understanding, combination
+# ---------------------------------------------------------------------------
+
+
+class LongContextPrice(EngineModel):
+    """The rates a request pays once its prompt is over ``threshold_tokens``.
+
+    Pricing page, "Long context pricing" (platform.claude.com, read
+    2026-10-23), for Claude Haiku 5.5: a request whose prompt is over 100,000
+    tokens pays the higher prices; the prompt counts all of its input tokens,
+    cache reads and cache writes included; each request is priced on its own,
+    and the long row prices every component, output included. Same units and
+    meaning per field as ``ModelPrice``.
+    """
+
+    threshold_tokens: int = Field(ge=0, strict=True)
+    input: float = Field(ge=0)
+    output: float = Field(ge=0)
+    cache_write: float = Field(ge=0)
+    cache_read: float = Field(ge=0)
+
+
+class ModelPrice(EngineModel):
+    """What one Claude model bills, in USD per million tokens.
+
+    ``cache_write`` is the 5-minute cache-write rate (the engine never asks
+    for the 1-hour TTL); ``cache_read`` the cache-hit rate. ``long_context``
+    replaces all four for a request whose prompt is over its threshold;
+    ``None`` means one price at every prompt length.
+    """
+
+    input: float = Field(ge=0)
+    output: float = Field(ge=0)
+    cache_write: float = Field(ge=0)
+    cache_read: float = Field(ge=0)
+    long_context: LongContextPrice | None = None
+
+
+class CandidateModule(EngineModel):
+    """A module the understand node expects to be hot, with its reason."""
+
+    path: str
+    reason: str
+
+    @field_validator("path")
+    @classmethod
+    def _path_inside_project(cls, value: str) -> str:
+        return _project_file("path", value)
+
+
+class ProjectUnderstanding(EngineModel):
+    """What the understand node learned about the project at the base commit.
+
+    ``workload_notes`` maps a workload id to one line about it.
+    ``served_by_model`` is the model that actually answered (a fallback may
+    have served the request).
+    """
+
+    language: str
+    summary: str = Field(max_length=1500)
+    entrypoints: tuple[str, ...] = ()
+    workload_notes: dict[str, str] = Field(default_factory=dict)
+    candidate_modules: tuple[CandidateModule, ...] = Field(default=(), max_length=10)
+    served_by_model: str
+
+
+class CombineSkip(EngineModel):
+    """A kept change the greedy combine could not apply, and why."""
+
+    trial_id: str
+    reason: str
+    paths: tuple[str, ...] = ()
+
+
+class Combination(EngineModel):
+    """The kept changes merged onto the base commit and re-judged together.
+
+    ``holds`` is true iff ``derive_verdict`` returned ``keep`` for the tested
+    tip. ``fallback_trial_id`` names the single best change re-tested after
+    the combination failed (``None`` when no fallback ran). ``summary``
+    records the greedy result, the fallback attempt and the final outcome.
+    """
+
+    base_commit: str
+    tip_commit: str | None = None
+    applied_trial_ids: tuple[str, ...] = ()
+    skipped: tuple[CombineSkip, ...] = ()
+    judge_results: tuple[JudgeResult, ...] = ()
+    holds: bool
+    fallback_trial_id: str | None = None
+    summary: str
+
+
 ENGINE_MODEL_CLASSES: tuple[type[EngineModel], ...] = (
     Project,
     Workload,
@@ -627,6 +778,12 @@ ENGINE_MODEL_CLASSES: tuple[type[EngineModel], ...] = (
     ApprovalRequest,
     ApprovalDecision,
     EngineEvent,
+    LongContextPrice,
+    ModelPrice,
+    CandidateModule,
+    ProjectUnderstanding,
+    CombineSkip,
+    Combination,
 )
 """Every model that may appear in checkpointed state (checkpointer allowlist)."""
 

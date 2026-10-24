@@ -4,17 +4,69 @@ on:
   pull_request:
   push:
     branches: [master, main]
+  # Manual runs execute only the live Claude smoke test (job live-smoke); every
+  # other job is skipped for this event. The inputs choose what live-smoke runs
+  # (STATUS Window 0: stage-a, the benchmark corpus E0, the attack corpus X,
+  # the hard corpus, the open-source repositories), what each corpus run is
+  # handed (mode), the editor model (stage M) and the suite's hard cap. There
+  # is no "every suite" choice: together they need more (196 USD) than the
+  # 150 USD ceiling of suite_cap_usd, so they are dispatched one by one.
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Live suite: stage-a, corpus, attack, hard, oss, or an experiment (probes, triage, papers, web, prescreen, sweep, sweep-fable, ab, escalation) (one at a time: together they need more than the 150 USD ceiling)'
+        type: choice
+        options:
+          [
+            stage-a,
+            corpus,
+            attack,
+            hard,
+            oss,
+            probes,
+            triage,
+            papers,
+            web,
+            prescreen,
+            sweep,
+            sweep-fable,
+            ab,
+            escalation,
+          ]
+        default: stage-a
+      mode:
+        description: 'Corpus mode (LIVE_CORPUS_MODE): aimed (both manifest hypotheses), blind (one generic hypothesis), decoy (the neutral one alone)'
+        type: choice
+        options: [aimed, blind, decoy]
+        default: aimed
+      engine_model:
+        description: 'ENGINE_MODEL for the run (Sonnet runs without fallbacks)'
+        type: choice
+        options: [claude-opus-5-5, claude-sonnet-5-5]
+        default: claude-opus-5-5
+      suite_cap_usd:
+        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75, hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 77, sweep-fable 33, ab 140, escalation 43'
+        type: string
+        default: '12'
 
-# Concurrency: Cancel in-progress runs for PR branches, keep all runs for main
+# Least privilege by default; a job that needs more says so itself.
+permissions:
+  contents: read
+
+# Concurrency: Cancel in-progress runs for PR branches, keep all runs for main.
+# Each manual (live) run is its own group and is never cancelled: it is paid
+# and approved, and two dispatches on one ref (e.g. attack and corpus) must
+# both run instead of the newer cancelling the older.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('dispatch-{0}', github.run_id) || 'auto' }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' && github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
 
 jobs:
   # Detect which packages changed for selective execution
   detect-changes:
     name: Detect Changes
     runs-on: ubuntu-22.04
+    if: github.event_name != 'workflow_dispatch'
     permissions:
       contents: read
       pull-requests: read # Required for paths-filter to access PR information
@@ -24,9 +76,12 @@ jobs:
       workflows: ${{ steps.filter.outputs.workflows }}
       infrastructure: ${{ steps.filter.outputs.infrastructure }}
     steps:
-      - uses: actions/checkout@v4
+      # Keeps the default persisted token, unlike every other job: on push,
+      # paths-filter may 'git fetch' the base commit, which needs it on a
+      # private repo. This job runs no repository code and uploads nothing.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 # zizmor: ignore[artipacked]
 
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
         id: filter
         with:
           filters: |
@@ -56,10 +111,12 @@ jobs:
       github.event_name == 'push'
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 10.20.0
           run_install: false
@@ -68,10 +125,10 @@ jobs:
         id: pnpm-cache
         shell: bash
         run: |
-          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
+          echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
 
       - name: Cache pnpm store
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
@@ -79,7 +136,7 @@ jobs:
             ${{ runner.os }}-pnpm-store-
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: '.nvmrc'
 
@@ -93,10 +150,12 @@ jobs:
     needs: setup-typescript
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 10.20.0
           run_install: false
@@ -105,10 +164,10 @@ jobs:
         id: pnpm-cache
         shell: bash
         run: |
-          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
+          echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
 
       - name: Cache pnpm store
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
@@ -116,7 +175,7 @@ jobs:
             ${{ runner.os }}-pnpm-store-
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: '.nvmrc'
 
@@ -132,10 +191,12 @@ jobs:
     needs: setup-typescript
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 10.20.0
           run_install: false
@@ -144,10 +205,10 @@ jobs:
         id: pnpm-cache
         shell: bash
         run: |
-          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
+          echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
 
       - name: Cache pnpm store
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
@@ -155,7 +216,7 @@ jobs:
             ${{ runner.os }}-pnpm-store-
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: '.nvmrc'
 
@@ -194,10 +255,12 @@ jobs:
     needs: setup-typescript
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 10.20.0
           run_install: false
@@ -206,10 +269,10 @@ jobs:
         id: pnpm-cache
         shell: bash
         run: |
-          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
+          echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
 
       - name: Cache pnpm store
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
@@ -217,7 +280,7 @@ jobs:
             ${{ runner.os }}-pnpm-store-
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: '.nvmrc'
 
@@ -231,7 +294,7 @@ jobs:
         run: pnpm test:coverage
 
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: coverage-report
@@ -244,69 +307,36 @@ jobs:
     name: Python CI
     runs-on: ubuntu-22.04
     needs: detect-changes
+    # infrastructure too: the Postgres tests build their databases from the
+    # migration files in infrastructure/schema.
     if: |
       needs.detect-changes.outputs.python == 'true' ||
-      needs.detect-changes.outputs.workflows == 'true' ||
-      github.event_name == 'push'
-    defaults:
-      run:
-        working-directory: ./services/python_agents
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Setup uv (fast Python package installer)
-        uses: astral-sh/setup-uv@v4
-        with:
-          enable-cache: true
-          cache-dependency-glob: |
-            **/pyproject.toml
-            **/uv.lock
-
-      - name: Install dependencies with uv sync
-        run: |
-          uv sync --frozen --extra dev
-
-      - name: Lint with Ruff
-        run: uv run ruff check .
-
-      - name: Format check with Ruff
-        run: uv run ruff format --check .
-
-      - name: Type check with Mypy
-        run: |
-          if find . -name "*.py" -type f | grep -q .; then
-            uv run mypy .
-          else
-            echo "No Python files found, skipping mypy"
-          fi
-        continue-on-error: true
-
-      - name: Run tests with parallelization
-        run: uv run pytest -n auto --cov --cov-report=xml --cov-report=term
-        if: hashFiles('services/python_agents/tests/**/*.py') != ''
-
-  # Database schema: apply every migration to a real Postgres, then re-apply the
-  # newest one to prove it is idempotent (same image as docker-compose.dev.yml)
-  schema-apply:
-    name: Schema Apply (Postgres)
-    runs-on: ubuntu-22.04
-    needs: detect-changes
-    if: |
       needs.detect-changes.outputs.infrastructure == 'true' ||
       needs.detect-changes.outputs.workflows == 'true' ||
       github.event_name == 'push'
     permissions:
       contents: read
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: ./services/python_agents
+    env:
+      # The engine's floor; every uv command (sync, run) uses it even after the
+      # older workload interpreters are installed below.
+      UV_PYTHON: '3.11'
+      # The Postgres repository tests run against the service below and count
+      # toward coverage (decision 30: they skip only when this is unset).
+      TEST_DATABASE_URL: postgresql://dev:devpass@localhost:5432/ai_platform
+      # Sandbox tests fail instead of skipping when the host cannot isolate
+      # (decision 36: never weaken these; move to ubuntu-24.04 instead).
+      REQUIRE_NETWORK_SANDBOX: '1'
+      REQUIRE_FS_SANDBOX: '1'
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        # pgvector on Postgres 16, pinned to a release tag and its multi-arch
+        # index digest; docker-compose.dev.yml pins the same digest. Bump both
+        # together.
+        image: pgvector/pgvector:0.8.7-pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
         env:
           POSTGRES_DB: ai_platform
           POSTGRES_USER: dev
@@ -321,13 +351,400 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+
+      - name: Setup uv (fast Python package installer)
+        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
+        with:
+          # Pinned: without it the action downloads whatever uv is latest.
+          version: '0.11.32'
+          enable-cache: true
+          cache-dependency-glob: |
+            **/pyproject.toml
+            **/uv.lock
+
+      - name: Install dependencies with uv sync
+        run: |
+          uv sync --frozen --extra dev --extra database --extra experiments
+          uv run python -c 'import sys; print("engine python", sys.version)'
+
+      # The profiler shim runs on workload interpreters >= 3.8, and its tests
+      # run every python3.N found on PATH (they skip the missing ones).
+      - name: Install workload interpreters 3.8 to 3.12
+        run: |
+          uv python install 3.8 3.9 3.10 3.11 3.12
+          uv python dir --bin >> "$GITHUB_PATH"
+
+      - name: Workload interpreters are on PATH
+        run: |
+          status=0
+          for version in 3.8 3.9 3.10 3.11 3.12; do
+            if command -v "python${version}" >/dev/null 2>&1; then
+              echo "python${version}: $(command -v "python${version}") ($("python${version}" -c 'import sys; print(sys.version.split()[0])'))"
+            else
+              echo "::error::python${version} is not on PATH, so the profiler shim tests for it would skip"
+              status=1
+            fi
+          done
+          exit "${status}"
+
+      - name: Lint with Ruff
+        run: uv run ruff check .
+
+      - name: Format check with Ruff
+        run: uv run ruff format --check .
+
+      - name: Type check with Mypy
+        run: uv run mypy src tests
+
+      # Fails loudly (instead of letting REQUIRE_* turn every sandbox test red)
+      # when the runner cannot give the engine its Linux sandbox: the exact
+      # unshare argv the engine uses, then the Landlock ABI probe.
+      - name: Sandbox probe (unshare and Landlock)
+        run: |
+          echo "kernel $(uname -r)"
+          userns=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          if [ -r "${userns}" ]; then
+            echo "apparmor_restrict_unprivileged_userns=$(cat "${userns}")"
+          fi
+          if ! command -v unshare >/dev/null 2>&1; then
+            echo "::error::unshare is not installed: the sandbox tests cannot run (REQUIRE_*=1)"
+            exit 1
+          fi
+          uv run python - <<'PY'
+          import subprocess
+          import sys
+
+          from autonomous_ai_agents.execution import launcher
+          from autonomous_ai_agents.execution.sandbox import UNSHARE_ARGV
+
+          HINT = (
+              "decision 36: move this job to ubuntu-24.04 with "
+              "'sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0'; "
+              "never unset REQUIRE_*"
+          )
+          argv = [*UNSHARE_ARGV, "true"]
+          probe = subprocess.run(argv, capture_output=True, timeout=30, check=False)
+          if probe.returncode != 0:
+              detail = probe.stderr.decode(errors="replace").strip()
+              print(f"::error::{' '.join(argv)} exited {probe.returncode}: {detail} ({HINT})")
+              sys.exit(1)
+          print(f"{' '.join(argv)}: ok")
+          try:
+              abi = launcher.default_ops().syscall(444, (None, 0, 1))
+          except OSError as error:
+              print(f"::error::Landlock is unavailable: {error} ({HINT})")
+              sys.exit(1)
+          print(f"Landlock ABI {abi}")
+          PY
+
+      - name: Run tests with parallelization
+        run: uv run pytest -m "not live" -n auto --cov --cov-report=xml --cov-report=term
+        if: hashFiles('services/python_agents/tests/**/*.py') != ''
+
+  # The macOS sandbox (sandbox-exec), Apple git and maxrss units, before the
+  # M4 Pro dogfood (spec decision 6). Blocking since the Step 2 close-out.
+  python-macos:
+    name: Python execution tests (macOS)
+    runs-on: macos-latest
+    needs: detect-changes
+    if: |
+      needs.detect-changes.outputs.python == 'true' ||
+      needs.detect-changes.outputs.workflows == 'true' ||
+      github.event_name == 'push'
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: ./services/python_agents
+    env:
+      UV_PYTHON: '3.11'
+      GIT_EXECUTABLE: /usr/bin/git
+      REQUIRE_NETWORK_SANDBOX: '1'
+      REQUIRE_FS_SANDBOX: '1'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+
+      - name: Setup uv (fast Python package installer)
+        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
+        with:
+          # Pinned: without it the action downloads whatever uv is latest.
+          version: '0.11.32'
+          enable-cache: true
+          cache-dependency-glob: |
+            **/pyproject.toml
+            **/uv.lock
+
+      - name: Install dependencies with uv sync
+        run: uv sync --frozen --extra dev
+
+      - name: Sandbox probe (sandbox-exec and Apple git)
+        run: |
+          sw_vers
+          "${GIT_EXECUTABLE}" --version
+          if ! /usr/bin/sandbox-exec -p '(version 1) (allow default)' /usr/bin/true; then
+            echo "::error::sandbox-exec cannot run a profile: the sandbox tests cannot run (REQUIRE_*=1)"
+            exit 1
+          fi
+          echo "sandbox-exec: ok"
+
+      - name: Run execution tests
+        run: uv run pytest tests/execution --no-cov -m "not live" -n auto
+
+  # Live Claude smoke test: costs money, so it runs only when started by hand
+  # (Actions > CI > Run workflow), never on push or pull_request. The key is
+  # passed to the test step only and never echoed (GitHub masks it as well).
+  # Environment 'live' must have required reviewers and hold ANTHROPIC_API_KEY
+  # as an environment secret (not a repository secret), so starting a run on
+  # any branch still needs a second person before the key reaches the runner.
+  live-smoke:
+    name: Live Claude API suite (manual)
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'workflow_dispatch'
+    environment: live
+    permissions:
+      contents: read
+    # Each whole loop takes a few minutes of real trials (up to about 8): Stage A
+    # runs 2, attack 3, corpus 15, hard 10 and oss at most 10 (larger
+    # repositories). A killed job loses the cost table, so each suite gets room
+    # for its loops (the hosted maximum is 360).
+    timeout-minutes: ${{ inputs.suite == 'sweep' && 240 || inputs.suite == 'sweep-fable' && 180 || inputs.suite == 'ab' && 360 || inputs.suite == 'escalation' && 90 || inputs.suite == 'triage' && 90 || inputs.suite == 'papers' && 60 || inputs.suite == 'web' && 90 || inputs.suite == 'corpus' && 180 || inputs.suite == 'oss' && 180 || inputs.suite == 'hard' && 120 || inputs.suite == 'attack' && 45 || 30 }}
+    defaults:
+      run:
+        working-directory: ./services/python_agents
+    env:
+      UV_PYTHON: '3.11'
+      # The live E2E and attack runs must be sandboxed: a runner that cannot
+      # isolate fails instead of running Claude-edited code unconfined.
+      REQUIRE_NETWORK_SANDBOX: '1'
+      REQUIRE_FS_SANDBOX: '1'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+
+      - name: Setup uv (fast Python package installer)
+        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
+        with:
+          # Pinned: without it the action downloads whatever uv is latest.
+          version: '0.11.32'
+          enable-cache: true
+          cache-dependency-glob: |
+            **/pyproject.toml
+            **/uv.lock
+
+      - name: Install dependencies with uv sync
+        run: uv sync --frozen --extra dev --extra database --extra experiments
+
+      # The same probe as the python job: fail loudly before any money is
+      # spent when the runner cannot give the engine its Linux sandbox.
+      - name: Sandbox probe (unshare and Landlock)
+        run: |
+          echo "kernel $(uname -r)"
+          userns=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          if [ -r "${userns}" ]; then
+            echo "apparmor_restrict_unprivileged_userns=$(cat "${userns}")"
+          fi
+          if ! command -v unshare >/dev/null 2>&1; then
+            echo "::error::unshare is not installed: the live E2E cannot be sandboxed (REQUIRE_*=1)"
+            exit 1
+          fi
+          uv run python - <<'PY'
+          import subprocess
+          import sys
+
+          from autonomous_ai_agents.execution import launcher
+          from autonomous_ai_agents.execution.sandbox import UNSHARE_ARGV
+
+          HINT = (
+              "decision 36: move this job to ubuntu-24.04 with "
+              "'sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0'; "
+              "never unset REQUIRE_*"
+          )
+          argv = [*UNSHARE_ARGV, "true"]
+          probe = subprocess.run(argv, capture_output=True, timeout=30, check=False)
+          if probe.returncode != 0:
+              detail = probe.stderr.decode(errors="replace").strip()
+              print(f"::error::{' '.join(argv)} exited {probe.returncode}: {detail} ({HINT})")
+              sys.exit(1)
+          print(f"{' '.join(argv)}: ok")
+          try:
+              abi = launcher.default_ops().syscall(444, (None, 0, 1))
+          except OSError as error:
+              print(f"::error::Landlock is unavailable: {error} ({HINT})")
+              sys.exit(1)
+          print(f"Landlock ABI {abi}")
+          PY
+
+      # -m live replaces the default "not live" filter; --no-cov because the
+      # live tests alone cannot meet the suite's coverage gate; -n 0 so one
+      # session ledger sees every test. The key reaches only this step and is
+      # never printed; a missing key fails here instead of letting every live
+      # test skip. The inputs arrive through env only and are validated before
+      # anything runs: the suite picks the paths, the model sets ENGINE_MODEL
+      # (Sonnet with ENGINE_FALLBACKS off, so the comparison bills Sonnet only
+      # and its worst case is priced on Sonnet alone), and the cap becomes
+      # LIVE_SUITE_CAP_USD, which tests/live/conftest.py enforces before each
+      # test spends. The mode becomes LIVE_CORPUS_MODE (the corpus and hard
+      # suites read it; stage-a, attack and oss ignore it). The cost table and
+      # the corpus summary go to the job summary; one JSON line per corpus run
+      # goes to LIVE_RESULTS_PATH.
+      - name: Run live tests
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          INPUT_SUITE: ${{ inputs.suite }}
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_ENGINE_MODEL: ${{ inputs.engine_model }}
+          INPUT_SUITE_CAP_USD: ${{ inputs.suite_cap_usd }}
+          LIVE_RESULTS_PATH: ${{ runner.temp }}/live-results.jsonl
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY}" ]; then
+            echo "::error::the ANTHROPIC_API_KEY secret of environment 'live' is not set"
+            exit 1
+          fi
+          corpus=(--ignore=tests/live/test_corpus_live.py --ignore=tests/live/test_attack_corpus_live.py --ignore=tests/live/test_hard_corpus_live.py --ignore=tests/live/test_oss_live.py --ignore=tests/live/experiments --ignore=tests/live/test_sweep_live.py --ignore=tests/live/test_ab_live.py --ignore=tests/live/test_escalation_live.py)
+          # need: the sum of the caps the suite's live tests ask the ledger for
+          # (Stage A 8.55, corpus 15 x 5, attack 3 x 4, hard 10 x 5, oss at most
+          # 10 x 5; the Window 0 experiments under tests/live/experiments: probes
+          # 0.46, triage 1.25, papers 3 x 1.25 + 2 x 2.75 + 0.75, web 18 caps 51.08, prescreen 2 x 1.11; the discovery
+          # suites: sweep 76.15, sweep-fable 33 (one Sonnet arm and Fable 5.1 on
+          # the 12 slowdowns), ab 2 reps 140, escalation 42.9),
+          # rounded up; a smaller cap would refuse, and fail, the later
+          # tests of the suite.
+          case "${INPUT_SUITE}" in
+            stage-a) paths=(tests/live tests/execution/test_editor.py "${corpus[@]}"); need=9 ;;
+            corpus) paths=(tests/live/test_corpus_live.py); need=75 ;;
+            attack) paths=(tests/live/test_attack_corpus_live.py); need=12 ;;
+            hard) paths=(tests/live/test_hard_corpus_live.py); need=50 ;;
+            oss) paths=(tests/live/test_oss_live.py); need=50 ;;
+            probes) paths=(tests/live/experiments/test_probes_live.py); need=1 ;;
+            triage) paths=(tests/live/experiments/test_triage_live.py); need=2 ;;
+            papers) paths=(tests/live/experiments/test_extraction_live.py); need=10 ;;
+            web) paths=(tests/live/experiments/test_web_live.py); need=52 ;;
+            prescreen) paths=(tests/live/experiments/test_prescreen_live.py); need=3 ;;
+            sweep) paths=(tests/live/test_sweep_live.py); need=77 ;;
+            sweep-fable) paths=(tests/live/test_sweep_live.py); need=33 ;;
+            ab) paths=(tests/live/test_ab_live.py); need=140 ;;
+            escalation) paths=(tests/live/test_escalation_live.py); need=43 ;;
+            *)
+              echo "::error::unknown suite input (stage-a, corpus, attack, hard, oss, probes, triage, papers, web, prescreen, sweep, sweep-fable, ab or escalation)"
+              exit 1
+              ;;
+          esac
+          if [ "${INPUT_SUITE}" = sweep-fable ]; then
+            # Fable 5.1 (the research plan's optional arm) beside the one arm
+            # whose per-repository run phase 1 shares
+            export LIVE_SWEEP_ARMS=sonnet-5-5-medium LIVE_SWEEP_FABLE=1
+          fi
+          case "${INPUT_MODE}" in
+            aimed) ;;
+            blind) ;;
+            decoy) ;;
+            *)
+              echo "::error::unknown mode input (aimed, blind or decoy)"
+              exit 1
+              ;;
+          esac
+          case "${INPUT_ENGINE_MODEL}" in
+            claude-opus-5-5) ;;
+            claude-sonnet-5-5) export ENGINE_FALLBACKS=false ;;
+            *)
+              echo "::error::unknown engine_model input"
+              exit 1
+              ;;
+          esac
+          if ! [[ "${INPUT_SUITE_CAP_USD}" =~ ^[0-9]{1,3}([.][0-9]{1,2})?$ ]] ||
+            ! awk -v cap="${INPUT_SUITE_CAP_USD}" 'BEGIN { exit !(cap > 0 && cap <= 150) }'; then
+            echo "::error::suite_cap_usd must be a number of USD above 0 and at most 150"
+            exit 1
+          fi
+          if ! awk -v cap="${INPUT_SUITE_CAP_USD}" -v need="${need}" 'BEGIN { exit !(cap >= need) }'; then
+            echo "::error::suite_cap_usd ${INPUT_SUITE_CAP_USD} is below the ${need} USD suite ${INPUT_SUITE} needs to admit every test"
+            exit 1
+          fi
+          export ENGINE_MODEL="${INPUT_ENGINE_MODEL}"
+          export LIVE_SUITE_CAP_USD="${INPUT_SUITE_CAP_USD}"
+          export LIVE_CORPUS_MODE="${INPUT_MODE}"
+          : > "${LIVE_RESULTS_PATH}"
+          echo "suite ${INPUT_SUITE}, mode ${LIVE_CORPUS_MODE}, ENGINE_MODEL ${ENGINE_MODEL}, LIVE_SUITE_CAP_USD ${LIVE_SUITE_CAP_USD}"
+          uv run pytest "${paths[@]}" -m live --no-cov -n 0 -rA
+
+      # One JSON line per corpus run (CorpusOutcome), kept for the STATUS
+      # ledger and the stage M comparison across runs.
+      - name: Upload live corpus results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: live-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/live-results.jsonl
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # Database schema: apply every migration to a real Postgres, then re-apply the
+  # engine migrations (003, 004) to prove they are idempotent. 001 and 002 are
+  # not idempotent (plain CREATE TABLE packages, CREATE INDEX idx_packages_name),
+  # so they run once. Same pinned image as the python job's service.
+  schema-apply:
+    name: Schema Apply (Postgres)
+    runs-on: ubuntu-22.04
+    needs: detect-changes
+    if: |
+      needs.detect-changes.outputs.infrastructure == 'true' ||
+      needs.detect-changes.outputs.workflows == 'true' ||
+      github.event_name == 'push'
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.7-pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
+        env:
+          POSTGRES_DB: ai_platform
+          POSTGRES_USER: dev
+          POSTGRES_PASSWORD: devpass
+        ports:
+          - '5432:5432'
+        options: >-
+          --health-cmd "pg_isready -U dev -d ai_platform"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Ensure psql is available
         run: which psql || (sudo apt-get update && sudo apt-get install -y postgresql-client)
 
-      # Same order as docker-entrypoint-initdb.d on a fresh volume (file name order)
-      - name: Apply migrations in order (001 -> 002 -> 003)
+      # Same order as docker-entrypoint-initdb.d on a fresh volume (file name
+      # order); every file runs exactly once here.
+      - name: Apply migrations once in order (001 -> 004)
         run: |
           for file in infrastructure/schema/*.sql; do
             echo "::group::${file}"
@@ -335,28 +752,24 @@ jobs:
             echo "::endgroup::"
           done
 
-      - name: Snapshot schema catalog before the second run
+      - name: Re-apply 003 then 004 and diff the catalog (idempotence proof)
         run: |
           snapshot() {
-            PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -tAc "SELECT conrelid::regclass, conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE connamespace = 'public'::regnamespace ORDER BY 1, 2" > "$1"
-            PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -tAc "SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' ORDER BY 1, 2" >> "$1"
-            PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -tAc "SELECT table_name, column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = 'public' ORDER BY 1, 2" >> "$1"
+            {
+              PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -v ON_ERROR_STOP=1 -tAc "SELECT conrelid::regclass, conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE connamespace = 'public'::regnamespace ORDER BY 1, 2"
+              PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -v ON_ERROR_STOP=1 -tAc "SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' ORDER BY 1, 2"
+              PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -v ON_ERROR_STOP=1 -tAc "SELECT table_name, column_name, data_type, is_nullable, column_default, is_identity FROM information_schema.columns WHERE table_schema = 'public' ORDER BY 1, 2"
+            } > "$1"
           }
-          snapshot /tmp/schema-before.txt
-
-      - name: Re-apply 003 (idempotence proof)
-        run: |
-          PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -v ON_ERROR_STOP=1 -f infrastructure/schema/003_engine.sql
-
-      - name: Second run changed nothing (no duplicated constraints or indexes)
-        run: |
-          snapshot() {
-            PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -tAc "SELECT conrelid::regclass, conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE connamespace = 'public'::regnamespace ORDER BY 1, 2" > "$1"
-            PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -tAc "SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' ORDER BY 1, 2" >> "$1"
-            PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -tAc "SELECT table_name, column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = 'public' ORDER BY 1, 2" >> "$1"
-          }
-          snapshot /tmp/schema-after.txt
-          diff -u /tmp/schema-before.txt /tmp/schema-after.txt
+          snapshot "${RUNNER_TEMP}/schema-before.txt"
+          for file in infrastructure/schema/003_engine.sql infrastructure/schema/004_engine_repository.sql; do
+            echo "::group::re-apply ${file}"
+            PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -v ON_ERROR_STOP=1 -f "${file}"
+            echo "::endgroup::"
+          done
+          snapshot "${RUNNER_TEMP}/schema-after.txt"
+          echo "catalog: $(wc -l < "${RUNNER_TEMP}/schema-before.txt") lines"
+          diff -u "${RUNNER_TEMP}/schema-before.txt" "${RUNNER_TEMP}/schema-after.txt"
 
       - name: Verify engine tables and columns
         run: |
@@ -372,14 +785,34 @@ jobs:
               status=1
             fi
           done
-          for column in claims citation_count; do
-            if [ "$(query "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'research_papers' AND column_name = '${column}')")" = "t" ]; then
-              echo "column research_papers.${column}: present"
+          # table.column:data_type (003 research columns, then the 004 additions)
+          for spec in research_papers.claims:jsonb research_papers.citation_count:integer \
+            projects.test_command:jsonb lessons.seq:bigint \
+            lessons.gain:'double precision' lessons.weight:'double precision'; do
+            target="${spec%%:*}"
+            want="${spec#*:}"
+            got="$(query "SELECT data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '${target%%.*}' AND column_name = '${target#*.}'")"
+            if [ "${got}" = "${want}" ]; then
+              echo "column ${target} (${want}): present"
             else
-              echo "::error::column research_papers.${column} is missing"
+              echo "::error::column ${target} should be ${want}, found '${got}'"
               status=1
             fi
           done
+          for index in uq_task_thread uq_lessons_seq; do
+            if [ "$(query "SELECT to_regclass('public.${index}') IS NOT NULL")" = "t" ]; then
+              echo "index ${index}: present"
+            else
+              echo "::error::index ${index} is missing"
+              status=1
+            fi
+          done
+          if [ "$(query "SELECT count(*) FROM pg_constraint WHERE conname = 'chk_project_test_command_argv' AND conrelid = 'public.projects'::regclass")" = "1" ]; then
+            echo "constraint chk_project_test_command_argv: present once"
+          else
+            echo "::error::constraint chk_project_test_command_argv is missing or duplicated"
+            status=1
+          fi
           exit "${status}"
 
   # Database init exactly as a developer runs it: docker compose starts the
@@ -402,7 +835,9 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Start postgres on an empty volume
         run: |
@@ -429,10 +864,15 @@ jobs:
           docker compose logs postgres
           exit 1
 
+      # A client connecting while the server boots or restarts after the init
+      # scripts (the health check, a racing probe) logs "FATAL: the database
+      # system is starting up" (or "shutting down"); that is a refused
+      # connection, not an init error, so only those exact lines are dropped.
       - name: Init log has no errors
         run: |
           docker compose logs postgres > /tmp/postgres-init.log
-          if grep -iE '(^|[^a-z])(error|fatal)([^a-z]|$)' /tmp/postgres-init.log; then
+          if grep -vE 'FATAL:  the database system is (starting up|shutting down)$' /tmp/postgres-init.log |
+            grep -iE '(^|[^a-z])(error|fatal)([^a-z]|$)'; then
             echo "::error::postgres init log contains errors (see above)"
             exit 1
           fi
@@ -445,7 +885,7 @@ jobs:
           echo "public tables: ${count}"
           docker compose exec -T postgres psql -U dev -d ai_platform -c '\dt'
           if [ "${count}" != "14" ]; then
-            echo "::error::expected 14 tables after 001 -> 002 -> 003, found ${count}"
+            echo "::error::expected 14 tables after 001 -> 004 (004 adds none), found ${count}"
             exit 1
           fi
 
@@ -465,10 +905,12 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 10.20.0
           run_install: false
@@ -477,10 +919,10 @@ jobs:
         id: pnpm-cache
         shell: bash
         run: |
-          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
+          echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
 
       - name: Cache pnpm store
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
@@ -488,32 +930,36 @@ jobs:
             ${{ runner.os }}-pnpm-store-
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: '.nvmrc'
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Blocking: the stage gate already requires a clean audit at moderate+,
+      # and a non-blocking audit never stopped a vulnerable lockfile.
       - name: Run pnpm audit
         run: pnpm audit --audit-level=high
-        continue-on-error: true
 
   # Docker security scan (optimized with Trivy caching)
   docker-security:
     name: Docker Security Scan
     runs-on: ubuntu-22.04
+    if: github.event_name != 'workflow_dispatch'
+    # No security-events: results go to an artifact, not SARIF upload.
     permissions:
       contents: read
-      security-events: write
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       # Cache Trivy database for 40-50% speedup
       - name: Cache Trivy Database
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/trivy
           key: trivy-db-${{ runner.os }}-${{ hashFiles('.github/workflows/*.yml') }}
@@ -522,7 +968,9 @@ jobs:
 
       # Consolidated single scan (70% faster than 3 separate scans)
       - name: Run Trivy - All Severities
-        uses: aquasecurity/trivy-action@master
+        # Commit of the signed v0.36.0 tag (on master; its nested actions are
+        # SHA-pinned). A mutable branch ref would run unreviewed code here.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         continue-on-error: true
         with:
           scan-type: 'config'
@@ -547,13 +995,15 @@ jobs:
             HIGH_CRITICAL_COUNT=$(jq -s 'length' high-critical.json)
             MEDIUM_LOW_COUNT=$(jq -s 'length' medium-low.json)
 
-            echo "HIGH_CRITICAL_COUNT=$HIGH_CRITICAL_COUNT" >> $GITHUB_ENV
-            echo "MEDIUM_LOW_COUNT=$MEDIUM_LOW_COUNT" >> $GITHUB_ENV
+            {
+              echo "HIGH_CRITICAL_COUNT=$HIGH_CRITICAL_COUNT"
+              echo "MEDIUM_LOW_COUNT=$MEDIUM_LOW_COUNT"
+            } >> "$GITHUB_ENV"
           fi
 
       # Upload optimized artifacts
       - name: Upload Trivy Results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: trivy-security-scan-${{ github.run_number }}
@@ -564,31 +1014,37 @@ jobs:
           retention-days: 14
           compression-level: 6
 
-      # Enhanced security summary
+      # Enhanced security summary. github.* values reach the script through
+      # env, never through ${{ }} inside run: (no script injection).
       - name: Generate Security Summary
         if: always()
+        env:
+          REPOSITORY: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          echo "# 🔒 Trivy Security Scan Report" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "# 🔒 Trivy Security Scan Report"
+            echo ""
 
-          # Status badge
-          if [ "${HIGH_CRITICAL_COUNT:-0}" -gt 0 ]; then
-            echo "![Status](https://img.shields.io/badge/Security-FAILED-red?style=for-the-badge&logo=security)" >> $GITHUB_STEP_SUMMARY
-          elif [ "${MEDIUM_LOW_COUNT:-0}" -gt 0 ]; then
-            echo "![Status](https://img.shields.io/badge/Security-WARNING-yellow?style=for-the-badge&logo=security)" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "![Status](https://img.shields.io/badge/Security-PASSED-brightgreen?style=for-the-badge&logo=security)" >> $GITHUB_STEP_SUMMARY
-          fi
+            # Status badge
+            if [ "${HIGH_CRITICAL_COUNT:-0}" -gt 0 ]; then
+              echo "![Status](https://img.shields.io/badge/Security-FAILED-red?style=for-the-badge&logo=security)"
+            elif [ "${MEDIUM_LOW_COUNT:-0}" -gt 0 ]; then
+              echo "![Status](https://img.shields.io/badge/Security-WARNING-yellow?style=for-the-badge&logo=security)"
+            else
+              echo "![Status](https://img.shields.io/badge/Security-PASSED-brightgreen?style=for-the-badge&logo=security)"
+            fi
 
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
-          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| 🔴 CRITICAL/HIGH | ${HIGH_CRITICAL_COUNT:-0} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🟡 MEDIUM/LOW | ${MEDIUM_LOW_COUNT:-0} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "📅 **Scan Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
-          echo "📦 **Repository:** \`${{ github.repository }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "🌿 **Branch:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+            echo ""
+            echo "| Severity | Count |"
+            echo "|----------|-------|"
+            echo "| 🔴 CRITICAL/HIGH | ${HIGH_CRITICAL_COUNT:-0} |"
+            echo "| 🟡 MEDIUM/LOW | ${MEDIUM_LOW_COUNT:-0} |"
+            echo ""
+            echo "📅 **Scan Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo "📦 **Repository:** \`${REPOSITORY}\`"
+            echo "🌿 **Branch:** \`${REF_NAME}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # FAIL if CRITICAL/HIGH found
       - name: Check for HIGH/CRITICAL Vulnerabilities

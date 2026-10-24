@@ -2,3 +2,13 @@ packages:
   - 'apps/*'
   - 'packages/*'
   - 'services/*'
+
+# Supply chain: a package version must be at least this old (minutes; seven
+# days) before pnpm resolves it. The compromised npm releases of 2025 (the
+# chalk/debug takeover, the self-replicating worm) were pulled within hours to
+# days; a cooldown keeps such versions out of new resolutions. Installs from
+# the lockfile (--frozen-lockfile) are unaffected. There is no security
+# exemption: to take a fix younger than a week, list the package under
+# minimumReleaseAgeExclude for that install. Dependabot's version updates use
+# the same seven-day cooldown (its security updates open immediately).
+minimumReleaseAge: 10080

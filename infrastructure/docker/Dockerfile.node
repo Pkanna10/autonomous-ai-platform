@@ -9,9 +9,11 @@
 # Stage 0: Base Configuration (Shared Across All Stages)
 # ==================================================================================
 # Using bookworm-slim for glibc compatibility and performance (15-35% faster than Alpine)
-# Proposal #2: node:20-bookworm-slim instead of Alpine for production reliability
-ARG NODE_VERSION=20.13.1
-FROM node:${NODE_VERSION}-bookworm-slim AS base
+# Node 22 is the maintained LTS line (Node 20 reached end of life on
+# 2026-04-30 and receives no security fixes; vite 7 and vitest 4 also need
+# >= 20.19 or >= 22.12). Tag and multi-arch digest pinned; Renovate/Dependabot
+# bump both together.
+FROM node:22.22.0-bookworm-slim@sha256:dd9d21971ec4395903fa6143c2b9267d048ae01ca6d3ea96f16cb30df6187d94 AS base
 
 # Install pnpm directly via npm to bypass corepack signature verification issues
 # Pin to pnpm@10.20.0 (matches packageManager in package.json)
@@ -31,8 +33,9 @@ ENV NODE_ENV=${NODE_ENV} \
     APP_VERSION=${VERSION} \
     BUILD_DATE=${BUILD_DATE} \
     GIT_COMMIT=${GIT_COMMIT} \
-    PNPM_HOME="/pnpm" \
-    PATH="$PNPM_HOME:$PATH"
+    PNPM_HOME="/pnpm"
+# Separate statement: a variable cannot be read in the ENV that defines it.
+ENV PATH="$PNPM_HOME:$PATH"
 
 # ==================================================================================
 # Stage 1: Pruner (Isolate Monorepo Workspace)
@@ -40,8 +43,9 @@ ENV NODE_ENV=${NODE_ENV} \
 # Proposal #14: turbo prune --docker for monorepo optimization (50-70% smaller images)
 FROM base AS pruner
 
-# Install Turborepo globally
-RUN npm install -g turbo
+# Install Turborepo globally, pinned to the version in pnpm-lock.yaml (an
+# unpinned global install resolves whatever the registry serves at build time)
+RUN npm install -g turbo@2.11.10
 
 # Copy entire monorepo (needed for pruning)
 COPY . .
@@ -246,8 +250,8 @@ RUN --mount=type=bind,from=builder,source=/app,target=/builder \
 # Stage 8: Production Distroless (Maximum Security)
 # ==================================================================================
 # Proposal #10: Distroless for 93% fewer CVEs (0-2 CVEs vs 28-37 CVEs)
-# Uncomment to use distroless (no shell, maximum security)
-FROM gcr.io/distroless/nodejs20-debian12 AS production-distroless
+# Node 22 (see the base stage), nonroot variant, pinned by digest.
+FROM gcr.io/distroless/nodejs22-debian12:nonroot@sha256:13593b7570658e8477de39e2f4a1dd25db2f836d68a0ba771251572d23bb4f8e AS production-distroless
 
 # Re-declare ARG for this stage
 ARG PACKAGE_SCOPE=@autonomous-ai/agent-core

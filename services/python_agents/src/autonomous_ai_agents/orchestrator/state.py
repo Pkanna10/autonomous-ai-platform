@@ -20,10 +20,16 @@ checkpointed state and never from the repository.
 ``run_id`` names the checkpoint thread and the engine's git branches, so
 ``validate_run_id`` keeps it to a safe refname piece (``RUN_ID_PATTERN``).
 
+``max_cost_usd`` is the run's hard cost cap; nodes that spend rebuild
+``Budget(state["max_cost_usd"], state["cost_usd"])`` so the budget survives a
+checkpoint and resume. ``budget_exhausted`` is set when the trials node stops
+for lack of money, and the router then goes straight to combine.
+
 ``AgentState`` is a transitional alias for the placeholder nodes and tests
 that still import the old name; it goes away with the node rewrite.
 """
 
+import math
 import operator
 import re
 from collections.abc import Sequence
@@ -33,6 +39,7 @@ from autonomous_ai_agents.common.config import settings
 from autonomous_ai_agents.common.models import (
     ApprovalDecision,
     Baseline,
+    Combination,
     Delivery,
     EngineEvent,
     Guardrail,
@@ -42,6 +49,7 @@ from autonomous_ai_agents.common.models import (
     Objective,
     Paper,
     Project,
+    ProjectUnderstanding,
     RunPhase,
     Technique,
     Trial,
@@ -105,6 +113,12 @@ class EngineState(TypedDict):
     error: str | None
     tokens_used: int
     cost_usd: float
+    base_commit: str | None
+    understanding: ProjectUnderstanding | None
+    max_cost_usd: float
+    combination: Combination | None
+    budget_exhausted: bool
+    extra_protected: list[str]
 
 
 AgentState = EngineState
@@ -119,18 +133,23 @@ def initial_state(
     *,
     run_id: str | None = None,
     max_rounds: int | None = None,
+    max_cost_usd: float | None = None,
 ) -> EngineState:
     """Build the state a run starts from, with every key set.
 
     The sequences are copied into fresh lists so later mutation by the caller
     cannot leak into a checkpoint. ``run_id`` defaults to a new uuid4 and is
     checked by ``validate_run_id``; ``max_rounds`` defaults to
-    ``settings.MAX_TRIAL_ROUNDS`` and must be at least 1. Both raise
-    ``ValueError``.
+    ``settings.MAX_TRIAL_ROUNDS`` and must be at least 1; ``max_cost_usd``
+    defaults to ``settings.MAX_COST_USD`` and must be finite and at least 0.
+    All three raise ``ValueError``.
     """
     rounds = max_rounds if max_rounds is not None else settings.MAX_TRIAL_ROUNDS
     if rounds < 1:
         raise ValueError(f"max_rounds must be at least 1, got {rounds}")
+    cap = float(max_cost_usd if max_cost_usd is not None else settings.MAX_COST_USD)
+    if not math.isfinite(cap) or cap < 0:
+        raise ValueError(f"max_cost_usd must be finite and at least 0, got {cap}")
     return EngineState(
         run_id=validate_run_id(run_id if run_id is not None else new_id()),
         phase=RunPhase.connect,
@@ -157,4 +176,10 @@ def initial_state(
         error=None,
         tokens_used=0,
         cost_usd=0.0,
+        base_commit=None,
+        understanding=None,
+        max_cost_usd=cap,
+        combination=None,
+        budget_exhausted=False,
+        extra_protected=[],
     )

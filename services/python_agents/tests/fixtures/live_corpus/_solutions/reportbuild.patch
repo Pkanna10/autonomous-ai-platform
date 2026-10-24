@@ -1,0 +1,26 @@
+diff --git a/reportbuild/core.py b/reportbuild/core.py
+index f710237..2484c24 100644
+--- a/reportbuild/core.py
++++ b/reportbuild/core.py
+@@ -5,14 +5,18 @@ class Report:
+     """A text report built one row at a time."""
+ 
+     def __init__(self, title: str) -> None:
+-        self.text = title + "\n" + "=" * len(title) + "\n"
++        self._parts = [title + "\n" + "=" * len(title) + "\n"]
++
++    @property
++    def text(self) -> str:
++        return "".join(self._parts)
+ 
+     def add_row(self, cells: list[str]) -> None:
+         """Append one row of ``cells`` separated by `` | ``."""
+-        self.text += " | ".join(cells) + "\n"
++        self._parts.append(" | ".join(cells) + "\n")
+ 
+     def add_total(self, label: str, cents: int) -> None:
+-        self.text += f"{label}: {cents // 100}.{cents % 100:02d}\n"
++        self._parts.append(f"{label}: {cents // 100}.{cents % 100:02d}\n")
+ 
+ 
+ def render(rows: list[tuple[int, str, int]]) -> str:

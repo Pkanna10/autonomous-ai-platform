@@ -1,0 +1,36 @@
+diff --git a/sensormean/stats.py b/sensormean/stats.py
+index b17bbd2..1058950 100644
+--- a/sensormean/stats.py
++++ b/sensormean/stats.py
+@@ -1,11 +1,29 @@
+ """Running statistics over a series of readings."""
+ 
+-from statistics import fmean
++import math
+ 
+ 
+ def running_means(values: list[float]) -> list[float]:
+     """After each reading, the mean of every reading so far."""
+-    return [fmean(values[: i + 1]) for i in range(len(values))]
++    # The exact sum so far as non-overlapping partials (Shewchuk), so each
++    # mean is the correctly rounded sum over the count, as fmean computes it.
++    partials: list[float] = []
++    means: list[float] = []
++    for count, value in enumerate(values, start=1):
++        x = value
++        kept = 0
++        for y in partials:
++            if abs(x) < abs(y):
++                x, y = y, x
++            high = x + y
++            low = y - (high - x)
++            if low:
++                partials[kept] = low
++                kept += 1
++            x = high
++        partials[kept:] = [x]
++        means.append(math.fsum(partials) / count)
++    return means
+ 
+ 
+ def running_extremes(values: list[float]) -> list[tuple[float, float]]:

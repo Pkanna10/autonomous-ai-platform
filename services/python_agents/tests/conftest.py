@@ -53,6 +53,10 @@ from autonomous_ai_agents.orchestrator.main import (
 from autonomous_ai_agents.orchestrator.nodes import NodeContext
 from autonomous_ai_agents.persistence.repository import InMemoryRepository
 
+# tests/fixtures/ holds data, not engine tests: the dedupe_repo E2E project
+# (with its own unittest suite) and its edit sets. Never collect them here.
+collect_ignore_glob = ["fixtures/*"]
+
 VAL_LOSS = "val_loss"
 BASELINE_FINGERPRINT = fingerprint("baseline")
 

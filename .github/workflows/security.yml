@@ -9,6 +9,10 @@ on:
     - cron: '0 9 * * 1'
   workflow_dispatch: # Allow manual trigger
 
+# Least privilege by default; a job that needs more says so itself.
+permissions:
+  contents: read
+
 # Concurrency: Cancel in-progress runs for PR branches, keep all runs for main
 concurrency:
   group: security-${{ github.workflow }}-${{ github.ref }}
@@ -18,20 +22,25 @@ jobs:
   # OSV-Scanner - Google's free vulnerability scanner (reusable workflow)
   osv-scanner:
     name: OSV Vulnerability Scan
+    # The reusable workflow's documented minimum. upload-sarif stays false:
+    # every advisory it would upload already exists as a Dependabot alert, so
+    # a SARIF copy per run would double the counts in the Security tab.
     permissions:
       contents: read
       security-events: write
       actions: read
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.2.4
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@9bb69575e74019c2ad085a1860787043adf47ccb # v2.2.4
+    # No --skip-git: osv-scanner 2.x has no such flag (it aborted with "flag
+    # provided but not defined", so every earlier run reported "No issues
+    # found" without scanning); 2.x skips git history by default.
     with:
       scan-args: |-
         --recursive
-        --skip-git
         ./
       upload-sarif: false
       fail-on-vuln: false
 
-  # OSV-Scanner with custom reporting (enhanced visibility for private repos)
+  # OSV-Scanner with custom reporting (a per-package table in the job summary)
   osv-scanner-summary:
     name: OSV Scanner Report
     runs-on: ubuntu-22.04
@@ -40,37 +49,50 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
-      - name: Install OSV-Scanner CLI
-        run: |
-          curl -L https://github.com/google/osv-scanner/releases/latest/download/osv-scanner-linux-amd64 -o osv-scanner
-          chmod +x osv-scanner
-          sudo mv osv-scanner /usr/local/bin/
-
+      # The scanner's own pinned action (a versioned container) replaces the
+      # old `curl .../releases/latest ... && sudo mv` install: that ran an
+      # unverified, floating binary as root on every push. The container is
+      # the same one the reusable workflow above runs. Exit code 1 means
+      # findings, which the summary step reports.
       - name: Run OSV-Scanner
-        run: osv-scanner scan --format json --recursive --skip-git ./ > osv-results.json || true
+        uses: google/osv-scanner-action/osv-scanner-action@9bb69575e74019c2ad085a1860787043adf47ccb # v2.2.4
+        continue-on-error: true
+        with:
+          scan-args: |-
+            --format=json
+            --output=osv-results.json
+            --recursive
+            ./
 
       - name: Generate Job Summary
         run: |
-          echo "# 🔍 OSV-Scanner Vulnerability Report" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "# 🔍 OSV-Scanner Vulnerability Report"
+            echo ""
+            if [ ! -s osv-results.json ]; then
+              echo "❌ **The scanner produced no results file** (see the scan step)."
+              exit 1
+            fi
 
-          VULN_COUNT=$(jq '[.results[].packages[].vulnerabilities[]] | length' osv-results.json)
+            VULN_COUNT=$(jq '[.results[]?.packages[]?.vulnerabilities[]?] | length' osv-results.json)
 
-          if [ "$VULN_COUNT" -eq 0 ]; then
-            echo "✅ **No vulnerabilities found!**" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "⚠️ **Found $VULN_COUNT vulnerabilities**" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "| Package | Ecosystem | Vulnerability | Details |" >> $GITHUB_STEP_SUMMARY
-            echo "|---------|-----------|---------------|---------|" >> $GITHUB_STEP_SUMMARY
-
-            jq -r '.results[].packages[] | select(.vulnerabilities | length > 0) | .package.name as $pkg | .package.ecosystem as $eco | .vulnerabilities[] | "| \($pkg) | \($eco) | \(.id) | [Link](https://osv.dev/vulnerability/\(.id)) |"' osv-results.json >> $GITHUB_STEP_SUMMARY
-          fi
+            if [ "$VULN_COUNT" -eq 0 ]; then
+              echo "✅ **No vulnerabilities found!**"
+            else
+              echo "⚠️ **Found $VULN_COUNT vulnerabilities**"
+              echo ""
+              echo "| Package | Ecosystem | Vulnerability | Details |"
+              echo "|---------|-----------|---------------|---------|"
+              jq -r '.results[]?.packages[]? | select(.vulnerabilities | length > 0) | .package.name as $pkg | .package.ecosystem as $eco | .vulnerabilities[] | "| \($pkg) | \($eco) | \(.id) | [Link](https://osv.dev/vulnerability/\(.id)) |"' osv-results.json
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload OSV results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: osv-scanner-results
@@ -82,18 +104,22 @@ jobs:
   npm-audit:
     name: npm Audit
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 10.20.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: '.nvmrc'
           cache: 'pnpm'
@@ -107,8 +133,10 @@ jobs:
 
       - name: Parse and display audit results
         run: |
-          echo "# 📦 npm Audit Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "# 📦 npm Audit Results"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
 
           if [ -f npm-audit.json ]; then
             CRITICAL=$(jq '.metadata.vulnerabilities.critical // 0' npm-audit.json)
@@ -116,22 +144,26 @@ jobs:
             MODERATE=$(jq '.metadata.vulnerabilities.moderate // 0' npm-audit.json)
             LOW=$(jq '.metadata.vulnerabilities.low // 0' npm-audit.json)
 
-            echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
-            echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
-            echo "| 🔴 Critical | $CRITICAL |" >> $GITHUB_STEP_SUMMARY
-            echo "| 🟠 High | $HIGH |" >> $GITHUB_STEP_SUMMARY
-            echo "| 🟡 Moderate | $MODERATE |" >> $GITHUB_STEP_SUMMARY
-            echo "| 🟢 Low | $LOW |" >> $GITHUB_STEP_SUMMARY
+            {
+              echo "| Severity | Count |"
+              echo "|----------|-------|"
+              echo "| 🔴 Critical | $CRITICAL |"
+              echo "| 🟠 High | $HIGH |"
+              echo "| 🟡 Moderate | $MODERATE |"
+              echo "| 🟢 Low | $LOW |"
+            } >> "$GITHUB_STEP_SUMMARY"
 
             if [ "$CRITICAL" -gt 0 ] || [ "$HIGH" -gt 0 ]; then
-              echo "" >> $GITHUB_STEP_SUMMARY
-              echo "⚠️ **Action Required:** Critical or High severity vulnerabilities detected!" >> $GITHUB_STEP_SUMMARY
+              {
+                echo ""
+                echo "⚠️ **Action Required:** Critical or High severity vulnerabilities detected!"
+              } >> "$GITHUB_STEP_SUMMARY"
               exit 1
             fi
           fi
 
       - name: Upload audit results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: npm-audit-results
@@ -143,18 +175,22 @@ jobs:
   license-check:
     name: License Compliance
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 10.20.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: '.nvmrc'
           cache: 'pnpm'
@@ -162,15 +198,44 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # pnpm exec runs the locked devDependency; npx would fall back to
+      # fetching a package of that name from the registry.
       - name: Check licenses
         run: |
-          npx license-checker --json > licenses.json
-          npx license-checker --summary
+          pnpm exec license-checker --json > licenses.json
+          pnpm exec license-checker --summary
 
       - name: Upload license report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: license-report
           path: licenses.json
           retention-days: 30
           compression-level: 6
+
+  # Static analysis of the workflows themselves (unpinned actions, template
+  # injection, credential persistence, excessive permissions). Fails on any
+  # finding of low severity or above, so a regression cannot merge.
+  workflow-lint:
+    name: Workflow lint (zizmor)
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
+        with:
+          version: '0.11.32'
+
+      # The read-only job token lets the impostor-commit and known-vulnerable
+      # -actions audits query the GitHub API; it never leaves the runner.
+      - name: Run zizmor
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: uvx --from zizmor==1.22.0 zizmor --persona regular --min-severity low --format github .github/workflows

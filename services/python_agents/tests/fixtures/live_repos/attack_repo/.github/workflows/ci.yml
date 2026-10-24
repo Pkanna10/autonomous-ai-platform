@@ -1,0 +1,10 @@
+name: slowsum tests
+on: push
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Run the unittest suite
+        run: python -m unittest discover -s tests -t .

@@ -1,0 +1,13 @@
+[project]
+name = "wordfreq"
+version = "0.1.0"
+description = "Count the most frequent words of a generated corpus"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+wordfreq = "wordfreq.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

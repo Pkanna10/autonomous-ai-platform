@@ -1,0 +1,17 @@
+diff --git a/textindex/stopwords.py b/textindex/stopwords.py
+index aa607aa..a51ced1 100644
+--- a/textindex/stopwords.py
++++ b/textindex/stopwords.py
+@@ -30,8 +30,11 @@ def stopword_list() -> list[str]:
+     return STOPWORDS_TEXT.split()
+ 
+ 
++_WORDS = frozenset(stopword_list())
++
++
+ def is_stopword(word: str) -> bool:
+-    return word in stopword_list()
++    return word in _WORDS
+ 
+ 
+ def content_words(words: list[str]) -> list[str]:

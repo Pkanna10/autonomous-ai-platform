@@ -1,0 +1,21 @@
+diff --git a/deliveryround/pickups.py b/deliveryround/pickups.py
+index cecd179..386b1ad 100644
+--- a/deliveryround/pickups.py
++++ b/deliveryround/pickups.py
+@@ -1,5 +1,7 @@
+ """Pending pickups, lowest cost first."""
+ 
++from bisect import insort
++
+ 
+ def pending_views(
+     offers: list[tuple[int, str]], every: int, show: int
+@@ -10,7 +12,7 @@ def pending_views(
+     pending: list[tuple[int, str]] = []
+     views: list[list[tuple[int, str]]] = []
+     for count, offer in enumerate(offers, start=1):
+-        pending = sorted([*pending, offer])
++        insort(pending, offer)
+         if count % every == 0:
+             views.append(pending[:show])
+     return views

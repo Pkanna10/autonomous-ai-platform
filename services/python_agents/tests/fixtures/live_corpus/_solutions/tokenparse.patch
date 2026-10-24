@@ -1,0 +1,19 @@
+diff --git a/tokenparse/core.py b/tokenparse/core.py
+index d10c9fe..b5895a8 100644
+--- a/tokenparse/core.py
++++ b/tokenparse/core.py
+@@ -5,11 +5,10 @@ def tally(text: str) -> tuple[int, int, int]:
+     """``(words, integers, sum of integers)`` of the tokens in ``text``."""
+     words = integers = total = 0
+     for token in text.split():
+-        try:
+-            value = int(token)
+-        except ValueError:
++        digits = token[1:] if token[:1] == "-" else token
++        if not (digits.isascii() and digits.isdigit()):
+             words += 1
+             continue
+         integers += 1
+-        total += value
++        total += int(token)
+     return words, integers, total

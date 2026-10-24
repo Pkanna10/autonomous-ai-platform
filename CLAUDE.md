@@ -1,7 +1,8 @@
 # Autonomous AI Platform - Claude Code Configuration
 
-**Version:** 4.1.0 **Last Updated:** 2026-10-21 **Status:** Engine rebuild, Step
-1 (engine design) delivered in PR #11; Step 2 next
+**Version:** 4.3.0 **Last Updated:** 2026-10-24 **Status:** Engine rebuild, Step
+2 (core loop) closed out on PR #12 (gate passed, awaiting merge); Step 3 in
+design on `claude/step3-research`
 
 ---
 
@@ -34,8 +35,12 @@ improvement it can **prove** and keeps only what wins.
 
 ```
 CONNECT -> UNDERSTAND -> DEFINE "BETTER" -> BASELINE -> PROFILE -> RESEARCH
-  -> HYPOTHESES -> TRIALS (one git worktree each) -> JUDGES -> VERDICTS
-  -> COMBINE + re-test -> DELIVER (branch/PR + report) -> LEARN -> WATCH
+  -> HYPOTHESES -> ACQUIRE (packages, tools) -> TRIALS (one git worktree each)
+  -> JUDGES -> VERDICTS -> COMBINE + re-test -> DELIVER (branch/PR + report)
+  -> LEARN -> WATCH
+
+HEAL enters the same loop: a failing test, a crash or an error report becomes
+a hypothesis whose judge is "the failing case now passes, nothing regresses".
 ```
 
 - **Define "better".** Default objective: minimize runtime and peak memory;
@@ -50,45 +55,73 @@ CONNECT -> UNDERSTAND -> DEFINE "BETTER" -> BASELINE -> PROFILE -> RESEARCH
   hacking). Results need N >= 5 runs and a gain larger than the measured noise.
 - **Autonomy is proportional to verifiability.** Efficiency wins are delivered
   automatically; changes that alter model or algorithm behaviour are flagged;
-  novel or capability changes are proposals that need human approval. The engine
-  never pushes to the default branch.
+  novel changes are proposals that need human approval. Autonomy comes from
+  automatic checks, not from a human: the user is asked when a check fails or
+  cannot run. The engine never pushes to the default branch.
+- **Acquire capabilities automatically** (vision update 2026-10-24). When a
+  hypothesis needs a dependency, an engine-owned capability step finds, vets,
+  pins and installs it into the trial's own environment, never the user's:
+  fetching is a separate network-on step (exact versions with hashes, wheels
+  only), trials stay network-off. The policy is automatic (the name exists and
+  is no near-miss of a popular one, minimum age and downloads, no known
+  vulnerability, licence allowlist); the user is asked only when a check fails.
+  The editor still cannot touch manifests or lockfiles; the delivered branch
+  shows the lockfile diff and why each package was added, and a package with no
+  proven gain against a baseline without it is dropped. MCP servers and APIs are
+  discovered and ranked the same way: read-only, credential-free servers are
+  connected automatically and sandboxed like trials; credentials or write access
+  need the user's approval, and every tool description is untrusted input.
+- **Self-healing.** The user's code: a failing test, a crash or an error report
+  becomes a hypothesis judged by "the failing case passes, and the full suite
+  and the other judges show no regression"; a fix changes behaviour, so it is
+  delivered as a flagged branch. The engine itself: a trial that fails for a
+  fixable reason (syntax, import or type error) gets a bounded retry with that
+  error fed back, inside the cost cap.
 - **Learn.** Every verdict becomes a lesson ("frozen encoder + repeated epochs
   -> cache embeddings") that feeds the next hypothesis ranking.
 
 ### The 7 layers and where they live
 
-| Layer                     | Repo home                                                     | Decision                                                     |
-| ------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------ |
-| L1 Interfaces             | `services/python_agents` CLI (planned), `apps/` (later)       | Integrate: CLI first, then web console, GitHub App, plugin   |
-| L2 Orchestrator           | `services/python_agents/.../orchestrator/`                    | Build on LangGraph 1.x (checkpointing, interrupts, retries)  |
-| L3 Capability acquisition | `capabilities/` (planned) + `packages` table                  | Vet and approval-gate any package a trial needs              |
-| L4 Research               | `services/python_agents/.../research/`                        | **Build**: playbook, paper search, claim extraction, matcher |
-| L5 Execution              | `execution/` (planned), `packages/execution-engine` (TS)      | Local runner on the user's hardware; cloud sandbox later     |
-| L6 Optimization           | `optimization/` (planned)                                     | **Build**: hypotheses, trials, judges, verdicts, combine     |
-| L7 Self-improvement       | `learning/` (planned) + `user_feedback` table                 | **Build**: lessons store; evaluator-gated, no fine-tuning    |
-| Persistence               | `infrastructure/schema/` (Postgres + pgvector), Redis, Qdrant | Existing tables reused and extended via new migrations       |
+| Layer                     | Repo home                                                                                   | Decision                                                                                                                                                                                                            |
+| ------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| L1 Interfaces             | `services/python_agents` CLI (planned), `apps/` (later)                                     | Integrate: CLI first, then web console, GitHub App, plugin                                                                                                                                                          |
+| L2 Orchestrator           | `services/python_agents/.../orchestrator/`                                                  | Build on LangGraph 1.x (checkpointing, interrupts, retries)                                                                                                                                                         |
+| L3 Capability acquisition | `capabilities/` (planned) + `packages` table                                                | **Build**: automatic package acquisition under an automatic policy (user asked only on a failed check); MCP server and API discovery, auto-connect only read-only and credential-free                               |
+| L4 Research               | `services/python_agents/.../research/`                                                      | **Build**: playbook, paper search, claim extraction, matcher                                                                                                                                                        |
+| L5 Execution              | `services/python_agents/.../execution/` (built, Step 2)                                     | Local runner on the user's hardware; cloud sandbox later; per-trial environments with offline installs; bounded self-retry on fixable trial errors                                                                  |
+| L6 Optimization           | `services/python_agents/.../optimization/` (Steps 1-2)                                      | **Build**: hypotheses, trials, judges, verdicts, combine                                                                                                                                                            |
+| L7 Self-improvement       | `services/python_agents/.../learning/` + `lessons` table (`user_feedback` table unused yet) | **Build**: lessons store; evaluator-gated, no fine-tuning; self-healing of the user's code (failing case -> hypothesis -> flagged branch); production error intake and gradual rollout later (Steps 4-5 interfaces) |
+| Persistence               | `infrastructure/schema/` (Postgres + pgvector), Redis, Qdrant                               | Existing tables reused and extended via new migrations                                                                                                                                                              |
 
 ---
 
 ## Project Status and Build Order
 
-**Reality check (2026-10-21, after Step 1):** the repository contains working
-infrastructure (Docker, CI incl. a schema-apply job, security scanning, schema
-001-003), a working TypeScript Claude client, and the engine's walking skeleton
-in `services/python_agents`: the full loop wired in LangGraph with a final data
-model, anti-cheating rules, judges, verdict order, approval interrupt and
-lessons, running on stub runners. Real runners, the profiler, research and the
-CLI do not exist yet. Treat anything else described in older docs as a plan, not
-a feature.
+**Reality check (2026-10-24, Step 2 closed out, PR #12 awaiting merge):** the
+repository contains working infrastructure (Docker, CI with a Postgres service,
+a sandbox probe, a macOS job and a manual live smoke test, security scanning,
+schema 001-004), a working TypeScript Claude client, and the engine's core loop
+in `services/python_agents`, running for real on CPU-bound Python workloads:
+preflight at connect, one Claude understand request, baseline, cProfile profile
+and Claude-edited trials in sandboxed git worktrees (network and write
+isolation, checked on every run), git-side anti-cheating, the frozen judges, a
+combine re-tested ABAB with the test suite on its tip, delivery to a local
+`engine/run-<id>` branch, and a Postgres repository, all under a hard per-run
+cost cap. Research, the CLI, the live log and hardware detection do not exist
+yet; hypotheses are supplied by the caller. Treat anything else described in
+older docs as a plan, not a feature.
 
-| Step | Deliverable                                                                                    | Model / setting to select               |
-| ---- | ---------------------------------------------------------------------------------------------- | --------------------------------------- |
-| 0    | Repair & upgrade: DB init fix, dependency bumps, current model IDs, truthful docs (PR #11)     | Opus 5.5, High                          |
-| 1    | Engine design: typed state, data models, judges, anti-cheating, migration 003 (PR #11)         | Fable 5.1, Extra                        |
-| 2    | Core loop end to end on CPU Python workloads, with an E2E fixture test                         | Opus 5.5, Ultracode                     |
-| 3    | Research: arXiv monitor, PDF parser, playbook, claim/precondition extraction, matcher          | Opus 5.5, Ultracode (Fable for matcher) |
-| 4    | Interfaces + runner: live CLI log, hardware detection (CPU/CUDA/MPS), `--goal` English parsing | Opus 5.5, Ultracode                     |
-| 5    | Dogfood on fixtures, OSS repos, then the user's VLM bridge on an M4 Pro                        | Opus 5.5, High                          |
+| Step | Deliverable                                                                                                                                                                                                     | Model / setting to select               |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| 0    | Repair & upgrade: DB init fix, dependency bumps, current model IDs, truthful docs (PR #11)                                                                                                                      | Opus 5.5, High                          |
+| 1    | Engine design: typed state, data models, judges, anti-cheating, migration 003 (PR #11)                                                                                                                          | Fable 5.1, Extra                        |
+| 2    | Core loop end to end on CPU Python workloads, with an E2E fixture test (done 2026-10-24, PR #12)                                                                                                                | Opus 5.5, Ultracode                     |
+| 3    | Research: generator and matcher wired into the hypotheses node, playbook, PDF parser, claim/precondition extraction, arXiv monitor (off GitHub runners); bounded engine self-retry on fixable trial errors      | Opus 5.5, Ultracode (Fable for matcher) |
+| 3b   | Capability acquisition: automatic package policy, network-on fetch into a hash-pinned wheelhouse, offline per-trial installs, engine-owned lockfile commit, drop a package with no proven gain                  | Opus 5.5, Ultracode                     |
+| 3c   | Self-healing of the user's code: failing test or crash -> hypothesis, engine-written reproducer frozen with the judges, "now passes, nothing regresses" judge, flagged delivery                                 | Opus 5.5, High                          |
+| 4    | Interfaces + runner: live CLI log, hardware detection (CPU/CUDA/MPS), `--goal` English parsing; MCP server and API discovery (auto-connect read-only, credential-free only); error-report intake for the healer | Opus 5.5, Ultracode                     |
+| 5    | Dogfood on fixtures, OSS repos, then the user's VLM bridge on an M4 Pro                                                                                                                                         | Opus 5.5, High                          |
+| 6    | Production loop: error monitoring into the healer, gradual rollout through the user's deployment (the engine never deploys)                                                                                     | Opus 5.5, High                          |
 
 Runtime models called by the engine itself (`services/python_agents` settings):
 `ENGINE_MODEL=claude-opus-5-5` for understanding, extraction and trial edits;
@@ -141,15 +174,18 @@ ones in parallel, then integrate.
 
 ## Security Requirements
 
-Check before generating code. The project runs pip-audit, bandit, safety, OSV,
-Trivy and Docker Scout in CI; keep them green.
+Check before generating code. The project runs pip-audit, bandit, OSV and Trivy
+in CI (safety on demand through `uvx`); keep them green.
 
 **OWASP Top 10 for LLM applications:**
 
 1. Prompt injection: validate and constrain all user and paper-derived input.
 2. Sensitive data: no API keys, passwords or secrets in code. `.env` only.
 3. Supply chain: audit dependencies (`pnpm audit`, `pip-audit`); any package a
-   trial wants to install is vetted and approval-gated (slopsquatting defence).
+   trial needs passes the automatic capability policy (registry existence and
+   near-miss names against slopsquatting, age, downloads, OSV, licence, wheels
+   only, hash-pinned) and installs only into the trial's environment; a failed
+   check asks the user.
 4. Data and model poisoning: validate inputs, sanitize data from papers and
    registries.
 5. Insecure output handling: sanitize outputs; no XSS or SQL injection.
@@ -251,8 +287,12 @@ User (product owner): vision, priorities, approvals, merges
 
 Rules: spawn a role only when it adds separable value; the author never reviews
 their own work; parallel Builders only on disjoint files; reports carry commands
-and outputs, not claims; the Lead is the only writer to the branch. Every design
-decision gets a first-principles "why" in `STATUS.md`.
+and outputs, not claims; the Lead is the only writer to the branch. Every brief
+carries the seams checklist (fixtures above the tests, real-vs-fake swap points,
+root vs non-root, what only CI, macOS or a live run proves; `STATUS.md` Lessons,
+Step 2), and review effort follows risk: one correctness Reviewer per unit, a
+security Reviewer only at trust boundaries, scoped to the diff and its callers.
+Every design decision gets a first-principles "why" in `STATUS.md`.
 
 ### Process
 
@@ -274,17 +314,39 @@ Shape Up for bets, Kanban for flow, XP for engineering, DORA for measurement.
 - DORA-style tracking per step in `STATUS.md`: lead time, CI-red pushes, rework
   commits, reverts.
 
+### Standing permissions for PRs and branches (user, 2026-10-24)
+
+Phase approvals are unchanged: the user approves each step's spec and build plan
+before building starts. Within that, the Lead may, without asking:
+
+- mark a step's PR ready and merge it into `master` with a merge commit, once
+  its stage gate is recorded as a clean pass in `STATUS.md`, every required CI
+  check on the PR head is green, and the PR is mergeable with no conflicts;
+- create a branch per step (`claude/<step-name>`) from the latest `master`, or
+  stacked on the open step's head when the previous step is not merged yet, and
+  open a draft PR for it;
+- retarget a stacked PR after its base merges, and merge `master` into a step
+  branch to keep it current;
+- delete a branch after its PR is merged.
+
+Still ask the user first: any direct push to `master`; any force-push; merging
+with a red, skipped-required or pending check; deleting an unmerged branch;
+changing repository or branch-protection settings, or the `live` environment.
+After each merge, report the PR number, the merge commit and the CI result on
+`master`.
+
 ### Stage gate (end of every step)
 
 1. **Upgrades.** Review `pnpm outdated -r` and `uv tree --outdated --depth 1`
    (the gate reports both). Upgrade inside the step unless a major bump needs
-   its own PR. Renovate opens weekly PRs for anything missed.
+   its own PR. Dependabot opens weekly PRs (Actions, npm, uv, Docker) for
+   anything missed.
 2. **Audits.** `pnpm audit --audit-level=moderate`, `pip-audit` and `bandit`
    must be clean. `security.yml` (OSV, Trivy, secret scanning) runs on every
    push and every Monday. Fix or justify each finding in the PR.
 3. **Security review of the new code** against the OWASP list above; add the
-   protections the step needs (worktree isolation, URL validation, approval
-   gates for package installs).
+   protections the step needs (worktree isolation, URL validation, the automatic
+   capability policy for package installs and MCP connections).
 4. **Docs.** `README.md` (what and how), `STATUS.md` (development-log row:
    planned, started, completed, PR, gate; decisions; lessons), the relevant
    `CLAUDE.md` if conventions changed.
@@ -299,7 +361,7 @@ Shape Up for bets, Kanban for flow, XP for engineering, DORA for measurement.
 
 - **Python 3.11+** with `uv`, Hatchling, Ruff, mypy strict, pytest
 - **LangGraph 1.x** for the orchestrator loop; **anthropic 1.x** SDK
-- **Node.js 20+**, TypeScript 5.9, pnpm 10, Vitest, ESLint, Prettier
+- **Node.js 22.12+**, TypeScript 5.9, pnpm 10, Vitest, ESLint, Prettier
 - **Claude** via the Messages API: `claude-opus-5-5` (engine),
   `claude-haiku-5-5` (triage)
 - **PostgreSQL 16 + pgvector**, Redis 7, Qdrant (Docker Compose)
@@ -363,6 +425,18 @@ directory:
 
 ## Changelog
 
+- **4.3.0 (2026-10-24):** Vision update from the user: automatic package
+  acquisition (an automatic policy replaces the approval gate), self-healing of
+  the user's code and of the engine's own trials, and MCP server and API
+  discovery join the vision, the loop (ACQUIRE, HEAL) and the L3, L5 and L7
+  rows; the build order gains Steps 3b (capability acquisition), 3c
+  (self-healing) and 6 (production loop), Step 3 the engine self-retry and Step
+  4 MCP/API discovery (approved by the user the same day). Standing permissions
+  for PRs and branches (mark ready, merge with a merge commit, branch per step,
+  retarget, delete merged branches) under Development Workflow.
+- **4.2.0 (2026-10-22):** Step 2 built: reality check updated to the real core
+  loop on CPU Python workloads; build-order row 2 marks the pending gate and PR
+  #12; the layer table points L5-L7 at the built service packages.
 - **4.1.0 (2026-10-21):** Step 1 delivered: reality check updated to the walking
   skeleton; `mypy` covers tests in the gate; build-order rows point at PR #11.
 - **4.0.0 (2026-10-21):** Vision clarified as the improvement engine; 7-layer

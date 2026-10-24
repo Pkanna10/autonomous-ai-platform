@@ -46,6 +46,7 @@ from autonomous_ai_agents.common.models import (
     ViolationRule,
     Workload,
 )
+from autonomous_ai_agents.execution.protocols import TrialBrief
 from autonomous_ai_agents.execution.runner import ScriptedOutcome, StubTrialRunner
 from autonomous_ai_agents.orchestrator.main import (
     EngineGraph,
@@ -155,7 +156,12 @@ def test_h1_is_kept_and_delivered_on_an_engine_branch(
     assert final["kept_verdict_ids"] == [verdict.id]
     assert len(final["lessons"]) == 1
     assert len(ctx.repository.list_lessons(sample_project.id)) == 1
-    assert [event.phase for event in final["events"]] == LOOP_ORDER
+    assert [
+        event.phase for event in final["events"] if "code" not in event.data
+    ] == LOOP_ORDER
+    assert [
+        event.data["code"] for event in final["events"] if "code" in event.data
+    ] == ["noisy_host"]
     assert final["round"] == 1
     assert [h.status for h in final["hypotheses"]] == [HypothesisStatus.kept]
     assert final["cost_usd"] == pytest.approx(0.12)
@@ -317,7 +323,7 @@ def test_h4_interrupts_for_approval_and_is_delivered_once_approved(
     assert f"| {h4_behaviour.title} | keep |" in delivery.report_markdown
     (lesson,) = final["lessons"]
     assert lesson.outcome is VerdictOutcome.keep
-    assert [e.phase for e in final["events"]][9:11] == [
+    assert [e.phase for e in final["events"] if "code" not in e.data][9:11] == [
         RunPhase.verdicts,
         RunPhase.approval,
     ]
@@ -464,11 +470,21 @@ class _FlakyRunner(StubTrialRunner):
         *,
         round: int,
         branch: str,
+        budget_usd: float,
+        brief: TrialBrief,
     ) -> Trial:
         if hypothesis.id == self._flaky_id and not self._failed_once:
             self._failed_once = True
             raise ConnectionError("worktree creation failed (transient)")
-        return super().run(hypothesis, workloads, baseline, round=round, branch=branch)
+        return super().run(
+            hypothesis,
+            workloads,
+            baseline,
+            round=round,
+            branch=branch,
+            budget_usd=budget_usd,
+            brief=brief,
+        )
 
 
 def test_a_re_executed_trials_node_gets_verdicts_for_its_final_trials_only(

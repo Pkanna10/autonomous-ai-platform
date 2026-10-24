@@ -1,0 +1,21 @@
+diff --git a/graphwalk/core.py b/graphwalk/core.py
+index 276649f..394e775 100644
+--- a/graphwalk/core.py
++++ b/graphwalk/core.py
+@@ -1,12 +1,14 @@
+ """Breadth-first search."""
+ 
++from collections import deque
++
+ 
+ def hops(edges: list[list[int]], start: int) -> dict[int, int]:
+     """Members reachable from ``start`` and their hop count."""
+     distance = {start: 0}
+-    pending = [start]
++    pending = deque([start])
+     while pending:
+-        node = pending.pop(0)
++        node = pending.popleft()
+         for target in edges[node]:
+             if target not in distance:
+                 distance[target] = distance[node] + 1

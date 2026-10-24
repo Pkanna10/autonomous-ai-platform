@@ -119,11 +119,19 @@ database = [
 ]
 
 # ============================================
+# Window 0 live experiments (tests/live/experiments): PDF text for the
+# local check of Claude's page citations. BSD-3-Clause, pure Python.
+# ============================================
+experiments = [
+    "pypdf>=6.0.0,<7.0.0",
+]
+
+# ============================================
 # Development dependencies (all phases)
 # ============================================
 dev = [
     # Testing
-    "pytest>=8.0.0",
+    "pytest>=9.0.0",
     "pytest-cov>=6.0.0",
     "pytest-asyncio>=0.24.0",
     "pytest-mock>=3.14.0",
@@ -141,7 +149,8 @@ dev = [
     # Security scanning
     "pip-audit>=2.7.0",                 # PyPA official vulnerability scanner
     "bandit[toml]>=1.7.0",              # SAST security linter
-    "safety>=3.0.0",                    # Dependency security checker
+    # safety runs on demand (`uvx safety check`): it pins filelock below 4.0,
+    # which blocked filelock 4.2.1's fixes for three CVEs.
 
     # Profiling (Tier 4: Import optimization)
     "pyinstrument>=4.6.0",              # Statistical profiler
@@ -219,6 +228,9 @@ docstring-code-format = true
 # May require code fixes (2-4 hours), but prevents runtime type errors
 [tool.mypy]
 python_version = "3.11"
+# E2E fixture project and its edit sets: a second `tests` package and several
+# copies of `dedupe/core.py`. They are type-checked on their own instead.
+exclude = ['(^|/)tests/fixtures/']
 
 # Strict mode flags (Tier 3)
 strict = true                           # Enable all strict flags
@@ -272,6 +284,8 @@ addopts = [
     "--strict-config",
     "-ra",                      # Show all test summary info
     "-q",                       # Quiet mode
+    # Never call the real Claude API by default; run those with `-m live`
+    "-m", "not live",
     # Parallel execution (CI optimization: use all cores)
     "-n=auto",                  # Automatically detect CPU count and parallelize
     # Coverage flags (Proposal #10: Enforce 90% minimum)
@@ -285,6 +299,8 @@ markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "unit: marks tests as unit tests (fast, isolated)",
+    "postgres: needs PostgreSQL with pgvector at TEST_DATABASE_URL (skipped when it is unset)",
+    "live: calls the real Claude API and costs money; needs ANTHROPIC_API_KEY (deselected by default, run with -m live)",
 ]
 asyncio_mode = "auto"
 

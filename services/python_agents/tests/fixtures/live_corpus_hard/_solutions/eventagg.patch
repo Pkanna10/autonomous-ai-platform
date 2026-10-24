@@ -1,0 +1,140 @@
+diff --git a/eventagg/aggregate.py b/eventagg/aggregate.py
+index 5a85228..f8ef303 100644
+--- a/eventagg/aggregate.py
++++ b/eventagg/aggregate.py
+@@ -3,26 +3,54 @@
+ from collections.abc import Iterable
+ 
+ 
++class Totals:
++    """``totals`` of one key, fed one event at a time."""
++
++    def __init__(self, key: str) -> None:
++        self.key = key
++        self.rows: dict[str, list[float]] = {}
++
++    def add(self, event: dict[str, object]) -> None:
++        row = self.rows.setdefault(str(event[self.key]), [0, 0, 0.0])
++        row[0] += 1
++        row[1] += int(str(event["bytes"]))
++        row[2] = max(row[2], float(str(event["latency_ms"])))
++
++    def result(self) -> dict[str, tuple[int, int, float]]:
++        return {
++            name: (int(row[0]), int(row[1]), row[2])
++            for name, row in sorted(self.rows.items())
++        }
++
++
++class ErrorShare:
++    """``error_share``, fed one event at a time."""
++
++    def __init__(self) -> None:
++        self.errors = 0
++        self.total = 0
++
++    def add(self, event: dict[str, object]) -> None:
++        self.total += 1
++        self.errors += int(str(event["status"])) >= 400
++
++    def result(self) -> float:
++        return self.errors / self.total if self.total else 0.0
++
++
+ def totals(
+     events: Iterable[dict[str, object]], key: str
+ ) -> dict[str, tuple[int, int, float]]:
+     """``(count, bytes, highest latency)`` per value of ``key``, sorted."""
+-    rows: dict[str, list[float]] = {}
++    running = Totals(key)
+     for event in events:
+-        name = str(event[key])
+-        row = rows.setdefault(name, [0, 0, 0.0])
+-        row[0] += 1
+-        row[1] += int(str(event["bytes"]))
+-        row[2] = max(row[2], float(str(event["latency_ms"])))
+-    return {
+-        name: (int(row[0]), int(row[1]), row[2]) for name, row in sorted(rows.items())
+-    }
++        running.add(event)
++    return running.result()
+ 
+ 
+ def error_share(events: Iterable[dict[str, object]]) -> float:
+     """The share of events whose status is 400 or above."""
+-    errors = total = 0
++    running = ErrorShare()
+     for event in events:
+-        total += 1
+-        errors += int(str(event["status"])) >= 400
+-    return errors / total if total else 0.0
++        running.add(event)
++    return running.result()
+diff --git a/eventagg/events.py b/eventagg/events.py
+index 1329984..61d6c62 100644
+--- a/eventagg/events.py
++++ b/eventagg/events.py
+@@ -1,17 +1,23 @@
+ """Deterministic service events: the same day on every run."""
+ 
++from collections.abc import Iterator
++
+ KINDS = ("request", "retry", "error", "redirect", "timeout")
+ REGIONS = ("eu-west", "eu-north", "us-east", "us-west", "ap-south", "sa-east")
+ 
+ 
+ def generate(count: int, seed: int = 29) -> list[dict[str, object]]:
+     """The day's ``count`` events, in the order they were logged."""
++    return list(each_event(count, seed))
++
++
++def each_event(count: int, seed: int = 29) -> Iterator[dict[str, object]]:
++    """The events of ``generate``, one at a time."""
+     state = seed
+-    out: list[dict[str, object]] = []
+     for number in range(count):
+         state = (state * 1103515245 + 12345) % (1 << 31)
+         value = state >> 4
+-        out.append(
++        yield (
+             {
+                 "id": f"evt-{number:08d}",
+                 "kind": KINDS[value % len(KINDS)],
+@@ -21,4 +27,3 @@ def generate(count: int, seed: int = 29) -> list[dict[str, object]]:
+                 "status": 200 + (value >> 7) % 4 * 100,
+             }
+         )
+-    return out
+diff --git a/eventagg/main.py b/eventagg/main.py
+index 151e7dd..5ec3a31 100644
+--- a/eventagg/main.py
++++ b/eventagg/main.py
+@@ -1,18 +1,22 @@
+ """Workload: ``python -m eventagg.main``."""
+ 
+-from eventagg.aggregate import error_share, totals
+-from eventagg.events import generate
++from eventagg.aggregate import ErrorShare, Totals
++from eventagg.events import each_event
+ 
+ DAY_EVENTS = 300_000
+ 
+ 
+ def main() -> None:
+-    events = generate(DAY_EVENTS)
+-    for kind, (count, moved, peak) in totals(events, "kind").items():
++    kinds, regions, errors = Totals("kind"), Totals("region"), ErrorShare()
++    for event in each_event(DAY_EVENTS):  # one pass: no event is kept
++        kinds.add(event)
++        regions.add(event)
++        errors.add(event)
++    for kind, (count, moved, peak) in kinds.result().items():
+         print(f"{kind}\t{count}\t{moved}\t{peak:.1f}")
+-    for region, (count, moved, peak) in totals(events, "region").items():
++    for region, (count, moved, peak) in regions.result().items():
+         print(f"{region}\t{count}\t{moved}\t{peak:.1f}")
+-    print(f"errors\t{error_share(events):.6f}")
++    print(f"errors\t{errors.result():.6f}")
+ 
+ 
+ if __name__ == "__main__":

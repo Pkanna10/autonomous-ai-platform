@@ -1,0 +1,31 @@
+diff --git a/invoicekit/rules.py b/invoicekit/rules.py
+index db576fd..b678d5c 100644
+--- a/invoicekit/rules.py
++++ b/invoicekit/rules.py
+@@ -84,15 +84,23 @@ def known_regions() -> set[str]:
+     return {rate.region for rate in parse_schedule(SCHEDULE)}
+ 
+ 
++def _rows_by_key() -> dict[tuple[str, str], list[Rate]]:
++    rows: dict[tuple[str, str], list[Rate]] = {}
++    for rate in parse_schedule(SCHEDULE):
++        rows.setdefault((rate.region, rate.family), []).append(rate)
++    return rows
++
++
++_ROWS = _rows_by_key()
++
++
+ def tax_rate(region: str, family: str, day: str) -> int:
+     """The rate in basis points for ``family`` sold in ``region`` on ``day``
+     (ISO dates compare as text): the latest row in effect, the family's own
+     row before the region's ``*`` row."""
+     best: Rate | None = None
+     for wanted in (family, "*"):
+-        for rate in parse_schedule(SCHEDULE):
+-            if rate.region != region or rate.family != wanted:
+-                continue
++        for rate in _ROWS.get((region, wanted), []):
+             if rate.effective > day:
+                 continue
+             if best is None or rate.effective >= best.effective:
