@@ -1,5 +1,4 @@
 from generate import make_corpus
-
 from wordpairs import render
 
 SEED = 11

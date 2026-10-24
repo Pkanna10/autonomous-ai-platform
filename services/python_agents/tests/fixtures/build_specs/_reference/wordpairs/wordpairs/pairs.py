@@ -7,7 +7,7 @@ WORD = re.compile(r"[A-Za-z]+")
 def _counts(text: str) -> dict:
     words = [w.lower() for w in WORD.findall(text)]
     counts = {}
-    for first, second in zip(words, words[1:]):
+    for first, second in zip(words, words[1:], strict=False):
         if first in STOP or second in STOP:
             continue
         counts[(first, second)] = counts.get((first, second), 0) + 1

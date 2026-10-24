@@ -1,5 +1,4 @@
 from generate import make_csv
-
 from salesreport import build_report
 
 SEED = 7

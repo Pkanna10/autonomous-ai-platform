@@ -21,7 +21,9 @@ class WordPairsTest(unittest.TestCase):
             top_pairs("a b", 0)
 
     def test_digits_and_apostrophes_separate_words(self):
-        self.assertEqual(top_pairs("don't 9lives"), [("don", "t", 1), ("t", "lives", 1)])
+        self.assertEqual(
+            top_pairs("don't 9lives"), [("don", "t", 1), ("t", "lives", 1)]
+        )
 
     def test_line_breaks_do_not_end_the_sequence(self):
         self.assertEqual(top_pairs("red\nfox"), [("red", "fox", 1)])

@@ -34,9 +34,17 @@ class BuildReportTest(unittest.TestCase):
 
     def test_empty_lines_are_ignored_and_cents_are_exact(self):
         text = HEADER + "\n\n2024-01-01,S,x,3,0.10\n\n"
-        self.assertTrue(build_report(text).endswith("S,2024-01,1,3,0.30,x\nTOTAL,,1,3,0.30,\n"))
+        self.assertTrue(
+            build_report(text).endswith("S,2024-01,1,3,0.30,x\nTOTAL,,1,3,0.30,\n")
+        )
 
     def test_groups_sort_by_region_then_month(self):
-        text = HEADER + "\n2024-02-01,B,x,1,1.00\n2024-01-01,B,x,1,1.00\n2024-03-01,A,x,1,1.00\n"
+        text = (
+            HEADER
+            + "\n2024-02-01,B,x,1,1.00\n2024-01-01,B,x,1,1.00\n2024-03-01,A,x,1,1.00\n"
+        )
         lines = build_report(text).splitlines()[1:-1]
-        self.assertEqual([l.split(",")[:2] for l in lines], [["A", "2024-03"], ["B", "2024-01"], ["B", "2024-02"]])
+        self.assertEqual(
+            [row.split(",")[:2] for row in lines],
+            [["A", "2024-03"], ["B", "2024-01"], ["B", "2024-02"]],
+        )

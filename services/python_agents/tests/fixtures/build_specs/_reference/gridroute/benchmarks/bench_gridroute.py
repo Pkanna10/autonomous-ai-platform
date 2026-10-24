@@ -1,5 +1,4 @@
 from generate import make_grid
-
 from gridroute import render
 
 SEED = 5

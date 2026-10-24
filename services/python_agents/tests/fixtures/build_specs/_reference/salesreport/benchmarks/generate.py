@@ -1,6 +1,15 @@
 import random
 
-REGIONS = ("CENTRAL", "EAST", "NORTH", "NORTHEAST", "SOUTH", "SOUTHWEST", "WEST", "ZONE-X")
+REGIONS = (
+    "CENTRAL",
+    "EAST",
+    "NORTH",
+    "NORTHEAST",
+    "SOUTH",
+    "SOUTHWEST",
+    "WEST",
+    "ZONE-X",
+)
 
 
 def make_csv(seed: int, rows: int) -> str:
