@@ -1021,8 +1021,30 @@ the diff captured by git, combine with a re-test, delivery to a real
 the judged-trials key question (closed by decision 35). Left:
 
 - [x] Verifier, stage gate, `/security-review`, U21 live suite (2026-10-23).
-- [ ] First live-smoke run and its ledger row, the macOS job blocking, the Step
-      2 report, development-log row, PR ready.
+- [x] First live-smoke run and its ledger row (2026-10-23).
+- [ ] The macOS job blocking, the Step 2 report, development-log row, decisions
+      still only in `.claude/handoff/` moved here and the folder deleted, PR
+      ready.
+
+Step 3 starts from the Window 0 findings (a fresh-context review of the branch
+on 2026-10-24 agreed):
+
+- **First build: wire `generate_hypotheses` and `match_techniques` into the
+  hypotheses node.** Both exist and are measured live, but the engine still runs
+  only caller-supplied candidates. Why: it is the gap between the walking
+  skeleton and "make it better" with no hypothesis handed over.
+- **Validate the sweep's grader before trusting hit@k**: hand-label about 10
+  hypothesis and reference-fix pairs, near misses included, and check the Opus
+  4.8 grader agrees. Why: one unlabelled LLM grader is an unmeasured judge.
+- **Discovery is measured on the hard corpus and real code, not the easy
+  corpus**: the 12 benchmark slowdowns are single-hotspot textbook cases the
+  profiler points at, so blind rates saturate there. Small gains (2-20 %) are
+  only exercised by the OSS suite.
+- **The arXiv monitor does not run from GitHub runners** (E2: HTTP 429 on search
+  and id lookups alike); it runs on the user's machine or reads a committed
+  snapshot. Paper retrieval waits on the A/B (E5).
+- Playbook slugs map to `techniques.slug` (unique in 003), so no migration is
+  needed for the id.
 
 ### Known gaps carried to later steps
 
