@@ -70,7 +70,7 @@ class ProjectConflictError(EngineError):
 
 
 class InvalidRecordIdError(EngineError):
-    """An id bound for a UUID database column is not a UUID."""
+    """An id refused before SQL: not a UUID, or a caller id failing the id rule."""
 
 
 class LLMUnavailable(Exception):  # noqa: N818 - name fixed by the spec

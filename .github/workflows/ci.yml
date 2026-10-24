@@ -705,7 +705,7 @@ jobs:
           retention-days: 30
 
   # Database schema: apply every migration to a real Postgres, then re-apply the
-  # engine migrations (003, 004) to prove they are idempotent. 001 and 002 are
+  # engine migrations (003 onward) to prove they are idempotent. 001 and 002 are
   # not idempotent (plain CREATE TABLE packages, CREATE INDEX idx_packages_name),
   # so they run once. Same pinned image as the python job's service.
   schema-apply:
@@ -744,7 +744,7 @@ jobs:
 
       # Same order as docker-entrypoint-initdb.d on a fresh volume (file name
       # order); every file runs exactly once here.
-      - name: Apply migrations once in order (001 -> 004)
+      - name: Apply migrations once in order (001 onward)
         run: |
           for file in infrastructure/schema/*.sql; do
             echo "::group::${file}"
@@ -752,7 +752,7 @@ jobs:
             echo "::endgroup::"
           done
 
-      - name: Re-apply 003 then 004 and diff the catalog (idempotence proof)
+      - name: Re-apply 003 onward and diff the catalog (idempotence proof)
         run: |
           snapshot() {
             {
@@ -762,7 +762,12 @@ jobs:
             } > "$1"
           }
           snapshot "${RUNNER_TEMP}/schema-before.txt"
-          for file in infrastructure/schema/003_engine.sql infrastructure/schema/004_engine_repository.sql; do
+          # Every engine migration from 003 on, in file-name order, so a new
+          # migration is covered without a workflow edit (Step 3, D25).
+          for file in infrastructure/schema/*.sql; do
+            case "$(basename "${file}")" in
+              00[12]_*) continue ;;
+            esac
             echo "::group::re-apply ${file}"
             PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -v ON_ERROR_STOP=1 -f "${file}"
             echo "::endgroup::"
@@ -785,10 +790,12 @@ jobs:
               status=1
             fi
           done
-          # table.column:data_type (003 research columns, then the 004 additions)
+          # table.column:data_type (003 research columns, the 004 additions,
+          # then 005's caller-id columns)
           for spec in research_papers.claims:jsonb research_papers.citation_count:integer \
             projects.test_command:jsonb lessons.seq:bigint \
-            lessons.gain:'double precision' lessons.weight:'double precision'; do
+            lessons.gain:'double precision' lessons.weight:'double precision' \
+            lessons.hypothesis_id:'character varying' lessons.technique_id:'character varying'; do
             target="${spec%%:*}"
             want="${spec#*:}"
             got="$(query "SELECT data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '${target%%.*}' AND column_name = '${target#*.}'")"
@@ -813,6 +820,22 @@ jobs:
             echo "::error::constraint chk_project_test_command_argv is missing or duplicated"
             status=1
           fi
+          # 005: the caller-id columns are 64 wide, each with its id-rule CHECK
+          for column in hypothesis_id technique_id; do
+            width="$(query "SELECT character_maximum_length FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'lessons' AND column_name = '${column}'")"
+            if [ "${width}" = "64" ]; then
+              echo "column lessons.${column}: VARCHAR(64)"
+            else
+              echo "::error::column lessons.${column} should be VARCHAR(64), found width '${width}'"
+              status=1
+            fi
+            if [ "$(query "SELECT count(*) FROM pg_constraint WHERE conname = 'chk_lesson_${column}' AND conrelid = 'public.lessons'::regclass")" = "1" ]; then
+              echo "constraint chk_lesson_${column}: present once"
+            else
+              echo "::error::constraint chk_lesson_${column} is missing or duplicated"
+              status=1
+            fi
+          done
           exit "${status}"
 
   # Database init exactly as a developer runs it: docker compose starts the
@@ -885,7 +908,7 @@ jobs:
           echo "public tables: ${count}"
           docker compose exec -T postgres psql -U dev -d ai_platform -c '\dt'
           if [ "${count}" != "14" ]; then
-            echo "::error::expected 14 tables after 001 -> 004 (004 adds none), found ${count}"
+            echo "::error::expected 14 tables after 001 -> 005 (004 and 005 add none), found ${count}"
             exit 1
           fi
 

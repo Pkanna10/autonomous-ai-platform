@@ -1541,11 +1541,17 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                     ),
                 )
                 raise
-            ctx.repository.save_trial(run_id, trial)
-            new_trials.append(trial)
             # trial.cost_usd <= remaining, so only rounding could pass the cap
             cost_usd = min(state["max_cost_usd"], cost_usd + trial.cost_usd)
             tokens_used += trial.tokens_used
+            try:
+                ctx.repository.save_trial(run_id, trial)
+            except Exception as exc:  # spent but not recorded: keep the money
+                keep_progress(
+                    exc, _trials_progress(state, new_trials, cost_usd, tokens_used)
+                )
+                raise
+            new_trials.append(trial)
         ran = {trial.hypothesis_id: HypothesisStatus.trialled for trial in new_trials}
         failed = sum(1 for t in new_trials if t.status is TrialStatus.failed)
         event = _announce(

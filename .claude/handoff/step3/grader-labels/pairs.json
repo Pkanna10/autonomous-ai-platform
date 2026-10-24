@@ -1,0 +1,730 @@
+[
+ {
+  "repo": "tagfilter",
+  "kind": "slowdown",
+  "refs": [
+   {
+    "part": 1,
+    "of": 1,
+    "where": "tagfilter/core.py matches, count_by_kind -2+3",
+    "excerpt": "def matches(tags: list[str], allowed: list[str]) -> bool: / if matches(tags, allowed):"
+   }
+  ],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Build allowlist set once in count_by_kind for O(1) tag membership"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Trim data generation overhead in data.py"
+   }
+  ]
+ },
+ {
+  "repo": "keywordscan",
+  "kind": "slowdown",
+  "refs": [
+   {
+    "part": 1,
+    "of": 1,
+    "where": "keywordscan/core.py _pattern, mentions, hits_by_level -4+8",
+    "excerpt": "alternatives = \"|\".join(re.escape(word) for word in sorted(set(keywords))) / pattern = re.compile(rf\"\\b(?:{alte\u2026"
+   }
+  ],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Hoist keyword sort, dedup and regex compile out of the per-line mentions loop"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Use a set-based word lookup instead of regex alternation per line"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 3,
+    "title": "Reduce allocation overhead in log line generation"
+   }
+  ]
+ },
+ {
+  "repo": "reportbuild",
+  "kind": "slowdown",
+  "refs": [
+   {
+    "part": 1,
+    "of": 1,
+    "where": "reportbuild/core.py __init__, text, add_row, add_total -3+7",
+    "excerpt": "self.text = title + \"\\n\" + \"=\" * len(title) + \"\\n\" / self.text += \" | \".join(cells) + \"\\n\" / self.text += f\"{l\u2026"
+   }
+  ],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Replace quadratic string += in Report.add_row with list accumulation and a single join"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Cut per-row formatting overhead in render with a single comprehension and join"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 3,
+    "title": "Avoid the extra full-text copy in main when computing the CRC and line count"
+   }
+  ]
+ },
+ {
+  "repo": "scorenorm",
+  "kind": "slowdown",
+  "refs": [
+   {
+    "part": 1,
+    "of": 1,
+    "where": "scorenorm/core.py rescale -2+4",
+    "excerpt": "low, high = min(values), max(values) / span = high - low"
+   }
+  ],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Hoist min/max out of the per-value loop in rescale to make it linear"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Use a list comprehension for scaling in rescale after hoisting bounds"
+   }
+  ]
+ },
+ {
+  "repo": "leaderboard",
+  "kind": "slowdown",
+  "refs": [
+   {
+    "part": 1,
+    "of": 1,
+    "where": "leaderboard/core.py replay -3+6",
+    "excerpt": "board.append((-points, player)) / board.sort() / leaders.append(board[0][1])"
+   }
+  ],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Replace per-result full board sort in replay with a running best and a single final sort"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Keep the board sorted with bisect.insort instead of re-sorting each result"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 3,
+    "title": "Speed up result generation in data.results by trimming per-item overhead"
+   }
+  ]
+ },
+ {
+  "repo": "orderlookup",
+  "kind": "slowdown",
+  "refs": [
+   {
+    "part": 1,
+    "of": 1,
+    "where": "orderlookup/core.py totals_by_region -1+6",
+    "excerpt": "region = find_customer(people, order.customer_id).region"
+   }
+  ],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Build customer_id index dict once so the order join is O(1) per lookup"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Trim object-creation overhead in order and customer generators"
+   }
+  ]
+ },
+ {
+  "repo": "inventorysim",
+  "kind": "slowdown",
+  "refs": [
+   {
+    "part": 1,
+    "of": 1,
+    "where": "inventorysim/core.py simulate -4+1",
+    "excerpt": "import copy / snapshot = copy.deepcopy(warehouse) / audit.append(stock_value(snapshot))"
+   }
+  ],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Remove the needless per-day deepcopy in simulate() and compute stock_value on the live warehouse"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Replace the generator-based stock_value sum with a tighter per-bin computation"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 3,
+    "title": "Trim run_day overhead with local variable binding and fewer lookups"
+   }
+  ]
+ },
+ {
+  "repo": "tokenparse",
+  "kind": "slowdown",
+  "refs": [
+   {
+    "part": 1,
+    "of": 1,
+    "where": "tokenparse/core.py tally -4+3",
+    "excerpt": "try: / value = int(token) / except ValueError: / total += value"
+   }
+  ],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Avoid exception-driven int() parsing in tally with a cheap pre-check"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Speed up stream generation by removing per-token formatting and appends"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 3,
+    "title": "Count words with a single pass over split tokens, parsing integers only when needed"
+   }
+  ]
+ },
+ {
+  "repo": "wordcount",
+  "kind": "slowdown",
+  "refs": [
+   {
+    "part": 1,
+    "of": 1,
+    "where": "wordcount/core.py frequencies -1+4",
+    "excerpt": "return {word: words.count(word) for word in sorted(set(words))}"
+   }
+  ],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Replace per-word list.count with a single-pass counter in frequencies"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Optimise words() generation loop with precomputed word table"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 3,
+    "title": "Use heapq.nlargest in most_common for top-N selection"
+   }
+  ]
+ },
+ {
+  "repo": "configlookup",
+  "kind": "slowdown",
+  "refs": [
+   {
+    "part": 1,
+    "of": 1,
+    "where": "configlookup/core.py _categories, rule_for -2+8",
+    "excerpt": "document = json.loads(RULES_JSON) / rule: dict[str, int] = document[\"categories\"][category]"
+   }
+  ],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Cache parsed rules so json.loads runs once instead of per line item"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Expose a pre-parsed rules dict from rules.py and use it in core"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 3,
+    "title": "Trim per-item overhead in price: hoist lookups and reduce arithmetic"
+   }
+  ]
+ },
+ {
+  "repo": "stairways",
+  "kind": "slowdown",
+  "refs": [
+   {
+    "part": 1,
+    "of": 1,
+    "where": "stairways/core.py ways -0+3",
+    "excerpt": "+ import functools / @functools.cache"
+   }
+  ],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Memoize ways() with a cache to make the recursion linear"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Replace the recursion in ways() with bottom-up dynamic programming"
+   }
+  ]
+ },
+ {
+  "repo": "graphwalk",
+  "kind": "slowdown",
+  "refs": [
+   {
+    "part": 1,
+    "of": 1,
+    "where": "graphwalk/core.py hops -2+4",
+    "excerpt": "pending = [start] / node = pending.pop(0)"
+   }
+  ],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Replace list.pop(0) queue in BFS with collections.deque or index-based queue"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Speed up BFS inner loop with local bindings and a level-synchronous frontier"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 3,
+    "title": "Tighten LCG graph generation loop in data.graph"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 4,
+    "title": "Compute max and sum of hops in a single pass in main"
+   }
+  ]
+ },
+ {
+  "repo": "blockhash",
+  "kind": "control",
+  "refs": [],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Hash a reused memoryview of BLOCK and bind update and pack to locals in image_digest"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Replace per-block 4-byte update with a precomputed list of suffix bytes"
+   }
+  ]
+ },
+ {
+  "repo": "sortstats",
+  "kind": "control",
+  "refs": [],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Avoid list/array round-trip in checksum by keeping sorted data compact"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Sort in a compact array form and skip repeated conversions in main"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 3,
+    "title": "Generate the sample with a cheaper bulk random source while keeping the same values"
+   }
+  ]
+ },
+ {
+  "repo": "lettertally",
+  "kind": "control",
+  "refs": [],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Chunked sampling and counting to avoid materialising the 5.5M-element list"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Sample integer indices and count them, then map to words"
+   }
+  ]
+ },
+ {
+  "repo": "shipmerge",
+  "kind": "slowdown",
+  "refs": [
+   {
+    "part": 1,
+    "of": 2,
+    "where": "shipmerge/catalog.py distinct_skus -5+1",
+    "excerpt": "seen: list[str] = [] / for line in lines: / if line.sku not in seen: / seen.append(line.sku) / return seen"
+   },
+   {
+    "part": 2,
+    "of": 2,
+    "where": "shipmerge/orders.py arrival_ranks -2+2",
+    "excerpt": "numbers = order_numbers(lines) / return [numbers.index(line.order_id) for line in lines]"
+   }
+  ],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Use a companion set for membership in distinct_skus"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Replace list.index in arrival_ranks with an order-to-rank dict"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 3,
+    "title": "Cut allocation overhead in shipment generation"
+   }
+  ]
+ },
+ {
+  "repo": "ledgerclose",
+  "kind": "slowdown",
+  "refs": [
+   {
+    "part": 1,
+    "of": 2,
+    "where": "ledgerclose/settle.py settle -3+1",
+    "excerpt": "queue = list(pending) / while queue: / account, amount = queue.pop(0)"
+   },
+   {
+    "part": 2,
+    "of": 2,
+    "where": "ledgerclose/peaks.py window_peaks -3+10",
+    "excerpt": "for end in range(len(values)): / start = max(0, end - window + 1) / peaks.append(max(values[start : end + 1]))"
+   }
+  ],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Replace per-position slice+max in window_peaks with a monotonic deque"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Remove list.pop(0) quadratic behaviour in settle"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 3,
+    "title": "Speed up LCG number generation and transfer construction in data.py"
+   }
+  ]
+ },
+ {
+  "repo": "deliveryround",
+  "kind": "slowdown",
+  "refs": [
+   {
+    "part": 1,
+    "of": 3,
+    "where": "deliveryround/main.py main -2+3",
+    "excerpt": "from deliveryround.network import build_stops, find_stop, legs / a, b = find_stop(stops, start), find_stop(stops, end)"
+   },
+   {
+    "part": 2,
+    "of": 3,
+    "where": "deliveryround/distance.py distance_so_far -1+6",
+    "excerpt": "return [sum(lengths[:i]) for i in range(len(lengths))]"
+   },
+   {
+    "part": 3,
+    "of": 3,
+    "where": "deliveryround/pickups.py pending_views -1+3",
+    "excerpt": "pending = sorted([*pending, offer])"
+   }
+  ],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Replace linear find_stop scan with a code-to-stop dict index"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Compute running distance totals linearly with itertools.accumulate"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 3,
+    "title": "Maintain pending pickups incrementally instead of re-sorting each offer"
+   }
+  ]
+ },
+ {
+  "repo": "invoicekit",
+  "kind": "slowdown",
+  "refs": [
+   {
+    "part": 1,
+    "of": 1,
+    "where": "invoicekit/rules.py _rows_by_key, tax_rate -3+11",
+    "excerpt": "for rate in parse_schedule(SCHEDULE): / if rate.region != region or rate.family != wanted: / continue"
+   }
+  ],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Cache parsed tax schedule instead of re-parsing on every tax_rate call"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Replace Fraction arithmetic in money.py with integer math"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 3,
+    "title": "Speed up FNV digest and quote in export"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 4,
+    "title": "Memoize per-day calendar computations in days.py"
+   }
+  ]
+ },
+ {
+  "repo": "fleetsim",
+  "kind": "slowdown",
+  "refs": [
+   {
+    "part": 1,
+    "of": 1,
+    "where": "fleetsim/service.py per_job -3+5",
+    "excerpt": "from fleetsim.metrics import share_at_most / share_at_most(past, outcome.wait),"
+   }
+  ],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Inline and simplify grid distance helpers in geometry (blocks, metres, ring_distance, travel_minutes)"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Cache per-job travel and reach computations in dispatch.choose across vehicles"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 3,
+    "title": "Memoize energy_for and can_reach distance lookups with a coordinate-pair cache"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 4,
+    "title": "Sort the past waits once in service.per_job instead of for each job"
+   }
+  ]
+ },
+ {
+  "repo": "textindex",
+  "kind": "slowdown",
+  "refs": [
+   {
+    "part": 1,
+    "of": 1,
+    "where": "textindex/stopwords.py is_stopword -1+4",
+    "excerpt": "return word in stopword_list()"
+   }
+  ],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Cache tokenisation and stemming results across repeated passes over documents"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Make is_stopword a frozenset membership test with no per-call work"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 3,
+    "title": "Speed up Jaccard with set intersection and cached shingle sets and pair results"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 4,
+    "title": "Optimise sentence splitting and tokenising with precompiled regexes"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 5,
+    "title": "Reduce index build overhead with local bindings and setdefault-based postings"
+   }
+  ]
+ },
+ {
+  "repo": "topicmerge",
+  "kind": "slowdown",
+  "refs": [
+   {
+    "part": 1,
+    "of": 1,
+    "where": "topicmerge/merge.py unique_topics -4+3",
+    "excerpt": "seen: list[str] = [] / if topic not in seen: / seen.append(topic) / return seen"
+   }
+  ],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Use a set for the seen check in unique_topics while keeping first-use order"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Fuse the topic traversals so unique_topics reuses the counts dict order"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 3,
+    "title": "Speed up post generation by trimming per-post slicing and formatting"
+   }
+  ]
+ },
+ {
+  "repo": "sensormean",
+  "kind": "slowdown",
+  "refs": [
+   {
+    "part": 1,
+    "of": 1,
+    "where": "sensormean/stats.py running_means -2+20",
+    "excerpt": "from statistics import fmean / return [fmean(values[: i + 1]) for i in range(len(values))]"
+   }
+  ],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Compute running means incrementally with exact fsum-equivalent state, avoiding O(n^2) slice+fmean"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Compute only the means that are printed (every 100th and the last) in main"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 3,
+    "title": "Single-pass running_extremes using local min/max variables"
+   }
+  ]
+ },
+ {
+  "repo": "eventagg",
+  "kind": "slowdown",
+  "refs": [
+   {
+    "part": 1,
+    "of": 1,
+    "where": "eventagg/aggregate.py, eventagg/events.py, eventagg/main.py Totals, __init__, add, result, ErrorShare, totals, error_share, generate, each_event, main -22+59",
+    "excerpt": "rows: dict[str,\u2026"
+   }
+  ],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Stream events from a generator instead of materialising 300k dicts"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Single-pass aggregation by kind, region and error share"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 3,
+    "title": "Remove redundant conversions and per-event list allocation in totals"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 4,
+    "title": "Use tuples or __slots__ records and interned strings instead of dicts per event"
+   }
+  ]
+ },
+ {
+  "repo": "distmatrix",
+  "kind": "slowdown",
+  "refs": [
+   {
+    "part": 1,
+    "of": 1,
+    "where": "distmatrix/distances.py, distmatrix/main.py matrix, summaries, each_row, main -4+11",
+    "excerpt": "return [[math.dist(p, q) for q in points] for p in points] / def summaries(rows: list[l\u2026"
+   }
+  ],
+  "hypotheses": [
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 1,
+    "title": "Stream row summaries instead of materialising the full N x N distance matrix"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 2,
+    "title": "Avoid per-row slice copies when excluding the self-distance"
+   },
+   {
+    "arm": "sonnet-5-5-medium",
+    "rank": 3,
+    "title": "Store distance rows compactly in array('d') if the matrix is kept"
+   }
+  ]
+ }
+]
