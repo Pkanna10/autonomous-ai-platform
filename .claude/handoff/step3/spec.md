@@ -1,29 +1,54 @@
-# Step 3 spec: wired discovery, engine self-retry, review delivery (3b and 3c designed)
+# Step 3 spec: wired discovery, engine self-retry, review delivery (3c and 3b designed)
 
-Base: `claude/step3-research` at `322f08f` (master holds Step 2). Built from
-design A, with the blocking flaws in `judges.md` fixed, the recommended B items
-grafted, every "missing from both" item decided or listed in §8, the user's
-binding decisions (`user-decisions.md`) applied and the E5 result applied.
-Paths are relative to `services/python_agents/src/autonomous_ai_agents/` unless
-they start with `tests/`, `infrastructure/` or `.github/`. Every file:line cited
-here was re-read at `322f08f`. Anything not re-read is marked **(not
-re-read)**, and anything inferred is marked **unverified**.
+Base: `claude/step3-research` at `9d2482f` (no `src` change since `322f08f`:
+`git diff --quiet 322f08f HEAD -- services/python_agents/src`). Built from
+design A, with `judges.md`'s blocking flaws fixed, B's recommended items
+grafted, the user's decisions (`user-decisions.md`), the E5 result and the
+owner's review applied. Paths are relative to
+`services/python_agents/src/autonomous_ai_agents/` unless they start with
+`tests/`, `infrastructure/` or `.github/`. Every file:line was re-read at
+`9d2482f`; anything not re-read is marked **(not re-read)**, anything inferred
+**unverified**.
 
-**Revision 2 (critic fixes).** D13 sends a crash message only when it matches
-a CPython template, and states what that proves (canaries in U4, E3-D, §5).
-Also: E3-A made reachable, E3-E added; D7's negative cap (§4.2, U8); 005 equals
-the id rule (D3, §3.5, U1); the "not re-tested together" caveat (§4.5, U11);
-live caps from `ab_need`, rounded up (D2, §6, Q3); `NodeContext` owned by U2
-(§3.4, §7); `env_baselines` (D27); the report fenced (D33, §5); blind
-`techniques=()` (U10); Q3's skip option.
+**Revision 3 (owner conditions).** From `owner-step3-review.md`: a per-run
+retry cap with the residual restated per run (D12, D13, §3.1, §4.4, §5, U2,
+U6, new U16); D35, how a `behaviour` hypothesis passes (D9, D10, §4.5, U11);
+3.13 and 3.14 templates, derived by running each error under every
+interpreter present (D13, U3, U4); owner decisions O1-O5, so 3c comes before
+3b (D36); a total-time line and the retry-crashes-again rule in the report
+(§4.4, §4.5); L2a at 2 repetitions, W5 gated over 20 (§6, §7); Wave 3 held
+until Wave 1's live runs report (§1, §7).
 
-**About the A/B.** E5 is finished (GitHub Actions run 40063812021, 10.20 USD)
-and applied: retrieval is off and no paper code is built. The "re-test" (D2,
-L5) is a new, smaller, optional A/B on a corpus built in Wave 2, not a re-run.
+**Open for the owner in Revision 3.** D35 is the Lead's reading of condition
+2, not one of its two options; under it O2 yields review branches only for
+behaviour ideas that keep every guarded output. Owner to confirm before U11
+(build-order step 6) (§8 Q2). The per-run retry default (1 or 2) is §8 Q13.
+The W4 gate restated over 20 is the Lead's (D22).
+
+**Revision 2 (critic fixes):** D13's template rule and its canaries; E3-A
+reachable, E3-E; D7's negative cap; 005 equals the id rule; the "not re-tested
+together" caveat; live caps from `ab_need`; `NodeContext` owned by U2;
+`env_baselines`; the report fenced; blind `techniques=()`.
+
+**About the A/B.** E5 is finished (Actions run 40063812021, 10.20 USD) and
+applied: retrieval is off, no paper code is built. The re-test (D2, L5) is a
+new, smaller A/B on a corpus built in Wave 2.
 
 ---
 
 ## 0 Decisions
+
+**Owner decisions (2026-10-24, binding; §8 Q1-Q5 answered).**
+
+- **O1.** The CLAUDE.md Step 3 row changes as §8 Q1 says (U15).
+- **O2.** Generated behaviour ideas by default (D9), under D35.
+- **O3.** The re-test is approved (about 8.50 USD); its pooled rule lands in
+  STATUS before L5a, its first run (D2).
+- **O4.** 3b lockfiles: hash-pinned `requirements*.txt` first.
+- **O5.** 3c before 3b, unless packages block the dogfood on the owner's code.
+  *Why (owner):* 3c has no network boundary and reuses the loop and judges; 3b
+  needs a security review of a network-on fetch, an allowlist proxy and an
+  unverified Landlock interaction with `uv` (D36).
 
 **D1. The A/B result is applied. No paper code in Step 3, and retrieval is off
 by default.**
@@ -53,9 +78,9 @@ saturate. That re-test is the only path back to paper intake.**
   2. Both arms on v2, 2 repetitions (L5b).
   3. Both arms on OSS, 1 repetition (L5c). Skipped when its 10 tasks cannot
      change the pooled decision.
-- **The pre-registered pooled rule** is written to STATUS before L5b is
-  dispatched. Over the v2 and OSS slowdown tasks, `c − b ≥ 3`, and B's false
-  wins on controls must not exceed A's.
+- **The pre-registered pooled rule** is written to STATUS before L5a is
+  dispatched (O3). Over the v2 and OSS slowdown tasks, `c − b ≥ 3`, and B's
+  false wins on controls must not exceed A's.
   - If it is met, `RESEARCH_RETRIEVAL` flips to `matched` (a one-line unit), and
     paper intake becomes a later conditional step (§7, P).
   - Otherwise, the playbook stays a test fixture and retrieval stays off.
@@ -157,17 +182,21 @@ them. Caller candidates rank first, by the Step 2 formula.**
 ones are parked.**
 
 - *Why:* with D10, a behaviour keep no longer stops the run, and every frozen
-  judge still applies. `novel` still interrupts at the gate, which no unattended
-  run can answer (`tests/live/discovery.py:409-420` filters for this reason).
+  judge still applies, equivalence included (D35): a behaviour idea reaches the
+  review branch only with unchanged outputs where the run guards them. `novel`
+  still interrupts at the gate, which no unattended run can answer
+  (`tests/live/discovery.py:409-420` filters for this reason).
 - Nothing fills `needs_package` in Step 3: the generator prompt forbids new
   dependencies (`optimization/generate.py:139-140`).
-- L1 records counts per class; if behaviour ideas crowd out efficiency wins,
-  `GENERATED_CLASSES` narrows (§8 Q2).
+- L1 records counts per class and how many behaviour trials equivalence
+  rejected; if behaviour ideas crowd out efficiency wins, `GENERATED_CLASSES`
+  narrows (O2, §8 Q2).
 
 **D10. Behaviour keeps go to their own review branch, with no pause** (user
 decision 1).
 
-- `derive_verdict` rule 6 (`optimization/judges.py:673-682`) splits:
+- How a behaviour hypothesis can pass every judge is D35.
+- `derive_verdict` rule 6 (`optimization/judges.py:674-682`) splits:
   - `efficiency` gives `keep`;
   - `behaviour` gives the new `VerdictOutcome.review`;
   - `novel` gives `needs_approval`, as today.
@@ -200,9 +229,32 @@ decision 1).
   traceback of a fixable type: `SyntaxError`, `IndentationError`, `TabError`,
   `ImportError`, `ModuleNotFoundError`, `NameError`, `UnboundLocalError`,
   `TypeError`, `AttributeError`.
-- **How often:** at most `EDITOR_FIX_RETRIES` times (default 1, at most 2), on
-  the trial's own `Budget`, and only while `budget.remaining ≥ retry_floor_usd`
+- **How often:** at most `EDITOR_FIX_RETRIES` per trial (default 1, at most
+  2) and `EDITOR_FIX_RETRIES_PER_RUN` per run (default 2 until the owner
+  answers §8 Q13, which offers 1; at most 4), on the
+  trial's own `Budget`, and only while `budget.remaining ≥ retry_floor_usd`
   (the factory's `min_trial_budget()`, `orchestrator/factory.py:111-116`).
+- **Where the run cap is checked** (U16): the trials node computes what is
+  left, `EDITOR_FIX_RETRIES_PER_RUN − Σ (attempts − 1)` over `state["trials"]`
+  (`orchestrator/state.py:104`; earlier rounds, appended by the judges node's
+  delta, `nodes.py:1603`) and this round's earlier trials, and passes it
+  as `TrialBrief.fix_retries_left: int = 0` (`execution/protocols.py:76-81`).
+  `_attempt` retries only while its retries are below both caps, and
+  `_runner_trial_problems` (`nodes.py:456-473`) refuses a trial whose
+  `attempts − 1` exceeds what it was given. Counted from checkpointed trials,
+  the cap survives a resume at a node boundary (`interrupt_before`); a crash
+  inside the trials node loses that round's count along with its trials,
+  which `_trials_progress` (`nodes.py:784-796`) attaches only to the failed
+  record, and the round is re-run and re-paid on resume, as in Step 2 (D18).
+  The runner reads the field; the editor prompt
+  never shows it.
+- *Why a brief field:* a new `run()` keyword would break every
+  `TrialRunner` (`execution/runner.py:46-62`): `StubTrialRunner` (`:120-129`)
+  and the test fakes (e.g. `tests/orchestrator/test_nodes.py:277`). The
+  default 0 fails closed.
+- **When the run's retries are spent:** the trial keeps its first failure,
+  with the note "not retried: the run's N fix retries are spent" in
+  `retry_notes`; rule 2 rejects it like any failed trial, and the run goes on.
 - **Never retried:** timeouts, floods, isolation and report failures
   (`execution/procrun.py:265-289`), `AssertionError`, and the test suite, which
   runs with `check_exit=False` (`execution/measure.py:576`): a judge input,
@@ -227,20 +279,66 @@ decision 1).
 - `classify` sends:
   - **frames** only as `(path, function, line)`, at most the 3 innermost, where
     `path` is a tracked base path or a touched path that matches no
-    `READ_DENY_PATTERNS` entry (`common/paths.py:74-92`) and `function` is in
-    the closure set. Source lines are never sent: the editor can `view` them.
-  - **a message** only when it fully matches a CPython template for the parsed
-    type (3.8-3.12 wording, pinned in `retry.py`, one test each): `NameError`
-    `name 'X' is not defined` (and the free-variable forms, and the 3.10+
-    `. Did you mean: 'Z'?`); `UnboundLocalError` `local variable 'X'
-    referenced before assignment` and its 3.11 form; `ImportError` `cannot
-    import name 'X' from 'Y'` (location dropped); `ModuleNotFoundError` `No
-    module named 'X'`; `AttributeError` `'T' object has no attribute 'X'`,
-    `module 'Y' …` and `type object 'T' …`; `TypeError` `F() takes N
-    positional argument(s) but M were given`, `unsupported operand type(s)
-    for OP: 'T' and 'U'` and `F() got an unexpected keyword argument 'X'`;
-    and fixed `SyntaxError`/`IndentationError`/`TabError` phrases (`invalid
-    syntax`, `unexpected indent`, …, one line number at most).
+    `READ_DENY_PATTERNS` entry (`common/paths.py:74-92`), `function` is in
+    the closure set, and `1 ≤ line ≤` the line count of `path` at the
+    trial's commit (the blob is already read for the name-slot check); any
+    other frame is dropped. A trial diff controls all three
+    (`f.__code__ = f.__code__.replace(co_firstlineno=123456789)` makes
+    python3.13 and 3.14 print `line 123456790`), so none is a free value.
+    Source lines are never sent: the editor can `view` them.
+  - **a message** only when it fully matches a template for the parsed type,
+    pinned per CPython version in `retry.py`. Each was derived by raising the
+    error uncaught under 3.8.20, 3.9.25, 3.10.20, 3.11.17, 3.12.3, 3.13.16
+    and 3.14.6 (all in this container; 3.14.6 through `uv python install
+    3.14`) and reading stderr's last line. Under 3.14.6 the 33-case probe is
+    identical to 3.13.16 on every case but the installation `PATH`; carets
+    and no colour on a pipe are the same, and `TERM` alone does not colour.
+    CI proof still comes from U3 (3.13 and 3.14 installed and on PATH) and
+    U4's live-template tests (`ci.yml:380-383` installs only 3.8-3.12
+    today). `PATH` is always dropped.
+    - `NameError`: `name 'X' is not defined` (+ `. Did you mean: 'Z'?` 3.10+,
+      `. Did you forget to import 'Z'?` 3.12+); `free variable 'X' referenced
+      before assignment in enclosing scope` ≤ 3.10, `cannot access free
+      variable 'X' where it is not associated with a value in enclosing scope`
+      3.11+.
+    - `UnboundLocalError`: `local variable 'X' referenced before assignment`
+      ≤ 3.10, `cannot access local variable 'X' where it is not associated
+      with a value` 3.11+.
+    - `ImportError`: `cannot import name 'X' from 'Y' (PATH)` (+ `. Did you
+      mean: 'Z'?` 3.12+); `… from partially initialized module 'Y' (most
+      likely due to a circular import) (PATH)`; 3.13+ `… from 'Y' (consider
+      renaming 'PATH' if it has the same name as a library you intended to
+      import)`. On 3.13 and 3.14 the `consider renaming` form replaces the
+      circular-import form only when `Y` is a top-level module in the
+      script directory (`sys.path[0]`); inside a package (`pkg.a`) both
+      still print `partially initialized module` (re-run here under 3.12,
+      3.13.16 and 3.14.6). U4 pins both forms for 3.13 and 3.14: a repository
+      with top-level modules hits the first.
+    - `ModuleNotFoundError`: `No module named 'X'`, `…; 'Y' is not a package`.
+    - `AttributeError`: `'T' object`, `module 'Y'` or `type object 'T'`, then
+      `has no attribute 'X'` (+ `. Did you mean: 'Z'?` 3.10+; 3.13 ` (consider
+      renaming 'PATH' since it has the same name as the standard library module
+      named 'Y' and prevents importing that standard library module)`).
+    - `TypeError`: `F() takes N positional argument(s) but M were given` (`F`
+      qualified from 3.10: `C.m()`), `unsupported operand type(s) for OP: 'T'
+      and 'U'`, `F() got an unexpected keyword argument 'X'` (+ 3.13 `. Did
+      you mean 'Z'?`, no colon).
+    - Syntax phrases, one line number at most: `invalid syntax`, `unexpected
+      indent`, `unindent does not match any outer indentation level`,
+      `inconsistent use of tabs and spaces in indentation`; ≤ 3.9 `unexpected
+      EOF while parsing`, `expected an indented block`; 3.10+ `expected ':'`,
+      `'(' was never closed`, `invalid syntax. Perhaps you forgot a comma?`,
+      `expected an indented block after … on line N`.
+    - Against 3.12, 3.13 changed only the keyword suggestion and the two
+      `consider renaming` forms. Frame caret lines (`~^^`) appear from 3.11
+      (PEP 657: 3.11 and 3.12 print `~~~~~~^^^^^` under
+      `return d["a"]["b"] + undefined_name`) and are skipped by the parser on
+      every version; 3.13 only widened the cases (it also underlines a
+      whole-line call such as `f({"a": {}})`, which 3.11 and 3.12 leave
+      bare), so U4's parse fixtures carry carets for 3.11-3.14. An ESC byte
+      is a miss (3.13 colours under `FORCE_COLOR`,
+      which `child_env` drops, `execution/sandbox.py:58-60`).
+
     Every captured name (each dotted part) is in the closure set. A name slot
     (`X`, `Y`, `F`) also appears on the innermost repository frame's source
     line at the trial's commit; a type slot (`T`, `U`) may instead be a builtin
@@ -250,9 +348,32 @@ decision 1).
   a name the API has already seen, or one of two short numbers, so no
   verbatim, digit-encoded or alphabet-encoded copy of a file passes (a picked
   name is not on the raising line). The residual is a selection channel among
-  seen values (3 frames, 3 names, 2 numbers): about 16 bytes per attempt at
-  worst, times `EDITOR_FIX_RETRIES` (≤ 2); §5 lists it. The same rule governs
-  3c's rewrite request (D33).
+  seen values, each slot chosen by the trial diff:
+  - up to 3 frames, each a path among the tracked and touched ones, a closure
+    name and a line within that file: about log2(files) + log2(closure) +
+    log2(file lines) bits, about 35 bits on a 1,000-file repository with an
+    8 MiB closure (10 + 15 + 10);
+  - 2 numbers of at most 4 digits, 13.3 bits each;
+  - up to 3 names, each among the identifiers on the raising line (a few bits
+    each);
+  - the type and template, under a byte.
+
+  That is about 105 + 27 + 9 + 6 ≈ 147 bits: **about 18 bytes per attempt at
+  worst** (the earlier 16 left the frame line unbounded; the line rule above
+  bounds it).
+- **Residual per run** (condition 1), bounded by `EDITOR_FIX_RETRIES_PER_RUN`:
+  1 × 18 = 18 bytes at 1, 2 × 18 = 36 at the spec's default 2, 72 at the
+  bound 4 (§8 Q13 asks the owner to choose 1 or 2). Uncapped at the defaults
+  it was 3 rounds (`config.py:243`) × 3 trials (`nodes.py:209`) × 1 retry ×
+  18 = 162 bytes (324 at 2 retries; the owner's 480 assumed 5 trials a
+  round). 36 bytes holds one short key under a perfect encoding (a
+  40-character base64 secret is 30 bytes) and 18 does not, and runs on one
+  repository add up (§5).
+- **Which messages the per-run figure covers:** trial retries, and from 3c
+  the reproducer rewrite (D33), which is a D13 message too. 3c counts each
+  rewrite against the same `EDITOR_FIX_RETRIES_PER_RUN` (D36), so the
+  per-run figure holds for heal runs; counted separately it would be the
+  figure above + 18 × `REPRO_RETRIES` bytes.
 
 **D14. The retry's conversation shape.** A fresh editor request, not a replay:
 
@@ -280,7 +401,7 @@ the trial's budget, which `call()` checks per request.
 
 **D16. The editor gets its own model setting.** `EDITOR_MODEL` defaults to
 `None`, meaning `ENGINE_MODEL`, so nothing changes. A one-line unit (W5) flips
-it to Sonnet 5.5 at `low` only after L2. *Why:* E8a (12/12, about 0.04 USD a
+it to Sonnet 5.5 at `low` only if L2a (2 repetitions) passes W5's gate. *Why:* E8a (12/12, about 0.04 USD a
 run) and E5 (Sonnet engine, 44/44) cover only corpora that saturate. The OSS
 small gains ran on Opus only (ledger row O).
 
@@ -337,8 +458,12 @@ prompt.**
 
 **D22. Evolution is built only if the data asks for it.** W4 compounds two
 disjoint near misses (inconclusive, right direction, ≥ 0.5 of their noise floor)
-into one new trial, judged from scratch. *Gate:* L2 shows at least 2 of 10 OSS
-runs with two or more such near misses. *Why:* nothing measured supports it yet.
+into one new trial, judged from scratch. *Gate:* at least 4 of L2a's 20 OSS
+runs (2 of 10 per repetition) have two or more such near misses; restated
+proportionally by the Lead in Rev 3 (the owner asked only for W5's gate over
+20), and 2 of 10 in either repetition also satisfies the original rule, so
+the owner can object to the stricter reading. *Why:* nothing measured
+supports it yet.
 
 **D23. Protected-pattern gaps are closed.** The patterns to add:
 
@@ -360,14 +485,15 @@ changes what is installed or which interpreter runs.
   a timeout, and a ledger line (§6).
 
 **D25. One migration per change:** 005 ids (U1), 006 `review` (U11), 007 for
-3b, 008 for 3c. U1 also makes the CI re-apply loop cover every file from `003`
-on (`ci.yml:765` lists only 003 and 004), so later migrations need no workflow
-edit.
+3c, 008 for 3b (O5 order). U1 also makes the CI re-apply loop cover every
+file from `003` on (`ci.yml:765` lists only 003 and 004), so later migrations
+need no workflow edit.
 
 **D26. New node tests go in new files** (`test_hypotheses_node.py`,
 `test_research_node.py`): `tests/orchestrator/test_nodes.py` is 5,661 lines.
 
-**3b (designed here, built as its own step with its own approval):**
+**3b (designed here, built as its own step with its own approval, after 3c,
+O5; D numbers kept):**
 
 **D27. Same environment on both sides** (user decision 4).
 
@@ -432,7 +558,8 @@ only if all of these hold:
 - The acquire phase removes them in `finally`, under the run lock, and
   `sweep_stale_runs` (`:306`) removes them for dead runs.
 
-**3c (designed here, built as its own step with its own approval):**
+**3c (designed here, built as its own step with its own approval, before 3b,
+O5):**
 
 **D33. Reproducer integrity** (user decision 6).
 
@@ -468,16 +595,94 @@ only if all of these hold:
   `__init__.py`. The report states that human review of the review branch is the
   final guard.
 
+**Step 3 (owner conditions):**
+
+**D35. How a `behaviour` hypothesis passes (owner condition 2; settled before
+U11): no judge is exempted or replaced in Step 3.**
+
+- *Code today:* no judge reads the class, only rule 6
+  (`optimization/judges.py:630-682`). `EquivalenceJudge` applies to every
+  objective (`:300-302`) under an `output_equivalence` guardrail (`:304-312`)
+  and fails on a changed, missing or unstable fingerprint (`:324-337`,
+  `anticheat.py:236-273`); rule 3 then rejects every class (`judges.py:646-651`).
+- *No replacement exists:* replacing it needs a measured quality bound
+  ("accuracy may drop ≤ 0.5 %"), but the runner measures only wall time, CPU
+  time, peak RSS (`execution/measure.py:366-368`) and the suite flag (`:595`).
+  A `metric_bound` on another metric has no baseline row, so the guardrail
+  judge is inconclusive (`judges.py:408`, `:445-450`) and rule 4 blocks.
+  Exempting it with only the suite in its place would let wrong-but-fast output
+  reach review on tests written for other purposes, with a human the only
+  check; CLAUDE.md says autonomy comes from automatic checks.
+- **The rule:**
+  - Under an `output_equivalence` guardrail (every live suite through
+    `tests/live/conftest.py:826-839` and `CorpusRepo.guardrails`,
+    `tests/live/corpus.py:206-221`, which OSS reuses, `tests/live/oss.py:143-146`;
+    the Step 2 E2E, `tests/e2e/test_step2.py:241-246`), a behaviour hypothesis
+    reaches review only with identical stdout and declared output file on
+    every workload. The fingerprint is sha256 over (length, sha256) of stdout
+    plus the workload's `output_file` when set (`execution/measure.py:199-210`,
+    `:290-300`); stderr, logging and any undeclared file are not compared, so a
+    behaviour change confined to them passes equivalence. One that alters a
+    workload's stdout or declared output file is rejected by rule 3. "Behaviour" means what
+    the generator prompt says (`generate.py:125-127`, `:141`): results may
+    change on inputs the workloads do not exercise, which is why it is reviewed.
+  - Without that guardrail (`define` adds only the RSS bound,
+    `nodes.py:1300-1313`), equivalence is `not_applicable` (`judges.py:306-312`)
+    and behaviour passes on the efficiency gates (§8 Q12).
+  - Still gating every class: rules 1-5 (violations, trial failure, any failed
+    judge, an inconclusive primary or guardrail judge, a passed objective).
+- **Status (U2, U11):** a `review` verdict sets `HypothesisStatus.trialled`,
+  as `needs_approval` does: no new status, so `chk_hypothesis_status`
+  (`003:391-392`) is unchanged. `_STATUS_AFTER_VERDICT` (`nodes.py:280-285`)
+  lists only keep, reject, inconclusive and needs_approval, and the verdicts
+  node (`:1655`) and the approval gate's resume (`:1730`) index it, so U11
+  adds the `review` entry (without it the first review verdict raises
+  `KeyError`).
+- **Code (U11):** rule 6, plus the `_STATUS_AFTER_VERDICT` entry and the
+  verdicts event text (`nodes.py:1659-1664`, which names four outcomes) in
+  `nodes.py`. Combine re-judges the review set as
+  `efficiency` (`orchestrator/combine_node.py:231-246`, `holds` iff `keep`,
+  `common/models.py:740`); with no class-reading judge that is the same test.
+  U11's tests pin the three cases and that combine.
+- *Later:* a quality bound could replace equivalence for behaviour (reported,
+  not gating, only when that bound passes): a frozen-rule change with its own
+  decision (§8 Q11). 3c's exemption (D34) covers only the reproducer's
+  workloads.
+- *Why:* the default objective says outputs must not change; a user who has not
+  said how much quality may drop has not allowed output to change.
+
+**D36. 3c before 3b (O5): what 3c would have had from 3b.**
+
+- *The rewrite's closure budget:* each reproducer rewrite (`REPRO_RETRIES`,
+  D33) is a D13 message, so it is counted against the run's
+  `EDITOR_FIX_RETRIES_PER_RUN` like a trial retry; when none is left, the
+  rewrite is not sent and the heal is refused with that note. One per-run
+  figure (D13) then bounds every channel from run output to the API (C3
+  counts it, C4's retry exclusion keeps the reproducer's workloads out of
+  trial retries).
+- *Packages:* a heal whose fix needs a missing third-party module (a
+  `ModuleNotFoundError` for a module outside the repository and the standard
+  library) is refused before the reproducer request and listed as a
+  `needs_package` proposal, so the user is asked.
+- *A lockfile environment:* 3c measures in the ambient environment, as Step 2
+  does; heal runs move to E0 when 3b lands (D27).
+- *Migrations* swap: 007 is 3c's, 008 is 3b's (D25, §3.5). Nothing else in
+  D33-D34 or D10 uses a 3b part.
+- *The exception:* if preparing the Step 5 dogfood shows the owner's code
+  needs a new package to improve, the Lead proposes 3b first at the 3c briefing.
+
 ---
 
 ## 1 Scope and non-goals
 
-**Step 3 (this approval):** Wave 1 (U1-U15, independent of the A/B), Wave 2
-(the A/B follow-up, V1-V6 and the re-test) and Wave 3 (lessons and evolution,
-W1-W6, each gated), as listed in §7.
+**Step 3:** Wave 1 (U1-U16, independent of the A/B) and Wave 2 (the A/B
+follow-up, V1-V6 and the re-test) are approved (owner, 2026-10-24). Wave 3
+(lessons and evolution, W1-W6, each gated) is **held until Wave 1's live runs
+(L1a, L1b, L2a and, when it runs, L2b) report**, as listed in §7.
 
-**3b and 3c** are designed in D27-D34 and outlined in §7. Each is built after
-Step 3 as its own step, with its own briefing, approval and security review.
+**3c, then 3b** (O5) are designed in D33-D34 and D27-D32 and outlined in §7.
+Each is built after Step 3 as its own step, with its own briefing, approval
+and security review.
 
 **Non-goals:**
 
@@ -515,7 +720,7 @@ START -> connect -> understand -> define -> baseline --+------------> REPRODUCE 
       |          v
       |      trials (one worktree each, network off; hypothesis fenced)
       |        edit -> capture -> anti-cheat -> commit(parent=base) -> measure
-      |          ^--- fixable own crash, closure-checked feedback, <= 1 retry ---+
+      |          ^-- fixable own crash, closure-checked, <= 1 retry a trial, 2 a run (Q13) +
       |          v
       |      judges -> verdicts:  efficiency->keep | behaviour->review | novel->needs_approval
       |          |
@@ -548,7 +753,8 @@ reproducer sha256, env lock hashes.
 | `GENERATED_CLASSES` | `("efficiency", "behaviour")` | a subset of `ChangeClass`; `novel` refused until approvals run unattended |
 | `DISCOVERY_MAX_SHARE` | 0.25 | in (0, 1) |
 | `EDITOR_MODEL` | `None` (= `ENGINE_MODEL`) | priced; `EDITOR_EFFORT` accepted by its chain |
-| `EDITOR_FIX_RETRIES` | 1 | 0-2 |
+| `EDITOR_FIX_RETRIES` | 1 (per trial) | 0-2 |
+| `EDITOR_FIX_RETRIES_PER_RUN` | 2 until §8 Q13 is answered (1 is offered: 18 bytes a run against 36, D13) | 0-4; checked in the trials node (D12, U16); 3c's rewrites count against it (D36) |
 | `RETRY_CLOSURE_MAX_SOURCE_BYTES` | 8 MiB | ≥ 1 |
 
 - Role chains run without fallbacks, except the editor when `EDITOR_MODEL` is
@@ -558,12 +764,12 @@ reproducer sha256, env lock hashes.
   role.
 - `role_settings(base, model, *, fallbacks)` moves from
   `tests/live/discovery.py:163-171` (`model_settings`) into `common/config.py`.
+- 3c adds `REPRO_MODEL` / `REPRO_EFFORT` (Sonnet 5.5 / `medium`, unmeasured),
+  `REPRO_VARIANTS=2` and `REPRO_RETRIES=1`.
 - 3b adds `ACQUIRE_ENABLED=False`, `UV_EXECUTABLE`, `UV_VERSION`, `UV_SHA256`,
   `PACKAGE_MIN_PROJECT_AGE_DAYS=90`, `PACKAGE_MIN_VERSION_AGE_DAYS=14`,
   `PACKAGE_LICENCES`, `PACKAGES_PER_HYPOTHESIS=1` and
   `ACQUIRE_MAX_BYTES=500 MiB`.
-- 3c adds `REPRO_MODEL` / `REPRO_EFFORT` (Sonnet 5.5 / `medium`, unmeasured),
-  `REPRO_VARIANTS=2` and `REPRO_RETRIES=1`.
 
 ### 3.2 State (`orchestrator/state.py`; every key set in `initial_state`)
 
@@ -582,21 +788,22 @@ Step 3 (U2):
 `TechniqueMatchRecord(slug, fit, justification_summary, unmet_preconditions)` is
 a new `EngineModel`. It and every new model join `ENGINE_SERDE_ALLOWLIST`.
 
-3b adds `env_baselines: dict[str, Baseline]` and
-`capabilities: list[CapabilityRecord]`. 3c adds `run_kind`, `heal_case` and
-`reproducer`.
+3c adds `run_kind`, `heal_case` and `reproducer`. 3b adds
+`env_baselines: dict[str, Baseline]` and `capabilities: list[CapabilityRecord]`.
 
 ### 3.3 Models (`common/models.py`, U2)
 
-- `VerdictOutcome.review = "review"`.
+- `VerdictOutcome.review = "review"`. No new `HypothesisStatus`: a reviewed
+  hypothesis is `trialled`, as for `needs_approval` (D35; U11 adds the
+  `_STATUS_AFTER_VERDICT` entry).
 - `Trial.attempts: int = 1` and `Trial.retry_notes: tuple[str, ...] = ()`. Both
   are serde-safe, and both are stored in the JSONB trials array.
 - `Hypothesis.parked_reason: str | None = None`.
-- 3b: `Hypothesis.packages: tuple[PackageRequest, ...] = ()` (a name and a
-  reason, never a version or a URL) and `Trial.env_lock_sha256: str | None`.
 - 3c: `HealCase(kind, target, signature)`;
   `ExceptionSignature(type, message, frames)`;
   `Reproducer(path, sha256, variants_sha256, signature, baseline_failures)`.
+- 3b: `Hypothesis.packages: tuple[PackageRequest, ...] = ()` (a name and a
+  reason, never a version or a URL) and `Trial.env_lock_sha256: str | None`.
 
 ### 3.4 Seams
 
@@ -625,10 +832,11 @@ class MatchResult: matches: tuple[TechniqueMatch, ...]; notes: tuple[str, ...]
   `avoid_titles` are accepted and ignored until W1.
 - `NodeContext` (`nodes.py:181-237`) gains `generator`, `matcher` (both `None`
   by default, which keeps Step 2 behaviour), `retrieval`, `generated_classes`,
-  `generator_n`, `generator_max_calls`, `matcher_k`, `discovery_max_share` and
+  `generator_n`, `generator_max_calls`, `matcher_k`, `discovery_max_share`,
+  `fix_retries_per_run: int = 0` (Step 2 has no retry) and
   `playbook: tuple[Technique, ...] = ()`. U2 owns these fields and their
-  `__post_init__` checks (it freezes the shared contracts, D4); U8, U9 and U11
-  only read them.
+  `__post_init__` checks (it freezes the shared contracts, D4); U8, U9, U11 and
+  U16 only read them.
 
 **Retry (U4, U6):**
 
@@ -638,13 +846,15 @@ class MatchResult: matches: tuple[TechniqueMatch, ...]; notes: tuple[str, ...]
   `kind="exit"`, the tail and the workload. Today only the tail's last line
   survives.
 - `execution/crash.py`: `parse_traceback(tail: bytes) -> CrashReport | None`.
-  It handles chained exceptions and the `SyntaxError` caret, for Python
-  3.8-3.12.
+  It handles chained exceptions, the `SyntaxError` caret and frame caret
+  lines (`~^^`), for Python 3.8-3.14.
 - `execution/retry.py`:
   - `ClosureIndex.build(diff: str, sources: Mapping[str, bytes])`;
   - `classify(failure, *, closure, tracked, touched, excluded_workloads) -> TrialFeedback | None`;
   - `TrialFeedback(exc_type, frames, message | None)`.
 - `EditTask.feedback: TrialFeedback | None = None` (`execution/protocols.py:137-146`).
+- `TrialBrief.fix_retries_left: int = 0` (`protocols.py:76-81`; U6 adds and
+  reads it, U16 sets it).
 - `GitWorkspace.commit(handle, message, *, base, parent=None)` (`git.py:765-774`).
 - `GitTrialRunner` gains `fix_retries` and `retry_floor_usd`.
 
@@ -666,9 +876,9 @@ class MatchResult: matches: tuple[TechniqueMatch, ...]; notes: tuple[str, ...]
 **006_review_outcome.sql** (U11): drop and re-add `chk_lesson_outcome` with
 `review` (`003:427-428`). The comment at `003:444` is updated.
 
-**007** (3b): new `packages` columns, a `run_packages` table, and `acquire` in
-`chk_task_phase`. **008** (3c): `heal` in `chk_hypothesis_source` (`003:384`) and
-`reproduce` in `chk_task_phase` (`003:253-257`).
+**007** (3c): `heal` in `chk_hypothesis_source` (`003:384`) and `reproduce` in
+`chk_task_phase` (`003:253-257`). **008** (3b): new `packages` columns, a
+`run_packages` table, and `acquire` in `chk_task_phase`.
 
 ### 3.6 Live plumbing (U13; Wave 2 adds `V4`)
 
@@ -755,7 +965,8 @@ The order is:
    - `excluded_workloads` (3c: the reproducer).
 2. A retry needs all of these:
    - `classify` returned feedback;
-   - `trial.attempts ≤ fix_retries`;
+   - `trial.attempts ≤ fix_retries` (per trial);
+   - `trial.attempts − 1 < brief.fix_retries_left` (the run's cap, D12);
    - `budget.remaining ≥ retry_floor_usd`.
 3. The retry:
    1. `GitWorkspace.reset(handle)`.
@@ -765,12 +976,20 @@ The order is:
    5. `commit(..., parent=base)`, then `update_ref(own_ref, commit2, commit1)`
       and `progress.moved = commit2`.
    6. A fresh measurement.
-4. An unaffordable retry, an editor stop, a capture violation or a second crash
-   keeps the first failure. The note goes in `retry_notes`, and the result is
-   never `TrialUnaffordable`. An exception takes `_undo_own_ref` (`:465-487`).
+4. An unaffordable retry, a spent run cap, an editor stop, a capture violation
+   or a retry that crashes again keeps the first failure. The note goes in
+   `retry_notes`, and the result is never `TrialUnaffordable`. An exception
+   takes `_undo_own_ref` (`:465-487`).
+   - **A retry that crashes with another fixable error** is not retried at
+     the default `EDITOR_FIX_RETRIES=1` (the limit is per trial). At 2, the
+     second retry is fed the latest crash, closure-checked; if it crashes too,
+     the first failure is still kept. Each later crash's type is a
+     `retry_notes` entry, shown in the trial's report row (U11): "NameError;
+     retry: TypeError, first failure kept".
 5. Wall time: a retried trial measures twice. The per-workload timeouts and
    `TEST_TIMEOUT_S` (`config.py:279`) bound each run, `EDITOR_FIX_RETRIES ≤ 2`
-   the factor; live timeouts grow in U13. No run-level wall cap (§8 Q8).
+   the factor; live timeouts grow in U13. No run-level wall cap until the
+   Step 4 CLI (owner, §8 Q8); the report's total-time line (§4.5) shows it now.
 
 ### 4.5 Review delivery (U11)
 
@@ -787,7 +1006,9 @@ The order is:
    - If the review combination holds, the node publishes create-only through
      `ctx.publisher.publish` with the review branch and its own `Delivery`
      (`kind=branch`). The report starts with: "Behaviour change(s): every judge
-     passed, re-tested together; review before merging; not merged into
+     passed (identical stdout and declared output file on every workload where
+     the run guards them; stderr and other files not compared, D35), re-tested
+     together; review before merging; not merged into
      `engine/run-<id>`, never pushed. Not re-tested together with
      `engine/run-<id>`; merging both is unproven."
    - The main report lists the review branch, and the parked ideas as
@@ -795,10 +1016,15 @@ The order is:
      together with this branch; merging both is unproven."
 4. Learn: review lessons carry outcome `review`, which ranking treats as
    neutral.
+5. Both reports (U11, `_report`, `nodes.py:1117`) gain each trial's
+   `retry_notes` in its row (§4.4) and a total-time line, "Total time: H:MM,
+   first event to delivery, any approval pause included; N trial(s) retried",
+   from the first `EngineEvent.at` (`common/models.py:658`; state events,
+   `orchestrator/state.py:112`) to when the report is built.
 
-### 4.5b 3b and 3c behaviour
+### 4.5b 3c and 3b behaviour
 
-D27-D34, A §4.5-4.6 and B §4.4 (1-8) and §4.5 (1-6), as corrected above;
+D33-D34, D27-D32, A §4.5-4.6 and B §4.4 (1-8) and §4.5 (1-6), as corrected above;
 each step's briefing restates it.
 
 ### 4.6 Failure modes
@@ -808,7 +1034,8 @@ each step's briefing restates it.
 | `save_trial` refuses or raises | The run fails with the round's progress kept (U1); `h1` and slugs no longer trigger it |
 | The generator is empty, refuses or is unusable; the matcher fails | Soft note, spend charged; the router ends the run when nothing is left |
 | Discovery is unaffordable (pre-send, or `d ≤ cost_usd`) | `discovery_exhausted`; the run trials the pool, then combines |
-| The retry is not fixable, unaffordable or fails | The first failure is kept, with a note; timeouts, `AssertionError` and suite failures are never retried |
+| The retry is not fixable, unaffordable, over the run cap or crashes again | The first failure is kept, with a note shown in the report; timeouts, `AssertionError` and suite failures are never retried |
+| A behaviour trial changes a guarded output (stdout or the declared output file) | Rejected by rule 3 (equivalence failed, D35); never on the review branch. A change confined to stderr, logging or an undeclared file is not seen by equivalence |
 | The crash message fails a template or closure | Type and frames only, noted in `retry_notes` |
 | The review combination does not hold | No review branch, said in the report; the run branch is unaffected |
 | A novel hypothesis | Caller ones interrupt as in Step 2; generated ones are parked |
@@ -820,10 +1047,11 @@ each step's briefing restates it.
 | Threat | Controls |
 | --- | --- |
 | Injection relayed by generated hypotheses into the editor | D11: fence plus token refusal (`editor.py:463`); the generator already fences repository text (`generate.py:215-242`) |
-| Run output carrying secrets to the API (retry, 3c rewrite) | D13 closure: a message only when it matches a CPython template for its type, every captured name in the diff or the base sources (name slots also on the raising line), at most two numbers of at most 4 digits, 300 characters; else type and frames only; at most 3 tracked or touched frames, no deny-listed paths, no traceback source lines; fenced; never stdout, timings, fingerprints, suite output or verdicts. Digit- and alphabet-encoding canaries in U4 and E3-D. Residual: a selection channel of about 16 bytes per attempt, at most 2 attempts |
+| Run output carrying secrets to the API (retry, 3c rewrite) | D13: a message only on a per-version CPython template with closure-checked names (name slots on the raising line), ≤ 2 numbers of ≤ 4 digits, ≤ 300 characters, else type and frames; ≤ 3 tracked or touched frames, no deny-listed paths or source lines; fenced; never stdout, timings, fingerprints, suite output or verdicts; canaries in U4 and E3-D; a frame's line must lie within its file. Residual: about 18 bytes per attempt × `EDITOR_FIX_RETRIES_PER_RUN` (36 bytes a run at the default 2, 18 at 1, 72 at the bound; §8 Q13), adding up across runs. The per-run figure covers trial retries and 3c's rewrites only because 3c counts each rewrite against the same cap (D36); counted separately a heal run would add 18 × `REPRO_RETRIES` |
 | 3c: injection through the error report | D33: the report is fenced with a per-request token and refused if it holds it (`Fence.holds`, `structured.py:126`); the variant writer never sees it |
 | Retry as a reward-hacking channel | Own workload crash only; it runs before any judge (`trial_runner.py:502-587`); a full re-capture and anti-cheat pass on the union diff; one commit on the base |
 | Discovery spend starving proofs | D7 narrowed budget enforced by `Budget.check` before send; `DISCOVERY_MAX_SHARE`; `discovery_cost_usd` reported |
+| Output-changing behaviour reaching review on weak evidence | D35: equivalence gates every class wherever an `output_equivalence` guardrail is set (every live suite and E2E), over stdout and the declared output file only; with no guardrail nothing checks output for any class (§8 Q12, STATUS Known gap); no exemption until a measured quality bound exists |
 | Excessive agency in behaviour delivery | Review branch: create-only, under the prefix, never on a checked-out or default branch (`assert_safe_branch`), never merged into the run branch, never pushed; novel still asks |
 | New per-role transports | The key stays inside `AnthropicTransport`; every role model is priced and its effort validated; no fallbacks on new roles; an unpriced role model is refused at startup |
 | Widened Postgres ids | The engine id rule checked before any SQL, plus the 005 `CHECK`; literal SQL with parameters, unchanged |
@@ -835,7 +1063,8 @@ each step's briefing restates it.
 | 3c: reproducer gaming | D33-D34; sha256 per run; variants hidden from the editor; `heal_tamper`; no new files; human review stated |
 
 Units with a security Reviewer: U1 (SQL), U4 (closure), U5 (patterns), U6
-(retry, fence), U10 (transports), plus every 3b and 3c unit named in §7.
+(retry, fence), U10 (transports), U16 (run retry cap), plus every 3c and 3b
+unit named in §7.
 
 ---
 
@@ -854,12 +1083,24 @@ Units with a security Reviewer: U1 (SQL), U4 (closure), U5 (patterns), U6
   - a `save_trial` raise keeps the round's spend in the failed state.
 - **U2:** serde reflection over the new models; `initial_state` sets every new
   key; each validator refuses an unpriced role model and an effort its chain
-  rejects; a `novel` entry in `GENERATED_CLASSES` is refused.
+  rejects; a `novel` entry in `GENERATED_CLASSES` is refused;
+  `EDITOR_FIX_RETRIES_PER_RUN` outside 0-4 is refused;
+  `NodeContext.fix_retries_per_run` defaults to 0.
 - **U4:**
-  - `parse_traceback` on 3.8-3.12 stderr (chained, caret, cut tail);
+  - `parse_traceback` on 3.8-3.14 stderr (chained, `SyntaxError` caret, frame
+    caret lines, cut tail);
   - `classify` gives `None` for a timeout, a signal, `AssertionError`, the
     suite and an excluded workload;
   - each template, per supported version, passes with closure-checked names;
+  - **live templates** (new `tests/execution/test_retry_templates.py`): each
+    template's snippet runs under every `python3.N` on PATH (3.8-3.14) and
+    stderr's last line must match that version's template; a missing
+    interpreter skips locally (as `tests/execution/test_profiler.py:480-483`),
+    never in CI once U3's PATH check (`ci.yml:385-397`, 3.8-3.12 today)
+    covers 3.13 and 3.14, so 3.14 is proven there from U3's commit on (U3
+    lands before U4);
+  - the 3.13 forms pass with the path dropped; an ESC byte gives type and
+    frames only;
   - closure withholds a message holding `AKIAIOSFODNN7EXAMPLE`, a 5-digit
     number, a third number, or a function name absent from the diff and the
     sources;
@@ -871,14 +1112,22 @@ Units with a security Reviewer: U1 (SQL), U4 (closure), U5 (patterns), U6
     `eval(ALPHA[b])`, per byte of the planted file: the name is not on the
     raising line, so the message is withheld;
   - a frame in `.env` or outside the tracked or touched set is dropped, and at
-    most 3 frames are sent.
+    most 3 frames are sent;
+  - a frame whose line is 0 or exceeds its file's line count at the trial's
+    commit (a forged `co_firstlineno`) is dropped;
+  - the 3.13 and 3.14 `ImportError` forms: a circular import between two
+    top-level script-directory modules gives the `consider renaming` form, one
+    inside a package the `partially initialized` form; both pass.
 - **U5:** each new pattern refuses a diff.
 - **U6** (new `tests/execution/test_trial_retry.py`):
   - `NameError` then a fixing edit gives `attempts == 2` and one commit whose
     parent is the base (`combine._unfit` passes), with no `unrecorded_write`;
   - a reset removes a file the failed run wrote;
   - an unaffordable retry keeps the first failure;
-  - the cap holds;
+  - the per-trial cap holds; `fix_retries_left=0` gives no retry and the
+    "spent" note, and never reaches the editor prompt;
+  - a retry crashing with another fixable error keeps the first failure and
+    notes the second type;
   - the feedback never contains stdout or timings;
   - the hypothesis is fenced, and a token inside it is refused.
 - **U7:** the adapters on `ScriptedTransport` record their spend in the budget;
@@ -900,9 +1149,16 @@ Units with a security Reviewer: U1 (SQL), U4 (closure), U5 (patterns), U6
   retry floor equals it; the factory passes the playbook only through
   `NodeContext.playbook` and, in blind mode, `build_context` returns
   `techniques == ()` (`factory.py:306-379` never sets it today), so the
-  generator's research block stays empty (`generate.py:215-243`).
+  generator's research block stays empty (`generate.py:215-243`); the factory
+  sets `fix_retries_per_run` from `EDITOR_FIX_RETRIES_PER_RUN`.
 - **U11:**
   - rule 6 for all three classes;
+  - a `review` verdict passes `verdicts` (status `trialled`, a `review` count
+    in the event text) and `approval_gate`'s resume with no `KeyError`;
+  - D35: under `output_equivalence`, changed output rejects (rule 3) and
+    identical output gives `review`; without it, `review`; the review set's
+    combine holds under the same judges;
+  - both reports carry the total-time line and the rows' retry notes;
   - a behaviour keep gives `engine/review-<id>`, with the run branch unchanged
     and no interrupt;
   - a novel caller candidate still interrupts;
@@ -917,22 +1173,31 @@ Units with a security Reviewer: U1 (SQL), U4 (closure), U5 (patterns), U6
   grader replies replay through `grade_with`.
 - **U13:** every new constant and need is pinned; a suite cap below its need is
   refused (`tests/live/conftest.py` admission, lines 12-17).
+- **U16** (new `tests/orchestrator/test_run_retry_cap.py`): at a cap of 2 the
+  node passes 2, 1, then 0, and a third fixable crash keeps its first failure
+  with the "spent" note; a resume counts from the checkpointed `trials`; a
+  runner reporting more retries than it was given is refused; a cap of 0
+  reproduces Step 2.
 
 **E2E** (`tests/e2e/test_step3.py`, marker `slow`, real git and sandbox, scripted
 Claude):
 
 - **E3-A:** `candidates=()`, plus a scripted generator reply, reaches a delivered
-  branch. A second run stopped with `interrupt_before=["trials"]` (as
-  `tests/orchestrator/test_graph_e2e.py:431` does) and resumed by a fresh graph
+  branch. A second run stopped with `interrupt_before=["trials"]` (the same
+  mechanism as `tests/orchestrator/test_graph_e2e.py:431`, which stops before
+  `verdicts`, here with `trials`) and resumed by a fresh graph
   records exactly one generator request. (With `candidates=()` no run reaches
   the gate: only caller `novel` ideas do.)
 - **E3-E:** one caller `novel` candidate beside the scripted generator pauses
   at `approval_gate` and is resumed; the generator count is unchanged by the
   resume (zero: caller ideas go first, and the gate leads to `combine`).
 - **E3-B:** a `NameError` from the first edit is fixed by the retry, and the run
-  delivers with `attempts=2`.
-- **E3-C:** a behaviour hypothesis lands on `engine/review-<id>` with no pause,
-  and a novel one is parked.
+  delivers with `attempts=2`; with `EDITOR_FIX_RETRIES_PER_RUN=0` the same run
+  keeps the first failure.
+- **E3-C:** under an `output_equivalence` guardrail, a behaviour change with
+  identical outputs lands on `engine/review-<id>` with no pause; a second
+  behaviour change that alters output is rejected by rule 3; a novel one is
+  parked.
 - **E3-D:** injected crash messages are withheld from the wire: one holding a
   canary verbatim, one carrying a planted file's bytes as decimal numbers in a
   `NameError` message, and one picking diff-defined alphabet names per byte.
@@ -941,22 +1206,21 @@ Claude):
   alphabet name.
 
 **Live** (CI `live-smoke` only, one suite at a time under the 150 USD ceiling;
-every run lands its cost and finding in the ledger). The expected costs come
-from Window 0 rows: E5 about 0.10 USD per task-arm on the Sonnet engine
-(10.20 / 100); H 0.11 USD a run (Opus); O 0.30 USD a run (Opus); M 0.45x Opus;
-E3 0.048 USD per repo-arm including the grader. Each A/B cap is the computed
-`ab_need(plan)` (`tests/live/discovery_ab.py:134-137`): per task
-`AB_GEN_CAP_USD` (a `ceil_usd` constant, `:108-114`; 0.8 at E5's settings, as
-the `ab` need 140 = 2 × 25 × 2.8 shows) plus both run caps, rounded up to a
-whole USD as `ci.yml:636-637` does, since the ledger admits a test only if it
-fits with earlier spend and open caps (`tests/live/conftest.py:12-17`).
+every run lands its cost and finding in the ledger). Expected costs come from
+Window 0 rows: E5 about 0.10 USD per task-arm (Sonnet engine, 10.20 / 100); H
+0.11 and O 0.30 USD a run (Opus); M 0.45x Opus; E3 0.048 USD per repo-arm with
+the grader. Each A/B cap is `ab_need(plan)` (`tests/live/discovery_ab.py:134-137`):
+per task `AB_GEN_CAP_USD` (a `ceil_usd` constant, `:108-114`; 0.8 at E5's
+settings, as the `ab` need 140 = 2 × 25 × 2.8 shows) plus both run caps,
+rounded up to a whole USD as `ci.yml:636-637` does; the ledger admits a test
+only if it fits with earlier spend and open caps (`tests/live/conftest.py:12-17`).
 
 | Run | Measures | Feeds | Cap (sum of worst cases) | Expected | Cheapest arm |
 | --- | --- | --- | --- | --- | --- |
-| L1a `hard`, `wired` | Wired engine wins with no hypothesis handed over; attempts per trial (retry rate); counts per class; discovery cost | Wave 1 acceptance; the D9 class default | 10 × 5 = 50 | ~1.0 | Sonnet engine (E5 ran it on this corpus) |
+| L1a `hard`, `wired` | Wired engine wins with no hypothesis handed over; attempts per trial (retry rate); counts per class; behaviour trials rejected by equivalence; discovery cost | Wave 1 acceptance; the D9 class default | 10 × 5 = 50 | ~1.0 | Sonnet engine (E5 ran it on this corpus) |
 | L1b `corpus`, `wired` | Control false wins with generation in the loop | The same | 15 × 5 = 75 | ~0.8 | Sonnet engine |
-| L2a `oss`, `wired`, Sonnet low editor | Delivered against aimed-Opus 6/10; near-miss counts; retry rate | W5 (`EDITOR_MODEL`), the W4 gate | 10 × 5 = 50 | ~1.5 | Sonnet first |
-| L2b `oss`, `wired`, Opus editor | Only if L2a < 5/10 | W5 | 10 × 5 = 50 | ~3.0 | - |
+| L2a `oss`, `wired`, Sonnet low editor, 2 reps (owner) | Delivered against aimed-Opus 6/10 per rep; near-miss counts; retry rate | W5 (`EDITOR_MODEL`; ≥ 10 of 20), the W4 gate | 20 × 5 = 100 | ~3.0 | Sonnet first |
+| L2b `oss`, `wired`, Opus editor | Only if L2a < 10/20 | W5 | 10 × 5 = 50 | ~3.0 | - |
 | L3 `grader` | Opus 4.8 grader agreement on about 10 hand labels (≥ 9/10, no false positive on near misses) | Whether L4's hit@k counts as validated | 10 × `GRADE_WORST_USD` (`discovery_grader.py:298`) | < 0.5 | - |
 | L4 `sweep-record`, Sonnet medium, v1 + v2 | Recorded replies; v2 blind hit@1 | U12's real fixture; the v2 saturation pre-check | Sweep need for 1 arm × 37 repos (guard-computed; about 23) | ~1.8 | One arm only |
 | L5a `ab-v2`, arm A only, 1 rep | Is v2 saturated for executed wins (≥ 90 % means revise) | Whether L5b runs | `ab_need`: 12 × (0.8 + 1) = 21.6, need 22 | ~0.6 (+0.6 for the one rerun on a revised v2) | A only |
@@ -964,11 +1228,11 @@ fits with earlier spend and open caps (`tests/live/conftest.py:12-17`).
 | L5c `ab-oss`, both arms, 1 rep, 2 USD run cap | The same on small gains | D2 pooled rule | `ab_need`: 10 × (0.8 + 4) = 48, need 48 | ~3.0 | Skipped if it cannot change the decision |
 | W1 refresh | The eval fixture after the prompt change | W1 | `sweep_need` for 1 arm × the 25 v1 repos (`discovery_sweep.py:139-143`, guard-computed; about 25/37 of L4's 23, need about 16) | ~0.6 | One arm |
 
-The Step 3 expected total is about 15-18 USD (about 21 with L2b), all in Window
-1, including the one L5a rerun (0.6) if v2 is revised; L5a is not repeated a
+The Step 3 expected total is about 16.5-19.5 USD (about 22.5 with L2b), all
+in Window 1, with L2a's second repetition (about 1.50 USD, owner) and the one L5a rerun (0.6) if v2 is revised; L5a is not repeated a
 second time. It replaces Window 1 row C (`STATUS.md` "Window 1", about 30 USD of Opus
-extraction). Reruns happen only when a fix changes what is measured. 3b's L6
-(the network job, 0 tokens) and 3c's L7 (the heal corpus) are planned with their
+extraction). Reruns happen only when a fix changes what is measured. 3c's L7
+(the heal corpus) and 3b's L6 (the network job, 0 tokens) are planned with their
 steps.
 
 ---
@@ -985,37 +1249,43 @@ seams checklist in its brief.
 | --- | --- | --- | --- | --- | --- |
 | U1 | Postgres ids (first) | `infrastructure/schema/005_lesson_ids.sql`, `persistence/postgres.py`, `tests/persistence/test_postgres.py`, `orchestrator/nodes.py` (the `save_trial` guard only), `tests/orchestrator/test_trials_progress.py`, `.github/workflows/ci.yml` (schema re-apply and column check) | ~200 | - | correctness; security (SQL) |
 | U2 | Contracts | `common/config.py`, `common/models.py`, `orchestrator/state.py`, `orchestrator/serde.py`, `optimization/sources.py`, `orchestrator/nodes.py` (the `NodeContext` fields of §3.4 only) + tests | ~330 | U1 | correctness |
-| U3 | pip-audit in CI | `.github/workflows/ci.yml` (python job), `.github/workflows/security.yml` | ~40 | U1 | correctness (CI) |
-| U4 | Crash parser, classifier, closure | `execution/procrun.py`, `execution/measure.py` (`launch`), `execution/crash.py`, `execution/retry.py` + tests | ~380 | U1 | security |
+| U3 | pip-audit in CI; interpreters 3.13 and 3.14 | `.github/workflows/ci.yml` (python job: pip-audit, and the workload-interpreter install and PATH check at `:380-397` extended to 3.8-3.14), `.github/workflows/security.yml` | ~50 | U1 | correctness (CI) |
+| U4 | Crash parser, classifier, closure, templates 3.8-3.14 | `execution/procrun.py`, `execution/measure.py` (`launch`), `execution/crash.py`, `execution/retry.py` + tests, `tests/execution/test_retry_templates.py` | ~410 | U1, U3 (commit order) | security |
 | U5 | Protected-pattern gaps | `optimization/anticheat.py` + tests | ~60 | U1 | security |
-| U6 | Retry flow and fence | `execution/trial_runner.py`, `execution/git.py`, `execution/protocols.py`, `execution/editor.py`, `tests/execution/test_trial_retry.py` | ~390 | U2, U4 | security; correctness |
+| U6 | Retry flow and fence | `execution/trial_runner.py`, `execution/git.py`, `execution/protocols.py` (`EditTask.feedback`, `TrialBrief.fix_retries_left`), `execution/editor.py`, `tests/execution/test_trial_retry.py` | ~400 | U2, U4 | security; correctness |
 | U7 | Adapters and `rank_generated` | `optimization/hypothesis_source.py`, `optimization/ranking.py` + tests | ~250 | U2 | correctness |
 | U8 | Hypotheses node and router | `orchestrator/nodes.py` (`hypotheses`, `after_verdicts`), `tests/orchestrator/test_hypotheses_node.py` | ~380 | U7 | correctness; spec |
 | U9 | Research node (matched, off) | `orchestrator/nodes.py` (`research`), `tests/orchestrator/test_research_node.py` | ~200 | U8 | correctness |
-| U10 | Factory: roles, playbook, retry floor | `orchestrator/factory.py`, `tests/orchestrator/test_factory_roles.py` | ~220 | U6, U7 | security (transports) |
-| U11 | Review-branch delivery | `optimization/judges.py`, `orchestrator/nodes.py` (`verdicts`, `combine`, `deliver`, `_report`), `infrastructure/schema/006_review_outcome.sql`, `tests/orchestrator/test_review_delivery.py`, `tests/optimization/test_judges.py` (rule 6) | ~380 | U9 | spec (user decision 1); correctness |
+| U10 | Factory: roles, playbook, retry floor and run retry cap | `orchestrator/factory.py`, `tests/orchestrator/test_factory_roles.py` | ~220 | U6, U7 | security (transports) |
+| U11 | Review-branch delivery (D10, D35), total-time line, retry notes | `optimization/judges.py` (rule 6 only), `orchestrator/nodes.py` (`_STATUS_AFTER_VERDICT`, `verdicts` and its event text, `combine`, `deliver`, `_report`), `infrastructure/schema/006_review_outcome.sql`, `tests/orchestrator/test_review_delivery.py`, `tests/optimization/test_judges.py` (rule 6, D35) | ~410 | U9 | spec (user decision 1, D35); correctness |
 | U12 | Offline discovery eval | `tests/live/discovery_grader.py`, `tests/live/discovery_sweep.py`, `tests/optimization/test_discovery_eval.py`, `tests/fixtures/discovery_eval/seed.json` | ~300 | U7 | weakened-test |
 | U13 | Live plumbing | `tests/live/corpus.py`, `tests/live/oss.py`, `tests/live/test_*_guards.py`, `.github/workflows/ci.yml` (live-smoke) | ~250 | U3, U10 | cost (caps) |
-| U14 | E2E E3-A to E3-E | `tests/e2e/test_step3.py`, `tests/fixtures/step3/` | ~350 | U11, U13 | correctness |
-| U15 | Docs (Lead) | `CLAUDE.md` (D10 wording, Step 3 row per §8 Q1), `services/python_agents/CLAUDE.md` (rule 6, branches, state keys), `README.md`, `STATUS.md` (dev-log rows 3b, 3c and 6, which today lists 0-5 at `STATUS.md:62-70`; Window 1 row C; the D2 pre-registration) | ~150 | all | spec |
+| U14 | E2E E3-A to E3-E | `tests/e2e/test_step3.py`, `tests/fixtures/step3/` | ~350 | U13, U16 | correctness |
+| U15 | Docs (Lead) | `CLAUDE.md` (D10 wording, Step 3 row per O1, 3c before 3b per O5), `services/python_agents/CLAUDE.md` (rule 6, branches, state keys), `README.md`, `STATUS.md` (dev-log rows 3c, 3b and 6, today 0-5 at `STATUS.md:62-70`; Window 1 row C; D2's rule before L5a; §8 Q12 as a Known gap) | ~150 | all | spec |
+| U16 | Run retry cap (D12) | `orchestrator/nodes.py` (`trials`, `run_one`, `_runner_trial_problems` only), `tests/orchestrator/test_run_retry_cap.py` | ~120 | U10, U11 | security; correctness |
 
 Build order:
 
 1. U1, alone.
-2. U2, U3, U4 and U5, in parallel.
+2. U2, U3, U4 and U5, in parallel (disjoint files); U3's commit lands before
+   U4's, so U4's live-template tests never skip 3.13 or 3.14 in CI.
 3. U6 and U7.
 4. U8 and U12.
 5. U9 and U10.
 6. U11 and U13.
-7. U14.
-8. U15.
-9. The live runs: L1a, then L1b, then L2a (and L2b only if needed).
+7. U16.
+8. U14.
+9. U15.
+10. The live runs: L1a, then L1b, then L2a, 2 repetitions (L2b only if
+    needed). They report before Wave 3 starts (owner).
 
-`nodes.py` (U1, U2, U8, U9, U11) and `ci.yml` (U1, U3, U13) never share a
-batch; U8 branches from U2's commit, U9 from U8's, U11 from U9's, U13 from U3's.
+`nodes.py` (U1, U2, U8, U9, U11, U16) and `ci.yml` (U1, U3, U13) never share
+a batch; U8 branches from U2's commit, U9 from U8's, U11 from U9's, U16 from
+U11's, U13 from U3's. Until U16 lands, `fix_retries_left` stays 0 and no retry
+runs (fail closed).
 
-That is 15 units, about 3,880 lines. After step 5 of this order, a run needs no
-hypothesis handed to it, and a fixable crash recovers.
+That is 16 units, about 4,100 lines (U4, U6 and U11 at about 400-410). After step 5 of this order, a run needs no
+hypothesis handed to it; after step 7, a fixable crash recovers.
 
 **Wave 2** (the A/B follow-up; independent of Wave 1 except U12 and U13):
 
@@ -1038,15 +1308,16 @@ v2 rules:
 
 Live order: L3, then L4, then L5a, then L5b, then L5c.
 
-**Wave 3** (lessons and evolution; each unit gated):
+**Wave 3** (lessons and evolution; held until Wave 1's live runs L1a, L1b,
+L2a and, when it runs, L2b report (owner), then each unit gated):
 
 | # | Unit | Files | Lines | Gate |
 | --- | --- | --- | --- | --- |
 | W1 | Lessons and `avoid_titles` in the generator prompt (fenced) | `optimization/generate.py` + tests | ~220 | Wave 1; a W1 refresh afterwards |
 | W2 | Combine-failed lesson discount | `learning/lessons.py`, `orchestrator/nodes.py` (`learn`) | ~150 | Wave 1 |
 | W3 | Profiler `Hotspot.tags` (never set in `src` today) | `execution/profiler.py`, `execution/_profile_shim.py` (not re-read) | ~200 | lowest priority; dropped if Wave 3 runs long |
-| W4 | Evolution: near-miss compounds | `optimization/evolve.py`, `orchestrator/nodes.py` (a hook in `hypotheses`) | ~380 | L2: ≥ 2/10 runs with ≥ 2 disjoint near misses |
-| W5 | `EDITOR_MODEL` default flip to Sonnet low | `common/config.py` | ~10 | L2: Sonnet delivers ≥ Opus-aimed 6/10 − 1, with 0 control wins in L1b |
+| W4 | Evolution: near-miss compounds | `optimization/evolve.py`, `orchestrator/nodes.py` (a hook in `hypotheses`) | ~380 | L2a: ≥ 4/20 runs (2/10 per rep) with ≥ 2 disjoint near misses |
+| W5 | `EDITOR_MODEL` default flip to Sonnet low | `common/config.py` | ~10 | L2a: Sonnet delivers on ≥ 10 of 20 runs (2 reps; the Opus-aimed 6/10 − 1 per rep), with 0 control wins in L1b |
 | W6 | `RESEARCH_RETRIEVAL` flip to `matched` | `common/config.py` | ~10 | D2's pooled rule met |
 
 **Conditional, not in Step 3: P, paper intake.**
@@ -1065,9 +1336,23 @@ Live order: L3, then L4, then L5a, then L5b, then L5c.
 - *Otherwise:* papers stay deprioritised, and the decision is recorded in STATUS
   with the data.
 
-**3b outline** (its own step, about 10 units):
+**3c outline** (its own step, built first, O5; about 7 units):
 
-- B0: contracts and 007.
+- C0: contracts and 007; the `needs_package` refusal (D36).
+- C1: the shim and signature matching.
+- C2: the reproducer writer, the separate variant writer and the static checks
+  (security).
+- C3: the reproduce node, freeze, the N/N baseline and `--deselect`
+  (`_require_trustworthy_baseline`, `nodes.py:647`); each rewrite counted
+  against `EDITOR_FIX_RETRIES_PER_RUN` (D36).
+- C4: `HealJudge`, the equivalence exemption, `heal_tamper`, the no-new-file
+  rule and the retry exclusion (security).
+- C5: delivery of commit R, then commit F, on the review branch, and the report.
+- C6: the E2E corpus (5 planted bugs, 3 controls) and L7.
+
+**3b outline** (its own step, built after 3c, O5; about 10 units):
+
+- B0: contracts and 008.
 - B1: the name snapshot and near miss.
 - B2: the pure policy.
 - B3: wheel inspection.
@@ -1076,57 +1361,56 @@ Live order: L3, then L4, then L5a, then L5b, then L5c.
   Landlock probe (security).
 - B6: offline envs, `make_phase(env=)` (`execution/measure.py:132`), the
   `_env`/`_wheels` owner and `_host` (`measure.py:321`) (security).
-- B7: the acquire node, C1, capture from C1, the whole-run E0 baseline and the
-  ambient ratio (security).
+- B7: the acquire node, C1, capture from C1, the whole-run E0 baseline (heal
+  runs included, D36) and the ambient ratio (security).
 - B8: combine with packages, the drop with dynamic fallback, the tie-break and
   the install line.
 - B9: E2E and L6.
 
-**3c outline** (its own step, about 7 units):
-
-- C0: contracts and 008.
-- C1: the shim and signature matching.
-- C2: the reproducer writer, the separate variant writer and the static checks
-  (security).
-- C3: the reproduce node, freeze, the N/N baseline and `--deselect`
-  (`_require_trustworthy_baseline`, `nodes.py:647`).
-- C4: `HealJudge`, the equivalence exemption, `heal_tamper`, the no-new-file
-  rule and the retry exclusion (security).
-- C5: delivery of commit R, then commit F, on the review branch, and the report.
-- C6: the E2E corpus (5 planted bugs, 3 controls) and L7.
-
 ---
 
-## 8 Open questions (each with a recommended answer)
+## 8 Open questions (Q1-Q5 and Q8 answered by the owner, 2026-10-24; Q2's D35 reading to confirm; Q13 open)
 
-1. **The CLAUDE.md Step 3 row.** It still lists the PDF parser,
-   claim/precondition extraction and the arXiv monitor, with "Fable for
-   matcher". *Recommended:* change it to "generator wired, engine self-retry,
-   review delivery, hard corpus v2 and the retrieval re-test, lessons and
-   evolution; paper intake conditional (STATUS)" with Sonnet for discovery. This
-   needs your approval, since it edits the build order.
-2. **Generated behaviour ideas by default** (D9). *Recommended:* yes, as
-   specified, with L1a reporting counts per class. Narrow to efficiency if
-   behaviour ideas take more than a third of slots without a review win.
-3. **Spend on the re-test (L5, about 8.5 USD expected, caps up to 68).**
-   *Recommended:* approve it. It is the only route by which paper code could
-   ever be justified, and it is cheaper than building that code speculatively.
-   Nothing in Wave 1 waits on it. *Alternative:* skip the re-test; retrieval
-   stays off, W6 and P are removed, and V4 shrinks to the corpus and arm
-   selection L4 needs.
-4. **3b lockfiles.** *Recommended:* hash-pinned `requirements*.txt` first;
+1. **The CLAUDE.md Step 3 row.** *Answered (O1):* "generator wired, engine
+   self-retry, review delivery, hard corpus v2 and the retrieval re-test,
+   lessons and evolution; paper intake conditional (STATUS)", Sonnet for
+   discovery (U15).
+2. **Behaviour ideas by default** (D9). *Answered (O2):* yes, under D35; narrow
+   to efficiency if they take over a third of slots without a review win.
+   *To confirm:* D35 is the Lead's reading of condition 2, not one of its two
+   options; under it O2 yields review branches only for behaviour ideas that
+   keep every guarded output. Owner to confirm before U11 (build-order step
+   6).
+3. **The re-test (L5, about 8.50 USD, caps up to 68).** *Answered (O3):* yes.
+4. **3b lockfiles.** *Answered (O4):* hash-pinned `requirements*.txt` first;
    `uv.lock` only after probing `uv lock --no-build` on dynamic metadata
    (**unverified**); no lockfile means asking the user.
-5. **The order of 3b and 3c.** 3c has no network-on boundary and could ship
-   first. *Recommended:* keep 3b then 3c, unless you want healing sooner.
+5. **3b and 3c order.** *Answered (O5), reversing the recommendation:* 3c
+   first (D36).
 6. **The reproducer model.** Sonnet 5.5 medium is a guess. *Recommended:* L7
    compares it with Opus in 3c.
 7. **Small OSS gains under the noise floor** (4/10). A paired, interleaved rule
    would change a frozen judge. *Recommended:* scope it for Step 5, not Step 3.
-8. **A run-level wall-time cap.** None exists, and retries can double trial
-   time. *Recommended:* none in Step 3; add `--max-time` with the Step 4 CLI.
+8. **A run-level wall-time cap.** *Answered:* a total-time line now (§4.5);
+   `--max-time` with the Step 4 CLI.
 9. **Review branches and learning.** A merge of `engine/review-<id>` is not
    detected, so review lessons stay neutral. *Recommended:* accept until the
    Step 4 GitHub App observes merges.
 10. **Novel lessons across runs** (fresh ids, no technique). *Recommended:* rely
     on W1's prompt channel; no title-key matching in Step 3.
+11. **A quality bound in place of equivalence for behaviour** (D35).
+    *Recommended:* decide it with a workload-reported quality metric and
+    `--goal` parsing (Step 4).
+12. **No default output check.** `define` adds only the RSS bound
+    (`nodes.py:1300-1313`), so a caller passing no guardrails gets no output
+    check for any class, unlike CLAUDE.md's default objective; every live
+    suite and E2E passes one. *Recommended:* a STATUS Known gap now (U15); the
+    Step 4 CLI adds `output_equivalence` by default (it needs a deterministic
+    output, `nodes.py:661-673`).
+13. **The per-run retry default** (condition 1; the owner said only "a small
+    default"). `EDITOR_FIX_RETRIES_PER_RUN=1` leaves about 18 bytes a run,
+    below a 40-character base64 key (30 bytes); `2` leaves about 36 bytes,
+    which holds one, and gives L1a twice the retry data. The bound stays 0-4
+    either way (72 bytes). The spec builds 2 until answered; the value is one
+    constant in U2 and one factory line in U10. *Recommended:* 1, since the
+    owner's stated concern was a short key.
