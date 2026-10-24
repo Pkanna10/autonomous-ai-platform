@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: 'Live suite: stage-a, corpus, attack, hard, oss, or an experiment (probes, triage, papers, web, prescreen, sweep, sweep-fable, ab, escalation) (one at a time: together they need more than the 150 USD ceiling)'
+        description: 'Live suite: stage-a, corpus, attack, hard, oss, or an experiment (probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, escalation, acquire) (one at a time: together they need more than the 150 USD ceiling)'
         type: choice
         options:
           [
@@ -30,8 +30,10 @@ on:
             prescreen,
             sweep,
             sweep-fable,
+            sweep-record,
             ab,
             escalation,
+            acquire,
           ]
         default: stage-a
       mode:
@@ -45,7 +47,7 @@ on:
         options: [claude-opus-5-5, claude-sonnet-5-5]
         default: claude-opus-5-5
       suite_cap_usd:
-        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75, hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 77, sweep-fable 33, ab 140, escalation 43'
+        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75, hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 77, sweep-fable 33, sweep-record 17, ab 140, escalation 43, acquire 1'
         type: string
         default: '12'
 
@@ -525,7 +527,7 @@ jobs:
     # runs 2, attack 3, corpus 15, hard 10 and oss at most 10 (larger
     # repositories). A killed job loses the cost table, so each suite gets room
     # for its loops (the hosted maximum is 360).
-    timeout-minutes: ${{ inputs.suite == 'sweep' && 240 || inputs.suite == 'sweep-fable' && 180 || inputs.suite == 'ab' && 360 || inputs.suite == 'escalation' && 90 || inputs.suite == 'triage' && 90 || inputs.suite == 'papers' && 60 || inputs.suite == 'web' && 90 || inputs.suite == 'corpus' && 180 || inputs.suite == 'oss' && 180 || inputs.suite == 'hard' && 120 || inputs.suite == 'attack' && 45 || 30 }}
+    timeout-minutes: ${{ inputs.suite == 'sweep' && 240 || inputs.suite == 'sweep-fable' && 180 || inputs.suite == 'sweep-record' && 150 || inputs.suite == 'ab' && 360 || inputs.suite == 'escalation' && 90 || inputs.suite == 'triage' && 90 || inputs.suite == 'papers' && 60 || inputs.suite == 'web' && 90 || inputs.suite == 'corpus' && 180 || inputs.suite == 'oss' && 180 || inputs.suite == 'hard' && 120 || inputs.suite == 'attack' && 45 || 30 }}
     defaults:
       run:
         working-directory: ./services/python_agents
@@ -632,7 +634,8 @@ jobs:
           # 10 x 5; the Window 0 experiments under tests/live/experiments: probes
           # 0.46, triage 1.25, papers 3 x 1.25 + 2 x 2.75 + 0.75, web 18 caps 51.08, prescreen 2 x 1.11; the discovery
           # suites: sweep 76.15, sweep-fable 33 (one Sonnet arm and Fable 5.1 on
-          # the 12 slowdowns), ab 2 reps 140, escalation 42.9),
+          # the 12 slowdowns), sweep-record 16.2 (one Sonnet arm, recorded), ab 2
+          # reps 140, escalation 42.9; acquire 0.60 (Part B; Part A is free)),
           # rounded up; a smaller cap would refuse, and fail, the later
           # tests of the suite.
           case "${INPUT_SUITE}" in
@@ -648,10 +651,12 @@ jobs:
             prescreen) paths=(tests/live/experiments/test_prescreen_live.py); need=3 ;;
             sweep) paths=(tests/live/test_sweep_live.py); need=77 ;;
             sweep-fable) paths=(tests/live/test_sweep_live.py); need=33 ;;
+            sweep-record) paths=(tests/live/test_sweep_live.py); need=17 ;;
             ab) paths=(tests/live/test_ab_live.py); need=140 ;;
             escalation) paths=(tests/live/test_escalation_live.py); need=43 ;;
+            acquire) paths=(tests/live/experiments/test_acquire_live.py); need=1 ;;
             *)
-              echo "::error::unknown suite input (stage-a, corpus, attack, hard, oss, probes, triage, papers, web, prescreen, sweep, sweep-fable, ab or escalation)"
+              echo "::error::unknown suite input (stage-a, corpus, attack, hard, oss, probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, escalation or acquire)"
               exit 1
               ;;
           esac
@@ -659,6 +664,11 @@ jobs:
             # Fable 5.1 (the research plan's optional arm) beside the one arm
             # whose per-repository run phase 1 shares
             export LIVE_SWEEP_ARMS=sonnet-5-5-medium LIVE_SWEEP_FABLE=1
+          fi
+          if [ "${INPUT_SUITE}" = sweep-record ]; then
+            # one Sonnet arm, recording hypotheses, grader verdicts and the
+            # redacted replies for hand labels and offline replay
+            export LIVE_SWEEP_ARMS=sonnet-5-5-medium LIVE_SWEEP_RECORD=1
           fi
           case "${INPUT_MODE}" in
             aimed) ;;

@@ -1024,8 +1024,10 @@ SUITES = (
     "prescreen",
     "sweep",
     "sweep-fable",
+    "sweep-record",
     "ab",
     "escalation",
+    "acquire",
 )
 DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_sweep_live.py",
@@ -1035,6 +1037,7 @@ DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
 EXPERIMENT_MINUTES = {
     "sweep": 240,
     "sweep-fable": 180,
+    "sweep-record": 150,
     "ab": 360,
     "escalation": 90,
     "triage": 90,
@@ -1044,6 +1047,10 @@ EXPERIMENT_MINUTES = {
 SWEEP_FABLE_ENV = {  # Fable 5.1 beside the one arm whose run phase 1 shares
     "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
     "LIVE_SWEEP_FABLE": "1",
+}
+SWEEP_RECORD_ENV = {  # one arm, recorded for hand labels and offline replay
+    "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
+    "LIVE_SWEEP_RECORD": "1",
 }
 EXPERIMENTS = "tests/live/experiments"  # the Window 0 experiments: never in Stage A
 CAP_CEILING_USD = 150  # the most suite_cap_usd may be
@@ -1638,9 +1645,12 @@ def _suite_needs() -> dict[str, float]:
     sweep = importlib.import_module(f"{__package__}.discovery_sweep")
     ab = importlib.import_module(f"{__package__}.discovery_ab")
     escalation = importlib.import_module(f"{__package__}.discovery_escalation")
+    acquire = importlib.import_module(f"{__package__}.experiments.test_acquire_live")
     return {
         "sweep": sweep.sweep_need(sweep.sweep_plan({})),
         "sweep-fable": sweep.sweep_need(sweep.sweep_plan(SWEEP_FABLE_ENV)),
+        "sweep-record": sweep.sweep_need(sweep.sweep_plan(SWEEP_RECORD_ENV)),
+        "acquire": acquire.POLICY_CAP_USD + acquire.SUGGEST_CAP_USD,
         "ab": ab.ab_need(ab.ab_plan({})),
         "escalation": escalation.escalation_need(),
         "web": web.E6_NEED_USD,
@@ -1943,16 +1953,23 @@ def test_a_whole_loop_on_the_production_wiring_offline(
     assert "401 authentication_error" in outcome.guard
 
 
-def test_the_fable_sweep_exports_its_arms_only_for_its_own_suite() -> None:
-    """``sweep-fable`` is the sweep module with Fable on and one other arm;
-    every other suite leaves both variables unset."""
+@pytest.mark.parametrize(
+    ("suite", "env"),
+    [("sweep-fable", SWEEP_FABLE_ENV), ("sweep-record", SWEEP_RECORD_ENV)],
+)
+def test_a_sweep_variant_exports_its_variables_only_for_its_own_suite(
+    suite: str, env: dict[str, str]
+) -> None:
+    """``sweep-fable`` (Fable on beside one arm) and ``sweep-record`` (one
+    arm, recorded) are the sweep module with their own variables; every
+    other suite leaves them unset."""
     script = _run_script()
-    exports = " ".join(f"{k}={v}" for k, v in SWEEP_FABLE_ENV.items())
+    exports = " ".join(f"{k}={v}" for k, v in env.items())
     guarded = re.search(
-        r'if \[ "\$\{INPUT_SUITE\}" = sweep-fable \]; then\n'
+        rf'if \[ "\$\{{INPUT_SUITE\}}" = {re.escape(suite)} \]; then\n'
         rf"(?:  #.*\n)*  export {re.escape(exports)}\nfi\n",
         script,
     )
     assert guarded is not None, script
-    assert script.count("LIVE_SWEEP_") == len(SWEEP_FABLE_ENV)
-    assert "sweep-fable) paths=(tests/live/test_sweep_live.py);" in script
+    assert script.count("LIVE_SWEEP_") == len(SWEEP_FABLE_ENV) + len(SWEEP_RECORD_ENV)
+    assert f"{suite}) paths=(tests/live/test_sweep_live.py);" in script
