@@ -29,7 +29,7 @@ from collections.abc import Callable, Iterator, Mapping
 import pytest
 
 from ..conftest import StartLive
-from .arxiv_fetch import ArxivFetcher, FetchError, FetchRefusedError, recent
+from .arxiv_fetch import ArxivFetcher, Entry, FetchError, FetchRefusedError, recent
 from .harness import ExperimentClient
 from .recorder import ExperimentRecorder
 from .test_probes_live import finish
@@ -38,6 +38,8 @@ from .triage import TriageReport, run_triage, triage_config
 pytestmark = pytest.mark.live
 
 E2_CAP_USD = 1.25
+SAMPLE_MONTH = "2509"  # a closed month: its ids no longer change
+SAMPLE_BATCH = 100
 SHARES: Mapping[str, float] = {"cs.PF": 0.3, "cs.DC": 0.3, "cs.LG": 0.4}
 
 
@@ -46,6 +48,24 @@ def quotas(count: int) -> dict[str, int]:
     out = {c: int(count * s) for c, s in SHARES.items() if c != "cs.LG"}
     out["cs.LG"] = count - sum(out.values())
     return out
+
+
+def _id_sample(
+    fetcher: ArxivFetcher, count: int, recorder: ExperimentRecorder
+) -> tuple[Entry, ...]:
+    """The first ``count`` ids of ``SAMPLE_MONTH``, looked up 100 at a time:
+    the fallback when arXiv throttles category searches from CI (run
+    40057574628: HTTP 429 on every attempt while id lookups answered). A
+    stream of every category, so most abstracts are irrelevant, as a
+    nightly triage stream is."""
+    ids = [f"{SAMPLE_MONTH}.{n:05d}" for n in range(1, count + 1)]
+    found: list[Entry] = []
+    try:
+        for at in range(0, len(ids), SAMPLE_BATCH):
+            found.extend(fetcher.entries(ids[at : at + SAMPLE_BATCH]))
+    except (FetchError, FetchRefusedError) as exc:
+        recorder.record("E2", "fetch", "sample_failed", {"error": str(exc)})
+    return tuple(found)
 
 
 def run_e2(
@@ -59,14 +79,16 @@ def run_e2(
 ) -> TriageReport:
     """Fetch, then triage; nothing is spent unless enough abstracts came."""
     config = triage_config(environ)
-    error = ""
+    error, source = "", "search"
     try:
         entries = recent(fetcher, quotas(config.count))
     except (FetchError, FetchRefusedError) as exc:
         error = str(exc)
         recorder.record("E2", "fetch", "failed", {"error": error})
-        entries = ()
-    recorder.record("E2", "fetch", "arxiv", {"abstracts": len(entries)})
+        source, entries = "id_sample", _id_sample(fetcher, config.count, recorder)
+    recorder.record(
+        "E2", "fetch", "arxiv", {"abstracts": len(entries), "source": source}
+    )
     assert len(entries) >= max(1, config.sync_count), (
         f"arXiv returned {len(entries)} abstracts; E2 needs at least "
         f"{config.sync_count} ({error[:200] or 'no fetch error'})"

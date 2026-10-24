@@ -690,3 +690,56 @@ def test_an_id_with_a_sync_verdict_is_not_resubmitted(
         if line["arm"] == "label"
     }
     assert labels[entries[0].arxiv_id] == "sync"
+
+
+def _throttled_search(sent: list[httpx2.Request]) -> httpx2.MockTransport:
+    """arXiv as CI met it: every search is 429, lookups by id answer."""
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request)
+        query = parse_qs(urlsplit(str(request.url)).query)
+        if "search_query" in query:
+            return httpx2.Response(429)
+        ids = query["id_list"][0].split(",")
+        rows = "".join(
+            f"<entry><id>http://arxiv.org/abs/{i}v1</id><title>T {i}</title>"
+            f"<summary>{'An abstract. ' * 20}</summary></entry>"
+            for i in ids
+        )
+        body = f'<feed xmlns="http://www.w3.org/2005/Atom">{rows}</feed>'.encode()
+        return httpx2.Response(
+            200, content=body, headers={"content-type": "application/atom+xml"}
+        )
+
+    return httpx2.MockTransport(handler)
+
+
+def test_a_throttled_search_falls_back_to_a_fixed_id_sample(
+    api: TriageApi, dry_start: DryStart, tmp_path: Path
+) -> None:
+    clock, sent = Clock(), list[httpx2.Request]()
+    fetcher = ArxivFetcher(
+        transport=_throttled_search(sent), clock=clock, sleep=clock.sleep
+    )
+    env = {
+        "LIVE_RESULTS_PATH": str(tmp_path / "r.jsonl"),
+        "LIVE_TRIAGE_COUNT": "120",
+        "LIVE_TRIAGE_SYNC": "5",
+    }
+    recorder = ExperimentRecorder("E2", env)
+    api.results = []
+    live_e2.run_e2(
+        dry_start, fetcher, env, recorder=recorder, clock=clock, sleep=clock.sleep
+    )
+    failed = [r for r in recorder.rows if r.item == "failed"]
+    assert failed and "429" in str(failed[0].metrics["error"])
+    (source,) = [r for r in recorder.rows if r.item == "arxiv"]
+    assert source.metrics == {"abstracts": 120, "source": "id_sample"}
+    lookups = [
+        parse_qs(urlsplit(str(r.url)).query)["id_list"][0].split(",")
+        for r in sent
+        if "id_list" in str(r.url)
+    ]
+    assert [len(batch) for batch in lookups] == [100, 20]
+    assert lookups[0][0] == f"{live_e2.SAMPLE_MONTH}.00001"
+    assert dry_start.runs  # the batch ran on the sample
