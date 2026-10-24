@@ -1,7 +1,8 @@
 # Autonomous AI Platform - Claude Code Configuration
 
 **Version:** 4.3.0 **Last Updated:** 2026-10-24 **Status:** Engine rebuild, Step
-2 (core loop) built on PR #12; Verifier and stage gate next
+2 (core loop) closed out on PR #12 (gate passed, awaiting merge); Step 3 in
+design on `claude/step3-research`
 
 ---
 
@@ -96,11 +97,11 @@ a hypothesis whose judge is "the failing case now passes, nothing regresses".
 
 ## Project Status and Build Order
 
-**Reality check (2026-10-22, Step 2 built, stage gate pending):** the repository
-contains working infrastructure (Docker, CI with a Postgres service, a sandbox
-probe, a macOS job and a manual live smoke test, security scanning, schema
-001-004), a working TypeScript Claude client, and the engine's core loop in
-`services/python_agents`, running for real on CPU-bound Python workloads:
+**Reality check (2026-10-24, Step 2 closed out, PR #12 awaiting merge):** the
+repository contains working infrastructure (Docker, CI with a Postgres service,
+a sandbox probe, a macOS job and a manual live smoke test, security scanning,
+schema 001-004), a working TypeScript Claude client, and the engine's core loop
+in `services/python_agents`, running for real on CPU-bound Python workloads:
 preflight at connect, one Claude understand request, baseline, cProfile profile
 and Claude-edited trials in sandboxed git worktrees (network and write
 isolation, checked on every run), git-side anti-cheating, the frozen judges, a
@@ -114,7 +115,7 @@ older docs as a plan, not a feature.
 | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
 | 0    | Repair & upgrade: DB init fix, dependency bumps, current model IDs, truthful docs (PR #11)                                                                                                                      | Opus 5.5, High                          |
 | 1    | Engine design: typed state, data models, judges, anti-cheating, migration 003 (PR #11)                                                                                                                          | Fable 5.1, Extra                        |
-| 2    | Core loop end to end on CPU Python workloads, with an E2E fixture test (built; gate pending, PR #12)                                                                                                            | Opus 5.5, Ultracode                     |
+| 2    | Core loop end to end on CPU Python workloads, with an E2E fixture test (done 2026-10-24, PR #12)                                                                                                                | Opus 5.5, Ultracode                     |
 | 3    | Research: generator and matcher wired into the hypotheses node, playbook, PDF parser, claim/precondition extraction, arXiv monitor (off GitHub runners); bounded engine self-retry on fixable trial errors      | Opus 5.5, Ultracode (Fable for matcher) |
 | 3b   | Capability acquisition: automatic package policy, network-on fetch into a hash-pinned wheelhouse, offline per-trial installs, engine-owned lockfile commit, drop a package with no proven gain                  | Opus 5.5, Ultracode                     |
 | 3c   | Self-healing of the user's code: failing test or crash -> hypothesis, engine-written reproducer frozen with the judges, "now passes, nothing regresses" judge, flagged delivery                                 | Opus 5.5, High                          |

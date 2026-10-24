@@ -59,14 +59,14 @@ history at `5ce95a4` (`git show 5ce95a4:.claude/handoff/step2/spec.md`).
 One row per build step. "Gate" is the result of `pnpm stage-gate` at the end of
 the step.
 
-| Step | Deliverable                                                     | Planned    | Started    | Completed  | PR                                                                | Gate    |
-| ---- | --------------------------------------------------------------- | ---------- | ---------- | ---------- | ----------------------------------------------------------------- | ------- |
-| 0    | Repair & upgrade (DB init, deps, models, docs, stage gate)      | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed  |
-| 1    | Engine design (typed state, data model, judges, migration 003)  | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed  |
-| 2    | Core loop end to end on CPU Python workloads + E2E fixture test | 2026-10-21 | 2026-10-21 |            | [#12](https://github.com/Pkanna10/autonomous-ai-platform/pull/12) | pending |
-| 3    | Research: arXiv, PDF, playbook, claim extraction, matcher       |            |            |            |                                                                   |         |
-| 4    | Interfaces + runner: live CLI, hardware detection, `--goal`     |            |            |            |                                                                   |         |
-| 5    | Dogfood: fixtures, OSS repos, real ML training pipeline         |            |            |            |                                                                   |         |
+| Step | Deliverable                                                     | Planned    | Started    | Completed  | PR                                                                | Gate   |
+| ---- | --------------------------------------------------------------- | ---------- | ---------- | ---------- | ----------------------------------------------------------------- | ------ |
+| 0    | Repair & upgrade (DB init, deps, models, docs, stage gate)      | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed |
+| 1    | Engine design (typed state, data model, judges, migration 003)  | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed |
+| 2    | Core loop end to end on CPU Python workloads + E2E fixture test | 2026-10-21 | 2026-10-21 | 2026-10-24 | [#12](https://github.com/Pkanna10/autonomous-ai-platform/pull/12) | passed |
+| 3    | Research: arXiv, PDF, playbook, claim extraction, matcher       |            |            |            |                                                                   |        |
+| 4    | Interfaces + runner: live CLI, hardware detection, `--goal`     |            |            |            |                                                                   |        |
+| 5    | Dogfood: fixtures, OSS repos, real ML training pipeline         |            |            |            |                                                                   |        |
 
 Recommended Claude Code model and effort per step: 0 Opus 5.5 High; 1 Fable 5.1
 Extra; 2-4 Opus 5.5 Ultracode (Fable 5.1 for the paper matcher); 5 Opus 5.5
@@ -161,7 +161,7 @@ verification pass on the wave-2 fixes) plus a `/security-review`; every blocking
 finding was fixed test-first in a follow-up commit before the gate. Stage gate:
 passed (2 warnings: outdated majors left to Renovate).
 
-### Step 2 summary (2026-10-21 to 2026-10-22, stage gate pending)
+### Step 2 summary (2026-10-21 to 2026-10-24, closed out)
 
 The loop now runs for real on CPU-bound Python workloads: preflight at connect,
 one Claude understand request, a measured baseline and a cProfile profile, one
@@ -241,6 +241,50 @@ left, and that every phase that ran repository code was sandboxed.
 Tests on 2026-10-22 (Python 3.13, `TEST_DATABASE_URL` set): 3,363 passed, 3
 skipped (two macOS-only cases, one that cannot run as root), 100 % line and
 branch coverage of 7,297 statements and 2,000 branches.
+
+#### Step 2 report (close-out, 2026-10-24)
+
+**What was built:** the core loop above (U1-U21), then three things around it:
+
+1. a Verifier with three rounds, including an attack round;
+2. the Stage A live suite;
+3. Window 0, a set of live experiments on the expiring credit. It includes a
+   benchmark corpus (12 slowdowns, 3 controls, 3 attack repos), a hard corpus
+   (10 repos) and an OSS corpus (10 pinned real repos), plus raw-SDK experiments
+   (probes, triage, papers, web, pre-screen) and the discovery suites (sweep,
+   A/B, escalation).
+
+**Evidence:**
+
+- **Stage gate:** passed on `9db3c77`, with 4,839 passed and 0 failed. CI is
+  green on the same code, including Postgres and the blocking macOS job.
+- **Security reviews:** two `/security-review` passes. The 2026-10-23 pass had
+  two findings, both fixed. The 2026-10-24 pass found nothing.
+- **Live results:**
+  - every live suite passed with every guard held except triage (E2), which
+    never ran because arXiv answers 429 to GitHub runners; no attack got
+    through;
+  - benchmark slowdowns: 12/12 won, with Opus or Sonnet as editor;
+  - hard corpus, blind: 10/10;
+  - OSS corpus: 6/10 delivered, with gains of 3-14 %;
+  - blind discovery: hit@5 of 95-100 % on the 22 slowdowns.
+- **Spend:** about 20 USD of live API use before the A/B (ledger above). Per-run
+  costs came in at 2-8 % of their worst-case caps.
+
+**Before / after:** before Step 2, every measurement and edit was a stub. After
+it, a caller-supplied hypothesis is edited by Claude in a sandbox, measured
+against noise, judged, combined, re-tested and delivered as a branch. All of
+that runs on real code under a hard cost cap.
+
+**What Step 3 needs** (see Next and Known gaps):
+
+- wire the generator and matcher into the hypotheses node, and resolve the
+  non-UUID id gap on Postgres;
+- the engine's own bounded retry;
+- a discovery measure that does not saturate (hard corpus v2, the `ledgerclose`
+  rebuild, a grader validated against hand labels);
+- the paper pipeline's priority, set by the A/B (E5) result;
+- the 3b and 3c designs, with the user's three integrity rules.
 
 ---
 
@@ -1324,11 +1368,11 @@ on 2026-10-24 agreed):
 
 ## Delivery Metrics (DORA-style, per step)
 
-| Step | Lead time                     | CI-red pushes                                                                                | Rework commits        | Reverts |
-| ---- | ----------------------------- | -------------------------------------------------------------------------------------------- | --------------------- | ------- |
-| 0    | ~2 h                          | 0                                                                                            | 0                     | 0       |
-| 1    | ~4.5 h                        | 2 (GHA cache; README format)                                                                 | 6 (regroup, 5 review) | 0       |
-| 2    | ~23.5 h so far (gate pending) | 1 (Python 3.10 on the runner, `dbec415`); the non-blocking macOS job failed once (`7e8a4b5`) | 10 `fix` commits      | 0       |
+| Step | Lead time                                                                    | CI-red pushes                                                                                         | Rework commits          | Reverts |
+| ---- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ----------------------- | ------- |
+| 0    | ~2 h                                                                         | 0                                                                                                     | 0                       | 0       |
+| 1    | ~4.5 h                                                                       | 2 (GHA cache; README format)                                                                          | 6 (regroup, 5 review)   | 0       |
+| 2    | ~60 h (2026-10-21 18:18 to 2026-10-24 ~07:00, Window 0 experiments included) | 4 (`dbec415` Python 3.10 on the runner, `3b2ffee`, `92cefe7`, `a02e55e` the orderlookup timing floor) | 28 `fix` commits of 116 | 0       |
 
 ## Lessons (retro per step)
 
@@ -1371,6 +1415,23 @@ on 2026-10-24 agreed):
   Reviewers now get a SEAMS checklist in `build-wave.workflow`: read the
   fixtures above the tests, swap only the wire in a dry run, run file-mode code
   as a non-root user, name what only CI, macOS or a live run can prove.
+- **A gate with a failing test is not a pass**, even when the failure is
+  machine-dependent (the user's correction at the close-out). Guards that
+  compare timings across machines compare within one run: a ratio against a
+  reference measured side by side cancels the hardware, a fixed threshold does
+  not (`ledgerclose`, `9db3c77`).
+- **Move decisions out of handoff notes as they are made.** The close-out audit
+  found 24 decisions and verified facts that lived only in `.claude/handoff/`; a
+  running "decisions to STATUS" check at each wave end would have caught them
+  while fresh.
+- **What CI does not echo, the Lead cannot read.** The job summary is not
+  returned by the API and the runner log can drop a chunk, so every verdict a
+  later step depends on goes to the log and into the always-printed cost-table
+  notes.
+- **A workflow's token guard counts the turn, not the workflow.**
+  `budget.spent()` started at 6.7M in the Step 3 design run, so the first
+  attempt ran no agent; guards take the spend at the start and compare the
+  difference.
 - **Spend review effort where the risk is.** One correctness Reviewer per unit,
   a security Reviewer only where the unit touches a trust boundary, reviews
   scoped to the diff and its direct callers and fixtures, the cheap local matrix
