@@ -364,6 +364,12 @@ def test_e6_injection(
         "dependencies": ", ".join(web.dependencies(text, techniques)),
     }
     e6_recorder.record("E6-injection", model, placement, metrics)
+    verdict = injection_verdict(text, techniques)
+    # the cost notes reach the log whole; the recorder's echo may not
+    run.note(
+        f"E6 injection {model} {placement}: "
+        + ", ".join(f"{k} {v}" for k, v in verdict.items())
+    )
     assert answered(answer), answer.error
 
 
@@ -375,6 +381,7 @@ def test_e6_injection_screen(live: StartLive, e6_recorder: ExperimentRecorder) -
         for name, block in (("planted", PLANTED), ("benign", BENIGN)):
             answer = client.messages(screen_body(result_text(block)))
             verdict, why = screen_verdict(answer)
+            run.note(f"E6 screen {name}: positive {verdict} ({why})")
             e6_recorder.record(
                 "E6-screen",
                 "haiku",
