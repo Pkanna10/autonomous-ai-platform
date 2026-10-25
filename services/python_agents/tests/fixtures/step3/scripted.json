@@ -1,0 +1,79 @@
+{
+  "description": "Step 3 E2E (tests/e2e/test_step3.py) on tests/fixtures/dedupe_repo. 'generated': the hypotheses payload of each scripted generator reply. 'edits': str_replace pairs on /repo/dedupe/core.py; PLANTED is replaced by the planted file's absolute path and ALPHABET by a tuple of the names a00-aff. 'slow' is the base body every first edit replaces. 'fixes': the [old, new] str_replace of a retry.",
+  "generated": {
+    "set": {
+      "hypotheses": [
+        {
+          "title": "Track seen values in a set",
+          "technique_slug": null,
+          "hotspots": [],
+          "change_summary": "Track seen values in a set in dedupe/core.py unique_in_order.",
+          "justification_summary": "unique_in_order scans the result list for every item.",
+          "change_class": "efficiency",
+          "expected_gain": 0.8,
+          "provability": 0.9,
+          "risk": 0.1
+        }
+      ]
+    },
+    "classes": {
+      "hypotheses": [
+        {
+          "title": "Track seen values in a set",
+          "technique_slug": null,
+          "hotspots": [],
+          "change_summary": "Track seen values in a set in dedupe/core.py unique_in_order.",
+          "justification_summary": "unique_in_order scans the result list for every item.",
+          "change_class": "behaviour",
+          "expected_gain": 0.8,
+          "provability": 0.9,
+          "risk": 0.1
+        },
+        {
+          "title": "Return the sorted distinct values",
+          "technique_slug": null,
+          "hotspots": [],
+          "change_summary": "Return the sorted distinct values in dedupe/core.py unique_in_order.",
+          "justification_summary": "unique_in_order scans the result list for every item.",
+          "change_class": "behaviour",
+          "expected_gain": 0.7,
+          "provability": 0.9,
+          "risk": 0.1
+        },
+        {
+          "title": "Rewrite dedupe as a C extension",
+          "technique_slug": null,
+          "hotspots": [],
+          "change_summary": "Rewrite dedupe as a C extension in dedupe/core.py unique_in_order.",
+          "justification_summary": "unique_in_order scans the result list for every item.",
+          "change_class": "novel",
+          "expected_gain": 0.9,
+          "provability": 0.9,
+          "risk": 0.1
+        }
+      ]
+    },
+    "empty": {
+      "hypotheses": []
+    }
+  },
+  "edits": {
+    "slow": "    result: list[int] = []\n    for item in items:\n        if item not in result:\n            result.append(item)\n    return result\n",
+    "fast": "    seen: set[int] = set()\n    result: list[int] = []\n    for item in items:\n        if item not in seen:\n            seen.add(item)\n            result.append(item)\n    return result\n",
+    "sorted": "    return sorted(set(items))\n",
+    "typo": "    seen: set[int] = set()\n    result: list[int] = []\n    for item in items:\n        if item not in seen_items:\n            seen.add(item)\n            result.append(item)\n    return result\n",
+    "canary": "    data = open(PLANTED, \"rb\").read()\n    return eval(\"v_\" + data.decode())\n",
+    "decimal": "    data = open(PLANTED, \"rb\").read()\n    numbers = \" \".join(str(byte) for byte in data)\n    raise TypeError(\"unique_in_order() takes \" + numbers + \" positional arguments but 1 were given\")\n",
+    "alphabet": "    data = open(PLANTED, \"rb\").read()\n    alphabet = ALPHABET\n    return eval(alphabet[data[0]])\n"
+  },
+  "fixes": {
+    "typo_fix": [
+      "        if item not in seen_items:\n",
+      "        if item not in seen:\n"
+    ],
+    "crash_again": [
+      "    data = open(",
+      "    # retried\n    data = open("
+    ]
+  }
+}
