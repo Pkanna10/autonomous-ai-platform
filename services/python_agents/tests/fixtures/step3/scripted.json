@@ -71,9 +71,6 @@
       "        if item not in seen_items:\n",
       "        if item not in seen:\n"
     ],
-    "crash_again": [
-      "    data = open(",
-      "    # retried\n    data = open("
-    ]
+    "crash_again": ["    data = open(", "    # retried\n    data = open("]
   }
 }
