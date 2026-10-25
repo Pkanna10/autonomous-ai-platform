@@ -2101,14 +2101,30 @@ def _step(block: str, name: str) -> str:
     return block[begin : len(block) if after < 0 else after]
 
 
-def test_the_python_job_installs_and_checks_every_workload_interpreter() -> None:
+@pytest.mark.parametrize(
+    ("start", "end", "tests_step"),
+    [
+        ("  python:\n", "  python-macos:\n", "Run tests with parallelization"),
+        ("  python-macos:\n", "  live-smoke:\n", "Run execution tests"),
+    ],
+    ids=["linux", "macos"],
+)
+def test_each_python_job_installs_and_checks_every_workload_interpreter(
+    start: str, end: str, tests_step: str
+) -> None:
     """D13's live templates run under every ``python3.N`` on PATH and must
-    not skip in CI: the job installs 3.8-3.14 and fails if one is missing."""
-    job = _ci_block("  python:\n", "  python-macos:\n")
-    install = _step(job, "Install workload interpreters 3.8 to 3.14")
+    not skip in CI: each job that runs them installs 3.8-3.14 before its
+    tests and fails if one is missing."""
+    job = _ci_block(start, end)
+    names = _step_names(job)
+    install_name = "Install workload interpreters 3.8 to 3.14"
+    check_name = "Workload interpreters are on PATH"
+    assert names.index(install_name) + 1 == names.index(check_name)
+    assert names.index(check_name) < names.index(tests_step)
+    install = _step(job, install_name)
     assert f"uv python install {WORKLOAD_VERSIONS}\n" in install
     assert 'uv python dir --bin >> "$GITHUB_PATH"' in install
-    check = _step(job, "Workload interpreters are on PATH")
+    check = _step(job, check_name)
     assert f"for version in {WORKLOAD_VERSIONS}; do\n" in check
     assert "              status=1\n" in check  # a missing one fails the job
     assert "::error::python${version} is not on PATH" in check

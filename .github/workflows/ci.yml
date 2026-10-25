@@ -515,6 +515,26 @@ jobs:
       - name: Install dependencies with uv sync
         run: uv sync --frozen --extra dev
 
+      # Same as the python job: the retry template and profiler shim tests
+      # run every python3.N on PATH and fail in CI when one is missing.
+      - name: Install workload interpreters 3.8 to 3.14
+        run: |
+          uv python install 3.8 3.9 3.10 3.11 3.12 3.13 3.14
+          uv python dir --bin >> "$GITHUB_PATH"
+
+      - name: Workload interpreters are on PATH
+        run: |
+          status=0
+          for version in 3.8 3.9 3.10 3.11 3.12 3.13 3.14; do
+            if command -v "python${version}" >/dev/null 2>&1; then
+              echo "python${version}: $(command -v "python${version}") ($("python${version}" -c 'import sys; print(sys.version.split()[0])'))"
+            else
+              echo "::error::python${version} is not on PATH, so the profiler shim and retry template tests for it would skip"
+              status=1
+            fi
+          done
+          exit "${status}"
+
       - name: Sandbox probe (sandbox-exec and Apple git)
         run: |
           sw_vers
