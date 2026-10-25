@@ -147,6 +147,16 @@ def test_report_keys_match_the_launch_report_contract() -> None:
     assert set(get_type_hints(LaunchReport)) == procrun.REPORT_KEYS
 
 
+def test_a_run_failure_is_not_a_crash_unless_launch_says_so() -> None:
+    """Only ``measure.launch``'s exit branch sets the crash fields (D12)."""
+    plain = RunFailure("timeout after 1 s", ("a note",))
+    crash = RunFailure("x", kind="exit", exit_tail=b"tail", workload_id="w1")
+
+    assert (plain.kind, plain.exit_tail, plain.workload_id) == ("other", b"", None)
+    assert (plain.reason, plain.notes) == ("timeout after 1 s", ("a note",))
+    assert (crash.kind, crash.exit_tail, crash.workload_id) == ("exit", b"tail", "w1")
+
+
 def test_parse_report_accepts_the_launchers_own_format() -> None:
     """
     GIVEN a report encoded exactly as the launcher writes it (and a refusal)

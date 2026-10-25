@@ -53,6 +53,7 @@ from autonomous_ai_agents.common.models import (
 )
 from autonomous_ai_agents.common.paths import normalize_path
 from autonomous_ai_agents.execution.procrun import (
+    FailureKind,
     OutputCaps,
     RunFailure,
     RunSample,
@@ -238,8 +239,13 @@ def launch(
     where: str,
     notes: list[str],
     check_exit: bool = True,
+    *,
+    workload_id: str | None = None,
 ) -> RunSample:
-    """Reset, then one ``run_once``; a repo-relative ``argv[0]`` is in the worktree."""
+    """Reset, then one ``run_once``; a repo-relative ``argv[0]`` is in the worktree.
+
+    A non-zero exit (with ``check_exit``) is a ``RunFailure`` of kind ``exit``
+    (``signal`` for a signal) carrying stderr's tail and ``workload_id``."""
     phase.reset()
     argv = list(command)
     try:
@@ -256,13 +262,18 @@ def launch(
         lines = sample.stderr_tail.decode(errors="replace").strip().splitlines()
         last = _quote(lines[-1]) if lines else "no stderr"
         reason = f"{where}: the command ended with {_status(sample.exit)}: {last}"
-        raise RunFailure(reason, tuple(notes))
+        kind: FailureKind = "exit" if sample.exit > 0 else "signal"
+        tail = sample.stderr_tail
+        raise RunFailure(
+            reason, tuple(notes), kind=kind, exit_tail=tail, workload_id=workload_id
+        )
     return sample
 
 
 def _run(phase: Phase, workload: Workload, where: str, notes: list[str]) -> RunSample:
     command, workdir = workload.command, workload.working_dir
-    return launch(phase, command, workdir, workload.timeout_s, where, notes)
+    timeout, wid = workload.timeout_s, workload.id
+    return launch(phase, command, workdir, timeout, where, notes, workload_id=wid)
 
 
 def read_capped(path: Path, cap: int, sink: Callable[[bytes], object]) -> int:

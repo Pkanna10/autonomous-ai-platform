@@ -542,10 +542,12 @@ def test_hardware_records_the_host_the_modes_and_the_isolated_runs(
 
 
 @pytest.mark.parametrize(
-    ("code", "says"), [(3, "exit status 3"), (-9, "signal 9")], ids=["exit", "signal"]
+    ("code", "says", "kind"),
+    [(3, "exit status 3", "exit"), (-9, "signal 9", "signal")],
+    ids=["exit", "signal"],
 )
 def test_a_non_zero_exit_is_a_run_failure_with_the_last_stderr_line(
-    area: Area, events: list[str], code: int, says: str
+    area: Area, events: list[str], code: int, says: str, kind: str
 ) -> None:
     """
     GIVEN a third timed run that exits non-zero after a run that left a note
@@ -564,12 +566,15 @@ def test_a_non_zero_exit_is_a_run_failure_with_the_last_stderr_line(
         ),
     )
 
+    measured = workload()
     with pytest.raises(RunFailure) as caught:
-        measure_workload(area.phase(run), workload())
+        measure_workload(area.phase(run), measured)
 
     assert caught.value.reason == (
         f"workload 'bench' run 3/5: the command ended with {says}: ValueError: bad?[0m"
     )
+    assert (caught.value.kind, caught.value.workload_id) == (kind, measured.id)
+    assert caught.value.exit_tail == b"Traceback\nValueError: bad\x1b[0m\n"
     assert caught.value.notes == (
         "workload 'bench' run 1/5: process group still alive after 3 s",
     )
@@ -605,6 +610,8 @@ def test_a_run_failure_keeps_its_reason_and_every_note(
         measure_workload(area.phase(run), workload())
 
     assert caught.value.reason == "workload 'bench' run 2/5: timeout after 42 s"
+    assert (caught.value.kind, caught.value.exit_tail) == ("other", b"")
+    assert caught.value.workload_id is None
     assert caught.value.notes == (
         "workload 'bench' warm-up 1/1: fs isolation was not applied (best_effort)",
         "workload 'bench' run 2/5: an output pipe was still open",

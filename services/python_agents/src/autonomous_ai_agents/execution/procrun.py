@@ -54,7 +54,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from autonomous_ai_agents.common.config import Settings, settings
 from autonomous_ai_agents.execution.protocols import LaunchReport
@@ -109,12 +109,30 @@ _FIELDS: dict[str, tuple[Callable[[object], bool], str]] = {
 REPORT_KEYS = frozenset(_FIELDS)
 
 
-class RunFailure(Exception):  # noqa: N818 - name fixed by the spec
-    """A run that yielded no trustworthy measurement; ``reason`` says why."""
+FailureKind = Literal["exit", "signal", "other"]
+"""``exit``/``signal``: the command ran and ended badly (``measure.launch``'s
+exit branch, the only place that sets them); ``other``: anything else."""
 
-    def __init__(self, reason: str, notes: tuple[str, ...] = ()) -> None:
+
+class RunFailure(Exception):  # noqa: N818 - name fixed by the spec
+    """A run that yielded no trustworthy measurement; ``reason`` says why.
+
+    A crash carries the raw ``exit_tail`` (stderr's tail, workload-chosen
+    bytes) and the workload's id for ``retry.classify``; it is never sent as
+    is."""
+
+    def __init__(
+        self,
+        reason: str,
+        notes: tuple[str, ...] = (),
+        *,
+        kind: FailureKind = "other",
+        exit_tail: bytes = b"",
+        workload_id: str | None = None,
+    ) -> None:
         super().__init__(reason)
         self.reason, self.notes = reason, notes
+        self.kind, self.exit_tail, self.workload_id = kind, exit_tail, workload_id
 
 
 @dataclass(frozen=True)
