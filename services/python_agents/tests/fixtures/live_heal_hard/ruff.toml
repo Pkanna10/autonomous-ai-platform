@@ -1,0 +1,3 @@
+# The hard heal fixtures are data, linted like the rest of the service.
+extend = "../../../pyproject.toml"
+cache-dir = "../../../.ruff_cache"

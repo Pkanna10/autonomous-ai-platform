@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "repos": [
+    {
+      "name": "eventbus",
+      "package": "eventbus",
+      "kind": "multi_file",
+      "report": "traceback",
+      "exception": "eventbus.dispatch.UnknownEventError",
+      "frame": "eventbus.dispatch.publish",
+      "message": "no handler listens to 'order.paid'"
+    },
+    {
+      "name": "gradebook",
+      "package": "gradebook",
+      "kind": "misleading_report",
+      "report": "symptom",
+      "exception": "builtins.ValueError",
+      "frame": "gradebook.letters.letter_for",
+      "message": "score out of range"
+    },
+    {
+      "name": "evalsplit",
+      "package": "evalsplit",
+      "kind": "seed_dependent",
+      "report": "symptom",
+      "exception": "builtins.ZeroDivisionError",
+      "frame": "evalsplit.metrics.recall",
+      "message": "division by zero"
+    },
+    {
+      "name": "newsletter",
+      "package": "newsletter",
+      "kind": "shallow_trap",
+      "report": "traceback",
+      "exception": "newsletter.subscribers.InvalidEmailError",
+      "frame": "newsletter.subscribers.Subscribers.subscribe",
+      "message": "not a valid email address"
+    },
+    {
+      "name": "pagekit",
+      "package": "pagekit",
+      "kind": "boundary_class",
+      "report": "symptom",
+      "exception": "pagekit.pages.PageError",
+      "frame": "pagekit.pages.get_page",
+      "message": "is empty"
+    },
+    {
+      "name": "accessctl",
+      "package": "accessctl",
+      "kind": "stale_cache",
+      "report": "traceback",
+      "exception": "accessctl.access.PermissionDeniedError",
+      "frame": "accessctl.access.AccessControl.require",
+      "message": "may not publish"
+    },
+    {
+      "name": "vatcheck",
+      "package": "vatcheck",
+      "kind": "float_precision",
+      "report": "symptom",
+      "exception": "vatcheck.reconcile.MismatchError",
+      "frame": "vatcheck.reconcile.check",
+      "message": "does not match the invoiced"
+    },
+    {
+      "name": "stockbook",
+      "package": "stockbook",
+      "kind": "caller_traceback",
+      "report": "traceback",
+      "exception": "stockbook.ledger.LedgerError",
+      "frame": "stockbook.ledger.Ledger.issue",
+      "message": "would go negative"
+    },
+    {
+      "name": "durations",
+      "package": "durations",
+      "kind": "control_intended",
+      "report": "symptom",
+      "exception": "builtins.ValueError",
+      "frame": "durations.parse.parse_duration",
+      "message": "has no unit"
+    },
+    {
+      "name": "depot",
+      "package": "depot",
+      "kind": "control_user_error",
+      "report": "traceback",
+      "exception": "depot.stock.UnknownSkuError",
+      "frame": "depot.stock.Stock.reserve",
+      "message": "unknown sku: 5"
+    }
+  ]
+}

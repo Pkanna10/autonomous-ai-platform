@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "repos": [
+    {
+      "name": "latencystats",
+      "package": "latencystats",
+      "kind": "off_by_one",
+      "report": "traceback",
+      "exception": "builtins.IndexError",
+      "frame": "latencystats.stats.percentile",
+      "message": "list index out of range"
+    },
+    {
+      "name": "contactbook",
+      "package": "contactbook",
+      "kind": "none_handling",
+      "report": "symptom",
+      "exception": "builtins.AttributeError",
+      "frame": "contactbook.cleaning.normalise_email",
+      "message": "'NoneType' object has no attribute 'strip'"
+    },
+    {
+      "name": "formcheck",
+      "package": "formcheck",
+      "kind": "mutable_default",
+      "report": "traceback",
+      "exception": "formcheck.rules.ValidationError",
+      "frame": "formcheck.rules.validate",
+      "message": "name is required"
+    },
+    {
+      "name": "chartscale",
+      "package": "chartscale",
+      "kind": "int_division",
+      "report": "symptom",
+      "exception": "builtins.ZeroDivisionError",
+      "frame": "chartscale.axis.pixel_to_value",
+      "message": "division by zero"
+    },
+    {
+      "name": "shipcost",
+      "package": "shipcost",
+      "kind": "missing_key",
+      "report": "traceback",
+      "exception": "builtins.KeyError",
+      "frame": "shipcost.rates.rate_for",
+      "message": "'eu-north'"
+    },
+    {
+      "name": "shopcatalog",
+      "package": "shopcatalog",
+      "kind": "wrong_exception",
+      "report": "symptom",
+      "exception": "builtins.ValueError",
+      "frame": "shopcatalog.lookup.find",
+      "message": "unknown sku 'Z-404'"
+    },
+    {
+      "name": "rosterload",
+      "package": "rosterload",
+      "kind": "encoding",
+      "report": "traceback",
+      "exception": "builtins.UnicodeDecodeError",
+      "frame": "rosterload.parse.read_names",
+      "message": "'ascii' codec can't decode"
+    },
+    {
+      "name": "billcycle",
+      "package": "billcycle",
+      "kind": "date_boundary",
+      "report": "symptom",
+      "exception": "builtins.ValueError",
+      "frame": "billcycle.periods.month_end",
+      "message": "month must be in 1..12"
+    }
+  ]
+}

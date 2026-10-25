@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "specs": [
+    {
+      "name": "salesreport",
+      "package": "salesreport",
+      "file": "salesreport.md"
+    },
+    { "name": "wordpairs", "package": "wordpairs", "file": "wordpairs.md" },
+    { "name": "gridroute", "package": "gridroute", "file": "gridroute.md" }
+  ]
+}

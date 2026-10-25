@@ -1,0 +1,12 @@
+The recipe module cannot book an issue of 500 g of flour although 2 kg were
+received this morning:
+
+Traceback (most recent call last):
+  File "/srv/bakery/recipes/production.py", line 64, in bake
+    ledger.issue(ingredient["item"], ingredient["amount"], ingredient["unit"])
+  File "/srv/bakery/vendor/stockbook/stockbook/ledger.py", line 28, in issue
+    raise LedgerError(f"stock of {item!r} would go negative ({left:g} kg)")
+stockbook.ledger.LedgerError: stock of 'flour' would go negative (-499998 kg)
+
+The ledger had ledger.receive("flour", 2) and then
+ledger.issue("flour", 500, "g").

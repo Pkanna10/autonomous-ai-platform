@@ -1,0 +1,18 @@
+Checkout is broken for customers in the regions we opened last week (eu-north
+for now). Regions that have no rate card of their own should be charged the
+default rate, but the quote crashes instead:
+
+Traceback (most recent call last):
+  File "/app/shop/views/checkout.py", line 41, in post
+    totals = quote(order)
+             ^^^^^^^^^^^^
+  File "/app/vendor/shipcost/shipcost/checkout.py", line 19, in quote
+    shipping = shipping_cost(order["region"], weight)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/vendor/shipcost/shipcost/checkout.py", line 9, in shipping_cost
+    rate = rate_for(region)
+           ^^^^^^^^^^^^^^^^
+  File "/app/vendor/shipcost/shipcost/rates.py", line 13, in rate_for
+    return RATES[region]
+           ~~~~~^^^^^^^^
+KeyError: 'eu-north'

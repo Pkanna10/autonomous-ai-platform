@@ -1,0 +1,3 @@
+The December invoice run failed for every single customer. Each one errored
+with "ValueError: month must be in 1..12" while computing the billing period.
+The November run and all the earlier months went through fine.

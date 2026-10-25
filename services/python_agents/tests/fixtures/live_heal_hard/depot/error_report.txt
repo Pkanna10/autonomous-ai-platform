@@ -1,0 +1,12 @@
+reserve() is broken: it claims an SKU we definitely stock does not exist.
+B-12 is in the catalogue with 40 units on hand, yet our restocking script
+fails on it:
+
+Traceback (most recent call last):
+  File "/home/ops/scripts/restock.py", line 12, in <module>
+    stock.reserve(5, "B-12")
+  File "/opt/depot/depot/stock.py", line 26, in reserve
+    raise UnknownSkuError(f"unknown sku: {sku!r}")
+depot.stock.UnknownSkuError: unknown sku: 5
+
+stock.on_hand("B-12") returns 40 in the same script, so the SKU is there.
