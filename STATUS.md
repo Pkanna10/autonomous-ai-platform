@@ -7,8 +7,8 @@
 ## Current Step
 
 **Build step:** 3 (wired discovery, engine self-retry, review delivery, quality
-check, noise rule). Wave 1 is built and committed (25 units); its E2E (U14, U26)
-is in progress, then the live runs L0 to L2. Step 2 is merged (PR
+check, noise rule). Wave 1 is built and committed (27 units, E2E U14 and U26
+included); next are the live runs L0 to L2. Step 2 is merged (PR
 [#12](https://github.com/Pkanna10/autonomous-ai-platform/pull/12)); the Window 0
 live experiments are closed out on PR
 [#21](https://github.com/Pkanna10/autonomous-ai-platform/pull/21). **Branch:**
@@ -46,11 +46,12 @@ history at `5ce95a4` (`git show 5ce95a4:.claude/handoff/step2/spec.md`).
   `65891ea`, U23 `e27aed6`, U24 `1285820`, U25 `ce937d4`, U27 `a78275a` (Lead-
   assigned, see Lessons); Lead fixes `f1080dc` (macOS interpreters) and
   `3e04294` (graphwalk size).
-- **In progress:** the E2E units U14 (`tests/e2e/test_step3.py`, E3-A to E3-E:
-  built, 8 tests, about 3 min 15 s serially, under review, not committed) and
-  U26 (`tests/e2e/test_step3_quality.py`, E3-F to E3-I: building), then U15
-  (these docs, Lead). U14's exact frame lines are proven on Python 3.13 only so
-  far; CI's python job runs 3.11.
+- **E2E done:** U14 (`de34b18`, `tests/e2e/test_step3.py`, E3-A to E3-E, 8
+  tests, about 3.5 min serially; its frame lines are version-independent, the
+  review checked 3.11) and U26 (`1c64bea`, `tests/e2e/test_step3_quality.py`,
+  E3-F to E3-I, 6 tests, about 4 min; E3-I runs on a synthetic clock, so its
+  verdicts are exact). U15's docs are `5acdfeb`; `46aed4b` formats U14's fixture
+  (CI Lint Code was red on `de34b18`: the Lead's gate now also runs prettier).
 - **Next: the live runs L0 to L2** (spec section 6), in order: L0 (`noise`, the
   paired path, no API call), L1a (`hard`, `wired`), L1b (`corpus`, `wired`), L2a
   (`oss`, `wired`, Sonnet low editor, 2 repetitions; L2b with the Opus editor
