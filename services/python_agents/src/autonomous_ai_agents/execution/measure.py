@@ -1,4 +1,4 @@
-"""Measurement: warm-ups, N timed runs, output fingerprints, ABAB, the test suite.
+"""Measurement: warm-ups, N timed runs, output fingerprints, ABBA, the test suite.
 
 Every launch (warm-up, timed, ABAB, test suite) first calls the phase's
 ``reset`` (``GitWorkspace.reset``: ``.git`` link check, scrub, ``checkout -f``,
@@ -10,6 +10,16 @@ missing ``required`` isolation. Every ``RunSample.notes`` and
 ``RunFailure.notes`` reaches the caller, which emits the events (nothing here
 imports the orchestrator). ``Workload.inputs`` is not passed and
 ``throughput_per_s`` is never produced.
+
+Before every workload launch (never the suite) the phase's ``mask`` deletes
+the quality check's frozen files after the reset (D37). Each run's exact
+fingerprint is ``raw_fingerprint``; ``output_fingerprint`` is the canonical
+one under the workload's ``output_tolerance`` (D39, ``outputs.py``) and
+equals the raw one without it. The agreed output bytes (the output file, else
+complete stdout, of the first timed run, kept when the canonical
+fingerprints agree) travel in ``Measured.outputs`` for the quality scorer only,
+never in a row, a note or a repr. Two sides alternate ABBA on one counter
+across warm-ups and timed runs (D41).
 
 ``tests_passed`` needs the runner's own summary, never the exit code alone:
 unittest's last ``Ran N tests`` line followed by ``OK`` (the suite keeps a
@@ -52,6 +62,13 @@ from autonomous_ai_agents.common.models import (
     Workload,
 )
 from autonomous_ai_agents.common.paths import normalize_path
+from autonomous_ai_agents.execution.outputs import (
+    Retained,
+    RunOutput,
+    check_mask,
+    mask,
+    resolve,
+)
 from autonomous_ai_agents.execution.procrun import (
     FailureKind,
     OutputCaps,
@@ -104,17 +121,20 @@ class Resetter(Protocol):
 @dataclass(frozen=True)
 class Phase:
     """Where every run of one phase happens; ``policy.writable`` is exactly
-    ``(worktree, scratch root)``, realpath'd."""
+    ``(worktree, scratch root)``, realpath'd. ``mask`` lists the literal
+    project files deleted before each workload launch (D37)."""
 
     policy: SandboxPolicy
     env: Mapping[str, str]
     reset: Callable[[], None]
     caps: OutputCaps
     run: RunOnce = run_once
+    mask: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if len(self.policy.writable) != 2:
             raise ValueError("a phase may write the worktree and the scratch root only")
+        check_mask(self.mask)
 
     @property
     def worktree(self) -> Path:
@@ -142,12 +162,14 @@ def make_phase(
     base_env: Mapping[str, str] | None = None,
     caps: OutputCaps | None = None,
     run: RunOnce = run_once,
+    mask: Sequence[str] = (),
 ) -> Phase:
     """The phase of ``handle`` with ``<run>/_scratch/<phase>`` and ``_probe/<phase>``.
 
     Modes default to the settings. Both dirs are created (0700) once the
-    policy has checked them; the phase's owner removes them.
+    policy and the mask have been checked; the phase's owner removes them.
     """
+    check_mask(mask)
     policy = SandboxPolicy(
         network=settings.NETWORK_ISOLATION if network is None else network,
         fs=settings.FS_ISOLATION if fs is None else fs,
@@ -162,16 +184,19 @@ def make_phase(
         home=root / "home", tmpdir=root / "tmp", worktree=worktree, base=base_env
     )
     reset = functools.partial(git.reset, handle)
-    return Phase(policy, env, reset, caps or OutputCaps.from_settings(), run)
+    caps = caps or OutputCaps.from_settings()
+    return Phase(policy, env, reset, caps, run, tuple(mask))
 
 
 @dataclass(frozen=True)
 class Measured:
-    """Rows for one phase, the notes for events, and the passing-test count."""
+    """Rows for one phase, the notes for events, the passing-test count, and
+    the agreed output bytes for the quality scorer (D37; never shown)."""
 
     measurements: tuple[Measurement, ...]
     notes: tuple[str, ...] = ()
     tests_counted: int | None = None
+    outputs: bytes | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -181,6 +206,8 @@ class AbabMeasured:
     a: tuple[Measurement, ...]
     b: tuple[Measurement, ...]
     notes: tuple[str, ...] = ()
+    outputs_a: bytes | None = field(default=None, repr=False)
+    outputs_b: bytes | None = field(default=None, repr=False)
 
 
 class UnusableError(Exception):
@@ -193,6 +220,8 @@ class _Series:
     cpu: list[float] = field(default_factory=list)
     rss: list[float] = field(default_factory=list)
     prints: list[str | None] = field(default_factory=list)
+    raws: list[str | None] = field(default_factory=list)
+    data: bytes | None = field(default=None, repr=False)
     fs: int = 0
     net: int = 0
 
@@ -241,14 +270,18 @@ def launch(
     check_exit: bool = True,
     *,
     workload_id: str | None = None,
+    masked: bool = True,
 ) -> RunSample:
-    """Reset, then one ``run_once``; a repo-relative ``argv[0]`` is in the worktree.
+    """Reset, then the phase's mask (only the suite passes ``masked=False``),
+    then one ``run_once``; a repo-relative ``argv[0]`` is in the worktree.
 
     A non-zero exit (with ``check_exit``) is a ``RunFailure`` of kind ``exit``
     (``signal`` for a signal) carrying stderr's tail and ``workload_id``."""
     phase.reset()
     argv = list(command)
     try:
+        if masked:
+            mask(phase.worktree, phase.mask)
         if not os.path.isabs(argv[0]):
             argv[0] = str(_inside(phase.worktree, argv[0], "the command"))
         cwd = _inside(phase.worktree, workdir, "working_dir")
@@ -298,33 +331,59 @@ def read_capped(path: Path, cap: int, sink: Callable[[bytes], object]) -> int:
     return size
 
 
-def _fingerprint(phase: Phase, workload: Workload, sample: RunSample) -> str:
-    """The run's fingerprint; ``UnusableError`` when the output file is unusable."""
-    file = None
+def _output(phase: Phase, workload: Workload, sample: RunSample) -> RunOutput:
+    """The run's fingerprints and bytes; ``UnusableError``: the file is unusable."""
+    file, kept = None, None
     if workload.output_file is not None:
         real = Path(os.path.realpath(phase.worktree / workload.output_file))
         if not real.is_relative_to(phase.worktree):
             raise UnusableError("resolves outside the worktree")
-        digest = hashlib.sha256()
-        size = read_capped(real, phase.caps.max_output_bytes, digest.update)
+        digest, kept = hashlib.sha256(), Retained(settings.OUTPUT_TOLERANCE_MAX_BYTES)
+
+        def sink(chunk: bytes) -> None:
+            digest.update(chunk)
+            kept(chunk)
+
+        size = read_capped(real, phase.caps.max_output_bytes, sink)
         file = (size, digest.hexdigest())
-    return output_fingerprint(sample.stdout_bytes, sample.stdout_sha256, file)
+    raw = output_fingerprint(sample.stdout_bytes, sample.stdout_sha256, file)
+    head = sample.stdout_head
+    whole = len(head) == sample.stdout_bytes
+    stdout = head if whole and _sha256(head) == sample.stdout_sha256 else None
+    tolerance, head_bytes = workload.output_tolerance, phase.caps.head_bytes
+    return resolve(raw, stdout, kept, tolerance, head_bytes)
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 def _timed(
-    phase: Phase, workload: Workload, into: _Series, where: str, notes: list[str]
+    phase: Phase,
+    workload: Workload,
+    into: _Series,
+    where: tuple[str, str],
+    notes: list[str],
 ) -> None:
-    sample = _run(phase, workload, where, notes)
-    fingerprint: str | None = None
+    """One timed run; ``where`` is (this run, the series) for the notes."""
+    sample = _run(phase, workload, where[0], notes)
+    output: RunOutput | None = None
     try:
-        fingerprint = _fingerprint(phase, workload, sample)
+        output = _output(phase, workload, sample)
     except UnusableError as problem:
         rel = workload.output_file
-        notes.append(f"{where}: output file {rel!r} {problem}; no output fingerprint")
+        notes.append(
+            f"{where[0]}: output file {rel!r} {problem}; no output fingerprint"
+        )
+    if output is not None and output.note is not None:
+        notes.append(f"{where[1]}: {output.note}")
     into.wall.append(sample.wall_ns / 1e9)
     into.cpu.append(sample.utime + sample.stime)
     into.rss.append(float(sample.maxrss_bytes))
-    into.prints.append(fingerprint)
+    into.prints.append(None if output is None else output.canonical)
+    into.raws.append(None if output is None else output.raw)
+    if len(into.raws) == 1:  # the first timed run's bytes stand for the series
+        into.data = None if output is None else output.data
     into.fs += sample.fs_isolated
     into.net += sample.net_isolated
 
@@ -352,6 +411,7 @@ def _row(
     values: Sequence[float],
     hardware: dict[str, JsonScalar],
     fingerprint: str | None = None,
+    raw: str | None = None,
 ) -> Measurement:
     return Measurement(
         workload_id=workload.id,
@@ -360,19 +420,31 @@ def _row(
         stats=RunStats.from_samples(values, unit=unit),
         samples=tuple(values),
         output_fingerprint=fingerprint,
+        raw_fingerprint=raw,
         hardware=hardware,
     )
+
+
+def _agreed(prints: Sequence[str | None]) -> str | None:
+    found = set(prints)
+    return found.pop() if len(found) == 1 else None
+
+
+def _kept(series: _Series) -> bytes | None:
+    """The first timed run's output bytes, only when every run's canonical
+    fingerprint agreed (D37): the same bytes when the raws agree too, else
+    one output equal to the others within the tolerance."""
+    return series.data if _agreed(series.prints) is not None else None
 
 
 def _rows(
     phase: Phase, workload: Workload, trial_id: str | None, series: _Series
 ) -> tuple[Measurement, ...]:
-    """Wall, CPU and peak RSS; the fingerprint only when every run agreed."""
-    agreed = set(series.prints)
-    fingerprint = agreed.pop() if len(agreed) == 1 else None
+    """Wall, CPU and peak RSS; each fingerprint only when every run agreed."""
+    fingerprint, raw = _agreed(series.prints), _agreed(series.raws)
     hardware = _host(phase.policy, len(series.wall), series.fs, series.net)
     return tuple(
-        _row(workload, trial_id, metric, unit, values, hardware, fingerprint)
+        _row(workload, trial_id, metric, unit, values, hardware, fingerprint, raw)
         for metric, unit, values in (
             (METRIC_WALL_TIME_S, "s", series.wall),
             (METRIC_CPU_TIME_S, "s", series.cpu),
@@ -384,17 +456,25 @@ def _rows(
 def _interleave(
     workload: Workload, sides: Sequence[tuple[str, Phase]], notes: list[str]
 ) -> list[_Series]:
-    """``warmup_runs`` untimed, then ``max(MIN_RUNS, runs)`` timed, side by side."""
+    """``warmup_runs`` untimed, then ``max(MIN_RUNS, runs)`` timed, side by side.
+
+    One counter runs across warm-ups and timed runs: the sides go in order on
+    an even index and reversed on an odd one (ABBA), so a position effect
+    is spread over both sides instead of biasing one (D41).
+    """
     name = f"workload {workload.name!r}"
     warmups, runs = workload.warmup_runs, max(settings.MIN_RUNS, workload.runs)
-    for index in range(warmups):
-        for side, phase in sides:
-            _run(phase, workload, f"{name}{side} warm-up {index + 1}/{warmups}", notes)
     series = [_Series() for _ in sides]
-    for index in range(runs):
-        for (side, phase), into in zip(sides, series, strict=True):
-            _timed(phase, workload, into, f"{name}{side} run {index + 1}/{runs}", notes)
-    for (side, _), into in zip(sides, series, strict=True):
+    pairs = list(zip(sides, series, strict=True))
+    for index in range(warmups + runs):
+        for (side, phase), into in pairs[::-1] if index % 2 else pairs:
+            if index < warmups:
+                where = f"{name}{side} warm-up {index + 1}/{warmups}"
+                _run(phase, workload, where, notes)
+            else:
+                where = f"{name}{side} run {index - warmups + 1}/{runs}"
+                _timed(phase, workload, into, (where, f"{name}{side}"), notes)
+    for (side, _), into in pairs:
         if len(set(into.prints)) > 1:
             notes.append(
                 f"{name}{side}: the {runs} timed runs did not agree on one output;"
@@ -412,9 +492,8 @@ def measure_workload(
     """
     notes: list[str] = []
     [series] = _interleave(workload, [("", phase)], notes)
-    return Measured(
-        _rows(phase, workload, trial_id, series), tuple(dict.fromkeys(notes))
-    )
+    rows = _rows(phase, workload, trial_id, series)
+    return Measured(rows, tuple(dict.fromkeys(notes)), outputs=_kept(series))
 
 
 def measure_abab(
@@ -425,12 +504,14 @@ def measure_abab(
     trial_id_a: str | None = None,
     trial_id_b: str | None = None,
 ) -> AbabMeasured:
-    """A and B interleaved run by run (warm-ups too), each after its own reset."""
+    """A and B interleaved ABBA run by run (warm-ups too), each after its own
+    reset; the name stays for its callers."""
     notes: list[str] = []
     series_a, series_b = _interleave(workload, [(" A", a), (" B", b)], notes)
     rows_a = _rows(a, workload, trial_id_a, series_a)
     rows_b = _rows(b, workload, trial_id_b, series_b)
-    return AbabMeasured(rows_a, rows_b, tuple(dict.fromkeys(notes)))
+    unique = tuple(dict.fromkeys(notes))
+    return AbabMeasured(rows_a, rows_b, unique, _kept(series_a), _kept(series_b))
 
 
 def python_module(argv: Sequence[str]) -> tuple[str, int] | None:
@@ -584,7 +665,8 @@ def run_tests(
     argv, replaced = _test_argv(command, suite.scratch / JUNIT_NAME)
     if replaced:
         notes.append(f"{where}: its own --junitxml was replaced by the engine's report")
-    sample = launch(suite, argv, ".", settings.TEST_TIMEOUT_S, where, notes, False)
+    timeout = settings.TEST_TIMEOUT_S
+    sample = launch(suite, argv, ".", timeout, where, notes, False, masked=False)
     count: int | None = None
     try:
         count = _suite_count(runner, sample, suite, baseline_count)

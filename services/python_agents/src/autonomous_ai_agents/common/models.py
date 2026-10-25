@@ -29,7 +29,7 @@ from typing import Final, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from autonomous_ai_agents.common.paths import GIT_METADATA_NAMES, normalize_path
+from autonomous_ai_agents.common.paths import literal_project_file, normalize_path
 
 # ---------------------------------------------------------------------------
 # Constants and helpers
@@ -87,25 +87,9 @@ def _optional_project_file(field: str, value: str | None) -> str | None:
 
 
 def _quality_file(field: str, value: str) -> str:
-    """``_project_file`` for a file a quality check freezes (D37).
-
-    Frozen paths reach ``extra_protected`` and the editor's read-deny list,
-    which match patterns, so ``*``, ``?`` and ``[`` are refused rather than
-    left to widen or miss the match. Control characters, a leading ``-``
-    (read as an interpreter flag) and git metadata are refused too.
-    """
-    if any(char in value for char in "*?[\x00\n\r"):
-        raise ValueError(
-            f"{field} must be a literal file name without '*', '?', '[' or "
-            f"control characters, got {value!r}"
-        )
-    normalized = _project_file(field, value)
-    if normalized.startswith("-"):
-        raise ValueError(f"{field} must not start with '-', got {value!r}")
-    git_names = {name.casefold() for name in GIT_METADATA_NAMES}
-    if any(part.casefold() in git_names for part in normalized.split("/")):
-        raise ValueError(f"{field} must not be git metadata, got {value!r}")
-    return normalized
+    """``_project_file`` for a file a quality check freezes (D37): the shared
+    ``literal_project_file`` rule, which the measurement mask applies too."""
+    return literal_project_file(field, value)
 
 
 def _unique_project_files(

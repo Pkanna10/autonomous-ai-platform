@@ -542,10 +542,13 @@ dogfood needs a new package, the Lead proposes 3b first at the 3c briefing.
   report or a prompt.
 - **One score per measurement:** the timed runs must agree on one fingerprint
   (`measure.py:356-361`), else no quality row: `missing_measurement`, rule 1
-  rejects. Scores are cached by `raw_fingerprint` (the exact bytes, D39), so
-  only a byte-identical output reuses a score; an output equal to the
-  baseline's within a tolerance is scored on its own bytes. `output_changed`
-  is read from the canonical fingerprint.
+  rejects. That is the canonical fingerprint: with a tolerance, runs whose
+  exact bytes differ within it still agree, their rows carry
+  `raw_fingerprint=None`, and the first timed run's bytes are scored
+  (Lead, U18 review). Scores are cached by `raw_fingerprint` (the exact bytes,
+  D39), so only a byte-identical output reuses a score; an output equal to the
+  baseline's within a tolerance, or with no `raw_fingerprint`, is scored on
+  its own bytes. `output_changed` is read from the canonical fingerprint.
 - **Frozen like the judges:**
   - at baseline the engine reads each frozen path at the base commit
     (`read_blob`, `git.py:556`; at most `QUALITY_MAX_FROZEN_BYTES`) and records
@@ -574,8 +577,11 @@ dogfood needs a new package, the Lead proposes 3b first at the 3c briefing.
   - determinism: at baseline the scorer runs twice on the base output;
     differing numbers refuse the quality check.
 - **Masking:** every frozen path is deleted from the worktree after each reset,
-  before every workload launch (not the suite), on both sides; a baseline that
-  needs them fails ("write predictions; the scorer reads the labels").
+  before every workload launch (not the suite), on both sides, including the
+  profile run; a baseline that needs them fails ("write predictions; the
+  scorer reads the labels"). `measure.launch` masks by default and only the
+  suite opts out, so a new launch path cannot forget it (Lead, U18 review;
+  the profiler's `mask=` is wired with the other callers in U24).
 - **Hidden from the editor:** the trial worktree is created at the base commit
   (`trial_runner.py:446`) and the editor works in it before any mask
   (`:524`); `editor_tools._resolve` (`:226-268`) denies reads only by
@@ -648,8 +654,9 @@ dogfood needs a new package, the Lead proposes 3b first at the 3c briefing.
 - `measure.py` keeps the exact fingerprint as `Measurement.raw_fingerprint` and
   makes `output_fingerprint` canonical: strict UTF-8; lines sorted if
   unordered; sha256 tagged with the options. The tokeniser (U18):
-  - split on whitespace and the delimiters `,;:()[]{}"'` only, the delimiters
-    kept byte for byte;
+  - split on ASCII whitespace and the delimiters `,;:=()[]{}"'` only, the
+    delimiters kept byte for byte (`=` added by the Lead in the U18 review, so
+    `name=value` metric lines get the tolerance);
   - a token is rewritten as `format(float(t), f".{d}g")` only when the whole
     token matches `[+-]?([0-9]+\.[0-9]*|\.[0-9]+|[0-9]+)([eE][+-]?[0-9]+)?`
     (ASCII digits) and holds a `.` or an exponent; anything else (`v1.10`, `id_2.50`, `1_0.5`, `infinity`) is
@@ -663,6 +670,9 @@ dogfood needs a new package, the Lead proposes 3b first at the 3c briefing.
   Limitation: a count printed as a float (`1234567890.0` vs `1234567891.0` at
   9 digits) rounds equal; only integers printed as integers are exact. The
   report sentence says so.
+- Unordered lines sort the newline-terminated lines; an unterminated last
+  piece stays last (injective), so the report sentence says "line order
+  ignored, except an unterminated last line".
 - Complete outputs only: stdout within `OUTPUT_HEAD_BYTES`, `output_file`
   within `OUTPUT_TOLERANCE_MAX_BYTES`; else the exact fingerprint, with a note.
 - The report names each delivered change whose raw fingerprints differ:

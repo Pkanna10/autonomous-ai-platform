@@ -902,7 +902,8 @@ def test_abab_interleaves_the_two_phases_with_a_reset_before_each_run(
     """
     GIVEN phase A (base) and phase B (combined tip) and one warm-up
     WHEN a workload is measured ABAB
-    THEN warm-ups and timed runs alternate A, B, each after its own phase's
+    THEN warm-ups and timed runs share one counter that leads with A on even
+        indices and B on odd ones (ABBA), each run after its own phase's
         reset; each side gets its own rows, fingerprint and trial id, and
         the notes name the side
     """
@@ -918,7 +919,8 @@ def test_abab_interleaves_the_two_phases_with_a_reset_before_each_run(
     result = measure_abab(a, b, load, trial_id_b="combined")
 
     assert isinstance(result, AbabMeasured)
-    assert events == ["reset A", "A", "reset B", "B"] * 6
+    ab, ba = ["reset A", "A", "reset B", "B"], ["reset B", "B", "reset A", "A"]
+    assert events == [*ab, *ba] * 3  # warm-up 1, then timed runs 1-5
     assert {c.cwd for c in a_run.calls} == {a_area.wt}
     assert {c.cwd for c in b_run.calls} == {b_area.wt}
     a_rows, b_rows = by_metric(result.a), by_metric(result.b)
