@@ -16,7 +16,12 @@ from urllib.parse import urlsplit
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from autonomous_ai_agents.common.models import ChangeClass, LongContextPrice, ModelPrice
+from autonomous_ai_agents.common.models import (
+    NOISE_CALIBRATION_BLOCKS_MAX,
+    ChangeClass,
+    LongContextPrice,
+    ModelPrice,
+)
 from autonomous_ai_agents.common.refnames import branch_prefix_problem
 
 IsolationMode = Literal["required", "best_effort", "off"]
@@ -292,6 +297,32 @@ class Settings(BaseSettings):
     EDITOR_FIX_RETRIES_PER_RUN: int = Field(default=1, ge=0, le=FIX_RETRIES_MAX)
     RETRY_CLOSURE_MAX_SOURCE_BYTES: int = Field(default=8 * _MIB, ge=1)
     """Most tracked source the retry's closure set reads (D13)."""
+
+    # ============================================
+    # Step 3: quality check and noise rule (D37-D41). The owner's choices
+    # (O9, O10); only the factory reads them, so the nodes keep Step 2's
+    # behaviour until it does (D4).
+    # ============================================
+    DEFAULT_OUTPUT_CHECK: bool = True
+    """With no quality check, outputs must stay identical (O9)."""
+    OUTPUT_TOLERANCE_MAX_BYTES: int = Field(default=16 * _MIB, ge=1)
+    """Largest ``output_file`` compared under a tolerance; above, exact (D39)."""
+    QUALITY_MAX_FROZEN_BYTES: int = Field(default=64 * _MIB, ge=1)
+    """Most bytes a quality check's frozen files may hold (D37)."""
+    QUALITY_MAX_ROWS: int = Field(default=1_000_000, ge=1)
+    """Most lines a builtin measure scores (D37)."""
+    QUALITY_TIMEOUT_S: float = Field(default=300.0, ge=1, allow_inf_nan=False)
+    """Wall-clock limit of one scoring (D37)."""
+    PAIRED_TRIALS: bool = True
+    """Measure each trial alternately against its own base worktree (D41 a)."""
+    CONFIRM_WINNERS: bool = True
+    """Re-test every would-be keep or review before it stands (D41 b)."""
+    NOISE_CALIBRATION_BLOCKS: int = Field(
+        default=3, ge=0, le=NOISE_CALIBRATION_BLOCKS_MAX
+    )
+    """A/A blocks behind the per-project floor; 0 keeps Step 2 (D41 c)."""
+    NOISE_GAP_MULTIPLIER: float = Field(default=2.0, ge=1, allow_inf_nan=False)
+    """The floor is this many times the largest calibrated gap (D41 c)."""
 
     # ============================================
     # Engine: measurement rigour and budget

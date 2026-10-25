@@ -17,17 +17,19 @@ Conventions:
 from __future__ import annotations
 
 import os
+import re
 import statistics
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime
 from enum import StrEnum
-from pathlib import PurePath
-from typing import Self
+from pathlib import PurePath, PurePosixPath
+from types import MappingProxyType
+from typing import Final, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from autonomous_ai_agents.common.paths import normalize_path
+from autonomous_ai_agents.common.paths import GIT_METADATA_NAMES, normalize_path
 
 # ---------------------------------------------------------------------------
 # Constants and helpers
@@ -42,6 +44,17 @@ METRIC_PEAK_RSS_BYTES = "peak_rss_bytes"
 METRIC_THROUGHPUT_PER_S = "throughput_per_s"
 METRIC_TESTS_PASSED = "tests_passed"
 """Runner-reported metric: mean 1.0 when the project's test suite passed."""
+
+SHA256_PATTERN = r"^[0-9a-f]{64}$"
+QUALITY_METRIC_PREFIX = "quality:"
+"""A quality check's guardrail metric is ``quality:<name>`` (D38)."""
+NOISE_FLOOR_MIN = 0.02
+"""A calibrated noise floor is never below 2 % (O10)."""
+NOISE_CALIBRATION_BLOCKS_MAX = 5
+"""Most A/A calibration blocks a baseline runs (``NOISE_CALIBRATION_BLOCKS``)."""
+QUALITY_MAX_FROZEN_PATHS = 16
+_SCORER_INTERPRETER = re.compile(r"python(3(\.\d+)?)?")
+"""``scorer[0]``'s file name: the scorer runs as ``python -E -s`` (D37)."""
 
 JsonScalar = str | int | float | bool | None
 ScalarDict = dict[str, JsonScalar]
@@ -67,6 +80,45 @@ def _project_file(field: str, value: str) -> str:
     if normalized == ".":
         raise ValueError(f"{field} must name a file, got {value!r}")
     return normalized
+
+
+def _optional_project_file(field: str, value: str | None) -> str | None:
+    return None if value is None else _project_file(field, value)
+
+
+def _quality_file(field: str, value: str) -> str:
+    """``_project_file`` for a file a quality check freezes (D37).
+
+    Frozen paths reach ``extra_protected`` and the editor's read-deny list,
+    which match patterns, so ``*``, ``?`` and ``[`` are refused rather than
+    left to widen or miss the match. Control characters, a leading ``-``
+    (read as an interpreter flag) and git metadata are refused too.
+    """
+    if any(char in value for char in "*?[\x00\n\r"):
+        raise ValueError(
+            f"{field} must be a literal file name without '*', '?', '[' or "
+            f"control characters, got {value!r}"
+        )
+    normalized = _project_file(field, value)
+    if normalized.startswith("-"):
+        raise ValueError(f"{field} must not start with '-', got {value!r}")
+    git_names = {name.casefold() for name in GIT_METADATA_NAMES}
+    if any(part.casefold() in git_names for part in normalized.split("/")):
+        raise ValueError(f"{field} must not be git metadata, got {value!r}")
+    return normalized
+
+
+def _unique_project_files(
+    field: str,
+    values: Sequence[str],
+    *,
+    check: Callable[[str, str], str] = _project_file,
+) -> tuple[str, ...]:
+    """Each checked and normalized; a path listed twice (in any spelling) is refused."""
+    paths = tuple(check(field, value) for value in values)
+    if len(set(paths)) != len(paths):
+        raise ValueError(f"{field} must list each file once, got {list(values)}")
+    return paths
 
 
 class EngineModel(BaseModel):
@@ -184,6 +236,8 @@ class ViolationRule(StrEnum):
     unrecorded_write = "unrecorded_write"
     process_spawn = "process_spawn"
     module_shadow = "module_shadow"
+    # Step 3 (D37): added lines name a frozen quality file (a tripwire).
+    quality_data_reference = "quality_data_reference"
 
 
 class DeliveryKind(StrEnum):
@@ -196,6 +250,36 @@ class EventLevel(StrEnum):
     info = "info"
     warning = "warning"
     error = "error"
+
+
+class BuiltinMeasure(StrEnum):
+    """A quality measure the engine computes itself, one value per line (D37)."""
+
+    accuracy = "accuracy"
+    error_rate = "error_rate"
+    macro_f1 = "macro_f1"
+    mae = "mae"
+    rmse = "rmse"
+
+
+class DropUnit(StrEnum):
+    """How a guardrail's ``max_drop`` is read (D38): a fraction of the baseline
+    mean (``relative``, Step 2's rule) or points of the metric (``absolute``)."""
+
+    relative = "relative"
+    absolute = "absolute"
+
+
+BUILTIN_DIRECTIONS: Final = MappingProxyType(
+    {
+        BuiltinMeasure.accuracy: Direction.maximize,
+        BuiltinMeasure.error_rate: Direction.minimize,
+        BuiltinMeasure.macro_f1: Direction.maximize,
+        BuiltinMeasure.mae: Direction.minimize,
+        BuiltinMeasure.rmse: Direction.minimize,
+    }
+)
+"""The direction each builtin fixes: higher is better or lower is better."""
 
 
 ENGINE_ENUM_CLASSES: tuple[type[StrEnum], ...] = (
@@ -212,9 +296,190 @@ ENGINE_ENUM_CLASSES: tuple[type[StrEnum], ...] = (
     ViolationRule,
     DeliveryKind,
     EventLevel,
+    BuiltinMeasure,
+    DropUnit,
 )
 """Every engine enum. Checkpoint deserialisation must allow these too, or
 ``state["phase"]`` comes back as a plain string after a resume."""
+
+
+# ---------------------------------------------------------------------------
+# Step 3: quality check, output tolerance, noise calibration (D37-D42)
+# ---------------------------------------------------------------------------
+
+
+class OutputTolerance(EngineModel):
+    """When two outputs count as equal (D39): a workload option, never silent.
+
+    ``float_digits`` compares decimal tokens at that many significant digits;
+    ``unordered_lines`` ignores line order. A tolerance setting neither is
+    refused: exact comparison is spelled ``Workload.output_tolerance=None``.
+    """
+
+    float_digits: int | None = Field(default=None, ge=6, le=15)
+    unordered_lines: bool = False
+
+    @model_validator(mode="after")
+    def _tolerates_something(self) -> Self:
+        if self.float_digits is None and not self.unordered_lines:
+            raise ValueError(
+                "an output tolerance needs float_digits or unordered_lines; "
+                "omit it for exact comparison"
+            )
+        return self
+
+
+class QualityCheck(EngineModel):
+    """The quality number the user confirmed once (D37, D40), judged as the
+    ``metric_bound`` guardrail ``quality:<name>`` (D38).
+
+    Exactly one source: a builtin ``measure`` over a ``labels`` file, or an
+    external ``scorer`` argv whose script (``scorer[1]``) is a project file.
+    Either way the files it reads are ``frozen_paths`` (1-16 project files,
+    the labels or the script among them): recorded at baseline, protected
+    from trials, masked from workloads and hidden from the editor. A builtin
+    fixes the direction; an external scorer must state one. ``max_drop`` is
+    what the user allows to be lost (0: the same or better), in points of the
+    metric by default (``absolute``, D38).
+    """
+
+    name: str = Field(pattern=r"^[a-z][a-z0-9_]{0,31}$")
+    measure: BuiltinMeasure | None = None
+    labels: str | None = None
+    scorer: tuple[str, ...] = ()
+    frozen_paths: tuple[str, ...] = Field(
+        min_length=1, max_length=QUALITY_MAX_FROZEN_PATHS
+    )
+    direction: Direction | None = None
+    max_drop: float = Field(default=0.0, ge=0)
+    drop_unit: DropUnit = DropUnit.absolute
+
+    @model_validator(mode="before")
+    @classmethod
+    def _builtin_fixes_the_direction(cls, data: object) -> object:
+        """Fill an unset direction from the builtin; a wrong one fails below."""
+        if not isinstance(data, dict) or data.get("direction") is not None:
+            return data
+        raw = data.get("measure")
+        if not isinstance(raw, str) or raw not in BUILTIN_DIRECTIONS:
+            return data  # none or unknown: the fields report it
+        return {**data, "direction": BUILTIN_DIRECTIONS[BuiltinMeasure(raw)]}
+
+    @field_validator("labels")
+    @classmethod
+    def _labels_inside_project(cls, value: str | None) -> str | None:
+        return None if value is None else _quality_file("labels", value)
+
+    @field_validator("frozen_paths")
+    @classmethod
+    def _frozen_paths_inside_project(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return _unique_project_files("frozen_paths", value, check=_quality_file)
+
+    @field_validator("scorer")
+    @classmethod
+    def _scorer_runs_a_project_script(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if not value:
+            return value
+        if len(value) < 2 or any(not arg or "\x00" in arg for arg in value):
+            raise ValueError(
+                "scorer must be an argv of an interpreter and a script, with no "
+                f"empty or NUL argument; got {list(value)}"
+            )
+        if not _SCORER_INTERPRETER.fullmatch(PurePosixPath(value[0]).name):
+            raise ValueError(
+                "scorer[0] must be a Python interpreter (python, python3 or "
+                f"python3.N, by name or path), got {value[0]!r}"
+            )
+        return (value[0], _quality_file("scorer[1]", value[1]), *value[2:])
+
+    @model_validator(mode="after")
+    def _exactly_one_source(self) -> Self:
+        if self.measure is not None:
+            if self.labels is None or self.scorer:
+                raise ValueError("a builtin measure needs labels and no scorer")
+            if self.direction is not BUILTIN_DIRECTIONS[self.measure]:
+                raise ValueError(f"{self.measure} fixes the direction")
+            needed = self.labels
+        else:
+            if self.labels is not None or not self.scorer:
+                raise ValueError(
+                    "a quality check is a builtin measure with labels or a scorer"
+                )
+            if self.direction is None:
+                raise ValueError("an external scorer needs a direction")
+            needed = self.scorer[1]
+        if needed not in self.frozen_paths:
+            raise ValueError(f"{needed!r} must be one of the frozen paths")
+        return self
+
+    @property
+    def metric(self) -> str:
+        """The guardrail metric this check is judged by."""
+        return f"{QUALITY_METRIC_PREFIX}{self.name}"
+
+
+class QualityProposal(EngineModel):
+    """Understand's suggestion (D40): a builtin over a labels file, or an
+    existing evaluation script. Model output, never activated by itself."""
+
+    measure: BuiltinMeasure | None = None
+    labels: str | None = None
+    scorer_path: str | None = None
+
+    @field_validator("labels", "scorer_path")
+    @classmethod
+    def _paths_inside_project(cls, value: str | None) -> str | None:
+        return _optional_project_file("quality proposal path", value)
+
+    @model_validator(mode="after")
+    def _builtin_with_labels_or_a_script(self) -> Self:
+        builtin = self.measure is not None and self.labels is not None
+        partial = (self.measure is None) != (self.labels is None)
+        if partial or builtin == (self.scorer_path is not None):
+            raise ValueError(
+                "a quality proposal is a measure with labels or a scorer path"
+            )
+        return self
+
+
+class FrozenFile(EngineModel):
+    """A quality file read at the base commit (D37), listed in the report."""
+
+    path: str
+    sha256: str = Field(pattern=SHA256_PATTERN)
+    size: int = Field(ge=0)
+
+    @field_validator("path")
+    @classmethod
+    def _path_inside_project(cls, value: str) -> str:
+        return _project_file("path", value)
+
+
+class NoiseCalibration(EngineModel):
+    """The per-project floor from A/A blocks of the base against itself (D41 c).
+
+    ``gaps`` holds, per workload (and time objective, as the calibrator keys
+    it), the largest relative gap |A - A'| over the blocks; ``floor`` is
+    ``max(MIN_RELATIVE_GAIN, NOISE_GAP_MULTIPLIER * largest gap)``, so never
+    below 2 % (O10) nor below any gap (the multiplier is at least 1).
+    """
+
+    blocks: int = Field(ge=1, le=NOISE_CALIBRATION_BLOCKS_MAX)
+    gaps: dict[str, float] = Field(default_factory=dict)
+    floor: float = Field(ge=NOISE_FLOOR_MIN)
+
+    @field_validator("gaps")
+    @classmethod
+    def _gaps_are_magnitudes(cls, value: dict[str, float]) -> dict[str, float]:
+        if any(gap < 0 for gap in value.values()):
+            raise ValueError(f"calibration gaps must be at least 0, got {value}")
+        return value
+
+    @model_validator(mode="after")
+    def _floor_covers_every_gap(self) -> Self:
+        if self.gaps and self.floor < max(self.gaps.values()):
+            raise ValueError("the noise floor must cover the largest calibrated gap")
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +539,8 @@ class Workload(EngineModel):
     timeout_s: float = Field(default=600.0, gt=0)
     warmup_runs: int = Field(default=1, ge=0)
     runs: int = Field(default=MIN_RUNS, ge=MIN_RUNS)
+    output_tolerance: OutputTolerance | None = None
+    """``None`` compares outputs byte for byte (Step 2); see ``OutputTolerance``."""
     created_at: datetime = Field(default_factory=utc_now)
 
     @field_validator("working_dir")
@@ -310,6 +577,8 @@ class Guardrail(EngineModel):
     metric: str | None = None
     max_drop: float | None = Field(default=None, ge=0)
     direction: Direction | None = None
+    drop_unit: DropUnit = DropUnit.relative
+    """How ``max_drop`` is read (D38); only a ``metric_bound`` may change it."""
     description: str
     created_at: datetime = Field(default_factory=utc_now)
 
@@ -321,6 +590,11 @@ class Guardrail(EngineModel):
             raise ValueError(
                 "metric_bound guardrails need metric, max_drop and direction"
             )
+        if (
+            self.kind is not GuardrailKind.metric_bound
+            and self.drop_unit is not DropUnit.relative
+        ):
+            raise ValueError("drop_unit applies to metric_bound guardrails only")
         return self
 
 
@@ -365,7 +639,10 @@ class Measurement(EngineModel):
     metric: str = Field(min_length=1)
     stats: RunStats
     samples: tuple[float, ...] = Field(min_length=1)
-    output_fingerprint: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    output_fingerprint: str | None = Field(default=None, pattern=SHA256_PATTERN)
+    raw_fingerprint: str | None = Field(default=None, pattern=SHA256_PATTERN)
+    """The exact-bytes fingerprint when ``output_fingerprint`` is canonical
+    under a tolerance (D39); scores are cached by it (D37)."""
     hardware: ScalarDict = Field(default_factory=dict)
     measured_at: datetime = Field(default_factory=utc_now)
 
@@ -384,6 +661,18 @@ class Baseline(EngineModel):
     objectives: tuple[Objective, ...] = ()
     guardrails: tuple[Guardrail, ...] = ()
     measured_at: datetime = Field(default_factory=utc_now)
+    calibration: NoiseCalibration | None = None
+    """The per-project noise floor (D41 c); ``None``: none was measured."""
+    quality_files: tuple[FrozenFile, ...] = ()
+    """The quality check's frozen files at the base commit (D37)."""
+
+    @field_validator("quality_files")
+    @classmethod
+    def _each_quality_file_once(
+        cls, value: tuple[FrozenFile, ...]
+    ) -> tuple[FrozenFile, ...]:
+        _unique_project_files("quality_files", [frozen.path for frozen in value])
+        return value
 
 
 class Hotspot(EngineModel):
@@ -510,6 +799,8 @@ class JudgeResult(EngineModel):
     noise_floor: float | None = None
     reason: str
     details: ScalarDict = Field(default_factory=dict)
+    output_changed: bool | None = None
+    """Set by the equivalence judge in quality mode (D35); ``None`` elsewhere."""
 
 
 class Violation(EngineModel):
@@ -554,6 +845,9 @@ class Trial(EngineModel):
     cost_usd: float = Field(default=0.0, ge=0)
     attempts: int = Field(default=1, ge=1)
     retry_notes: tuple[str, ...] = ()
+    base_measurements: tuple[Measurement, ...] = ()
+    """The paired base (A) rows measured alternately with this trial (D41 a);
+    empty: judged against the run baseline (Step 2)."""
 
 
 class Verdict(EngineModel):
@@ -571,6 +865,16 @@ class Verdict(EngineModel):
     decided_at: datetime = Field(default_factory=utc_now)
     approved_by: str | None = None
     approval_note: str | None = None
+    confirmations: int = Field(default=1, ge=1)
+    """Looks that passed (D42): 2 once the confirmation re-test held (D41 b)."""
+    confirmed_gain: float | None = None
+    """The confirmation look's primary gain; set only with a confirmation."""
+
+    @model_validator(mode="after")
+    def _a_confirmed_gain_needs_a_confirmation(self) -> Self:
+        if self.confirmed_gain is not None and self.confirmations < 2:
+            raise ValueError("confirmed_gain needs at least 2 confirmations")
+        return self
 
 
 class NoiseCheck(EngineModel):
@@ -733,6 +1037,8 @@ class ProjectUnderstanding(EngineModel):
     workload_notes: dict[str, str] = Field(default_factory=dict)
     candidate_modules: tuple[CandidateModule, ...] = Field(default=(), max_length=10)
     served_by_model: str
+    quality_proposal: QualityProposal | None = None
+    """A suggested quality check, reported as not active (D40)."""
 
 
 class CombineSkip(EngineModel):
@@ -807,6 +1113,11 @@ ENGINE_MODEL_CLASSES: tuple[type[EngineModel], ...] = (
     CombineSkip,
     Combination,
     TechniqueMatchRecord,
+    OutputTolerance,
+    QualityCheck,
+    QualityProposal,
+    FrozenFile,
+    NoiseCalibration,
 )
 """Every model that may appear in checkpointed state (checkpointer allowlist)."""
 

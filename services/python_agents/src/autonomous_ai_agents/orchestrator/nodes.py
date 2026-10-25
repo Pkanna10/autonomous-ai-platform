@@ -45,7 +45,7 @@ import statistics
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Literal, Protocol, runtime_checkable
 
 from langgraph.types import interrupt
 from pydantic import ValidationError
@@ -70,6 +70,7 @@ from autonomous_ai_agents.common.models import (
     METRIC_PEAK_RSS_BYTES,
     METRIC_TESTS_PASSED,
     METRIC_WALL_TIME_S,
+    NOISE_CALIBRATION_BLOCKS_MAX,
     ApprovalDecision,
     ApprovalItem,
     ApprovalRequest,
@@ -86,9 +87,11 @@ from autonomous_ai_agents.common.models import (
     Hypothesis,
     HypothesisStatus,
     Measurement,
+    NoiseCalibration,
     Objective,
     ObjectiveKind,
     Paper,
+    QualityCheck,
     RunPhase,
     ScalarDict,
     Technique,
@@ -165,6 +168,24 @@ class RouterFn(Protocol):
     def __call__(self, state: EngineState) -> Route: ...
 
 
+@runtime_checkable
+class NoiseCalibrator(Protocol):
+    """Measures the base against itself in ``blocks`` A/A blocks (D41 c).
+
+    Declared here (U17) beside its only reader, the baseline node; the git
+    baseline runner implements it (U20) and the factory injects it (U10).
+    """
+
+    def calibrate(
+        self,
+        workloads: Sequence[Workload],
+        *,
+        run_id: str,
+        commit: str,
+        blocks: int,
+    ) -> NoiseCalibration: ...
+
+
 LOOP_NODES: tuple[str, ...] = (
     "connect",
     "understand",
@@ -210,10 +231,18 @@ class NodeContext:
     ``fix_retries_per_run`` defaults to 0, so no trial retries until the
     factory passes ``EDITOR_FIX_RETRIES_PER_RUN`` (fail closed, D12).
 
+    Step 3 quality and noise fields (U17), Step 2 by default: ``quality`` is
+    the caller's confirmed check (D40; ``None``: none), and
+    ``default_output_check``, ``calibrator`` with ``calibration_blocks`` and
+    ``confirm_winners`` stay off until the factory passes
+    ``DEFAULT_OUTPUT_CHECK``, the baseline runner with
+    ``NOISE_CALIBRATION_BLOCKS``, and ``CONFIRM_WINNERS`` (D4, D41).
+
     Construction refuses duplicate or refname-unsafe candidate ids (each id
     names a trial branch), knobs below 1, a negative or non-finite
     ``min_trial_budget_usd`` and discovery or retry knobs outside their
-    settings' ranges, with ``ValueError``.
+    settings' ranges, or calibration blocks outside 0-5 or with no
+    calibrator, with ``ValueError``.
     """
 
     runner: TrialRunner
@@ -246,6 +275,11 @@ class NodeContext:
     discovery_max_share: float = 0.25
     fix_retries_per_run: int = 0
     playbook: tuple[Technique, ...] = ()
+    quality: QualityCheck | None = None
+    default_output_check: bool = False
+    calibrator: NoiseCalibrator | None = None
+    calibration_blocks: int = 0
+    confirm_winners: bool = False
 
     def __post_init__(self) -> None:
         counts = Counter(candidate.id for candidate in self.candidates)
@@ -274,6 +308,7 @@ class NodeContext:
                 f"got {self.min_trial_budget_usd}"
             )
         self._check_discovery_knobs()
+        self._check_noise_knobs()
 
     def _check_discovery_knobs(self) -> None:
         """The ranges of the matching settings (``common/config.py``)."""
@@ -299,6 +334,14 @@ class NodeContext:
                 "generated_classes must name efficiency and/or behaviour, "
                 f"never novel; got {[c.value for c in classes]}"
             )
+
+    def _check_noise_knobs(self) -> None:
+        """``NOISE_CALIBRATION_BLOCKS``'s range; blocks need a calibrator to run."""
+        blocks, high = self.calibration_blocks, NOISE_CALIBRATION_BLOCKS_MAX
+        if not 0 <= blocks <= high:
+            raise ValueError(f"calibration_blocks must be 0-{high}, got {blocks}")
+        if blocks and self.calibrator is None:
+            raise ValueError(f"calibration_blocks={blocks} needs a calibrator")
 
 
 # ---------------------------------------------------------------------------

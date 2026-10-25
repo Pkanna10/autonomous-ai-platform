@@ -532,6 +532,8 @@ def test_violation_rules_cover_measurement_completeness() -> None:
         "process_spawn",
         # Wave 2b: a new top-level module that shadows the stdlib or the runner
         "module_shadow",
+        # Step 3 (D37): added lines name a frozen quality file
+        "quality_data_reference",
     }
     assert ViolationRule("module_shadow").name == "module_shadow"
 
