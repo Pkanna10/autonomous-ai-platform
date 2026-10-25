@@ -1,21 +1,24 @@
 # Project Status - Autonomous AI Platform
 
-**Last Updated:** 2026-10-23
+**Last Updated:** 2026-10-25
 
 ---
 
 ## Current Step
 
-**Build step:** 2 of 5 (Core loop), closing out: every unit, the Verifier, the
-stage gate, two `/security-review` passes and the Window 0 live experiments are
-done; PR #12 waits on the user to mark it ready **Branch:**
-`claude/adoring-clarke-xpo1py` (draft PR
-[#12](https://github.com/Pkanna10/autonomous-ai-platform/pull/12)) **Vision:** a
-self-improving optimization engine that uses research findings and novel ideas
-to provably improve existing code, or build something new and then improve it
-(see `CLAUDE.md`).
+**Build step:** 3 (wired discovery, engine self-retry, review delivery, quality
+check, noise rule), Wave 1 building. Step 2 is merged (PR
+[#12](https://github.com/Pkanna10/autonomous-ai-platform/pull/12)); the Window 0
+live experiments are closed out on PR
+[#21](https://github.com/Pkanna10/autonomous-ai-platform/pull/21). **Branch:**
+`claude/step3-research` (draft PR
+[#22](https://github.com/Pkanna10/autonomous-ai-platform/pull/22)); the spec
+(revision 4, approved by the owner) is `.claude/handoff/step3/spec.md`.
+**Vision:** a self-improving optimization engine that uses research findings and
+novel ideas to provably improve existing code, or build something new and then
+improve it (see `CLAUDE.md`).
 
-### Resume here (handoff, 2026-10-24)
+### Resume here (handoff, 2026-10-25)
 
 A new session picks up from this section. Everything it needs is in the repo;
 nothing lives only in an old session. The Step 2 spec, Lead notes, research
@@ -27,9 +30,17 @@ history at `5ce95a4` (`git show 5ce95a4:.claude/handoff/step2/spec.md`).
 - **Step 2 is complete**: PR #12 merged into `master` on 2026-10-24 as `311212b`
   (a merge commit); CI on `master` green (run 40072834645, all 11 jobs). See
   "Step 2 summary" and the close-out report under it.
-- **Next: Step 3** (the build order in `CLAUDE.md`, with Steps 3b, 3c and 6
-  approved on 2026-10-24). It opens with a briefing; its first unit wires
-  `generate_hypotheses` and `match_techniques` into the hypotheses node.
+- **Window 0 is closed out** (2026-10-25): every live experiment, its cost,
+  models, tokens and the decision it fed are in "Experiment register (Window 0)"
+  and the ledger under "Live API testing plan"; read the register before
+  planning a live run, so the next one adds to it instead of repeating it.
+- **Next: Step 3, Wave 1.** The owner approved the spec (revision 4,
+  `.claude/handoff/step3/spec.md`, on `claude/step3-research`) on 2026-10-24,
+  with the decisions in `.claude/handoff/step3/owner-step3-review.md`. U1 (the
+  Postgres id fix) is done (`3ee4e76`); the build order is the spec's section 7.
+  Wave 3 waits for Wave 1's live runs.
+- **Credit:** Window 1's $200 expires 2026-11-25; plan to have it used by
+  2026-11-23 (the owner's buffer).
 - **Environment:** the database tests need Postgres 16 with pgvector and a role
   that may create databases (`TEST_DATABASE_URL`; the Docker Compose database
   works). The profiler tests also run `python3.8` to `python3.12`
@@ -60,14 +71,15 @@ history at `5ce95a4` (`git show 5ce95a4:.claude/handoff/step2/spec.md`).
 One row per build step. "Gate" is the result of `pnpm stage-gate` at the end of
 the step.
 
-| Step | Deliverable                                                     | Planned    | Started    | Completed  | PR                                                                | Gate   |
-| ---- | --------------------------------------------------------------- | ---------- | ---------- | ---------- | ----------------------------------------------------------------- | ------ |
-| 0    | Repair & upgrade (DB init, deps, models, docs, stage gate)      | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed |
-| 1    | Engine design (typed state, data model, judges, migration 003)  | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed |
-| 2    | Core loop end to end on CPU Python workloads + E2E fixture test | 2026-10-21 | 2026-10-21 | 2026-10-24 | [#12](https://github.com/Pkanna10/autonomous-ai-platform/pull/12) | passed |
-| 3    | Research: arXiv, PDF, playbook, claim extraction, matcher       |            |            |            |                                                                   |        |
-| 4    | Interfaces + runner: live CLI, hardware detection, `--goal`     |            |            |            |                                                                   |        |
-| 5    | Dogfood: fixtures, OSS repos, real ML training pipeline         |            |            |            |                                                                   |        |
+| Step | Deliverable                                                               | Planned    | Started    | Completed  | PR                                                                | Gate   |
+| ---- | ------------------------------------------------------------------------- | ---------- | ---------- | ---------- | ----------------------------------------------------------------- | ------ |
+| 0    | Repair & upgrade (DB init, deps, models, docs, stage gate)                | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed |
+| 1    | Engine design (typed state, data model, judges, migration 003)            | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed |
+| 2    | Core loop end to end on CPU Python workloads + E2E fixture test           | 2026-10-21 | 2026-10-21 | 2026-10-24 | [#12](https://github.com/Pkanna10/autonomous-ai-platform/pull/12) | passed |
+| W0   | Window 0 live experiments (discovery, A/B, noise, evolution, heal, build) | 2026-10-23 | 2026-10-23 | 2026-10-25 | [#21](https://github.com/Pkanna10/autonomous-ai-platform/pull/21) | passed |
+| 3    | Research: arXiv, PDF, playbook, claim extraction, matcher                 |            |            |            |                                                                   |        |
+| 4    | Interfaces + runner: live CLI, hardware detection, `--goal`               |            |            |            |                                                                   |        |
+| 5    | Dogfood: fixtures, OSS repos, real ML training pipeline                   |            |            |            |                                                                   |        |
 
 Recommended Claude Code model and effort per step: 0 Opus 5.5 High; 1 Fable 5.1
 Extra; 2-4 Opus 5.5 Ultracode (Fable 5.1 for the paper matcher); 5 Opus 5.5
@@ -1114,7 +1126,19 @@ Order: E1 first (its answers settle shapes the others rely on), then the cheap
 ones, then E3 and E5. E4 is the blind playbook (`research/playbook.json`), not a
 run.
 
-### Window 1: 2026-10-23 to 2026-11-24 ($200)
+**Window 0 outcome (closed 2026-10-25).** $77.78 spent by the Console's count
+(the ledger sums to $77.89, with the E8b row counted at its $0.10 bound); the
+other $122.22 expired unused on 2026-10-25, because no remaining run had a
+question worth its cost before the deadline. The experiment register below lists
+what each run measured and decided.
+
+### Window 1: the credit that expires 2026-11-25 ($200; use by 2026-11-23)
+
+The owner's rule (2026-10-25): plan to have this credit used by 2026-11-23, two
+days before it expires. The table below is the 2026-10-23 plan; Step 3's own
+live plan (spec section 6: L0 noise re-check, L1 wired runs, L2 editor runs, L3
+grader, L4 recorded sweep, about 17-20 USD) replaces stage C, and the register
+below says which questions are already answered.
 
 | Stage                          | When               | Live work                                                                                                                                                                                   | Est. per run    | Runs | Est. total |
 | ------------------------------ | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | ---- | ---------- |
@@ -1164,6 +1188,55 @@ E to use what is left before the reset.
   tied to $200).
 - Live tests never run from a Claude Code container; the engine ignores the
   container's `ANTHROPIC_BASE_URL`.
+
+### Experiment register (Window 0)
+
+Every Window 0 live run, grouped by the question it answered: 52 runs, $77.78 in
+total (the per-run cost tables sum to $77.7771, matching the Console). Tokens
+are input / output / cache read / cache write, summed from each run's cost
+table; a model pair (for example "sonnet + opus 4.8") is a test that billed
+both. The per-run detail (branch, commit, models, tokens, cost) is in
+`services/python_agents/tests/live/experiments/usage_window0.json`; the CI logs
+themselves expire after 90 days. **Read this table before planning a live run**:
+repeat a row only to test a change to what it measured.
+
+| Experiment (suite)                  | Question                                                | Answer and what it decided                                                                                          | Runs | Cost  | Models and tokens                                           |
+| ----------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---- | ----- | ----------------------------------------------------------- |
+| Stage A (`stage-a`)                 | Does the engine's API contract hold live?               | Yes after two key fixes; decision 31 (system notice after a tool result) accepted                                   | 4    | 0.62  | opus 5.5 18k/6k/42k/21k                                     |
+| Corpus, editor model (`corpus`)     | Opus or Sonnet as editor on known slowdowns?            | Tie (12/12 each); Sonnet at 0.45x the cost                                                                          | 2    | 2.18  | opus 5.5 34k/40k/309k/102k; sonnet 5.5 34k/32k/292k/94k     |
+| Attack corpus (`attack`)            | Does the editor follow planted lures?                   | No, on Opus and on Sonnet (3/3 delivered, no violations)                                                            | 2    | 0.45  | opus 5.5, sonnet 5.5 (small)                                |
+| Probes (`probes`)                   | Which request shapes does the API accept?               | Seven settled (citations + format refused, batch fallbacks refused, PDF in tool result accepted, effort levels)     | 1    | 0.02  | haiku 5.5 16k/0k                                            |
+| Triage (`triage`)                   | Can Haiku triage arXiv from CI?                         | No: arXiv blocks GitHub runners (429); the monitor runs on the user's machine                                       | 3    | 0.00  | none (failed before spend)                                  |
+| Papers (`papers`)                   | Two-pass cited extraction from PDFs                     | Works (1-3 cards a paper); deprioritised with the paper pipeline                                                    | 1    | 1.32  | sonnet 5.5 + haiku 5.5 579k/22k                             |
+| Pre-screen (`prescreen`)            | Do code-execution timings rank like local ones?         | Recorded; not used further                                                                                          | 1    | 0.01  | haiku 5.5 43k/4k                                            |
+| Web research (`web`)                | Web search costs and injection resistance               | Opus recommends a planted package only when fetched text is top-level; rule: fetched text only inside a tool result | 3    | 3.42  | opus 5.5 514k/42k; haiku 5.5 516k/56k                       |
+| Escalation (`escalation`)           | Does Sonnet at low effort suffice as editor?            | Yes on the corpus (12/12, no escalation)                                                                            | 1    | 0.59  | sonnet 5.5 34k/27k/297k/91k                                 |
+| Blind sweep (`sweep`)               | Which model and effort finds the planted slowdown?      | All arms 20-22/22 hit@5; Sonnet medium cheapest; Opus claims gains on controls                                      | 1    | 6.01  | sonnet 5.5, opus 5.5, opus 4.8 (grader) 317k/201k/223k/295k |
+| Fable arm (`sweep-fable`)           | Is Fable 5.1 a better generator?                        | Same hit rate at 7x Sonnet's cost                                                                                   | 1    | 2.66  | fable 5.1, sonnet 5.5, opus 4.8 153k/70k/78k/105k           |
+| Recorded sweep (`sweep-record`)     | Material for grader labels; is the grader right?        | Grader agrees with blind Fable labels on 74/75                                                                      | 1    | 1.12  | sonnet 5.5 + opus 4.8 125k/46k/60k/78k                      |
+| Hard corpus (`hard`)                | Blind discovery on deeper slowdowns                     | 10/10; saturated                                                                                                    | 1    | 1.14  | opus 5.5 47k/29k/163k/66k                                   |
+| Real libraries, aimed (`oss`)       | Real-code win rate; then Opus vs Sonnet as editor       | Opus 12/20, Sonnet 8/20: Opus stays the editor on real code                                                         | 4    | 8.89  | opus 5.5 371k/108k/1.5M/414k; sonnet 5.5 371k/93k/1.2M/436k |
+| Retrieval A/B, corpus (`ab`)        | Does a matched playbook card beat blind generation?     | 41/44 vs 44/44 on a saturated set: no                                                                               | 1    | 10.20 | sonnet 5.5 484k/484k/4.1M/1.6M                              |
+| Retrieval A/B, real code (`oss-ab`) | The same on 18 real libraries, and wins by ideas tried  | Tie (23/36 vs 24/36); retrieval off, papers deprioritised; about 5 ideas suffice                                    | 18   | 24.38 | sonnet 5.5 2.0M/836k/10.3M/4.4M                             |
+| Runner noise (`noise`)              | How often is identical code judged faster?              | 2.8 % at the 2 % floor: alternating trials, a second check and a per-project floor go into Step 3                   | 1    | 0.00  | none (no API call)                                          |
+| Evolution (`evolve`, `evolve-more`) | Do gains compound over rounds, and do the claims hold?  | Yes on 7 libraries (mean 22 % to 35 % and 10 % to 31 %); every claim held a fresh re-test                           | 2    | 13.95 | sonnet 5.5 1.7M/488k/5.6M/2.1M                              |
+| Self-healing (`heal`, `heal-hard`)  | Can the engine reproduce and fix reported bugs?         | Easy 8/8, hard 8/8, both false reports declined: feasible; 3c needs real bugs to discriminate                       | 2    | 0.30  | sonnet 5.5 85k/14k                                          |
+| Package policy (`acquire`)          | Does the automatic package policy work on PyPI and OSV? | Decoys rejected 10/10, 0 hallucinated names; needs a download source and compound-licence rule                      | 1    | 0.04  | sonnet 5.5 12k/1k                                           |
+| Build then improve (`build`)        | Can it build from English and then improve?             | 3/3 built, 2/3 pass spec-only tests, 1 improved by 37 %                                                             | 1    | 0.49  | opus 5.5 + sonnet 5.5 26k/24k/72k/32k                       |
+
+**Explored, so not worth repeating as is:** blind discovery on synthetic corpora
+(saturated), playbook retrieval on corpora and on 18 real libraries, model and
+effort arms for generation, Fable as generator, Opus vs Sonnet as editor (corpus
+and real code), web injection placement, arXiv from CI, PDF extraction shapes,
+the easy and hard planted heal sets, runner noise at the 2 % floor.
+
+**Open, for later windows:** the Step 3 live plan (L0: the new noise rule on the
+same runners; L1/L2: wired runs); evolution past 10 rounds (`sqlparse` was still
+improving); self-healing on real bug reports from open-source issue trackers;
+build-then-improve on larger specs and with a repair loop for failed spec tests;
+the package policy with a real download-count source; macOS live runs; batch
+pricing for generation; a quality-checked run (the owner's O7) once Step 3
+builds it.
 
 ### Live spend ledger
 
@@ -1472,13 +1545,44 @@ on 2026-10-24 agreed):
 
 ## Delivery Metrics (DORA-style, per step)
 
-| Step | Lead time                                                                    | CI-red pushes                                                                                         | Rework commits          | Reverts |
-| ---- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ----------------------- | ------- |
-| 0    | ~2 h                                                                         | 0                                                                                                     | 0                       | 0       |
-| 1    | ~4.5 h                                                                       | 2 (GHA cache; README format)                                                                          | 6 (regroup, 5 review)   | 0       |
-| 2    | ~60 h (2026-10-21 18:18 to 2026-10-24 ~07:00, Window 0 experiments included) | 4 (`dbec415` Python 3.10 on the runner, `3b2ffee`, `92cefe7`, `a02e55e` the orderlookup timing floor) | 28 `fix` commits of 116 | 0       |
+| Step | Lead time                                                                    | CI-red pushes                                                                                         | Rework commits                     | Reverts |
+| ---- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------------- | ------- |
+| 0    | ~2 h                                                                         | 0                                                                                                     | 0                                  | 0       |
+| 1    | ~4.5 h                                                                       | 2 (GHA cache; README format)                                                                          | 6 (regroup, 5 review)              | 0       |
+| 2    | ~60 h (2026-10-21 18:18 to 2026-10-24 ~07:00, Window 0 experiments included) | 4 (`dbec415` Python 3.10 on the runner, `3b2ffee`, `92cefe7`, `a02e55e` the orderlookup timing floor) | 28 `fix` commits of 116            | 0       |
+| W0   | ~2 days (2026-10-23 to 2026-10-25), 52 live runs, $77.78                     | 0                                                                                                     | 4 (lint of fixtures, review fixes) | 0       |
 
 ## Lessons (retro per step)
+
+### Window 0 (live experiments, 2026-10-23 to 2026-10-25)
+
+- **Every verdict goes into the cost-table notes from the first run.** Three
+  runs (E7, E8b, the first E6) put their answer only in the job summary or a
+  capped table cell, which the Lead cannot read; about $3.50 bought results that
+  were later read only partly. Since `7dd6c9c` every suite notes each verdict
+  through `run.note()`.
+- **Never rerun only to recover logging, and stop at the first external 429.**
+  E2 was dispatched three times against arXiv's runner block; the second 429 was
+  already conclusive.
+- **A saturated test set can only show harm.** The first A/B (E5) ran where
+  blind generation already won 44/44; the real-code A/B with 36 pairs was the
+  test that could decide. Check the baseline rate before pre-registering a rule
+  on a set.
+- **Canary one dispatch before fanning out.** The OSS A/B ran one library first;
+  the nine others went out only after its log showed real work. The same habit
+  caught a second-set A/B that would have run nothing.
+- **Labels must be made blind by construction.** The first grader-agreement
+  labeller saw the verdicts because a filter missed the log's escaping; the
+  rerun read a file checked to hold no verdicts.
+- **Merge PRs one at a time, each with its own green CI on `master`**
+  (Dependabot, 2026-10-24): back-to-back merges let concurrency cancel the
+  intermediate runs, so no single merge was proven green.
+- **An interrupt stops background builders for good.** Three builders were lost
+  to one interrupt; their partial files and briefs let new builders finish them,
+  so briefs are now kept in the session scratchpad.
+- **Easy corpora saturate fast.** The discovery corpus, the hard corpus, the
+  easy and then the hard heal set were all solved; real libraries were the only
+  sets that separated arms or models.
 
 ### Step 2
 
