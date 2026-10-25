@@ -41,6 +41,8 @@ section.
 
 from __future__ import annotations
 
+import glob
+import hashlib
 import math
 import re
 import statistics
@@ -82,6 +84,7 @@ from autonomous_ai_agents.common.models import (
     METRIC_WALL_TIME_S,
     NOISE_CALIBRATION_BLOCKS_MAX,
     NOISE_FLOOR_MIN,
+    QUALITY_METRIC_PREFIX,
     ApprovalDecision,
     ApprovalItem,
     ApprovalRequest,
@@ -93,6 +96,7 @@ from autonomous_ai_agents.common.models import (
     DropUnit,
     EngineEvent,
     EventLevel,
+    FrozenFile,
     Guardrail,
     GuardrailKind,
     Hotspot,
@@ -127,6 +131,7 @@ from autonomous_ai_agents.execution.measure import (
     UNKNOWN,
     baseline_test_count,
     classify_runner,
+    output_fingerprint,
 )
 from autonomous_ai_agents.execution.protocols import (
     BranchPublisher,
@@ -209,6 +214,22 @@ class NoiseCalibrator(Protocol):
         commit: str,
         blocks: int,
     ) -> NoiseCalibration: ...
+
+
+@runtime_checkable
+class _Freezing(Protocol):
+    """What a quality-aware baseline runner reports after ``measure`` (D37):
+    ``GitBaselineRunner`` (U24), through the factory's connected runner."""
+
+    @property
+    def quality_files(self) -> tuple[FrozenFile, ...]: ...
+
+    @property
+    def label_leaks(self) -> tuple[str, ...]: ...
+
+
+EMPTY_OUTPUT = output_fingerprint(0, hashlib.sha256(b"").hexdigest(), None)
+"""Empty stdout and no ``output_file`` (D40): an output check compares nothing."""
 
 
 LOOP_NODES: tuple[str, ...] = (
@@ -1032,13 +1053,14 @@ def _require_trustworthy_baseline(
 ) -> None:
     """Fail closed before any trial when the guardrails could never be judged.
 
-    With ``output_equivalence`` every objective measurement needs the output
-    fingerprint all its runs agreed on; with ``tests_pass`` the suite must
-    already pass at the base. Raises ``EngineError``.
+    With ``output_equivalence`` or a quality bound (D35, one score per
+    measurement) every objective measurement needs the output fingerprint all
+    its runs agreed on; with ``tests_pass`` the suite must already pass at
+    the base. Raises ``EngineError``.
     """
     kinds = {guardrail.kind for guardrail in guardrails}
     metrics = set(_objective_metrics(objectives))
-    if GuardrailKind.output_equivalence in kinds:
+    if GuardrailKind.output_equivalence in kinds or _quality_mode(guardrails):
         unseeded = _named(
             names,
             (
@@ -1049,8 +1071,9 @@ def _require_trustworthy_baseline(
         )
         if unseeded:
             raise EngineError(
-                "nondeterministic or missing output: add a seed or `output_file` "
-                f"(the runs did not agree on one output on workload(s) {unseeded})"
+                "nondeterministic or missing output: add a seed, an `output_file`, "
+                "an output tolerance or a quality check (the runs did not agree on "
+                f"one output on workload(s) {unseeded})"
             )
     if GuardrailKind.tests_pass in kinds:
         failing = _named(
@@ -1067,6 +1090,145 @@ def _require_trustworthy_baseline(
                 "the test suite already fails at the base commit (workload(s) "
                 f"{failing}): fix it or the test command before optimising"
             )
+
+
+def _quality_mode(guardrails: Iterable[Guardrail]) -> bool:
+    return any(
+        g.kind is GuardrailKind.metric_bound
+        and (g.metric or "").startswith(QUALITY_METRIC_PREFIX)
+        for g in guardrails
+    )
+
+
+def _output_check(
+    ctx: NodeContext, project_id: str, guardrails: list[Guardrail]
+) -> tuple[list[Guardrail], tuple[str, ...], str]:
+    """Define's one output mode (D40): the guardrails, the frozen paths to
+    protect (glob-escaped: literal names reach pattern matchers) and the
+    mode's name. Only ``ctx.quality``, the caller's confirmation, sets the
+    quality mode; understand's proposal never does."""
+    exact = any(g.kind is GuardrailKind.output_equivalence for g in guardrails)
+    check = ctx.quality
+    confirmed = None if check is None else check.metric
+    if any(_quality_mode((g,)) and g.metric != confirmed for g in guardrails):
+        raise EngineError(
+            "a quality guardrail is set only through the confirmed check "
+            "(NodeContext.quality, D40)"
+        )
+    if check is not None:
+        if exact:
+            raise EngineError(
+                "a quality check replaces the exact output check (D40): pass the "
+                "quality check or an output_equivalence guardrail, not both"
+            )
+        allowed = drop_text(
+            check.max_drop, check.drop_unit, points=is_point_measure(check.measure)
+        )
+        bound = Guardrail(
+            project_id=project_id,
+            kind=GuardrailKind.metric_bound,
+            metric=check.metric,
+            max_drop=check.max_drop,
+            direction=check.direction,
+            drop_unit=check.drop_unit,
+            description=f"quality check {check.name} may drop at most {allowed}",
+        )
+        frozen = tuple(glob.escape(path) for path in check.frozen_paths)
+        return [*guardrails, bound], frozen, check.metric
+    if ctx.default_output_check and not exact:
+        same = Guardrail(
+            project_id=project_id,
+            kind=GuardrailKind.output_equivalence,
+            description="outputs must stay identical (default output check)",
+        )
+        return [*guardrails, same], (), "exact"
+    return guardrails, (), "exact" if exact else "off"
+
+
+def _require_defining_check(ctx: NodeContext, baseline: Baseline) -> None:
+    """A run defined in quality mode resumes only with that check (D40):
+    without it the editor's read-deny and the masks would be gone."""
+    if not _quality_mode(baseline.guardrails):
+        return
+    metrics = {g.metric for g in baseline.guardrails}
+    if ctx.quality is None or ctx.quality.metric not in metrics:
+        raise EngineError("resume with the quality check that defined this run")
+
+
+def _empty_outputs(
+    measurements: Sequence[Measurement], objectives: Sequence[Objective]
+) -> list[str]:
+    """Workloads whose agreed output is empty stdout and no file (D40)."""
+    metrics = set(_objective_metrics(objectives))
+    return [
+        m.workload_id
+        for m in measurements
+        if m.metric in metrics
+        and EMPTY_OUTPUT in (m.raw_fingerprint, m.output_fingerprint)
+    ]
+
+
+def _compares_nothing(names: str) -> str:
+    return (
+        f"the output check compares nothing on workload {names}: print the result "
+        "or declare `output_file`"
+    )
+
+
+def _frozen_files(ctx: NodeContext) -> tuple[tuple[FrozenFile, ...], tuple[str, ...]]:
+    """The runner's frozen files and label leaks; in quality mode exactly the
+    check's frozen paths must have been recorded (D37), else ``EngineError``."""
+    runner = ctx.baseline_runner
+    files, leaks = (
+        (runner.quality_files, runner.label_leaks)
+        if isinstance(runner, _Freezing)
+        else ((), ())
+    )
+    check = ctx.quality
+    if check is not None:
+        froze = sorted(f.path for f in files)
+        if froze != sorted(check.frozen_paths):
+            raise EngineError(
+                f"the baseline froze {froze or 'nothing'} but quality check "
+                f"{check.name} names {sorted(check.frozen_paths)}: the scorer may "
+                "read only files recorded at the base commit (D37)"
+            )
+    return files, leaks
+
+
+def _baseline_checks(
+    ctx: NodeContext, state: EngineState, empty: str, leaks: Sequence[str]
+) -> list[EngineEvent]:
+    """The baseline's warnings for the run conditions: an exact check that
+    compares nothing (D40) and an input carrying the labels (D37)."""
+    exact = any(g.kind is GuardrailKind.output_equivalence for g in state["guardrails"])
+    found: list[EngineEvent] = []
+    if empty and exact:
+        found.append(
+            _note(
+                state,
+                RunPhase.baseline,
+                "output_compares_nothing",
+                _compares_nothing(empty),
+                level=EventLevel.warning,
+                data={"workloads": empty},
+            )  # fmt: skip
+        )
+    if leaks and ctx.quality is not None:
+        where = "; ".join(leaks)
+        found.append(
+            _note(
+                state,
+                RunPhase.baseline,
+                "label_leak",
+                f"quality check {ctx.quality.name}: the labels also appear in "
+                f"{_cell(where)}; the check is sound only if no workload reads "
+                "them there",
+                level=EventLevel.warning,
+                data={"leaks": where},
+            )  # fmt: skip
+        )
+    return found
 
 
 _NOISY_FLOOR = 0.10
@@ -1527,8 +1689,47 @@ def _noise_floor_text(state: EngineState, *, confirm: bool = False) -> str:
     return f"{floors}; {calibrated}; {looks}"
 
 
+def _output_conditions(state: EngineState, quality: QualityCheck | None) -> list[str]:
+    """The output mode (D40), what it compares nothing on, and the quality
+    check's precondition and label leaks (D37); none without a check."""
+    baseline = state["baseline"]
+    guardrails = state["guardrails"] if baseline is None else baseline.guardrails
+    if quality is not None:
+        what = (
+            f"{quality.measure} over {quality.labels}"
+            if quality.measure is not None
+            else f"the scorer {quality.scorer[1]}"
+        )
+        allowed = drop_text(
+            quality.max_drop,
+            quality.drop_unit,
+            points=is_point_measure(quality.measure),
+        )
+        mode = (
+            f"quality check {_cell(quality.name)}, {_cell(what)}, may drop at most "
+            f"{allowed}; sound only if no readable project file other than the "
+            "frozen ones determines the labels"
+        )
+    elif any(g.kind is GuardrailKind.output_equivalence for g in guardrails):
+        mode = "exact"
+    else:
+        return []
+    for event in state["events"]:
+        if event.data.get("code") == "output_compares_nothing":
+            mode += "; " + _compares_nothing(_cell(str(event.data.get("workloads"))))
+    lines = [f"- Output check: {mode}"]
+    leak = _latest(state["events"], "label_leak")
+    if leak is not None:
+        lines.append(f"- Labels also in: {_cell(str(leak.data.get('leaks')))}")
+    return lines
+
+
 def _run_conditions(
-    state: EngineState, prefix: str, *, confirm: bool = False
+    state: EngineState,
+    prefix: str,
+    *,
+    confirm: bool = False,
+    quality: QualityCheck | None = None,
 ) -> list[str]:
     """What the numbers above were measured under, and how to remove trial refs.
 
@@ -1564,7 +1765,7 @@ def _run_conditions(
             else _cell(combination.summary, limit=_SUMMARY_LIMIT)
         )
     )
-    lines += _step3_conditions(state)
+    lines += [*_step3_conditions(state), *_output_conditions(state, quality)]
     lines.append(f"- Peak RSS: {_RSS_DEFINITION}")
     refs = list(
         dict.fromkeys(
@@ -2004,7 +2205,7 @@ def _report(
     lines += [*_combination_line(state, prefix), ""]
     lines += _review_section(state, prefix, quality)
     lines += [*_retry_section(state), *_ideas_section(state)]
-    lines += [*_run_conditions(state, prefix, confirm=confirm), ""]
+    lines += [*_run_conditions(state, prefix, confirm=confirm, quality=quality), ""]
     return "\n".join(lines)
 
 
@@ -2028,7 +2229,7 @@ def _review_report(
         "",
         *_head(state, "**Run**", now or utc_now())[2:],
         *_retry_section(state),
-        *_run_conditions(state, prefix, confirm=confirm),
+        *_run_conditions(state, prefix, confirm=confirm, quality=quality),
         "",
     ]
     return "\n".join(lines)
@@ -2280,21 +2481,34 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                     f"{DEFAULT_RSS_MAX_GROWTH:.0%} (default)",
                 )
             )
+        guardrails, frozen, mode = _output_check(ctx, project.id, guardrails)
         metrics = ", ".join(objective.metric for objective in objectives)
         kinds = ", ".join(guardrail.kind.value for guardrail in guardrails)
-        event = _announce(
-            state,
-            RunPhase.define,
-            f"objectives: {metrics}; guardrails: {kinds or 'none'}",
-            data={"objectives": metrics, "guardrails": kinds, "min_runs": ctx.min_runs},
-        )
+        message = f"objectives: {metrics}; guardrails: {kinds or 'none'}"
+        data: ScalarDict = {
+            "objectives": metrics,
+            "guardrails": kinds,
+            "min_runs": ctx.min_runs,
+        }
+        if mode != "off":  # Step 2's event stays as it was
+            message += f"; output check: {mode}" + "".join(
+                f"; {_cell(w.name)} {_tolerance_text(w.output_tolerance)}"
+                for w in state["workloads"]
+                if w.output_tolerance is not None
+            )
+            data["output_check"] = mode
+        event = _announce(state, RunPhase.define, message, data=data)
         delta: NodeDelta = {
             "phase": RunPhase.define,
             "objectives": objectives,
             "events": [event],
         }
-        if leaner:
+        if len(guardrails) != len(state["guardrails"]):
             delta["guardrails"] = guardrails
+        if frozen:
+            delta["extra_protected"] = list(
+                dict.fromkeys((*state["extra_protected"], *frozen))
+            )
         return delta
 
     def baseline(state: EngineState) -> NodeDelta:
@@ -2302,6 +2516,13 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             state["workloads"], run_id=state["run_id"], commit=state["base_commit"]
         )
         objectives = tuple(state["objectives"])
+        names = {workload.id: workload.name for workload in state["workloads"]}
+        empty = _named(names, _empty_outputs(measurements, objectives))
+        if empty and ctx.quality is not None:
+            raise EngineError(
+                f"quality check {ctx.quality.name}: {_compares_nothing(empty)}; an "
+                "empty output cannot be scored (D40)"
+            )
         violations = measurement_violations(
             measurements,
             [workload.id for workload in state["workloads"]],
@@ -2314,10 +2535,10 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                 "baseline is not trustworthy: "
                 + "; ".join(f"{v.rule}: {v.message}" for v in violations)
             )
-        names = {workload.id: workload.name for workload in state["workloads"]}
         _require_trustworthy_baseline(
             measurements, objectives, state["guardrails"], names
         )
+        files, leaks = _frozen_files(ctx)
         objectives, calibration, floor = _calibrated(ctx, state, objectives)
         measured = Baseline(
             commit=state["base_commit"],
@@ -2325,6 +2546,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             objectives=objectives,
             guardrails=tuple(state["guardrails"]),
             calibration=calibration,
+            quality_files=files,
         )
         summary = _summarize_primary(measurements, objectives)
         noise = _noise(measurements, objectives)
@@ -2343,10 +2565,11 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             _noisy_host(state, n, names.get(n.workload_id, n.workload_id))
             for n in noise
         ]
+        checks = _baseline_checks(ctx, state, empty, leaks)
         return {
             "phase": RunPhase.baseline,
             "baseline": measured,
-            "events": [event, *notes],
+            "events": [event, *notes, *checks],
         }
 
     def profile(state: EngineState) -> NodeDelta:
@@ -2468,6 +2691,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                 understanding=state["understanding"],
                 hotspots=_brief_hotspots(hypothesis, state["hotspots"]),
                 protected=(*ctx.protected_patterns, *state["extra_protected"]),
+                read_deny=() if ctx.quality is None else ctx.quality.frozen_paths,
             ),
         )
         problems = _runner_trial_problems(trial, hypothesis, state["round"], remaining)
@@ -2482,6 +2706,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
 
     def trials(state: EngineState) -> NodeDelta:
         measured = _require_baseline(state)
+        _require_defining_check(ctx, measured)
         run_id = state["run_id"]
         round_number = state["round"]
         # The running total (decision 10): each trial is offered only what the

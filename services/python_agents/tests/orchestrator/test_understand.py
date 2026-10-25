@@ -40,7 +40,12 @@ from autonomous_ai_agents.common.errors import (
     LLMRequestError,
     LLMUnavailable,
 )
-from autonomous_ai_agents.common.models import Project, Workload
+from autonomous_ai_agents.common.models import (
+    BuiltinMeasure,
+    Project,
+    QualityProposal,
+    Workload,
+)
 from autonomous_ai_agents.execution.git import GitError, GitWorkspace
 from autonomous_ai_agents.execution.protocols import (
     ProjectUnderstander,
@@ -383,7 +388,7 @@ def _keywords(node: object) -> set[str]:
 def test_the_schema_has_exactly_the_understanding_fields() -> None:
     """
     GIVEN the response schema
-    THEN its top level names the five fields Claude fills (served_by_model is
+    THEN its top level names the six fields Claude fills (served_by_model is
          ours), every object requires all its properties and forbids extras,
          and it uses no keyword structured outputs do not support
     """
@@ -395,9 +400,10 @@ def test_the_schema_has_exactly_the_understanding_fields() -> None:
         "entrypoints",
         "workload_notes",
         "candidate_modules",
+        "quality_proposal",
     }
     objects = _objects(RESPONSE_SCHEMA)
-    assert len(objects) == 3  # the reply, a workload note, a candidate module
+    assert len(objects) == 4  # the reply, a note, a module, a quality proposal
     for obj in objects:
         props = obj["properties"]
         assert isinstance(props, Mapping)
@@ -1039,6 +1045,17 @@ INVALID: dict[str, str | None] = {
     "workload id with a DEL": _bad(
         workload_notes=[{"workload_id": "w\x7f", "note": "n"}]
     ),
+    "proposal labels with a newline": _bad(
+        quality_proposal={"measure": "accuracy", "labels": "a\nb", "scorer_path": None}
+    ),
+    "proposal with an extra key": _bad(
+        quality_proposal={
+            "measure": None,
+            "labels": None,
+            "scorer_path": "s.py",
+            "active": True,
+        }
+    ),
 }
 
 
@@ -1301,3 +1318,163 @@ def test_an_unpriced_model_is_noted(repo: Repo) -> None:
     assert run.result.understanding is not None
     (note,) = run.result.notes
     assert "claude-unlisted-9" in note and "price" in note
+
+
+# --------------------------------------------------------------------------
+# The quality proposal (U25, D40): model output, validated, never active.
+# --------------------------------------------------------------------------
+
+EVAL_FILES: dict[str, str | bytes] = {
+    "eval/labels.txt": "cat\ndog\ncat\n",
+    "eval/score.py": "print('aip-quality/1 acc=1')\n",
+    "data/test.csv": "id,text,label\n1,a,cat\n2,b,dog\n3,c,cat\n",
+}
+
+
+def _proposed(
+    measure: str | None = "accuracy",
+    labels: str | None = "eval/labels.txt",
+    scorer_path: str | None = None,
+) -> Json:
+    return _ok(
+        quality_proposal={
+            "measure": measure,
+            "labels": labels,
+            "scorer_path": scorer_path,
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("reply", "expected"),
+    [
+        (
+            _proposed(),
+            QualityProposal(measure=BuiltinMeasure.accuracy, labels="eval/labels.txt"),
+        ),
+        (
+            _proposed(None, None, "./eval/score.py"),
+            QualityProposal(scorer_path="eval/score.py"),
+        ),
+        (_ok(quality_proposal=None), None),
+        (_ok(), None),  # an older reply shape without the key
+    ],
+    ids=["builtin", "script", "null", "absent"],
+)
+def test_a_valid_proposal_is_kept_as_a_suggestion(
+    repo: Repo, reply: Json, expected: QualityProposal | None
+) -> None:
+    run = _run(add(repo, EVAL_FILES), [reply])
+    assert run.result.understanding is not None
+    assert run.result.understanding.quality_proposal == expected
+    assert run.result.notes == ()
+
+
+@pytest.mark.parametrize(
+    ("reply", "why"),
+    [
+        (_proposed(measure="auc"), "unknown measure 'auc'"),
+        (_proposed(labels="eval/missing.txt"), "not a file tracked at the base commit"),
+        (_proposed(labels=".env"), "a secret-like file never read"),
+        (_proposed(labels="eval/l*.txt"), "literal file name"),
+        (_proposed(None, None, "eval/l*.txt"), "literal file name"),
+        (_proposed(None, None, ".env"), "a secret-like file never read"),
+        (_proposed(labels=None), "a measure with labels or a scorer path"),
+        (
+            _proposed(scorer_path="eval/score.py"),
+            "a measure with labels or a scorer path",
+        ),
+    ],
+    ids=[
+        "measure",
+        "untracked",
+        "secret",
+        "glob",
+        "script-glob",
+        "script-secret",
+        "no-labels",
+        "both",
+    ],
+)
+def test_a_bad_proposal_is_dropped_with_a_note(
+    repo: Repo, reply: Json, why: str
+) -> None:
+    repo = add(repo, {**EVAL_FILES, ".env": "K=1\n", "eval/l*.txt": "x\n"})
+    run = _run(repo, [reply])
+    understanding = run.result.understanding
+    assert understanding is not None
+    assert understanding.quality_proposal is None
+    assert understanding.language == "python"  # the rest of the reply stands
+    (note,) = (n for n in run.result.notes if "quality proposal" in n)
+    assert why in note
+
+
+def test_a_proposal_whose_labels_leak_into_an_input_is_annotated(repo: Repo) -> None:
+    repo = add(repo, EVAL_FILES)
+    project = _project(repo)
+    workload = _workload(project, command=("python", "train.py", "data/test.csv"))
+    run = _run(repo, [_proposed()], workloads=[workload])
+    assert run.result.understanding is not None
+    (note,) = run.result.notes
+    assert "labels also appear in data/test.csv column 3" in note
+    assert "would be sound only if none does" in note
+
+
+def test_the_leak_scan_skips_paths_outside_and_an_unreadable_label_file(
+    repo: Repo,
+) -> None:
+    repo = add(repo, EVAL_FILES)
+    project = _project(repo)
+    argv = ("python", "../outside.csv", "data/test.csv")
+    workload = _workload(project, command=argv)
+
+    def failing(project: Project) -> RepoReader:
+        git = GitWorkspace(Path(project.root_path))
+
+        class Failing:
+            def ls_tree(self, commit: str) -> tuple[str, ...]:
+                return git.ls_tree(commit)
+
+            def read_blob(
+                self, commit: str, path: str, *, limit: int | None = None
+            ) -> bytes:
+                if path == "eval/labels.txt":
+                    raise GitError("gone")
+                return git.read_blob(commit, path, limit=limit)
+
+        return Failing()
+
+    clean = _run(repo, [_proposed()], workloads=[workload], reader=failing)
+    assert clean.result.understanding is not None
+    assert clean.result.understanding.quality_proposal is not None
+    assert clean.result.notes == ()  # nothing scanned, nothing claimed
+    cfg = _settings(QUALITY_MAX_FROZEN_BYTES=8)  # data/test.csv is over the cap
+    capped = _run(repo, [_proposed()], workloads=[workload], cfg=cfg)
+    assert capped.result.notes == ()
+
+
+@pytest.mark.parametrize(
+    ("working_dir", "argv", "leaks"),
+    [
+        ("data", ("test.csv",), True),  # argv[0] from the working dir
+        (".", ("python", "score.py", "eval/labels.txt"), False),  # the labels
+    ],
+    ids=["argv0-from-working-dir", "labels-file-itself"],
+)
+def test_the_leak_scan_reads_argv_like_the_workload_runs_it(
+    repo: Repo, working_dir: str, argv: tuple[str, ...], leaks: bool
+) -> None:
+    repo = add(repo, EVAL_FILES)
+    project = _project(repo)
+    workload = _workload(project, command=argv, working_dir=working_dir)
+    run = _run(repo, [_proposed()], workloads=[workload])
+    noted = [n for n in run.result.notes if "labels also appear" in n]
+    assert noted == (
+        [
+            "the suggested quality check's labels also appear in "
+            "data/test.csv column 3: a workload can read them there, "
+            "so that check would be sound only if none does"
+        ]
+        if leaks
+        else []
+    )
