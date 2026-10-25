@@ -51,7 +51,14 @@ from langgraph.types import interrupt
 from pydantic import ValidationError
 
 from autonomous_ai_agents.clients.budget import Budget
-from autonomous_ai_agents.common.config import settings
+from autonomous_ai_agents.common.config import (
+    FIX_RETRIES_MAX,
+    GENERATOR_MAX_CALLS_MAX,
+    GENERATOR_N_MAX,
+    MATCHER_K_MAX,
+    Retrieval,
+    settings,
+)
 from autonomous_ai_agents.common.errors import DeliveryError as DeliveryError
 from autonomous_ai_agents.common.errors import EngineError as EngineError
 from autonomous_ai_agents.common.errors import (
@@ -67,6 +74,7 @@ from autonomous_ai_agents.common.models import (
     ApprovalItem,
     ApprovalRequest,
     Baseline,
+    ChangeClass,
     Delivery,
     DeliveryKind,
     Direction,
@@ -123,6 +131,10 @@ from autonomous_ai_agents.optimization.judges import (
     primary_metric,
 )
 from autonomous_ai_agents.optimization.ranking import rank_hypotheses
+from autonomous_ai_agents.optimization.sources import (
+    HypothesisGenerator,
+    TechniqueMatcher,
+)
 from autonomous_ai_agents.orchestrator.combine_node import (
     CombineRules,
     CombineTarget,
@@ -191,9 +203,17 @@ class NodeContext:
     their node. ``min_trial_budget_usd`` is the least a trial must be able to
     spend before it starts (the factory sets one worst-case editor request).
 
+    Step 3 discovery and retry fields (U2): ``generator`` and ``matcher``
+    default to ``None`` (Step 2: no generation, no matching); ``playbook`` is
+    what the matcher picks from in ``matched`` retrieval; the knobs mirror
+    their settings (``GENERATOR_N`` and so on), which only the factory reads.
+    ``fix_retries_per_run`` defaults to 0, so no trial retries until the
+    factory passes ``EDITOR_FIX_RETRIES_PER_RUN`` (fail closed, D12).
+
     Construction refuses duplicate or refname-unsafe candidate ids (each id
-    names a trial branch), knobs below 1 and a negative or non-finite
-    ``min_trial_budget_usd``, with ``ValueError``.
+    names a trial branch), knobs below 1, a negative or non-finite
+    ``min_trial_budget_usd`` and discovery or retry knobs outside their
+    settings' ranges, with ``ValueError``.
     """
 
     runner: TrialRunner
@@ -213,6 +233,19 @@ class NodeContext:
     combiner: Combiner | None = None
     publisher: BranchPublisher | None = None
     min_trial_budget_usd: float = 0.0
+    generator: HypothesisGenerator | None = None
+    matcher: TechniqueMatcher | None = None
+    retrieval: Retrieval = "blind"
+    generated_classes: tuple[ChangeClass, ...] = (
+        ChangeClass.efficiency,
+        ChangeClass.behaviour,
+    )
+    generator_n: int = 5
+    generator_max_calls: int = 2
+    matcher_k: int = 3
+    discovery_max_share: float = 0.25
+    fix_retries_per_run: int = 0
+    playbook: tuple[Technique, ...] = ()
 
     def __post_init__(self) -> None:
         counts = Counter(candidate.id for candidate in self.candidates)
@@ -239,6 +272,32 @@ class NodeContext:
             raise ValueError(
                 "min_trial_budget_usd must be finite and at least 0, "
                 f"got {self.min_trial_budget_usd}"
+            )
+        self._check_discovery_knobs()
+
+    def _check_discovery_knobs(self) -> None:
+        """The ranges of the matching settings (``common/config.py``)."""
+        ranges = {
+            "generator_n": (self.generator_n, 1, GENERATOR_N_MAX),
+            "matcher_k": (self.matcher_k, 1, MATCHER_K_MAX),
+            "generator_max_calls": (
+                self.generator_max_calls,
+                0,
+                GENERATOR_MAX_CALLS_MAX,
+            ),
+            "fix_retries_per_run": (self.fix_retries_per_run, 0, FIX_RETRIES_MAX),
+        }
+        for name, (value, low, high) in ranges.items():
+            if not low <= value <= high:
+                raise ValueError(f"{name} must be {low}-{high}, got {value}")
+        share = self.discovery_max_share
+        if not (math.isfinite(share) and 0 < share < 1):
+            raise ValueError(f"discovery_max_share must be in (0, 1), got {share}")
+        classes = self.generated_classes
+        if not classes or ChangeClass.novel in classes:
+            raise ValueError(
+                "generated_classes must name efficiency and/or behaviour, "
+                f"never novel; got {[c.value for c in classes]}"
             )
 
 
@@ -282,6 +341,7 @@ _STATUS_AFTER_VERDICT: dict[VerdictOutcome, HypothesisStatus] = {
     VerdictOutcome.reject: HypothesisStatus.rejected,
     VerdictOutcome.inconclusive: HypothesisStatus.inconclusive,
     VerdictOutcome.needs_approval: HypothesisStatus.trialled,
+    VerdictOutcome.review: HypothesisStatus.trialled,  # D35, as needs_approval
 }
 
 _RUNNER_STATUSES: frozenset[TrialStatus] = frozenset(

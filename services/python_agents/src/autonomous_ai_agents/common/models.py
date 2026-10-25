@@ -166,6 +166,7 @@ class VerdictOutcome(StrEnum):
     reject = "reject"
     inconclusive = "inconclusive"
     needs_approval = "needs_approval"
+    review = "review"  # Step 3 (D10): all judges passed; its own branch, no pause
 
 
 class ViolationRule(StrEnum):
@@ -493,6 +494,8 @@ class Hypothesis(EngineModel):
     risk: float = Field(ge=0, le=1)
     score: float = 0.0
     status: HypothesisStatus = HypothesisStatus.proposed
+    parked_reason: str | None = Field(default=None, min_length=1)
+    """Why a generated idea was parked instead of trialled (Step 3, D9)."""
 
 
 class JudgeResult(EngineModel):
@@ -525,6 +528,10 @@ class Trial(EngineModel):
     ``violations`` are capture-time problems only the runner can see in the
     git diff (modes, binaries, git metadata, unrecorded writes); a trial with
     any is ``failed`` and never executed.
+
+    ``attempts`` counts editor attempts (2 after a fix retry, D12);
+    ``retry_notes`` says why a retry ran or did not ("not retried: the
+    run's fix retry is spent").
     """
 
     id: str = Field(default_factory=new_id)
@@ -545,6 +552,8 @@ class Trial(EngineModel):
     finished_at: datetime | None = None
     tokens_used: int = Field(default=0, ge=0)
     cost_usd: float = Field(default=0.0, ge=0)
+    attempts: int = Field(default=1, ge=1)
+    retry_notes: tuple[str, ...] = ()
 
 
 class Verdict(EngineModel):
@@ -753,6 +762,19 @@ class Combination(EngineModel):
     summary: str
 
 
+class TechniqueMatchRecord(EngineModel):
+    """A playbook technique the matcher found fitting (Step 3, matched mode).
+
+    The state's copy of ``research.playbook.TechniqueMatch``; ``unmet_preconditions``
+    holds precondition ``check`` keys of that technique.
+    """
+
+    slug: str = Field(min_length=1)
+    fit: float = Field(ge=0, le=1)
+    justification_summary: str
+    unmet_preconditions: tuple[str, ...] = ()
+
+
 ENGINE_MODEL_CLASSES: tuple[type[EngineModel], ...] = (
     Project,
     Workload,
@@ -784,6 +806,7 @@ ENGINE_MODEL_CLASSES: tuple[type[EngineModel], ...] = (
     ProjectUnderstanding,
     CombineSkip,
     Combination,
+    TechniqueMatchRecord,
 )
 """Every model that may appear in checkpointed state (checkpointer allowlist)."""
 

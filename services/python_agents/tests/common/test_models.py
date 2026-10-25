@@ -58,6 +58,7 @@ from autonomous_ai_agents.common.models import (
     RunPhase,
     RunStats,
     Technique,
+    TechniqueMatchRecord,
     Trial,
     TrialStatus,
     Verdict,
@@ -353,6 +354,9 @@ def _all_instances() -> list[EngineModel]:
         combination,
         long_tier,
         long_price,
+        TechniqueMatchRecord(
+            slug="memoize", fit=0.6, justification_summary="pure function"
+        ),
     ]
 
 
@@ -490,7 +494,8 @@ def test_enums_serialize_as_lowercase_strings(enum_cls: type[StrEnum]) -> None:
 def test_verdict_outcome_values_match_sql_check_list() -> None:
     """
     GIVEN the VerdictOutcome enum
-    WHEN compared with the values the 003 migration constrains
+    WHEN compared with the values the 003 migration constrains, plus review
+         (Step 3, D10: migration 006, unit U11, adds it to chk_lesson_outcome)
     THEN they match verbatim
     """
     assert {v.value for v in VerdictOutcome} == {
@@ -498,6 +503,7 @@ def test_verdict_outcome_values_match_sql_check_list() -> None:
         "reject",
         "inconclusive",
         "needs_approval",
+        "review",
     }
     assert VerdictOutcome("keep") is VerdictOutcome.keep
 

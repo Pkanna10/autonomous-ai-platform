@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from autonomous_ai_agents.common.models import LongContextPrice, ModelPrice
+from autonomous_ai_agents.common.models import ChangeClass, LongContextPrice, ModelPrice
 from autonomous_ai_agents.common.refnames import branch_prefix_problem
 
 IsolationMode = Literal["required", "best_effort", "off"]
@@ -24,6 +24,13 @@ IsolationMode = Literal["required", "best_effort", "off"]
 
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 """``output_config.effort`` levels, lowest first (the SDK's own literal)."""
+
+Retrieval = Literal["blind", "matched"]
+"""How research picks techniques for the generator (D1): ``blind`` shows the
+context's techniques as they are; ``matched`` asks the matcher first."""
+
+Role = Literal["engine", "editor", "generator", "matcher"]
+"""A Claude role with its own model chain (``role_chain``)."""
 
 _LEVELS: Final[tuple[Effort, ...]] = get_args(Effort)
 _ALL: Final = frozenset(_LEVELS)
@@ -111,6 +118,16 @@ _DEFAULT_PRICING: dict[str, ModelPrice] = {
         ),
     ),
 }
+
+
+GENERATOR_N_MAX: Final = 20
+"""Most hypotheses one generation request asks for (``GENERATOR_N``)."""
+MATCHER_K_MAX: Final = 20
+"""Most techniques one match request returns (``MATCHER_K``)."""
+GENERATOR_MAX_CALLS_MAX: Final = 5
+"""Most generation requests a run may send (``GENERATOR_MAX_CALLS``)."""
+FIX_RETRIES_MAX: Final = 1
+"""Most self-retries, per trial and per run, until B-R2 lifts it (O8)."""
 
 
 class Settings(BaseSettings):
@@ -202,7 +219,47 @@ class Settings(BaseSettings):
     """``output_config.effort`` on every editor request; ``None`` sends no
     ``output_config``. One value for a whole conversation keeps the cache."""
 
-    @field_validator("UNDERSTAND_EFFORT", "EDITOR_EFFORT", mode="before")
+    # ============================================
+    # Step 3: discovery roles (D5, D1, D9, D7) and the editor model (D16)
+    # ============================================
+    GENERATOR_MODEL: str = "claude-sonnet-5-5"
+    GENERATOR_EFFORT: Effort | None = "medium"
+    GENERATOR_N: int = Field(default=5, ge=1, le=GENERATOR_N_MAX)
+    GENERATOR_MAX_TOKENS: int = Field(default=16000, ge=1)
+    GENERATOR_MAX_CALLS: int = Field(default=2, ge=0, le=GENERATOR_MAX_CALLS_MAX)
+    MATCHER_MODEL: str = "claude-sonnet-5-5"
+    MATCHER_EFFORT: Effort | None = "medium"
+    MATCHER_K: int = Field(default=3, ge=1, le=MATCHER_K_MAX)
+    RESEARCH_RETRIEVAL: Retrieval = "blind"
+    GENERATED_CLASSES: tuple[ChangeClass, ...] = (
+        ChangeClass.efficiency,
+        ChangeClass.behaviour,
+    )
+    """Generated classes that enter rounds; any other is parked (never ``novel``)."""
+    DISCOVERY_MAX_SHARE: float = Field(default=0.25, gt=0, lt=1, allow_inf_nan=False)
+    """Most of ``max_cost`` discovery (generator and matcher) may spend (D7)."""
+    EDITOR_MODEL: str | None = None
+    """``None`` keeps ``ENGINE_MODEL`` with its fallbacks; a model runs alone."""
+
+    @field_validator("GENERATED_CLASSES")
+    @classmethod
+    def _generated_classes_never_novel(
+        cls, value: tuple[ChangeClass, ...]
+    ) -> tuple[ChangeClass, ...]:
+        """Novel ideas need approval no unattended run gives, so they park (D9)."""
+        if not value or ChangeClass.novel in value:
+            raise ValueError(
+                "GENERATED_CLASSES must name efficiency and/or behaviour, never novel"
+            )
+        return tuple(dict.fromkeys(value))
+
+    @field_validator(
+        "UNDERSTAND_EFFORT",
+        "EDITOR_EFFORT",
+        "GENERATOR_EFFORT",
+        "MATCHER_EFFORT",
+        mode="before",
+    )
     @classmethod
     def _blank_effort_is_unset(cls, value: object) -> object:
         """An empty variable (an unset CI var) means no effort, not an error."""
@@ -227,6 +284,14 @@ class Settings(BaseSettings):
     EDITOR_MAX_TOKENS: int = Field(default=8000, ge=1)
     """``max_tokens`` for each editor request (tool calls are short; this keeps
     the worst-case estimate of one request well under the default cost cap)."""
+
+    # Self-retry (D12, D13). Both bounded 0-1: the run cap by the owner (O8,
+    # until B-R2), the per-trial one because a run cap of 1 makes more
+    # unreachable (spec section 8, Q17).
+    EDITOR_FIX_RETRIES: int = Field(default=1, ge=0, le=FIX_RETRIES_MAX)
+    EDITOR_FIX_RETRIES_PER_RUN: int = Field(default=1, ge=0, le=FIX_RETRIES_MAX)
+    RETRY_CLOSURE_MAX_SOURCE_BYTES: int = Field(default=8 * _MIB, ge=1)
+    """Most tracked source the retry's closure set reads (D13)."""
 
     # ============================================
     # Engine: measurement rigour and budget
@@ -319,7 +384,12 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _every_billed_model_is_priced(self) -> Self:
         """Every model a request may bill needs a price, or no estimate is a bound."""
-        needed = (self.ENGINE_MODEL, *self.ENGINE_FALLBACK_MODELS, self.TRIAGE_MODEL)
+        needed = (
+            self.ENGINE_MODEL,
+            *self.ENGINE_FALLBACK_MODELS,
+            self.TRIAGE_MODEL,
+            *(model for role in _ROLES for model in role_chain(self, role)),
+        )
         missing = sorted({name for name in needed if name not in self.MODEL_PRICING})
         if missing:
             raise ValueError(f"MODEL_PRICING has no price for {', '.join(missing)}")
@@ -327,16 +397,21 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _effort_accepted_by_every_serving_model(self) -> Self:
-        """A configured level must be one every model in the chain accepts.
+        """A configured level must be one every model in its role's chain accepts.
 
-        The chain is ``cost.chain``'s: the engine model, plus the fallbacks
-        when they are sent; a fallback re-runs the same body, effort included.
+        Each chain is ``role_chain``'s: understanding uses the engine's (the
+        engine model, plus the fallbacks when they are sent; a fallback re-runs
+        the same body, effort included), every other key its own role's.
         """
-        serving: tuple[str, ...] = (self.ENGINE_MODEL,)
-        if self.ENGINE_FALLBACKS:
-            serving += self.ENGINE_FALLBACK_MODELS
-        for key in ("UNDERSTAND_EFFORT", "EDITOR_EFFORT"):
+        keys: tuple[tuple[str, Role], ...] = (
+            ("UNDERSTAND_EFFORT", "engine"),
+            ("EDITOR_EFFORT", "editor"),
+            ("GENERATOR_EFFORT", "generator"),
+            ("MATCHER_EFFORT", "matcher"),
+        )
+        for key, role in keys:
             level: Effort | None = getattr(self, key)
+            serving = role_chain(self, role)
             for model in dict.fromkeys(serving) if level is not None else ():
                 accepted = EFFORT_LEVELS.get(model)
                 if accepted is None:
@@ -387,6 +462,53 @@ class Settings(BaseSettings):
 
     TIMEOUT_SECONDS: int = 30
     """Default timeout for external API calls."""
+
+
+_ROLES: Final[tuple[Role, ...]] = get_args(Role)
+
+
+def role_chain(cfg: Settings, role: Role) -> tuple[str, ...]:
+    """Every model one request of ``role`` may bill, in the order tried.
+
+    The engine (and the editor while ``EDITOR_MODEL`` is unset) keeps
+    ``cost.chain``'s: ``ENGINE_MODEL`` plus ``ENGINE_FALLBACK_MODELS`` when
+    ``ENGINE_FALLBACKS`` is on. Every other role runs its model alone.
+    """
+    model = {
+        "engine": None,
+        "editor": cfg.EDITOR_MODEL,
+        "generator": cfg.GENERATOR_MODEL,
+        "matcher": cfg.MATCHER_MODEL,
+    }[role]
+    if model is not None:
+        return (model,)
+    if cfg.ENGINE_FALLBACKS:
+        return (cfg.ENGINE_MODEL, *cfg.ENGINE_FALLBACK_MODELS)
+    return (cfg.ENGINE_MODEL,)
+
+
+def role_settings(base: Settings, role: Role, **update: object) -> Settings:
+    """A validated copy of ``base`` whose engine chain is ``role``'s.
+
+    Promoted from ``tests/live/discovery.py``'s ``model_settings``: a role
+    with its own model gets it as ``ENGINE_MODEL`` with fallbacks off, and the
+    efforts of the other roles are cleared so they are not re-checked against
+    a model they never run on; then ``update`` applies. So
+    ``cost.chain(role_settings(base, role)) == role_chain(base, role)``, and
+    a transport built from the copy serves that role. ``base`` is unchanged.
+    """
+    changes: dict[str, object] = {}
+    model = role_chain(base, role)
+    if model != role_chain(base, "engine"):
+        changes = {
+            "ENGINE_MODEL": model[0],
+            "ENGINE_FALLBACKS": False,
+            "EDITOR_MODEL": None,
+            "UNDERSTAND_EFFORT": None,
+            "EDITOR_EFFORT": base.EDITOR_EFFORT if role == "editor" else None,
+        }
+    copy = base.model_copy(update={**changes, **update})
+    return type(base).model_validate(copy.model_dump())
 
 
 # Global settings instance

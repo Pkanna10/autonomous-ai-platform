@@ -2014,6 +2014,7 @@ class TestVerdicts:
             "reject": 1,
             "inconclusive": 1,
             "needs_approval": 1,
+            "review": 0,  # Step 3 outcome (D10), counted like the others
         }
 
     def test_too_few_runs_on_an_objective_metric_rejects(
