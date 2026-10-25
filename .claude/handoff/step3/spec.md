@@ -204,10 +204,16 @@ token (`:463`). *Why:* one rule, no flag to set wrong.
   as `TrialBrief.fix_retries_left: int = 0` (`execution/protocols.py:76-81`).
   `_attempt` retries only below both caps; `_runner_trial_problems`
   (`nodes.py:456-473`) refuses a trial reporting more. Counted from
-  checkpointed trials, the cap survives a resume at a node boundary; a crash
-  inside the trials node loses the round with its count (`_trials_progress`,
-  `nodes.py:784-796`, attaches it only to the failed record) and the round is
-  re-paid on resume, as in Step 2 (D18). The editor prompt never shows it.
+  checkpointed trials, the cap survives a resume at a node boundary. The
+  owner's rule is exactly one second chance per run, so a crash inside the
+  trials node must not regrant it either (Lead, U16 review): the node also
+  counts the run's saved trials (`list_trials`), takes the larger count, and
+  never lets a re-run trial lower a saved trial's `attempts`; an unreadable
+  repository grants 0. Residual: a trial lost after its retry request (an
+  engine error or a failed save) is not recorded, so resuming such a failed
+  run directly through the graph could grant one more retry. `Orchestrator`
+  refuses to resume a failed run; any later resume path (Step 4) must first
+  record the grant durably. The editor prompt never shows the count.
 - *Why a brief field:* a `run()` keyword would break every `TrialRunner`
   (`execution/runner.py:46-62`, `:120-129`, `tests/orchestrator/test_nodes.py:277`);
   default 0 fails closed.

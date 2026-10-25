@@ -602,13 +602,76 @@ def _baseline_workload_ids(baseline: Baseline, metrics: Sequence[str]) -> list[s
     )
 
 
+def _fix_retries_spent(*sources: Iterable[Trial]) -> int:
+    """The run's fix retries spent (D12): one per attempt after the first,
+    summed over trials, never below 0.
+
+    One trial id in several sources (the checkpoint, the repository, this
+    round) or twice in one is one trial (ids are ``trial_id_for(branch,
+    round)``, so a re-executed round rebuilds them): its largest count wins."""
+    most: dict[str, int] = {}
+    for source in sources:
+        for trial in source:
+            most[trial.id] = max(most.get(trial.id, 0), trial.attempts - 1)
+    return sum(most.values())
+
+
+_UNREADABLE = "fix_retry_count_unavailable"
+
+
+def _recorded_fix_retries(
+    ctx: NodeContext, state: EngineState
+) -> tuple[dict[str, Trial] | None, list[EngineEvent]]:
+    """The run's trials the repository records, by id (D12); ``None`` (with
+    one warning) when it cannot say; at cap 0 there is nothing to grant, so
+    nothing is read (Step 2).
+
+    Each trial is saved before the next starts, so the record survives a
+    crash inside the trials node that the checkpoint loses, and a re-executed
+    round's save keeps a higher recorded count (``_carried``). A trial lost
+    after its retry request (an engine error or a failed save) is not
+    recorded, so resuming such a failed run directly through the graph could
+    grant one more retry. Orchestrator refuses to resume a failed run; any
+    later resume path must first record the grant durably."""
+    if ctx.fix_retries_per_run == 0:
+        return {}, []
+    try:
+        recorded = ctx.repository.list_trials(state["run_id"])
+    except Exception as exc:  # fail closed: no retry this round, the run goes on
+        kind = type(exc).__name__  # never str(exc): it may carry a DSN
+        warning = _note(state, RunPhase.trials, _UNREADABLE,
+                        f"the run's trials could not be read ({kind}); no fix retry",
+                        level=EventLevel.warning, data={"error": kind})  # fmt: skip
+        return None, [warning]
+    return {trial.id: trial for trial in recorded}, []
+
+
+def _carried(trial: Trial, prior: Trial | None) -> Trial:
+    """``trial`` with a higher recorded count carried forward (D12): a
+    re-executed round keeps its id, and its save must not erase a spent retry."""
+    if prior is None or prior.attempts <= trial.attempts:
+        return trial
+    notes = (*prior.retry_notes, *trial.retry_notes)
+    return trial.model_copy(update={"attempts": prior.attempts, "retry_notes": notes})
+
+
 def _runner_trial_problems(
-    trial: Trial, hypothesis: Hypothesis, round_number: int, budget_usd: float
+    trial: Trial,
+    hypothesis: Hypothesis,
+    round_number: int,
+    budget_usd: float,
+    fix_retries_left: int,
 ) -> list[str]:
     """Why a runner's Trial cannot be trusted as this hypothesis's round trial."""
     problems: list[str] = []
     if trial.cost_usd > budget_usd:
         problems.append(f"cost_usd {trial.cost_usd} exceeds its budget {budget_usd}")
+    if trial.attempts - 1 > fix_retries_left:
+        retries = "retry" if fix_retries_left == 1 else "retries"
+        problems.append(
+            f"attempts {trial.attempts} exceeds the {fix_retries_left} fix "
+            f"{retries} it was given"
+        )
     if trial.hypothesis_id != hypothesis.id:
         problems.append(
             f"hypothesis_id is {trial.hypothesis_id!r}, expected {hypothesis.id!r}"
@@ -2675,9 +2738,11 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
         hypothesis: Hypothesis,
         measured: Baseline,
         remaining: float,
+        fix_retries_left: int,
     ) -> Trial:
-        """One trial offered ``remaining``; ``EngineError`` when the runner's
-        Trial cannot be trusted (charged at most ``remaining`` as progress)."""
+        """One trial offered ``remaining`` and ``fix_retries_left``;
+        ``EngineError`` when the runner's Trial cannot be trusted, more
+        attempts than allowed included (charged at most ``remaining``)."""
         branch = f"{ctx.branch_prefix}trial-{state['run_id']}-{hypothesis.id}"
         assert_safe_branch(branch, state["project"], ctx.branch_prefix)
         trial = ctx.runner.run(
@@ -2692,9 +2757,12 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                 hotspots=_brief_hotspots(hypothesis, state["hotspots"]),
                 protected=(*ctx.protected_patterns, *state["extra_protected"]),
                 read_deny=() if ctx.quality is None else ctx.quality.frozen_paths,
+                fix_retries_left=fix_retries_left,
             ),
         )
-        problems = _runner_trial_problems(trial, hypothesis, state["round"], remaining)
+        problems = _runner_trial_problems(
+            trial, hypothesis, state["round"], remaining, fix_retries_left
+        )
         if problems:
             error = EngineError(
                 f"runner returned an untrustworthy trial {trial.id} for "
@@ -2717,6 +2785,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
         ]
         new_trials: list[Trial] = []
         stopped: list[EngineEvent] = []
+        records, warned = _recorded_fix_retries(ctx, state)
         for index, hypothesis in enumerate(proposed):
             remaining = state["max_cost_usd"] - cost_usd
             if remaining <= 0 or remaining < ctx.min_trial_budget_usd:
@@ -2729,8 +2798,18 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                     )
                 )
                 break
+            # The run cap (D12, O8), one trial at a time, over the checkpoint,
+            # the repository (read once; this round's saves are new_trials) and
+            # this round, so no resume grants a spent retry again; max(0, ...)
+            # if the cap fell on resume; none if the repository cannot say.
+            left = 0
+            if records is not None:
+                spent = _fix_retries_spent(
+                    state["trials"], records.values(), new_trials
+                )
+                left = max(0, ctx.fix_retries_per_run - spent)
             try:
-                trial = run_one(state, hypothesis, measured, remaining)
+                trial = run_one(state, hypothesis, measured, remaining, left)
             except TrialUnaffordable as exc:  # its first request alone passes the cap
                 stopped.append(
                     _budget_exhausted(
@@ -2754,6 +2833,8 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                     ),
                 )
                 raise
+            # run_one checked the runner's own attempts; only now carry forward
+            trial = _carried(trial, (records or {}).get(trial.id))
             # trial.cost_usd <= remaining, so only rounding could pass the cap
             cost_usd = min(state["max_cost_usd"], cost_usd + trial.cost_usd)
             tokens_used += trial.tokens_used
@@ -2785,7 +2866,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             "hypotheses": _with_statuses(state["hypotheses"], ran),
             "cost_usd": cost_usd,
             "tokens_used": tokens_used,
-            "events": [*stopped, event],
+            "events": [*warned, *stopped, event],
         }
         if stopped:
             delta["budget_exhausted"] = True
