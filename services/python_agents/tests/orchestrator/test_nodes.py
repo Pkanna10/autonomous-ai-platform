@@ -485,6 +485,13 @@ def base_state(
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def h4_novel(h4_behaviour: Hypothesis) -> Hypothesis:
+    """H4 as a novel change: since D10 only a novel verdict pauses at the gate
+    (a behaviour win goes to the review branch), so gate tests use this."""
+    return h4_behaviour.model_copy(update={"change_class": ChangeClass.novel})
+
+
 class TestMakeNodes:
     def test_returns_every_node_in_loop_order(
         self, make_context: ContextFactory
@@ -1973,7 +1980,8 @@ class TestVerdicts:
         GIVEN the four design hypotheses judged in one round
         WHEN verdicts runs
         THEN H1 keep, H2 reject (protected path), H3 inconclusive,
-             H4 needs_approval; statuses, pending ids and repository follow
+             H4 review (D10: no pending approval); statuses and repository
+             follow
         """
         ctx = make_context(
             [h1_cache, h2_protected, h3_noise, h4_behaviour],
@@ -1992,7 +2000,7 @@ class TestVerdicts:
             ViolationRule.protected_path
         ]
         assert verdicts[h3_noise.id].outcome is VerdictOutcome.inconclusive
-        assert verdicts[h4_behaviour.id].outcome is VerdictOutcome.needs_approval
+        assert verdicts[h4_behaviour.id].outcome is VerdictOutcome.review
         assert verdicts[h4_behaviour.id].change_class is ChangeClass.behaviour
         statuses = {h.id: h.status for h in _items(delta, "hypotheses", Hypothesis)}
         assert statuses == {
@@ -2001,7 +2009,7 @@ class TestVerdicts:
             h3_noise.id: HypothesisStatus.inconclusive,
             h4_behaviour.id: HypothesisStatus.trialled,
         }
-        assert delta["pending_approval_ids"] == [verdicts[h4_behaviour.id].id]
+        assert delta["pending_approval_ids"] == []
         assert {v.id for v in ctx.repository.list_verdicts(RUN_ID)} == {
             v.id for v in verdicts.values()
         }
@@ -2013,8 +2021,8 @@ class TestVerdicts:
             "keep": 1,
             "reject": 1,
             "inconclusive": 1,
-            "needs_approval": 1,
-            "review": 0,  # Step 3 outcome (D10), counted like the others
+            "needs_approval": 0,
+            "review": 1,  # Step 3 outcome (D10), counted like the others
         }
 
     def test_too_few_runs_on_an_objective_metric_rejects(
@@ -2405,9 +2413,9 @@ class TestApprovalGate:
         self,
         make_context: ContextFactory,
         base_state: EngineState,
-        h4_behaviour: Hypothesis,
+        h4_novel: Hypothesis,
     ) -> tuple[NodeContext, dict[str, NodeFn], EngineState]:
-        ctx = make_context([h4_behaviour])
+        ctx = make_context([h4_novel])
         nodes = make_nodes(ctx)
         state = _advance(nodes, base_state, _before("combine"))
         assert len(state["pending_approval_ids"]) == 1
@@ -2416,7 +2424,7 @@ class TestApprovalGate:
     def test_interrupts_with_an_approval_request_built_from_state(
         self,
         pending_state: tuple[NodeContext, dict[str, NodeFn], EngineState],
-        h4_behaviour: Hypothesis,
+        h4_novel: Hypothesis,
     ) -> None:
         """
         GIVEN a state with one verdict awaiting approval
@@ -2434,8 +2442,8 @@ class TestApprovalGate:
         assert request.run_id == RUN_ID
         (item,) = request.items
         assert item.verdict_id == state["pending_approval_ids"][0]
-        assert item.title == h4_behaviour.title
-        assert item.change_class is ChangeClass.behaviour
+        assert item.title == h4_novel.title
+        assert item.change_class is ChangeClass.novel
         assert item.gain == pytest.approx(0.1667, abs=1e-3)
         assert "needs_approval" in item.summary
         assert "1 change" in request.message
@@ -2635,22 +2643,20 @@ class TestCombine:
         base_state: EngineState,
         h1_cache: Hypothesis,
         h3_noise: Hypothesis,
-        h4_behaviour: Hypothesis,
+        h4_novel: Hypothesis,
     ) -> None:
         """
         GIVEN a keep, an inconclusive and an approved needs_approval verdict
         WHEN combine runs
         THEN the kept ids are the keep verdict then the approved one
         """
-        ctx = make_context(
-            [h1_cache, h3_noise, h4_behaviour], max_hypotheses_per_round=3
-        )
+        ctx = make_context([h1_cache, h3_noise, h4_novel], max_hypotheses_per_round=3)
         nodes = make_nodes(ctx)
         state = _advance(nodes, base_state, _before("combine"))
         by_hypothesis = {v.hypothesis_id: v for v in state["verdicts"]}
         state["approval"] = ApprovalDecision(
             approved_verdict_ids=(
-                by_hypothesis[h4_behaviour.id].id,
+                by_hypothesis[h4_novel.id].id,
                 by_hypothesis[h1_cache.id].id,  # already kept: not duplicated
                 "unknown-verdict",  # ignored
             ),
@@ -2661,7 +2667,7 @@ class TestCombine:
 
         assert delta["kept_verdict_ids"] == [
             by_hypothesis[h1_cache.id].id,
-            by_hypothesis[h4_behaviour.id].id,
+            by_hypothesis[h4_novel.id].id,
         ]
         assert _only_event(delta).data == {"kept": 2}
 
@@ -2670,14 +2676,14 @@ class TestCombine:
         make_context: ContextFactory,
         base_state: EngineState,
         h1_cache: Hypothesis,
-        h4_behaviour: Hypothesis,
+        h4_novel: Hypothesis,
     ) -> None:
         """
         GIVEN a keep and an undecided needs_approval verdict
         WHEN combine runs with no approval
         THEN only the keep verdict is kept
         """
-        nodes = make_nodes(make_context([h1_cache, h4_behaviour]))
+        nodes = make_nodes(make_context([h1_cache, h4_novel]))
         state = _advance(nodes, base_state, _before("combine"))
         keep = next(v for v in state["verdicts"] if v.outcome is VerdictOutcome.keep)
 
@@ -2688,18 +2694,18 @@ class TestCombine:
         make_context: ContextFactory,
         base_state: EngineState,
         h1_cache: Hypothesis,
-        h4_behaviour: Hypothesis,
+        h4_novel: Hypothesis,
     ) -> None:
         """
         GIVEN a keep verdict and a needs_approval verdict the human rejected
         WHEN combine runs
         THEN only the keep verdict is kept
         """
-        nodes = make_nodes(make_context([h1_cache, h4_behaviour]))
+        nodes = make_nodes(make_context([h1_cache, h4_novel]))
         state = _advance(nodes, base_state, _before("combine"))
         by_hypothesis = {v.hypothesis_id: v for v in state["verdicts"]}
         state["approval"] = ApprovalDecision(
-            rejected_verdict_ids=(by_hypothesis[h4_behaviour.id].id,), approver="pk"
+            rejected_verdict_ids=(by_hypothesis[h4_novel.id].id,), approver="pk"
         )
 
         assert nodes["combine"](state)["kept_verdict_ids"] == [
@@ -3013,18 +3019,18 @@ class TestDeliver:
         make_context: ContextFactory,
         base_state: EngineState,
         h1_cache: Hypothesis,
-        h4_behaviour: Hypothesis,
+        h4_novel: Hypothesis,
     ) -> None:
         """
         GIVEN H4 approved at the gate next to the automatic keep H1
         WHEN deliver writes the report
         THEN H4's row reads keep, not needs_approval, and both are listed as kept
         """
-        nodes = make_nodes(make_context([h1_cache, h4_behaviour]))
+        nodes = make_nodes(make_context([h1_cache, h4_novel]))
         state = _advance(nodes, base_state, _before("combine"))
         by_hypothesis = {v.hypothesis_id: v for v in state["verdicts"]}
         state["approval"] = ApprovalDecision(
-            approved_verdict_ids=(by_hypothesis[h4_behaviour.id].id,), approver="pk"
+            approved_verdict_ids=(by_hypothesis[h4_novel.id].id,), approver="pk"
         )
         state = _apply(state, nodes["combine"](state))
 
@@ -3032,9 +3038,9 @@ class TestDeliver:
 
         assert isinstance(delivery, Delivery)
         report = delivery.report_markdown
-        assert f"| {h4_behaviour.title} | keep | +16.7% |" in report
-        assert f"| {h4_behaviour.title} | needs_approval |" not in report
-        assert f"Kept: {h1_cache.title}, {h4_behaviour.title}" in report
+        assert f"| {h4_novel.title} | keep | +16.7% |" in report
+        assert f"| {h4_novel.title} | needs_approval |" not in report
+        assert f"Kept: {h1_cache.title}, {h4_novel.title}" in report
 
     def test_report_without_a_baseline_or_verdicts(
         self, make_context: ContextFactory, base_state: EngineState
@@ -3164,14 +3170,14 @@ class TestLearn:
         self,
         make_context: ContextFactory,
         base_state: EngineState,
-        h4_behaviour: Hypothesis,
+        h4_novel: Hypothesis,
     ) -> None:
         """
         GIVEN needs_approval verdicts that were approved, rejected or left undecided
         WHEN learn runs
         THEN the lessons record keep, reject and needs_approval respectively
         """
-        nodes = make_nodes(make_context([h4_behaviour]))
+        nodes = make_nodes(make_context([h4_novel]))
         state = _advance(nodes, base_state, _before("combine"))
         (verdict,) = state["verdicts"]
         rejected = verdict.model_copy(update={"id": "rejected-one"})
@@ -3197,18 +3203,18 @@ class TestLearn:
         make_context: ContextFactory,
         base_state: EngineState,
         h1_cache: Hypothesis,
-        h4_behaviour: Hypothesis,
+        h4_novel: Hypothesis,
     ) -> None:
         """
         GIVEN a keep verdict (H1) next to an approved needs_approval one (H4)
         WHEN learn runs
         THEN H1's lesson is unchanged and only H4's records the approver
         """
-        nodes = make_nodes(make_context([h1_cache, h4_behaviour]))
+        nodes = make_nodes(make_context([h1_cache, h4_novel]))
         state = _advance(nodes, base_state, _before("combine"))
         by_hypothesis = {v.hypothesis_id: v for v in state["verdicts"]}
         state["approval"] = ApprovalDecision(
-            approved_verdict_ids=(by_hypothesis[h4_behaviour.id].id,), approver="pk"
+            approved_verdict_ids=(by_hypothesis[h4_novel.id].id,), approver="pk"
         )
 
         lessons = _items(nodes["learn"](state), "lessons", Lesson)
@@ -3216,7 +3222,7 @@ class TestLearn:
         by_id = {lesson.hypothesis_id: lesson for lesson in lessons}
         assert by_id[h1_cache.id].outcome is VerdictOutcome.keep
         assert by_id[h1_cache.id].verdict_id == by_hypothesis[h1_cache.id].id
-        assert by_id[h4_behaviour.id].outcome is VerdictOutcome.keep
+        assert by_id[h4_novel.id].outcome is VerdictOutcome.keep
         assert len(lessons) == 2
 
     def test_warns_about_verdicts_with_unknown_hypotheses(
@@ -4753,21 +4759,21 @@ class TestCombineWithCombiner:
         sample_project: Project,
         sample_workload: Workload,
         h1_cache: Hypothesis,
-        h4_behaviour: Hypothesis,
+        h4_novel: Hypothesis,
     ) -> None:
         """
         GIVEN two equal-score efficiency keeps (ids tie-b, tie-a) and an
-              approved lower-score behaviour change
+              approved lower-score novel change
         WHEN combine runs
         THEN the combiner gets tie-a, tie-b, then the approved change
         """
         tie_b = h1_cache.model_copy(update={"id": "tie-b"})
         tie_a = h1_cache.model_copy(update={"id": "tie-a"})
-        candidates = [tie_b, tie_a, h4_behaviour]
+        candidates = [tie_b, tie_a, h4_novel]
         nodes = make_nodes(make_context(candidates, max_hypotheses_per_round=3))
         state = _committed(_advance(nodes, base_state, _before("combine")))
         state["approval"] = ApprovalDecision(
-            approved_verdict_ids=(_verdict_of(state, h4_behaviour).id,), approver="pk"
+            approved_verdict_ids=(_verdict_of(state, h4_novel).id,), approver="pk"
         )
         applied = [t.id for t in state["trials"]]
         combiner = FakeCombiner([_measured(sample_workload.id, applied)])
@@ -4780,7 +4786,7 @@ class TestCombineWithCombiner:
         assert [c.hypothesis_id for c in call.kept] == [
             "tie-a",
             "tie-b",
-            h4_behaviour.id,
+            h4_novel.id,
         ]
         assert sorted(cast(list[str], delta["kept_verdict_ids"])) == sorted(
             v.id for v in state["verdicts"]

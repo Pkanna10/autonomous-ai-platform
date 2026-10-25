@@ -11,7 +11,7 @@ the id-keyed script is absent, so fresh hypothesis ids never matter.
 | H1         | 1.05 s, tests pass, touched src/bridge/encoder.py | keep           |
 | H2         | 1.20 s, tests pass, touched tests/test_cache.py   | reject         |
 | H3         | 1.76 s (inside the noise floor)                   | inconclusive   |
-| H4         | 1.50 s, val_loss +0.6 %, behaviour change         | needs_approval |
+| H4         | 1.50 s, val_loss +0.6 %, behaviour change         | review         |
 
 Baseline ``wall_time_s``: n=5, mean 1.80, stdev 0.035; noise floor 0.071 s.
 """
@@ -277,7 +277,7 @@ def h3_noise(sample_project: Project) -> Hypothesis:
 
 @pytest.fixture
 def h4_behaviour(sample_project: Project) -> Hypothesis:
-    """H4: behaviour-changing win within the guardrail (needs_approval)."""
+    """H4: behaviour-changing win within the guardrail (review, D10)."""
     return _hypothesis(
         sample_project,
         H4_TITLE,

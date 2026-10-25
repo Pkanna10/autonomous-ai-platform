@@ -410,6 +410,13 @@ def test_the_dump_is_plain_json_values_only(rich_state: EngineState) -> None:
     ]
 
 
+@pytest.fixture
+def h4_novel(h4_behaviour: Hypothesis) -> Hypothesis:
+    """H4 as a novel change: since D10 only a novel verdict pauses at the gate
+    (a behaviour win goes to the review branch), so gate tests use this."""
+    return h4_behaviour.model_copy(update={"change_class": ChangeClass.novel})
+
+
 def test_a_full_gated_engine_run_round_trips(
     make_context: Callable[..., NodeContext],
     engine_graph: Callable[..., EngineGraph],
@@ -420,7 +427,7 @@ def test_a_full_gated_engine_run_round_trips(
     h1_cache: Hypothesis,
     h2_protected: Hypothesis,
     h3_noise: Hypothesis,
-    h4_behaviour: Hypothesis,
+    h4_novel: Hypothesis,
 ) -> None:
     """
     GIVEN the briefing run: H1-H4 in one round, paused for H4, H4 approved
@@ -429,7 +436,7 @@ def test_a_full_gated_engine_run_round_trips(
          the events, the approval and the delivery)
     """
     ctx = make_context(
-        [h1_cache, h2_protected, h3_noise, h4_behaviour], max_hypotheses_per_round=4
+        [h1_cache, h2_protected, h3_noise, h4_novel], max_hypotheses_per_round=4
     )
     graph = engine_graph(ctx)
     cfg = run_config("serde-full", 3)

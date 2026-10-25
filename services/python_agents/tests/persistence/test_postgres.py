@@ -249,6 +249,13 @@ INVALID_ID_CASES: list[tuple[str, str, Callable[[Repository], None]]] = [
 ]
 
 
+@pytest.fixture
+def h4_novel(h4_behaviour: Hypothesis) -> Hypothesis:
+    """H4 as a novel change: since D10 only a novel verdict pauses at the gate
+    (a behaviour win goes to the review branch), so gate tests use this."""
+    return h4_behaviour.model_copy(update={"change_class": ChangeClass.novel})
+
+
 def test_the_offline_repository_really_cannot_connect(
     offline_repository: PostgresRepository,
 ) -> None:
@@ -1136,7 +1143,7 @@ def test_a_full_gated_run_is_recorded_identically_in_both_backends(
     h1_cache: Hypothesis,
     h2_protected: Hypothesis,
     h3_noise: Hypothesis,
-    h4_behaviour: Hypothesis,
+    h4_novel: Hypothesis,
 ) -> None:
     """
     GIVEN the briefing run (H1-H4 in one round) on a repository that writes
@@ -1147,7 +1154,7 @@ def test_a_full_gated_run_is_recorded_identically_in_both_backends(
     """
     memory = InMemoryRepository()
     ctx = make_context(
-        [h1_cache, h2_protected, h3_noise, h4_behaviour],
+        [h1_cache, h2_protected, h3_noise, h4_novel],
         max_hypotheses_per_round=4,
         repository=_Tee(memory, postgres_repository),
     )

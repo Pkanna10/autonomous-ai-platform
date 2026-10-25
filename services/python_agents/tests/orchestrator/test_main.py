@@ -300,6 +300,13 @@ class TestDefaultContext:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def h4_novel(h4_behaviour: Hypothesis) -> Hypothesis:
+    """H4 as a novel change: since D10 only a novel verdict pauses at the gate
+    (a behaviour win goes to the review branch), so gate tests use this."""
+    return h4_behaviour.model_copy(update={"change_class": ChangeClass.novel})
+
+
 @pytest.mark.parametrize("max_rounds", [1, 3, 60])
 def test_run_config_binds_the_thread_and_sizes_the_recursion_limit(
     max_rounds: int,
@@ -429,15 +436,15 @@ class TestOrchestrator:
         sample_workload: Workload,
         sample_objective: Objective,
         sample_guardrails: tuple[Guardrail, ...],
-        h4_behaviour: Hypothesis,
+        h4_novel: Hypothesis,
     ) -> None:
         """
-        GIVEN H4 (a behaviour change) as the only candidate
+        GIVEN H4 as a novel change (D10: only novel pauses) as the only candidate
         WHEN the orchestrator runs and is then resumed with an approval
         THEN the first result needs approval with the request attached and
              the second is done with H4 delivered on a branch
         """
-        ctx = make_context([h4_behaviour])
+        ctx = make_context([h4_novel])
         orchestrator = Orchestrator(context=ctx)
 
         paused = orchestrator.run(
@@ -451,8 +458,8 @@ class TestOrchestrator:
         assert paused.status == "needs_approval"
         assert paused.approval_request is not None
         (item,) = paused.approval_request.items
-        assert item.change_class is ChangeClass.behaviour
-        assert item.title == h4_behaviour.title
+        assert item.change_class is ChangeClass.novel
+        assert item.title == h4_novel.title
         assert paused.state["phase"] is RunPhase.verdicts
         assert paused.state["pending_approval_ids"] == [item.verdict_id]
 
@@ -599,7 +606,7 @@ class TestOrchestrator:
         sample_objective: Objective,
         sample_guardrails: tuple[Guardrail, ...],
         h1_cache: Hypothesis,
-        h4_behaviour: Hypothesis,
+        h4_novel: Hypothesis,
     ) -> None:
         """
         GIVEN a consumer that stops reading at the last event
@@ -608,7 +615,7 @@ class TestOrchestrator:
         """
         for run_id, candidate, last_phase in (
             ("run-break-done", h1_cache, RunPhase.done),
-            ("run-break-paused", h4_behaviour, RunPhase.approval),
+            ("run-break-paused", h4_novel, RunPhase.approval),
         ):
             ctx = make_context([candidate])
             orchestrator = Orchestrator(context=ctx)
@@ -637,7 +644,7 @@ class TestOrchestrator:
         sample_objective: Objective,
         sample_guardrails: tuple[Guardrail, ...],
         h1_cache: Hypothesis,
-        h4_behaviour: Hypothesis,
+        h4_novel: Hypothesis,
         ending: str,
     ) -> None:
         """
@@ -652,7 +659,7 @@ class TestOrchestrator:
             script = ScriptedOutcome(samples={METRIC_WALL_TIME_S: (1.8, 1.8)})
             ctx = make_context(baseline_runner=StubBaselineRunner(script))
         else:
-            ctx = make_context([h4_behaviour if ending == "paused" else h1_cache])
+            ctx = make_context([h4_novel if ending == "paused" else h1_cache])
         orchestrator = Orchestrator(context=ctx)
         run_id = f"run-held-{ending}"
         events = orchestrator.stream(
@@ -689,7 +696,7 @@ class TestOrchestrator:
         sample_workload: Workload,
         sample_objective: Objective,
         sample_guardrails: tuple[Guardrail, ...],
-        h4_behaviour: Hypothesis,
+        h4_novel: Hypothesis,
     ) -> None:
         """
         GIVEN H4 as the only candidate
@@ -697,7 +704,7 @@ class TestOrchestrator:
         THEN the stream ends with one paused event after the verdicts event,
              the paused run is saved, and resume finishes the run
         """
-        ctx = make_context([h4_behaviour])
+        ctx = make_context([h4_novel])
         orchestrator = Orchestrator(context=ctx)
 
         events = list(
@@ -904,7 +911,7 @@ class TestOrchestratorGuards:
         self,
         make_context: ContextFactory,
         inputs: tuple[Project, list[Workload], list[Objective], tuple[Guardrail, ...]],
-        h4_behaviour: Hypothesis,
+        h4_novel: Hypothesis,
     ) -> None:
         """
         GIVEN a run paused on H4
@@ -913,7 +920,7 @@ class TestOrchestratorGuards:
         THEN the first result still needs approval and its request carries
              the error; the second delivers H4
         """
-        ctx = make_context([h4_behaviour])
+        ctx = make_context([h4_novel])
         orchestrator = Orchestrator(context=ctx)
         paused = orchestrator.run(*inputs, run_id="run-bogus")
         assert paused.approval_request is not None
@@ -1373,7 +1380,7 @@ class TestConcurrentCalls:
         sample_workload: Workload,
         sample_objective: Objective,
         sample_guardrails: tuple[Guardrail, ...],
-        h4_behaviour: Hypothesis,
+        h4_novel: Hypothesis,
         design_scripts: dict[str, ScriptedOutcome],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -1390,7 +1397,7 @@ class TestConcurrentCalls:
 
         def context() -> NodeContext:
             return make_context(
-                [h4_behaviour],
+                [h4_novel],
                 runner=_CommittingRunner(StubTrialRunner(design_scripts)),
                 preflight=FakePreflight(),
                 combiner=combiner,

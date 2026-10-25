@@ -46,7 +46,8 @@ import re
 import statistics
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Literal, Protocol, runtime_checkable
 
 from langgraph.types import interrupt
@@ -89,6 +90,7 @@ from autonomous_ai_agents.common.models import (
     Delivery,
     DeliveryKind,
     Direction,
+    DropUnit,
     EngineEvent,
     EventLevel,
     Guardrail,
@@ -96,11 +98,13 @@ from autonomous_ai_agents.common.models import (
     Hotspot,
     Hypothesis,
     HypothesisStatus,
+    JudgeOutcome,
     Lesson,
     Measurement,
     NoiseCalibration,
     Objective,
     ObjectiveKind,
+    OutputTolerance,
     Paper,
     QualityCheck,
     RunPhase,
@@ -114,6 +118,7 @@ from autonomous_ai_agents.common.models import (
     Violation,
     ViolationRule,
     Workload,
+    utc_now,
 )
 from autonomous_ai_agents.common.refnames import (
     assert_safe_branch as assert_safe_branch,
@@ -143,6 +148,8 @@ from autonomous_ai_agents.optimization.anticheat import (
 from autonomous_ai_agents.optimization.judges import (
     Judge,
     derive_verdict,
+    drop_text,
+    is_point_measure,
     primary_metric,
 )
 from autonomous_ai_agents.optimization.ranking import rank_generated, rank_hypotheses
@@ -151,13 +158,18 @@ from autonomous_ai_agents.optimization.sources import (
     TechniqueMatcher,
 )
 from autonomous_ai_agents.orchestrator.combine_node import (
+    CombineOutcome,
     CombineRules,
     CombineTarget,
     combine_kept,
     is_commit,
     kept_changes,
 )
-from autonomous_ai_agents.orchestrator.confirm import CONFIRMABLE, confirm_one
+from autonomous_ai_agents.orchestrator.confirm import (
+    CONFIRMABLE,
+    confirm_one,
+    reported_gain,
+)
 from autonomous_ai_agents.orchestrator.events import emit, make_event
 from autonomous_ai_agents.orchestrator.state import EngineState, validate_run_id
 from autonomous_ai_agents.persistence.repository import Repository
@@ -589,12 +601,21 @@ def _runner_trial_problems(
     return problems
 
 
+_BY_MESSAGE: frozenset[ViolationRule] = frozenset(
+    {ViolationRule.missing_measurement, ViolationRule.too_few_runs}
+)
+"""Rules with no path whose message is what tells two findings apart."""
+
+
 def _dedupe(violations: Iterable[Violation]) -> tuple[Violation, ...]:
-    """``violations`` in order, each (rule, path, pattern) once (the first wins)."""
-    seen: set[tuple[ViolationRule, str | None, str | None]] = set()
+    """``violations`` in order, each (rule, path, pattern) once (the first
+    wins); a measurement rule's key adds its message, so a second missing
+    metric or workload is never hidden behind the first (U22 review N2)."""
+    seen: set[tuple[ViolationRule, str | None, str | None, str | None]] = set()
     unique: list[Violation] = []
     for violation in violations:
-        key = (violation.rule, violation.path, violation.pattern)
+        message = violation.message if violation.rule in _BY_MESSAGE else None
+        key = (violation.rule, violation.path, violation.pattern, message)
         if key not in seen:
             seen.add(key)
             unique.append(violation)
@@ -1479,22 +1500,36 @@ def _test_count_text(state: EngineState) -> str:
     )
 
 
-def _noise_floor_text(state: EngineState) -> str:
+def _noise_floor_text(state: EngineState, *, confirm: bool = False) -> str:
+    """Each workload's smallest provable gain, the calibration (D41 c) and
+    whether winners get a second look (D41 b, ``CONFIRM_WINNERS``)."""
     baseline = state["baseline"]
     noise = (
         [] if baseline is None else _noise(baseline.measurements, baseline.objectives)
     )
-    if not noise:
+    if baseline is None or not noise:
         return "not measured"
     names = {workload.id: workload.name for workload in state["workloads"]}
-    return "smallest provable gain " + ", ".join(
+    floors = "smallest provable gain " + ", ".join(
         f"{_cell(names.get(n.workload_id, n.workload_id))} "
         + ("unprovable (mean 0)" if n.floor is None else f"{n.floor:.1%}")
         for n in noise
     )
+    calibration = baseline.calibration
+    calibrated = (
+        "not calibrated"
+        if calibration is None
+        else f"calibrated over {calibration.blocks} A/A block(s): project floor "
+        f"{calibration.floor:.1%}, largest gap "
+        f"{max(calibration.gaps.values(), default=0.0):.1%}"
+    )
+    looks = "winners confirmed on a second look" if confirm else "confirmation off"
+    return f"{floors}; {calibrated}; {looks}"
 
 
-def _run_conditions(state: EngineState, prefix: str) -> list[str]:
+def _run_conditions(
+    state: EngineState, prefix: str, *, confirm: bool = False
+) -> list[str]:
     """What the numbers above were measured under, and how to remove trial refs.
 
     Every value goes through ``_cell``. The cleanup command
@@ -1516,7 +1551,7 @@ def _run_conditions(state: EngineState, prefix: str) -> list[str]:
         else f"- Isolation: network {_cell(str(isolation.data.get('network')))}, "
         f"filesystem {_cell(str(isolation.data.get('fs')))}"
     )
-    lines.append(f"- Noise floor: {_noise_floor_text(state)}")
+    lines.append(f"- Noise floor: {_noise_floor_text(state, confirm=confirm)}")
     lines.append(f"- Test count: {_cell(_test_count_text(state))}")
     ignored = [_cell(w.name) for w in state["workloads"] if w.inputs]
     lines.append("- Workload inputs ignored: " + (", ".join(ignored) or "none"))
@@ -1529,6 +1564,7 @@ def _run_conditions(state: EngineState, prefix: str) -> list[str]:
             else _cell(combination.summary, limit=_SUMMARY_LIMIT)
         )
     )
+    lines += _step3_conditions(state)
     lines.append(f"- Peak RSS: {_RSS_DEFINITION}")
     refs = list(
         dict.fromkeys(
@@ -1552,23 +1588,400 @@ def _run_conditions(state: EngineState, prefix: str) -> list[str]:
     return lines
 
 
-def _report(state: EngineState, prefix: str) -> str:
-    """The markdown report: title, baseline, one row per verdict, kept, conditions."""
-    project = state["project"]
+_NOTES_LIMIT = 500
+"""Longest combiner-notes text in an event or a report line (U23 risk)."""
+
+_RETRY_NOTE_LIMIT = 200
+_RETRY_NOTES_SHOWN = 3
+"""Retry notes are raw-ish text (a stderr line, editor errors): each is cut
+to the limit and at most this many are shown per trial, in the report only."""
+
+
+def _capped(text: str, limit: int = _NOTES_LIMIT) -> str:
+    """``text`` on one line, cut to ``limit`` characters with an ellipsis."""
+    flat = _LINE_BREAKS.sub(" ", text)
+    return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+
+
+def _combiner_notes(ctx: NodeContext) -> tuple[str, ...]:
+    """The latest combine call's notes (``GitCombiner.last_notes``), if any."""
+    return tuple(dict.fromkeys(map(str, getattr(ctx.combiner, "last_notes", ()))))
+
+
+def _project_floor(baseline: Baseline | None) -> float:
+    """The primary objective's raised ``min_relative_gain`` (D41 c, D42)."""
+    objectives = () if baseline is None else baseline.objectives
+    primary = primary_metric(objectives)
+    return next(
+        (o.min_relative_gain for o in objectives if o.metric == primary),
+        NOISE_FLOOR_MIN,
+    )
+
+
+def _gain_text(verdict: Verdict, floor: float) -> str:
+    """D42's line: mean of the looks, margin, confirmations and label."""
+    reported = reported_gain(verdict, floor=floor)
+    return "no gain measured" if reported is None else reported.text()
+
+
+def _score(value: float, check: QualityCheck) -> str:
+    points = is_point_measure(check.measure)
+    return f"{value * 100:.1f} %" if points else f"{value:.4g}"
+
+
+def _quality_drop(
+    check: QualityCheck, base: Sequence[Measurement], trial: Sequence[Measurement]
+) -> tuple[float, float, float] | None:
+    """(signed drop, base, trial) on the workload losing most, in the check's
+    unit (negative: an improvement); ``None`` with nothing to compare."""
+    after = {m.workload_id: m.stats for m in trial if m.metric == check.metric}
+    sign = 1.0 if check.direction is Direction.maximize else -1.0
+    found: list[tuple[float, float, float]] = []
+    for row in base:
+        stats = after.get(row.workload_id)
+        scale = abs(row.stats.mean) if check.drop_unit is DropUnit.relative else 1.0
+        if row.metric != check.metric or stats is None or scale == 0:
+            continue  # a relative drop over a zero mean is undefined
+        drop = sign * (row.stats.mean - stats.mean) / scale
+        found.append((drop, row.stats.mean, stats.mean))
+    return max(found, default=None)
+
+
+def _result_text(
+    verdict: Verdict,
+    trial: Trial | None,
+    base: Sequence[Measurement],
+    check: QualityCheck | None,
+) -> str:
+    """D38's result part of a review label."""
+    if not _output_changed(verdict):
+        return f"{verdict.change_class} change, outputs identical"
+    found = (
+        None
+        if check is None or trial is None
+        else _quality_drop(check, base, trial.measurements)
+    )
+    if check is None or found is None:
+        return "output changed, no quality number to compare"
+    drop, before, after = found
+    if math.isclose(drop, 0.0, abs_tol=1e-12):
+        return "result kept, output changed"
+    if drop < 0:
+        return (
+            f"changes results: {check.name} {_score(before, check)} → "
+            f"{_score(after, check)} (result improvement)"
+        )
+    points = is_point_measure(check.measure)
+    used = drop_text(drop, check.drop_unit, points=points).removesuffix(" points")
+    allowed = drop_text(check.max_drop, check.drop_unit, points=points)
+    return f"result drop within your limit: −{used} of {allowed} allowed"
+
+
+def _change_label(
+    verdict: Verdict,
+    trial: Trial | None,
+    base: Sequence[Measurement],
+    check: QualityCheck | None,
+    floor: float,
+) -> str:
+    """One review change's D38 label: the result part, then D42's gain."""
+    return f"{_result_text(verdict, trial, base, check)}, {_gain_text(verdict, floor)}"
+
+
+def _tolerance_text(tolerance: OutputTolerance) -> str:
+    """D39's report sentence for a workload's tolerance."""
+    digits = tolerance.float_digits
+    parts = [] if digits is None else [f"{digits} significant digits"]
+    if tolerance.unordered_lines:
+        parts.append("line order ignored, except an unterminated last line")
+    said = ", ".join(parts)
+    if digits is not None:
+        said += f"; counts printed as decimals compared to {digits} digits only"
+    return f"equal within tolerance ({said})"
+
+
+def _within_tolerance(
+    state: EngineState, trial: Trial | None, base: Sequence[Measurement]
+) -> list[str]:
+    """D39: one sentence per toleranced workload whose exact bytes differ."""
+
+    def raws(rows: Sequence[Measurement], workload_id: str) -> set[str | None]:
+        return {
+            m.raw_fingerprint
+            for m in rows
+            if m.workload_id == workload_id and m.output_fingerprint is not None
+        }
+
+    said: list[str] = []
+    for workload in state["workloads"]:
+        tolerance = workload.output_tolerance
+        before = raws(base, workload.id)
+        after = raws(() if trial is None else trial.measurements, workload.id)
+        if tolerance is None or not before or not after:
+            continue
+        if None in before or before != after:
+            said.append(f"{_cell(workload.name)} {_tolerance_text(tolerance)}")
+    return said
+
+
+@dataclass(frozen=True)
+class _Change:
+    """A delivered (or deliverable) verdict with its trial and paired base."""
+
+    verdict: Verdict
+    title: str
+    trial: Trial | None
+    base: tuple[Measurement, ...]
+
+
+def _changes(state: EngineState, verdicts: Iterable[Verdict]) -> list[_Change]:
     hypotheses = _by_id(state["hypotheses"])
-    decided = decided_verdicts(state["verdicts"], state["approval"])
-    decided_by_id = {verdict.id: verdict for verdict in decided}
+    trials = {trial.id: trial for trial in state["trials"]}
+    baseline = state["baseline"]
+    run_rows = () if baseline is None else baseline.measurements
+    changes: list[_Change] = []
+    for verdict in verdicts:
+        trial = trials.get(verdict.trial_id)
+        paired = () if trial is None else trial.base_measurements
+        changes.append(
+            _Change(
+                verdict,
+                _cell(_title_for(hypotheses, verdict)),
+                trial,
+                paired or run_rows,
+            )
+        )
+    return changes
+
+
+def _change_lines(
+    state: EngineState,
+    changes: Sequence[_Change],
+    check: QualityCheck | None,
+    *,
+    labelled: bool,
+) -> list[str]:
+    """One line per change: D38 label (review) or D42 gain (run), plus D39."""
+    floor = _project_floor(state["baseline"])
+    lines: list[str] = []
+    for change in changes:
+        text = (
+            _change_label(change.verdict, change.trial, change.base, check, floor)
+            if labelled
+            else _gain_text(change.verdict, floor)
+        )
+        said = _within_tolerance(state, change.trial, change.base)
+        lines.append(f"- {change.title}: {text}" + "".join(f"; {s}" for s in said))
+    return lines
+
+
+def _output_changed(verdict: Verdict) -> bool:
+    return any(r.output_changed is True for r in verdict.judge_results)
+
+
+def _delivery_sets(
+    decided: Iterable[Verdict],
+) -> tuple[list[Verdict], list[Verdict]]:
+    """The run set and the review set of the decided verdicts (D10, D35).
+
+    The run set is every ``keep`` whose output did not change. The review set
+    is every ``review`` plus any ``keep`` whose output changed: an approved
+    novel change (approval turns it into a keep) that altered output still
+    goes to review, so no output change ever reaches ``engine/run-<id>``,
+    with or without a combiner. Everything else is in neither.
+    """
+    run: list[Verdict] = []
+    review: list[Verdict] = []
+    for verdict in decided:
+        if verdict.outcome is VerdictOutcome.review or (
+            verdict.outcome is VerdictOutcome.keep and _output_changed(verdict)
+        ):
+            review.append(verdict)
+        elif verdict.outcome is VerdictOutcome.keep:
+            run.append(verdict)
+    return run, review
+
+
+def _review_verdicts(state: EngineState) -> list[Verdict]:
+    """The review set (:func:`_delivery_sets`), in order."""
+    return _delivery_sets(decided_verdicts(state["verdicts"], state["approval"]))[1]
+
+
+def _delivered_review(state: EngineState) -> list[Verdict]:
+    """The review verdicts the held review combination applied, in order."""
+    combination = state["review_combination"]
+    if combination is None or not combination.holds:
+        return []
+    applied = set(combination.applied_trial_ids)
+    return [v for v in _review_verdicts(state) if v.trial_id in applied]
+
+
+def _review_sentence(
+    state: EngineState, prefix: str, delivered: Sequence[Verdict]
+) -> str:
+    """The sentence both reports carry about the review branch (§4.5, 3)."""
+    run_branch = _cell(f"{prefix}run-{state['run_id']}")
+    confirmed = (
+        "each change was confirmed (D41)"
+        if delivered and all(v.confirmations >= 2 for v in delivered)
+        else "not every change was confirmed (confirmation off)"
+    )
+    return (
+        f"Every judge passed and {confirmed}; outputs compared as stated (D35, "
+        "D39); re-tested together; review before merging; not merged into "
+        f"{run_branch}, never pushed. Not re-tested together with {run_branch}; "
+        "merging both is unproven."
+    )
+
+
+def _review_section(
+    state: EngineState, prefix: str, check: QualityCheck | None
+) -> list[str]:
+    """The main report's review branch: where it is or why there is none."""
+    if not _review_verdicts(state):
+        return []
+    combination = state["review_combination"]
+    delivered = _delivered_review(state)
+    branch = _cell(f"{prefix}review-{state['run_id']}")
+    if combination is None:
+        where = "not created: the review set was not re-tested (no combiner)"
+    elif not combination.holds:
+        where = "not created: the review re-test did not hold: " + _cell(
+            combination.summary, limit=_SUMMARY_LIMIT
+        )
+    else:
+        where = f"{branch} ({len(delivered)} change(s))"
+    lines = ["**Review branch**", "", f"- Branch: {where}"]
+    lines += _change_lines(state, _changes(state, delivered), check, labelled=True)
+    if delivered:
+        lines.append(f"- {_review_sentence(state, prefix, delivered)}")
+    return [*lines, ""]
+
+
+def _total_time(state: EngineState, now: datetime) -> str:
+    """§4.5, 5: first event to the report, any pause included; retries."""
+    retried = len({t.id for t in state["trials"] if t.attempts > 1})
+    if not state["events"]:
+        return "Total time: not recorded (no event)"
+    elapsed = (now - min(e.at for e in state["events"])).total_seconds()
+    minutes = max(0, int(elapsed // 60))  # a clock stepped back reads 0:00
+    return (
+        f"Total time: {minutes // 60}:{minutes % 60:02d}, first event to delivery, "
+        f"any approval pause included; {retried} trial(s) retried"
+    )
+
+
+def _retry_section(state: EngineState) -> list[str]:
+    """Each trial's ``retry_notes``: the report only, cut, never a prompt."""
+    hypotheses = _by_id(state["hypotheses"])
+    lines: list[str] = []
+    for trial in dict((t.id, t) for t in state["trials"]).values():
+        if not trial.retry_notes:
+            continue
+        shown = [_cell(n, limit=_RETRY_NOTE_LIMIT) for n in trial.retry_notes]
+        more = len(shown) - _RETRY_NOTES_SHOWN
+        title = hypotheses.get(trial.hypothesis_id)
+        name = _cell(trial.hypothesis_id if title is None else title.title)
+        lines.append(
+            f"- {name} (trial {_cell(trial.id[:8])}, {trial.attempts} attempt(s)): "
+            + "; ".join(shown[:_RETRY_NOTES_SHOWN])
+            + (f"; and {more} more" if more > 0 else "")
+        )
+    return ["**Retry notes**", "", *lines, ""] if lines else []
+
+
+def _ideas_section(state: EngineState) -> list[str]:
+    """Parked ideas and understand's quality proposal (never active, D40)."""
+    lines = [
+        f"- {_cell(h.title)}: {_cell(h.parked_reason or 'parked')}"
+        for h in state["parked"]
+    ]
+    understanding = state["understanding"]
+    proposal = None if understanding is None else understanding.quality_proposal
+    if proposal is not None:
+        what = (
+            f"{proposal.measure} over {proposal.labels}"
+            if proposal.measure is not None
+            else f"the script {proposal.scorer_path}"
+        )
+        lines.append(f"- Suggested quality check (not active): {_cell(what)}")
+    return ["**Parked ideas and suggestions**", "", *lines, ""] if lines else []
+
+
+def _step3_conditions(state: EngineState) -> list[str]:
+    """Run-condition lines Step 3 adds: quality files and combiner notes."""
+    baseline = state["baseline"]
+    files = () if baseline is None else baseline.quality_files
+    lines = (
+        [
+            "- Quality files: "
+            + ", ".join(
+                f"{_cell(f.path)} sha256 {f.sha256} ({f.size} bytes)" for f in files
+            )
+        ]
+        if files
+        else []
+    )
+    notes = [e for e in state["events"] if e.data.get("code") == "combiner_notes"]
+    if notes:
+        said = "; ".join(str(e.data.get("notes")) for e in notes)
+        lines.append(f"- Combiner notes: {_cell(said, limit=_NOTES_LIMIT)}")
+    return lines
+
+
+def _combination_line(state: EngineState, prefix: str) -> list[str]:
+    """D42: the run branch's re-tested gain is its own line."""
+    combination, baseline = state["combination"], state["baseline"]
+    primary = None if baseline is None else primary_metric(baseline.objectives)
+    if combination is None or not combination.holds:
+        return []
+    gain = next(
+        (
+            r.gain
+            for r in combination.judge_results
+            if r.metric == primary
+            and r.gain is not None
+            and r.outcome is JudgeOutcome.passed
+        ),
+        None,
+    )
+    if gain is None:
+        return []
+    branch = _cell(f"{prefix}run-{state['run_id']}")
+    return [f"- Re-tested together on {branch}: {gain:.1%} better"]
+
+
+def _head(state: EngineState, title: str, now: datetime) -> list[str]:
     baseline = state["baseline"]
     baseline_line = (
         "Baseline: not measured"
         if baseline is None
         else _summarize_primary(baseline.measurements, baseline.objectives).line()
     )
+    return [title, "", baseline_line, _total_time(state, now), ""]
+
+
+def _report(
+    state: EngineState,
+    prefix: str,
+    *,
+    confirm: bool = False,
+    quality: QualityCheck | None = None,
+    now: datetime | None = None,
+) -> str:
+    """The markdown report: title, baseline, total time, one row per verdict,
+    kept with each gain (D42), the review branch, retry notes, parked ideas,
+    conditions."""
+    project = state["project"]
+    hypotheses = _by_id(state["hypotheses"])
+    decided = decided_verdicts(state["verdicts"], state["approval"])
+    decided_by_id = {verdict.id: verdict for verdict in decided}
     lines = [
-        f"# Engine run {state['run_id'][:8]}: {_cell(project.name)}",
-        "",
-        baseline_line,
-        "",
+        *_head(
+            state,
+            f"# Engine run {state['run_id'][:8]}: {_cell(project.name)}",
+            now or utc_now(),
+        ),
         "| Hypothesis | Outcome | Gain | Summary |",
         "| --- | --- | --- | --- |",
     ]
@@ -1578,13 +1991,46 @@ def _report(state: EngineState, prefix: str) -> str:
             f"| {_cell(_title_for(hypotheses, verdict))} | {verdict.outcome.value} "
             f"| {gain} | {_cell(verdict.summary)} |"
         )
-    kept = [
-        _cell(_title_for(hypotheses, decided_by_id[verdict_id]))
+    kept_verdicts = [
+        decided_by_id[verdict_id]
         for verdict_id in state["kept_verdict_ids"]
         if verdict_id in decided_by_id
     ]
-    lines += ["", "Kept: " + (", ".join(kept) if kept else "nothing"), ""]
-    lines += [*_run_conditions(state, prefix), ""]
+    kept = [_cell(_title_for(hypotheses, verdict)) for verdict in kept_verdicts]
+    lines += ["", "Kept: " + (", ".join(kept) if kept else "nothing")]
+    lines += _change_lines(
+        state, _changes(state, kept_verdicts), quality, labelled=False
+    )
+    lines += [*_combination_line(state, prefix), ""]
+    lines += _review_section(state, prefix, quality)
+    lines += [*_retry_section(state), *_ideas_section(state)]
+    lines += [*_run_conditions(state, prefix, confirm=confirm), ""]
+    return "\n".join(lines)
+
+
+def _review_report(
+    state: EngineState,
+    prefix: str,
+    *,
+    confirm: bool,
+    quality: QualityCheck | None,
+    now: datetime | None = None,
+) -> str:
+    """The review branch's report: one D38 label per change, the sentence."""
+    delivered = _delivered_review(state)
+    title = f"# Engine run {state['run_id'][:8]} review: {_cell(state['project'].name)}"
+    lines = [
+        title,
+        "",
+        *_change_lines(state, _changes(state, delivered), quality, labelled=True),
+        "",
+        _review_sentence(state, prefix, delivered),
+        "",
+        *_head(state, "**Run**", now or utc_now())[2:],
+        *_retry_section(state),
+        *_run_conditions(state, prefix, confirm=confirm),
+        "",
+    ]
     return "\n".join(lines)
 
 
@@ -1704,7 +2150,7 @@ def _confirmation_notes(
     data: ScalarDict = {"confirmed": held, "unconfirmed": len(looks) - held}
     said = ""
     if notes:
-        data["notes"] = "; ".join(notes)
+        data["notes"] = _capped("; ".join(notes))
         said = f"; combiner notes: {data['notes']}"
     return [
         _note(
@@ -1715,6 +2161,15 @@ def _confirmation_notes(
             data=data,
         )
     ]
+
+
+def _two_look_gain(verdict: Verdict) -> Verdict:
+    """A confirmed verdict as learned: D42's mean of both looks, not the
+    selection-biased first look (U23 review N6); others unchanged."""
+    reported = reported_gain(verdict, floor=0.0)
+    if verdict.confirmed_gain is None or reported is None:
+        return verdict
+    return verdict.model_copy(update={"gain": reported.gain})
 
 
 def _publishable(state: EngineState) -> tuple[str, str]:
@@ -2206,7 +2661,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             f"round {state['round']}: {len(new_verdicts)} verdict(s): "
             f"{counts['keep']} keep, {counts['reject']} reject, "
             f"{counts['inconclusive']} inconclusive, "
-            f"{counts['needs_approval']} need approval",
+            f"{counts['needs_approval']} need approval, {counts['review']} to review",
             data={"round": state["round"], "verdicts": len(new_verdicts), **counts},
         )
         return {
@@ -2283,82 +2738,125 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
         }
 
     def combine(state: EngineState) -> NodeDelta:
-        kept = [
-            verdict
-            for verdict in decided_verdicts(state["verdicts"], state["approval"])
-            if verdict.outcome is VerdictOutcome.keep
-        ]
-        if ctx.combiner is None:
+        # An approved novel change whose output changed is in the review set,
+        # never the run set (D35, _delivery_sets), with or without a combiner.
+        kept, review = _delivery_sets(
+            decided_verdicts(state["verdicts"], state["approval"])
+        )
+        combiner = ctx.combiner
+        if combiner is None:
+            data: ScalarDict = {"kept": len(kept)}
+            unsent = ""
+            if review:
+                data["review"] = len(review)
+                unsent = (
+                    f"; {len(review)} review change(s) not re-tested, no review branch"
+                )
             event = _announce(
                 state,
                 RunPhase.combine,
                 f"combined {len(kept)} kept change(s) "
-                "(re-testing the combination is Step 2)",
-                data={"kept": len(kept)},
+                f"(re-testing the combination is Step 2){unsent}",
+                data=data,
             )
             return {
                 "phase": RunPhase.combine,
                 "kept_verdict_ids": [verdict.id for verdict in kept],
                 "events": [event],
             }
+        delta: NodeDelta = {"phase": RunPhase.combine, "kept_verdict_ids": []}
+        events: list[EngineEvent] = []
         if not kept:
-            event = _announce(
-                state,
-                RunPhase.combine,
-                "nothing kept: nothing to combine",
-                data={"kept": 0},
+            events.append(
+                _announce(
+                    state,
+                    RunPhase.combine,
+                    "nothing kept: nothing to combine",
+                    data={"kept": 0},
+                )
             )
-            return {
-                "phase": RunPhase.combine,
-                "kept_verdict_ids": [],
-                "events": [event],
-            }
+        else:
+            outcome = _combine_set(state, combiner, kept, "run", events)
+            delta["kept_verdict_ids"] = list(outcome.kept_verdict_ids)
+            delta["combination"] = outcome.combination
+        if review:
+            delta["review_combination"] = _combine_set(
+                state, combiner, review, "review", events
+            ).combination
+        return {**delta, "events": events}
+
+    def _combine_set(
+        state: EngineState,
+        combiner: Combiner,
+        verdicts: Sequence[Verdict],
+        kind: Literal["run", "review"],
+        events: list[EngineEvent],
+    ) -> CombineOutcome:
+        """Re-test one set from the base (D10): the run set accepts ``keep``,
+        the review set ``keep`` or ``review``, on its own branch."""
         measured = _require_baseline(state)
+        branch = f"{ctx.branch_prefix}{kind}-{state['run_id']}"
         target = CombineTarget(
             run_id=state["run_id"],
             project=state["project"],
             base_commit=_require_commit(state, "combine"),
             workloads=tuple(state["workloads"]),
-            branch=f"{ctx.branch_prefix}run-{state['run_id']}",
+            branch=branch,
             round=max(1, state["round"]),
             quality_files=measured.quality_files,
         )
         changes = kept_changes(
-            kept,
+            verdicts,
             {trial.id: trial for trial in state["trials"]},
             _by_id(state["hypotheses"]),
         )
-        outcome = combine_kept(
-            ctx.combiner, changes, _combine_rules(ctx, measured), target
-        )
+        rules = _combine_rules(ctx, measured)
+        if kind == "review":
+            rules = replace(rules, accept=CONFIRMABLE)
+        outcome = combine_kept(combiner, changes, rules, target)
         combination = outcome.combination
-        event = _announce(
-            state,
-            RunPhase.combine,
-            f"combination {'held' if combination.holds else 'did not hold'}: "
-            f"delivering {len(outcome.kept_verdict_ids)} of {len(changes)} kept "
-            "change(s)",
-            level=EventLevel.info if combination.holds else EventLevel.warning,
-            data={
-                "kept": len(changes),
-                "applied": len(combination.applied_trial_ids),
-                "skipped": len(combination.skipped),
-                "holds": combination.holds,
-                "fallback": combination.fallback_trial_id is not None,
-                "delivered": len(outcome.kept_verdict_ids),
-            },
+        held = "held" if combination.holds else "did not hold"
+        events.append(
+            _announce(
+                state,
+                RunPhase.combine,
+                f"combination {held}: delivering {len(outcome.kept_verdict_ids)} "
+                f"of {len(changes)} kept change(s)"
+                if kind == "run"
+                else f"review combination {held}: delivering "
+                f"{len(outcome.kept_verdict_ids)} of {len(changes)} review "
+                f"change(s) on {branch}",
+                level=EventLevel.info if combination.holds else EventLevel.warning,
+                data={
+                    **({} if kind == "run" else {"set": kind}),
+                    "kept": len(changes),
+                    "applied": len(combination.applied_trial_ids),
+                    "skipped": len(combination.skipped),
+                    "holds": combination.holds,
+                    "fallback": combination.fallback_trial_id is not None,
+                    "delivered": len(outcome.kept_verdict_ids),
+                },
+            )
         )
-        return {
-            "phase": RunPhase.combine,
-            "kept_verdict_ids": list(outcome.kept_verdict_ids),
-            "combination": combination,
-            "events": [event],
-        }
+        notes = _combiner_notes(ctx)
+        if notes:
+            events.append(
+                _note(
+                    state,
+                    RunPhase.combine,
+                    "combiner_notes",
+                    f"{kind} set: {_capped('; '.join(notes))}",
+                    data={"set": kind, "notes": _capped("; ".join(notes))},
+                )
+            )
+        return outcome
 
     def deliver(state: EngineState) -> NodeDelta:
         project = state["project"]
         kept = tuple(state["kept_verdict_ids"])
-        report = _report(state, ctx.branch_prefix)
+        report = _report(
+            state, ctx.branch_prefix, confirm=ctx.confirm_winners, quality=ctx.quality
+        )
         data: ScalarDict = {"kind": DeliveryKind.report_only.value, "kept": len(kept)}
         if not kept:
             delivery = Delivery(
@@ -2403,14 +2901,74 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                 data["commit"] = commit
             message = f"delivering {len(kept)} change(s) on branch {branch}"
         event = _announce(state, RunPhase.deliver, message, data=data)
-        return {"phase": RunPhase.deliver, "delivery": delivery, "events": [event]}
+        delta: NodeDelta = {
+            "phase": RunPhase.deliver,
+            "delivery": delivery,
+            "events": [event],
+        }
+        review = _deliver_review(state)
+        if review is not None:
+            delta["review_delivery"], review_event = review
+            delta["events"] = [event, review_event]
+        return delta
+
+    def _deliver_review(state: EngineState) -> tuple[Delivery, EngineEvent] | None:
+        """The held review combination, create-only on its own branch (D10):
+        never the run branch, never merged, never pushed. Without a
+        publisher it is ``kind=branch`` with ``commit=None`` and the joined
+        trial diffs, as on the run path."""
+        delivered = _delivered_review(state)
+        combination = state["review_combination"]
+        if combination is None or not delivered:
+            return None
+        project, base = state["project"], _require_commit(state, "deliver")
+        tip = combination.tip_commit
+        if tip is None:
+            raise EngineError("refusing to publish the review set: it has no tip")
+        branch = f"{ctx.branch_prefix}review-{state['run_id']}"
+        assert_safe_branch(branch, project, ctx.branch_prefix)
+        commit: str | None = None
+        if ctx.publisher is None:
+            trials = {trial.id: trial for trial in state["trials"]}
+            diff = "\n".join(
+                trials[v.trial_id].diff for v in delivered if v.trial_id in trials
+            )
+        else:
+            commit = tip
+            diff = ctx.publisher.publish(project, branch, tip=tip, base=base)
+        delivery = Delivery(
+            project_id=project.id,
+            kind=DeliveryKind.branch,
+            branch=branch,
+            commit=commit,
+            verdict_ids=tuple(v.id for v in delivered),
+            combined_diff=diff,
+            report_markdown=_review_report(
+                state,
+                ctx.branch_prefix,
+                confirm=ctx.confirm_winners,
+                quality=ctx.quality,
+            ),
+        )
+        data: ScalarDict = {
+            "kind": "branch",
+            "review": len(delivered),
+            "branch": branch,
+        }
+        if commit is not None:
+            data["commit"] = commit
+        message = f"delivering {len(delivered)} change(s) for review on branch {branch}"
+        return delivery, _announce(state, RunPhase.deliver, message, data=data)
 
     def learn(state: EngineState) -> NodeDelta:
         known = _by_id(state["hypotheses"])
         decided = decided_verdicts(state["verdicts"], state["approval"])
         context = tuple(sorted({tag for hs in state["hotspots"] for tag in hs.tags}))
         lessons = lessons_from_verdicts(
-            decided, known, project_id=state["project"].id, context=context
+            [_two_look_gain(v) for v in decided],
+            known,
+            project_id=state["project"].id,
+            context=context,
         )
         for lesson in lessons:
             ctx.repository.save_lesson(lesson)

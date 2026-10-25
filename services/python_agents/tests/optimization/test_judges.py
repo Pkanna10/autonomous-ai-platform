@@ -1157,18 +1157,25 @@ def test_rule_6_efficiency_change_with_all_judges_passed_is_kept() -> None:
     assert verdict.approved_by is None
 
 
-@pytest.mark.parametrize("change_class", [ChangeClass.behaviour, ChangeClass.novel])
-def test_rule_6_behaviour_and_novel_changes_need_approval(
-    change_class: ChangeClass,
+@pytest.mark.parametrize(
+    ("change_class", "expected"),
+    [
+        (ChangeClass.behaviour, VerdictOutcome.review),
+        (ChangeClass.novel, VerdictOutcome.needs_approval),
+    ],
+)
+def test_rule_6_behaviour_goes_to_review_and_novel_needs_approval(
+    change_class: ChangeClass, expected: VerdictOutcome
 ) -> None:
     """
     GIVEN a behaviour-changing (or novel) hypothesis whose judges all passed (H4)
     WHEN the verdict is derived
-    THEN it is needs_approval and names the change class
+    THEN behaviour is review (D10, user decision 1), novel needs_approval,
+         and the summary names the change class
     """
     verdict = _verdict((SPEED_OK, TESTS_OK), change_class=change_class)
 
-    assert verdict.outcome is VerdictOutcome.needs_approval
+    assert verdict.outcome is expected
     assert verdict.change_class is change_class
     assert str(change_class) in verdict.summary
 
@@ -1325,11 +1332,11 @@ def test_example_h3_micro_tweak_is_inconclusive() -> None:
     assert verdict.outcome is VerdictOutcome.inconclusive
 
 
-def test_example_h4_bf16_autocast_needs_approval() -> None:
+def test_example_h4_bf16_autocast_goes_to_review() -> None:
     """
     GIVEN H4: 1.50 s, val_loss up 0.6 % (within 1 %), behaviour class
     WHEN judged
-    THEN speed and guardrail pass and the verdict is needs_approval
+    THEN speed and guardrail pass and the verdict is review (D10)
     """
     trial = _example_trial(1.50, val_loss=0.503)
     results = _judge_all(trial)
@@ -1337,7 +1344,7 @@ def test_example_h4_bf16_autocast_needs_approval() -> None:
     verdict = derive_verdict(trial, _hypothesis(ChangeClass.behaviour), results, ())
 
     assert results[3].outcome is PASSED
-    assert verdict.outcome is VerdictOutcome.needs_approval
+    assert verdict.outcome is VerdictOutcome.review
     assert verdict.gain == pytest.approx(0.30 / 1.80)
 
 
@@ -1534,42 +1541,36 @@ def _changed(flag: bool | None) -> JudgeResult:
 
 
 @pytest.mark.parametrize(
-    ("change_class", "changed", "review_behaviour", "expected"),
+    ("change_class", "changed", "expected"),
     [
-        (ChangeClass.efficiency, None, False, VerdictOutcome.keep),
-        (ChangeClass.efficiency, False, True, VerdictOutcome.keep),
-        (ChangeClass.efficiency, True, False, VerdictOutcome.review),
-        (ChangeClass.efficiency, True, True, VerdictOutcome.review),
-        (ChangeClass.behaviour, None, False, VerdictOutcome.needs_approval),
-        (ChangeClass.behaviour, False, False, VerdictOutcome.needs_approval),
-        (ChangeClass.behaviour, None, True, VerdictOutcome.review),
-        (ChangeClass.behaviour, False, True, VerdictOutcome.review),
-        (ChangeClass.behaviour, True, False, VerdictOutcome.review),
-        (ChangeClass.behaviour, True, True, VerdictOutcome.review),
-        (ChangeClass.novel, None, True, VerdictOutcome.needs_approval),
-        (ChangeClass.novel, True, False, VerdictOutcome.needs_approval),
-        (ChangeClass.novel, True, True, VerdictOutcome.needs_approval),
+        (ChangeClass.efficiency, None, VerdictOutcome.keep),
+        (ChangeClass.efficiency, False, VerdictOutcome.keep),
+        (ChangeClass.efficiency, True, VerdictOutcome.review),
+        (ChangeClass.behaviour, None, VerdictOutcome.review),
+        (ChangeClass.behaviour, False, VerdictOutcome.review),
+        (ChangeClass.behaviour, True, VerdictOutcome.review),
+        (ChangeClass.novel, None, VerdictOutcome.needs_approval),
+        (ChangeClass.novel, False, VerdictOutcome.needs_approval),
+        (ChangeClass.novel, True, VerdictOutcome.needs_approval),
     ],
 )
 def test_rule_6_review_for_every_class_with_and_without_output_changed(
     change_class: ChangeClass,
     changed: bool | None,
-    review_behaviour: bool,
     expected: VerdictOutcome,
 ) -> None:
     """
     GIVEN all judges passed, each change class, output_changed unset, False or
-          True, and the review rule for behaviour off (Step 2) or on (Step 3)
+          True
     WHEN the verdict is derived
     THEN a changed output is never kept: review, or needs_approval if novel;
-         unchanged, efficiency keeps, behaviour is review only when asked
+         unchanged, efficiency keeps and behaviour is always review (D10)
     """
     verdict = derive_verdict(
         _trial(),
         _hypothesis(change_class),
         (SPEED_OK, _changed(changed), TESTS_OK),
         (),
-        review_behaviour=review_behaviour,
     )
 
     assert verdict.outcome is expected

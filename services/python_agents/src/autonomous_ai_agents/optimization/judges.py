@@ -422,6 +422,13 @@ _POINT_MEASURES = frozenset(
 )
 """Builtins bounded in [0, 1]: an absolute drop of 0.005 reads "0.5 points"."""
 
+
+def is_point_measure(measure: BuiltinMeasure | None) -> bool:
+    """True for a builtin bounded in [0, 1]: its absolute drops (and D38
+    labels) read in points, so 0.005 is "0.5 points"."""
+    return measure in _POINT_MEASURES
+
+
 _ZERO_TOL = 1e-12
 """Absolute tolerance for "on the bound" and "zero" in drops."""
 
@@ -612,7 +619,7 @@ class GuardrailMetricJudge:
         return (
             self.quality is not None
             and self.quality.metric == metric
-            and self.quality.measure in _POINT_MEASURES
+            and is_point_measure(self.quality.measure)
         )
 
     def _result(
@@ -753,7 +760,6 @@ def derive_verdict(
     violations: Sequence[Violation],
     *,
     primary_metric: str | None = None,
-    review_behaviour: bool = False,
 ) -> Verdict:
     """Fold judge results and violations into a verdict, in a fixed order.
 
@@ -765,8 +771,8 @@ def derive_verdict(
     5. no objective judge (one carrying a metric) passed -> inconclusive;
     6. all passed (D35): any result with ``output_changed`` -> review, never
        keep (novel stays needs_approval); otherwise efficiency -> keep,
-       novel -> needs_approval, and behaviour -> review with
-       ``review_behaviour`` (Step 3, D10), else needs_approval (Step 2).
+       behaviour -> review (D10, user decision 1: its own branch, no pause)
+       and novel -> needs_approval.
 
     Rule 6 relies on :class:`EquivalenceJudge` being among the judges that
     produced ``judge_results``: it is the only judge that sets
@@ -775,9 +781,7 @@ def derive_verdict(
     results = tuple(judge_results)
     found = tuple(violations)
     change_class = hypothesis.change_class
-    outcome, summary = _decide(
-        trial, change_class, results, found, primary_metric, review_behaviour
-    )
+    outcome, summary = _decide(trial, change_class, results, found, primary_metric)
     return Verdict(
         trial_id=trial.id,
         hypothesis_id=hypothesis.id,
@@ -806,7 +810,6 @@ def _decide(
     results: tuple[JudgeResult, ...],
     violations: tuple[Violation, ...],
     primary: str | None,
-    review_behaviour: bool,
 ) -> tuple[VerdictOutcome, str]:
     if violations:
         rules = ", ".join(dict.fromkeys(str(v.rule) for v in violations))
@@ -845,13 +848,11 @@ def _decide(
             VerdictOutcome.inconclusive,
             "inconclusive: nothing proved better (no objective judge passed)",
         )
-    return _rule_6(change_class, results, review_behaviour)
+    return _rule_6(change_class, results)
 
 
 def _rule_6(
-    change_class: ChangeClass,
-    results: tuple[JudgeResult, ...],
-    review_behaviour: bool,
+    change_class: ChangeClass, results: tuple[JudgeResult, ...]
 ) -> tuple[VerdictOutcome, str]:
     """Rule 6, once rules 1-5 have let every result through."""
     changed = any(r.output_changed is True for r in results)
@@ -873,13 +874,7 @@ def _rule_6(
             VerdictOutcome.keep,
             "keep: all judges passed; efficiency change ships automatically",
         )
-    if review_behaviour:
-        return (
-            VerdictOutcome.review,
-            f"review: all judges passed; {change_class} change goes to the "
-            "review branch",
-        )
     return (
-        VerdictOutcome.needs_approval,
-        f"needs_approval: all judges passed; {change_class} change needs human approval",
+        VerdictOutcome.review,
+        f"review: all judges passed; {change_class} change goes to the review branch",
     )
