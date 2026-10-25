@@ -30,11 +30,13 @@ Step 2 adds five optional seams to the context (``preflight``,
 ``understander``, ``profiler``, ``combiner``, ``publisher``). Each defaults
 to ``None``, which keeps that node's Step 1 behaviour exactly: ``connect``,
 ``understand`` and ``profile`` stay stubs, ``combine`` keeps every kept
-verdict without a re-test and ``deliver`` joins the trial diffs. ``research``
-and ``watch`` stay stubs until Step 3. Whatever the seams, the trials node
-keeps a running cost total and stops below ``min_trial_budget_usd``, the
-baseline fails closed on nondeterministic output or a failing test suite,
-and every report carries a "Run conditions" section.
+verdict without a re-test and ``deliver`` joins the trial diffs. ``watch``
+stays a stub; ``research`` copies the context's techniques unless ``matched``
+retrieval (Step 3, off by default) asks the matcher. Whatever the seams,
+the trials node keeps a running cost total and stops below
+``min_trial_budget_usd``, the baseline fails closed on nondeterministic
+output or a failing test suite, and every report carries a "Run conditions"
+section.
 """
 
 from __future__ import annotations
@@ -62,6 +64,7 @@ from autonomous_ai_agents.common.config import (
 )
 from autonomous_ai_agents.common.errors import (
     BudgetExceeded,
+    LLMConfigError,
     LLMRequestError,
     LLMUnavailable,
     TrialUnaffordable,
@@ -101,6 +104,7 @@ from autonomous_ai_agents.common.models import (
     RunPhase,
     ScalarDict,
     Technique,
+    TechniqueMatchRecord,
     Trial,
     TrialStatus,
     Verdict,
@@ -904,6 +908,90 @@ def _generate(
     return _Generated(kept, delta, events)
 
 
+_SOFT_MATCH = (BudgetExceeded, LLMConfigError, *_SOFT_DISCOVERY)
+"""Matcher outcomes that continue blind (spec 4.1): a note, charged. Wider
+than the generator's: matching is optional, so even a refused key is soft."""
+
+
+@dataclass(frozen=True)
+class _Matched:
+    """One research turn: the techniques for the generator, state keys, events."""
+
+    techniques: list[Technique]
+    delta: NodeDelta
+    events: list[EngineEvent]
+
+
+def _match_spend(state: EngineState, budget: Budget) -> NodeDelta:
+    """D7's totals after a matcher turn; a match is no generator call."""
+    spend = _discovery_spend(state, budget, called=False)
+    del spend["generator_calls"]
+    return spend
+
+
+def _kept_matches(
+    playbook: Sequence[Technique], matches: Sequence[TechniqueMatchRecord], k: int
+) -> tuple[list[TechniqueMatchRecord], list[str]]:
+    """The first ``k`` matches naming a playbook card, first of each slug, and
+    a note per drop (or one saying nothing matched)."""
+    known = {technique.slug for technique in playbook}
+    kept: dict[str, TechniqueMatchRecord] = {}
+    notes: list[str] = []
+    for match in matches:
+        named = shown(match.slug)
+        if match.slug not in known:
+            notes.append(f"dropped match {named}: not a playbook technique")
+        elif match.slug in kept:
+            notes.append(f"dropped repeated match {named}")
+        else:
+            kept[match.slug] = match
+    usable = list(kept.values())
+    if len(usable) > k:
+        notes.append(f"dropped {len(usable) - k} match(es) beyond k={k}")
+    if not usable:
+        notes.append("no playbook technique matched; generating without cards")
+    return usable[:k], notes
+
+
+def _match(ctx: NodeContext, state: EngineState) -> _Matched:
+    """``matched`` retrieval: one matcher request on D7's narrowed budget; the
+    caller's techniques (blind) when it is off, unaffordable or soft-fails."""
+    phase, cost, warn = RunPhase.research, state["cost_usd"], EventLevel.warning
+    blind, code = list(ctx.techniques), "research_unavailable"
+    d = _discovery_cap(ctx, state)
+    if ctx.matcher is None or not ctx.playbook:
+        message = "matched retrieval has no matcher or no playbook; continuing blind"
+        return _Matched(blind, {}, [_note(state, phase, code, message, level=warn)])
+    if d <= cost:  # never a Budget: a negative cap is a ValueError (D7)
+        message = f"no request: discovery may spend up to {d:.6f} USD; continuing blind"
+        event = _note(state, phase, code, message, level=warn)
+        return _Matched(blind, {"discovery_exhausted": True}, [event])
+    budget = Budget(cap_usd=d, spent_usd=cost, tokens=state["tokens_used"])
+    try:
+        result = ctx.matcher.match(
+            understanding=state["understanding"],
+            hotspots=state["hotspots"],
+            techniques=ctx.playbook,
+            k=ctx.matcher_k,
+            budget=budget,
+        )
+    except _SOFT_MATCH as exc:
+        message = f"{type(exc).__name__}: {str(exc)[:300]}; continuing blind"
+        event = _note(state, phase, code, message, level=warn)
+        return _Matched(blind, _match_spend(state, budget), [event])
+    except Exception as exc:  # any other EngineError or a bug: the run ends (D18)
+        keep_progress(exc, _match_spend(state, budget))
+        raise
+    kept, dropped = _kept_matches(ctx.playbook, result.matches, ctx.matcher_k)
+    by_slug: dict[str, Technique] = {}
+    for technique in ctx.playbook:  # the first card of a slug, as the prompt shows
+        by_slug.setdefault(technique.slug, technique)
+    delta = {**_match_spend(state, budget), "technique_matches": kept}
+    notes = [*result.notes, *dropped]
+    events = [_note(state, phase, "research_note", note) for note in notes]
+    return _Matched([by_slug[m.slug] for m in kept], delta, events)
+
+
 def _named(names: Mapping[str, str], workload_ids: Iterable[str]) -> str:
     return ", ".join(dict.fromkeys(names.get(w, w) for w in workload_ids))
 
@@ -1675,19 +1763,26 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
         }
 
     def research(state: EngineState) -> NodeDelta:
-        techniques = list(ctx.techniques)
-        papers: list[Paper] = []
+        # Blind (the default, D1) sends nothing and keeps Step 2's delta;
+        # matched adds keys only for what it changes (spec 4.1). No paper
+        # intake in Step 3 (D1), so papers stay empty.
+        turn = _Matched(list(ctx.techniques), {}, [])
+        if ctx.retrieval == "matched":
+            turn = _match(ctx, state)
+        techniques, papers = turn.techniques, list[Paper]()
         event = _announce(
             state,
             RunPhase.research,
-            f"research: {len(techniques)} technique(s), {len(papers)} paper(s) (stub)",
+            f"research ({ctx.retrieval}): {len(techniques)} technique(s), "
+            f"{len(papers)} paper(s)",
             data={"techniques": len(techniques), "papers": len(papers)},
         )
         return {
+            **turn.delta,
             "phase": RunPhase.research,
             "techniques": techniques,
             "papers": papers,
-            "events": [event],
+            "events": [*turn.events, event],
         }
 
     def hypotheses(state: EngineState) -> NodeDelta:
