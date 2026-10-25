@@ -157,6 +157,7 @@ from autonomous_ai_agents.orchestrator.combine_node import (
     is_commit,
     kept_changes,
 )
+from autonomous_ai_agents.orchestrator.confirm import CONFIRMABLE, confirm_one
 from autonomous_ai_agents.orchestrator.events import emit, make_event
 from autonomous_ai_agents.orchestrator.state import EngineState, validate_run_id
 from autonomous_ai_agents.persistence.repository import Repository
@@ -1641,6 +1642,81 @@ def _combine_rules(ctx: NodeContext, baseline: Baseline) -> CombineRules:
     )
 
 
+def _confirmer(
+    ctx: NodeContext,
+    state: EngineState,
+    measured: Baseline,
+    known: Mapping[str, Hypothesis],
+    notes: list[str],
+) -> Callable[[Trial, Verdict], Verdict] | None:
+    """The verdicts node's second look (D41 b), or ``None`` with no combiner.
+
+    Judged as combine judges, under the run baseline's objectives (the raised
+    floor), never ``state["objectives"]``, scored against its quality files.
+    Each look's combiner notes (``last_notes``, when it has them) go to
+    ``notes``.
+    """
+    combiner = ctx.combiner
+    if combiner is None or not ctx.confirm_winners:
+        return None
+    rules = _combine_rules(ctx, measured)
+
+    def confirm(trial: Trial, verdict: Verdict) -> Verdict:
+        (change,) = kept_changes([verdict], {trial.id: trial}, known)
+        target = CombineTarget(
+            run_id=state["run_id"],
+            project=state["project"],
+            base_commit=_require_commit(state, "the confirmation"),
+            workloads=tuple(state["workloads"]),
+            branch=f"{ctx.branch_prefix}run-{state['run_id']}",
+            round=max(1, state["round"]),
+            quality_files=measured.quality_files,
+        )
+        confirmed = confirm_one(combiner, verdict, change, rules, target)
+        for note in map(str, getattr(combiner, "last_notes", ())):
+            if note not in notes:
+                notes.append(note)
+        return confirmed
+
+    return confirm
+
+
+def _confirmation_notes(
+    state: EngineState, looks: Sequence[Verdict], confirmed: bool, notes: Sequence[str]
+) -> list[EngineEvent]:
+    """One note on the round's winners: how many confirmed, or that none
+    could; with the combiner's notes appended."""
+    if not looks:
+        return []
+    if not confirmed:
+        return [
+            _note(
+                state,
+                RunPhase.verdicts,
+                "confirmation_skipped",
+                f"{len(looks)} winner(s) stand on one look: no combiner to "
+                "re-test them",
+                level=EventLevel.warning,
+                data={"winners": len(looks)},
+            )
+        ]
+    held = sum(1 for v in looks if v.outcome in CONFIRMABLE)
+    data: ScalarDict = {"confirmed": held, "unconfirmed": len(looks) - held}
+    said = ""
+    if notes:
+        data["notes"] = "; ".join(notes)
+        said = f"; combiner notes: {data['notes']}"
+    return [
+        _note(
+            state,
+            RunPhase.verdicts,
+            "confirmation",
+            f"{held} of {len(looks)} winner(s) confirmed on a second look{said}",
+            data=data,
+        )
+    ]
+
+
 def _publishable(state: EngineState) -> tuple[str, str]:
     """The held combination's tip and the pinned base, or ``EngineError``."""
     combination, base = state["combination"], state["base_commit"]
@@ -2073,7 +2149,10 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
         workload_ids = _baseline_workload_ids(measured, objective_metrics)
         primary = primary_metric(measured.objectives)
         protected = (*ctx.protected_patterns, *state["extra_protected"])
+        notes: list[str] = []
+        confirm = _confirmer(ctx, state, measured, known, notes)
         new_verdicts: list[Verdict] = []
+        looks: list[Verdict] = []
         for trial in state["round_trials"]:
             hypothesis = known.get(trial.hypothesis_id)
             if hypothesis is None:
@@ -2109,6 +2188,9 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                 violations,
                 primary_metric=primary,
             )
+            if ctx.confirm_winners and verdict.outcome in CONFIRMABLE:
+                verdict = verdict if confirm is None else confirm(trial, verdict)
+                looks.append(verdict)
             ctx.repository.save_verdict(run_id, verdict)
             new_verdicts.append(verdict)
         status_for = {
@@ -2134,7 +2216,10 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             "pending_approval_ids": [
                 v.id for v in new_verdicts if v.outcome is VerdictOutcome.needs_approval
             ],
-            "events": [event],
+            "events": [
+                *_confirmation_notes(state, looks, confirm is not None, notes),
+                event,
+            ],
         }
 
     def approval_gate(state: EngineState) -> NodeDelta:
@@ -2236,6 +2321,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             workloads=tuple(state["workloads"]),
             branch=f"{ctx.branch_prefix}run-{state['run_id']}",
             round=max(1, state["round"]),
+            quality_files=measured.quality_files,
         )
         changes = kept_changes(
             kept,
