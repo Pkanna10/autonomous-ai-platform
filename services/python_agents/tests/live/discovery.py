@@ -3,10 +3,12 @@
 ``test_sweep_live.py`` (E3, blind hypothesis sweep), ``test_ab_live.py`` (E5,
 retrieval A/B) and ``test_escalation_live.py`` (E8a, cheap editor first) use:
 
-- ``model_settings``: a validated per-run copy of the settings with one
-  engine model (``Settings.model_copy(update=...)`` skips the validators, so
-  the copy is validated again: an effort a chain model refuses fails here,
-  before any spend). The global ``settings`` are never changed.
+- Settings: a validated per-run copy with one engine model, alone, is
+  ``common.config.role_settings`` on the engine role (``ENGINE_MODEL`` set,
+  ``ENGINE_FALLBACKS`` off; the copy is validated again, so an effort a chain
+  model refuses fails before any spend). ``model_settings``, the helper it
+  was promoted from (U2), is now that call, kept for the suites that still
+  name it. The global ``settings`` are never changed.
 - Phase 1 (``phase_one``): the project understanding, the profiler hotspots
   and the objective of one corpus repository from the engine's real
   components, without any trial. It is a whole ``Orchestrator.run`` with
@@ -81,7 +83,12 @@ from autonomous_ai_agents.clients.budget import Budget
 from autonomous_ai_agents.clients.cost import count_margin, preflight_estimate
 from autonomous_ai_agents.clients.structured import PROMPT_ALLOWANCE_TOKENS
 from autonomous_ai_agents.clients.transport import LLMRequest, LLMTransport
-from autonomous_ai_agents.common.config import Effort, Settings, settings
+from autonomous_ai_agents.common.config import (
+    Effort,
+    Settings,
+    role_settings,
+    settings,
+)
 from autonomous_ai_agents.common.errors import (
     EngineError,
     LLMRequestError,
@@ -164,11 +171,11 @@ def model_settings(
     base: Settings, model: str, *, fallbacks: bool = False, **update: object
 ) -> Settings:
     """``base`` with ``ENGINE_MODEL`` = ``model`` (fallbacks off unless asked)
-    and ``update``, validated again; ``base`` itself is not changed."""
-    copy = base.model_copy(
-        update={"ENGINE_MODEL": model, "ENGINE_FALLBACKS": fallbacks, **update}
+    and ``update``: ``role_settings`` on the engine role, validated again;
+    ``base`` itself is not changed."""
+    return role_settings(
+        base, "engine", ENGINE_MODEL=model, ENGINE_FALLBACKS=fallbacks, **update
     )
-    return type(base).model_validate(copy.model_dump())
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +282,7 @@ Work = Callable[
 
 def run_arm(arm: Arm, run: LiveRun, base: Settings, work: Work) -> ArmResult:
     """``work`` on the arm's own transport (chain: the arm's model alone)."""
-    cfg = model_settings(base, arm.model)
+    cfg = role_settings(base, "engine", ENGINE_MODEL=arm.model, ENGINE_FALLBACKS=False)
     tap = UsageTap(run.transport(cfg))
     first = len(run.records)
     notes: list[str] = []
