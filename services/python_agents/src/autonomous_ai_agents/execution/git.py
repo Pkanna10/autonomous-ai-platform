@@ -553,6 +553,18 @@ class GitWorkspace:
                 paths.append(os.fsdecode(path))
         return tuple(paths)
 
+    def blob_modes(self, commit: str) -> dict[str, str]:
+        """Each blob path at ``commit`` (as ``ls_tree``) with its tree mode:
+        ``100644``, ``100755`` or ``120000`` (a symlink)."""
+        out = self._run("ls-tree", "-r", "-z", "--full-tree", _require_oid(commit))
+        modes = {}
+        for record in out.split(b"\0"):
+            meta, _, path = record.partition(b"\t")
+            mode, _, rest = meta.partition(b" ")
+            if rest.startswith(b"blob "):
+                modes[os.fsdecode(path)] = mode.decode("ascii")
+        return modes
+
     def read_blob(self, commit: str, path: str, *, limit: int | None = None) -> bytes:
         """The blob at ``commit:path``. With no ``limit``, all of it (``GitError``
         past ``MAX_OUTPUT_BYTES``); with one, its first ``limit`` bytes at

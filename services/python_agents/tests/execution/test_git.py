@@ -531,6 +531,21 @@ def test_ls_tree_lists_blob_paths_and_read_blob_returns_their_bytes(
     assert ws.read_blob(base, "core.py") == CORE_V1.encode()
 
 
+def test_blob_modes_reports_each_blob_entrys_mode(
+    ws: GitWorkspace, repo: Path, base: str
+) -> None:
+    write(repo / "deep" / "tool.sh", "echo\n")
+    (repo / "deep" / "tool.sh").chmod(0o755)
+    os.symlink("core.py", repo / "alias.py")
+    run_git(repo, "add", "-A")
+    run_git(repo, "update-index", "--add", "--cacheinfo", f"160000,{base},vendored")
+    run_git(repo, "commit", "-q", "-m", "modes")
+    modes = ws.blob_modes(out(repo, "rev-parse", "HEAD"))
+    assert set(modes) == set(ws.ls_tree(out(repo, "rev-parse", "HEAD")))
+    assert (modes["core.py"], modes["deep/tool.sh"]) == ("100644", "100755")
+    assert modes["alias.py"] == "120000" and "vendored" not in modes
+
+
 @pytest.mark.skipif(sys.platform == "darwin", reason="APFS refuses non-UTF-8 names")
 def test_a_non_utf8_file_name_round_trips(ws: GitWorkspace, repo: Path) -> None:
     name = os.fsdecode(b"caf\xe9.txt")

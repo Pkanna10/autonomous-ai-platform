@@ -558,9 +558,17 @@ dogfood needs a new package, the Lead proposes 3b first at the 3c briefing.
     `:1482`): a trial touching them is rejected (`protected_path`, rule 1);
   - the scorer never runs from a trial worktree: each scoring materialises the
     recorded blobs (sha256 re-checked) in the engine phase `<run>/quality`,
-    run as `python -E -s` with cwd and `sys.path[0]` the frozen copy, so no
-    trial-edited module is importable. A scorer that needs the repository fails
-    at baseline ("the scorer must be self-contained");
+    run as `python -s -B` with cwd and `sys.path[0]` the frozen copy, so no
+    trial-edited module is importable. Not `-E`: `child_env`'s allowlist already
+    drops every `PYTHON*` name but the forced `PYTHONHASHSEED=0` and
+    `PYTHONDONTWRITEBYTECODE=1`, which `-E` would ignore, making a scorer that
+    iterates a set score differently run to run (Lead, U19 review). A scorer
+    that needs the repository fails at baseline ("the scorer must be
+    self-contained");
+  - a frozen path must be a regular file in the tree (mode 100644 or 100755):
+    a symlink blob would freeze the link text and leave the real file
+    unprotected, so freeze refuses it ("freeze the file it points to"; Lead,
+    U19 review);
   - the scorer phase (U19) is not built by `make_phase`, which takes a
     `WorktreeHandle` and resets through `GitWorkspace.reset` (`check_link` on
     `<dir>/.git`, `checkout -f`, clean; `git.py:675-694`); the frozen copy has
@@ -778,7 +786,9 @@ dogfood needs a new package, the Lead proposes 3b first at the 3c briefing.
   worktree, giving per block and workload the relative gap of wall time, the
   engine's time objective (CPU time at tick granularity would inflate the
   floor; a user's custom `cpu_time_s` objective relies on the 2 % minimum;
-  Lead, U20 review). `floor = max(MIN_RELATIVE_GAIN, NOISE_GAP_MULTIPLIER × largest
+  Lead, U20 review). The raise is keyed by metric name: `wall_time_s` gets
+  the calibrated floor, a calibrated run's `cpu_time_s` gets at least 2 %
+  (Lead, U22 review). `floor = max(MIN_RELATIVE_GAIN, NOISE_GAP_MULTIPLIER × largest
   |gap|)`, never below 2 %. The baseline node raises each time objective's
   `min_relative_gain` to it (a larger user value stays) before any trial, so
   every judge, confirmation and combine applies it (`CombineRules` copies the
@@ -1157,7 +1167,7 @@ above; each step's briefing restates them.
 | Retry as a reward-hacking channel | Own workload crash only, before any judge (`trial_runner.py:502-587`); full re-capture and anti-cheat on the union diff; one commit on the base |
 | Discovery spend starving proofs | D7, enforced by `Budget.check` before send; `DISCOVERY_MAX_SHARE`; `discovery_cost_usd` reported |
 | A trial faking the quality number | D37: a frozen builtin or a scorer run from an engine copy of base blobs (sha256-checked), never text the trial prints, the copy existing only during scoring; frozen files protected, naming them refused, read-denied to the editor, masked from workloads; deterministic; strict one-line format; a warning when another tracked input carries the labels column. Residual, review only: labels read via the main repository, the object store or an unfrozen input carrying them (Landlock read rules **unverified**, D30); a lookup table of label values baked into the code (it names no frozen path); a scorer executing its input |
-| The scorer as a code path | Its own sandbox policy (network off, writes confined to the copy and scratch), output on stdin, `-E -s`, no repository on `sys.path`, `QUALITY_TIMEOUT_S`, ≤ 128 bytes read, the copy removed in `finally` |
+| The scorer as a code path | Its own sandbox policy (network off, writes confined to the copy and scratch), output on stdin, `-s -B` with the forced hash seed, regular-file blobs only, no repository on `sys.path`, `QUALITY_TIMEOUT_S`, ≤ 128 bytes read, the copy removed in `finally` |
 | Tolerance hiding a real change | A caller option, echoed in define and the report; a strict whole-token float rule, integers exact; sound one way (D39), counts printed as decimals the stated limitation; complete outputs only, else exact |
 | An output check that compares nothing | An empty-output workload warned at baseline and in the report, refused in quality mode (D40) |
 | Output change shipped unreviewed; excessive agency | Rule 6: `output_changed` is `review`, never `keep`; labelled; create-only under the prefix, never on a checked-out or default branch (`assert_safe_branch`), never merged or pushed; novel asks |

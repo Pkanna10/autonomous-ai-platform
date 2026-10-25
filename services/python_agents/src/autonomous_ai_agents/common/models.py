@@ -54,7 +54,7 @@ NOISE_CALIBRATION_BLOCKS_MAX = 5
 """Most A/A calibration blocks a baseline runs (``NOISE_CALIBRATION_BLOCKS``)."""
 QUALITY_MAX_FROZEN_PATHS = 16
 _SCORER_INTERPRETER = re.compile(r"python(3(\.\d+)?)?")
-"""``scorer[0]``'s file name: the scorer runs as ``python -E -s`` (D37)."""
+"""``scorer[0]``'s file name: the scorer runs as ``python -s -B`` (D37)."""
 
 JsonScalar = str | int | float | bool | None
 ScalarDict = dict[str, JsonScalar]
