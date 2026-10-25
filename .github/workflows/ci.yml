@@ -59,7 +59,7 @@ on:
         options: [default, claude-sonnet-5-5]
         default: default
       suite_cap_usd:
-        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75, hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 77, sweep-fable 33, sweep-record 17, ab 140, escalation 43, acquire 1, noise 0, heal 6, oss-ab 103, evolve 104, evolve-more 138, heal-hard 8, build 27'
+        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75, hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 77, sweep-fable 33, sweep-record 17, ab 140, escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, heal-hard 8, build 27'
         type: string
         default: '12'
       oss_repo:
