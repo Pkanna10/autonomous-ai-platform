@@ -38,6 +38,15 @@ capture and every anti-cheat rule run again on the diff against the base, and
 the second commit's parent is the base, so the trial stays one child of it.
 Anything else keeps the first failure and its commit, with a ``retry_notes``
 line (the notes, never the prompt, name what was withheld).
+
+Paired trials (D41 a, ``paired``): every attempt, a retry's too, is measured
+ABBA (``measure_abab``) against a fresh twin worktree at the base,
+``twin-trial-<hyp>`` (a prefix no trial phase has); the twin's rows are
+``Trial.base_measurements`` and the suite runs once, on the trial. A crash on
+the twin is an ``EngineError`` (the base, not the hypothesis, failed, as at
+baseline): never retried, no verdict, the spend on the error.
+The noise calibration (D41 c, ``GitBaselineRunner.calibrate``) measures the
+base against a second base worktree in A/A blocks.
 """
 
 from __future__ import annotations
@@ -69,9 +78,13 @@ from autonomous_ai_agents.common.errors import (
     add_spend,
 )
 from autonomous_ai_agents.common.models import (
+    METRIC_WALL_TIME_S,
+    NOISE_CALIBRATION_BLOCKS_MAX,
+    NOISE_FLOOR_MIN,
     Baseline,
     Hypothesis,
     Measurement,
+    NoiseCalibration,
     Project,
     Trial,
     TrialStatus,
@@ -95,6 +108,7 @@ from autonomous_ai_agents.execution.measure import (
     RunOnce,
     baseline_test_count,
     make_phase,
+    measure_abab,
     measure_workload,
     python_module,
     run_tests,
@@ -126,6 +140,14 @@ TRIAL_NAMESPACE = uuid.UUID("3f0c6a52-7d1e-5b9a-8c4f-2e6d9b1a7c30")
 """uuid5 namespace of trial ids: ``uuid5(TRIAL_NAMESPACE, "<branch>@<round>")``."""
 TRAILER = "Engine-Trial"
 BASELINE_PHASE = "baseline"
+CALIBRATE_PHASES = ("calibrate", "twin-calibrate")
+CALIBRATION = "the noise calibration"
+"""The noise calibration's two base worktrees (A and A')."""
+TWIN_FAILED = "the paired base run failed"
+"""The ``EngineError`` of a paired trial whose twin, not the trial, failed."""
+_TIME_METRICS = (METRIC_WALL_TIME_S,)
+"""Calibrated metrics: the engine's time objective. CPU time's tick
+granularity would inflate the floor every judge must clear."""
 NONDETERMINISTIC_NOTE = "did not agree on one output"
 """In a note, the measurement's nondeterministic-output warning."""
 INVOKE_PROTECTED: tuple[str, ...] = (
@@ -183,6 +205,29 @@ class _Job:
     brief: TrialBrief
     prior: str | None
     own_ref: str
+    twin: PhaseDirs
+
+
+@dataclass
+class _Side:
+    """Whether the latest launch of a paired measurement was the twin's."""
+
+    twin: bool = False
+
+
+def _marked(phase: Phase, side: _Side, twin: bool) -> Phase:
+    """``phase`` recording in ``side`` that its reset (every launch's first
+    step) ran, so a ``RunFailure`` names the side it came from."""
+
+    def reset() -> None:
+        side.twin = twin
+        phase.reset()
+
+    return replace(phase, reset=reset)
+
+
+def _twin_dirs(dirs: PhaseDirs) -> PhaseDirs:
+    return phase_dirs(dirs.run.name, f"twin-{dirs.worktree.name}")
 
 
 @dataclass(frozen=True)
@@ -319,10 +364,15 @@ class _PhaseOwner:
             for note in notes:
                 self._on_note(f"{prefix}: {note}")
 
-    def _make_phase(self, handle: WorktreeHandle, dirs: PhaseDirs) -> Phase:
+    def _make_phase(
+        self, handle: WorktreeHandle, dirs: PhaseDirs, *, mask: Sequence[str] = ()
+    ) -> Phase:
+        """The phase of ``handle``; ``mask`` lists the frozen files deleted
+        before each workload launch (D37; U24 passes the quality check's)."""
         return self._phase(
-            self._git, handle, scratch=dirs.scratch, probe=dirs.probe, run=self._run
-        )
+            self._git, handle, scratch=dirs.scratch, probe=dirs.probe, run=self._run,
+            mask=mask,
+        )  # fmt: skip
 
     def _measure(
         self,
@@ -332,15 +382,24 @@ class _PhaseOwner:
         prefix: str,
         trial_id: str | None,
         baseline_count: int | None,
-    ) -> tuple[Measurement, ...]:
-        """``measure_workload`` per workload, then the suite once; notes emitted.
-        ``RunFailure`` propagates, its notes emitted."""
+        twin: Phase | None = None,
+    ) -> tuple[tuple[Measurement, ...], tuple[Measurement, ...]]:
+        """``measure_workload`` per workload, or ABBA against ``twin`` (A), then
+        the suite once on ``phase``: (the twin's rows, ``phase``'s rows); notes
+        emitted. ``RunFailure`` propagates, its notes emitted."""
+        base: list[Measurement] = []
         rows: list[Measurement] = []
         try:
             for workload in workloads:
-                measured = measure_workload(phase, workload, trial_id=trial_id)
-                self._note(prefix, measured.notes)
-                rows.extend(measured.measurements)
+                if twin is None:
+                    alone = measure_workload(phase, workload, trial_id=trial_id)
+                    notes, own = alone.notes, alone.measurements
+                else:
+                    paired = measure_abab(twin, phase, workload, trial_id_b=trial_id)
+                    notes, own = paired.notes, paired.b
+                    base.extend(paired.a)
+                self._note(prefix, notes)
+                rows.extend(own)
             suite = run_tests(
                 phase,
                 self._project,
@@ -352,7 +411,7 @@ class _PhaseOwner:
             self._note(prefix, failure.notes)
             raise
         self._note(prefix, suite.notes)
-        return (*rows, *suite.measurements)
+        return tuple(base), (*rows, *suite.measurements)
 
     def _checked_out(self, ref: str) -> bool:
         return ref.casefold() in {
@@ -367,11 +426,17 @@ class _PhaseOwner:
                 " out another branch there, then run the trial again"
             )
 
-    def _tampered(self, before: str, exclude: frozenset[str] = frozenset()) -> None:
+    def _tampered(
+        self,
+        before: str,
+        exclude: frozenset[str] = frozenset(),
+        *,
+        what: str | None = None,
+    ) -> None:
         if repo_fingerprint(self._git, exclude_refs=exclude) != before:
             raise RepoTamperedError(
-                f"the repository changed while {self._what} ran: its refs, config"
-                " or hooks differ from before the run"
+                f"the repository changed while {what or self._what} ran: its"
+                " refs, config or hooks differ from before the run"
             )
 
 
@@ -397,7 +462,7 @@ class GitBaselineRunner(_PhaseOwner):
             handle = self._git.add_worktree(dirs.worktree, commit)
             phase = self._make_phase(handle, dirs)
             try:
-                rows = self._measure(
+                _, rows = self._measure(
                     phase,
                     workloads,
                     prefix="baseline",
@@ -411,6 +476,67 @@ class GitBaselineRunner(_PhaseOwner):
             raise EngineError(f"the baseline could not be measured: {failed.reason}")
         return rows
 
+    def calibrate(
+        self, workloads: Sequence[Workload], *, run_id: str, commit: str, blocks: int
+    ) -> NoiseCalibration:
+        """The ``NoiseCalibrator`` (D41 c): ``blocks`` A/A blocks, each every
+        workload ABBA at ``commit`` against a second worktree at ``commit``
+        (no suite). A gap is the relative difference of the wall-time means,
+        ``|A - A'| / max(A, A')`` (the gain a judge would read from pure noise),
+        keyed ``<workload id>:wall_time_s``, the largest over the blocks; the floor
+        is ``max(NOISE_FLOOR_MIN, NOISE_GAP_MULTIPLIER x the largest gap)``.
+        Only wall time is calibrated: a user's own ``cpu_time_s`` objective
+        relies on the 2 % minimum floor and its own noise judge. A
+        ``RunFailure`` is an ``EngineError`` once F1 held."""
+        if not 1 <= blocks <= NOISE_CALIBRATION_BLOCKS_MAX:
+            raise ValueError(
+                f"blocks must be 1-{NOISE_CALIBRATION_BLOCKS_MAX}, got {blocks}"
+            )
+        require_dir_name("run id", run_id)
+        sides = [phase_dirs(run_id, name) for name in CALIBRATE_PHASES]
+        before = repo_fingerprint(self._git)
+        failed: RunFailure | None = None
+        gaps: dict[str, float] = {}
+        with owned_phases(self._git, CALIBRATION, *sides):
+            a, b = (
+                self._make_phase(self._git.add_worktree(d.worktree, commit), d)
+                for d in sides
+            )
+            try:
+                for _ in range(blocks):
+                    for workload in workloads:
+                        paired = measure_abab(a, b, workload)
+                        self._note("calibration", paired.notes)
+                        for key, gap in _gaps(paired.a, paired.b):
+                            gaps[key] = max(gap, gaps.get(key, 0.0))
+            except RunFailure as failure:
+                self._note("calibration", failure.notes)
+                failed = failure
+            self._tampered(before, what=CALIBRATION)
+        if failed is not None:
+            raise EngineError(
+                f"the noise calibration could not be measured: {failed.reason}"
+            )
+        largest = max(gaps.values(), default=0.0)
+        floor = max(NOISE_FLOOR_MIN, settings.NOISE_GAP_MULTIPLIER * largest)
+        return NoiseCalibration(blocks=blocks, gaps=gaps, floor=floor)
+
+
+def _gaps(
+    a: Sequence[Measurement], b: Sequence[Measurement]
+) -> list[tuple[str, float]]:
+    """Each time metric's relative gap between the A and A' rows (0 for two
+    zero means)."""
+    means = {(m.workload_id, m.metric): m.stats.mean for m in b}
+    found: list[tuple[str, float]] = []
+    for row in a:
+        if row.metric in _TIME_METRICS:
+            other = means[(row.workload_id, row.metric)]
+            top = max(row.stats.mean, other)
+            gap = abs(row.stats.mean - other) / top if top > 0 else 0.0
+            found.append((f"{row.workload_id}:{row.metric}", gap))
+    return found
+
 
 class GitTrialRunner(_PhaseOwner):
     """The real ``TrialRunner`` for one project (module docstring for the steps).
@@ -422,7 +548,9 @@ class GitTrialRunner(_PhaseOwner):
     the editor's report and its ``Budget``'s record; above ``budget_usd`` the
     trial fails charged exactly ``budget_usd`` (and the same share of tokens).
     ``fix_retries`` (0-1, default 0: off) and ``retry_floor_usd`` bound the fix
-    retry (module docstring). Notes (``RunSample``, ``RunFailure``,
+    retry (module docstring). ``paired`` (default off: Step 2; the factory
+    passes ``PAIRED_TRIALS``) measures every attempt against a twin of the
+    base (module docstring). Notes (``RunSample``, ``RunFailure``,
     ``Measured``) go to ``on_note``
     prefixed ``trial for hypothesis <id>:``. ``prefix`` is the engine branch
     prefix (default the setting's; the factory passes the context's): the
@@ -446,6 +574,7 @@ class GitTrialRunner(_PhaseOwner):
         prefix: str | None = None,
         fix_retries: int = 0,
         retry_floor_usd: float = 0.0,
+        paired: bool = False,
     ) -> None:
         if not 0 <= fix_retries <= FIX_RETRIES_MAX:
             raise ValueError(
@@ -456,6 +585,7 @@ class GitTrialRunner(_PhaseOwner):
                 f"retry_floor_usd must be finite and at least 0, got {retry_floor_usd}"
             )
         self._fix_retries, self._retry_floor = fix_retries, retry_floor_usd
+        self._paired = paired
         super().__init__(
             project, git=git, network=network, fs=fs, platform=platform,
             base_env=base_env, run=run, on_note=on_note,
@@ -507,8 +637,9 @@ class GitTrialRunner(_PhaseOwner):
                 f" (no '{TRAILER}: {draft.id}' trailer); delete it to run the trial"
             )
         progress = _Progress(Budget(budget_usd))
+        twin = (_twin_dirs(dirs),) if self._paired else ()
         try:
-            with owned_phases(self._git, self._what, dirs):
+            with owned_phases(self._git, self._what, dirs, *twin):
                 handle = self._git.add_worktree(dirs.worktree, baseline.commit)
                 trial = self._attempt(
                     handle, dirs, draft, hypothesis, workloads, baseline, brief,
@@ -587,7 +718,7 @@ class GitTrialRunner(_PhaseOwner):
         job = _Job(
             handle, dirs, hypothesis, tuple(workloads), baseline, base, tracked,
             scope, replace(brief, protected=protected), prior,
-            f"refs/heads/{trial.branch}",
+            f"refs/heads/{trial.branch}", _twin_dirs(dirs),
         )  # fmt: skip
         task = EditTask(hypothesis, job.brief, secrets.token_hex(8))
         first = self._try(job, trial, task, progress, earlier=None)
@@ -660,18 +791,41 @@ class GitTrialRunner(_PhaseOwner):
         self._git.clean(job.handle)
         self._point(job, commit, progress)
         trial = trial.model_copy(update={"commit": commit})
+        side = _Side()
+        phase, twin = self._trial_phases(job, side)
         try:
-            rows = self._measure(
-                self._make_phase(job.handle, job.dirs),
+            base, rows = self._measure(
+                phase,
                 job.workloads,
                 prefix=f"trial for hypothesis {job.hypothesis.id}",
                 trial_id=trial.id,
                 baseline_count=baseline_test_count(job.baseline.measurements),
+                twin=twin,
             )
         except RunFailure as failure:
+            if (
+                side.twin
+            ):  # the base failed: no retry, no verdict (run() adds the spend)
+                raise EngineError(f"{TWIN_FAILED}: {failure.reason}") from None
             return _Tried(_failed(trial, failure.reason), result, failure)
-        measured = {"status": TrialStatus.measured, "measurements": rows}
+        measured = {
+            "status": TrialStatus.measured,
+            "measurements": rows,
+            "base_measurements": base,
+        }
         return _Tried(trial.model_copy(update=measured), result)
+
+    def _trial_phases(self, job: _Job, side: _Side) -> tuple[Phase, Phase | None]:
+        """The trial's phase and, when paired, a fresh twin's at the base (an
+        existing twin, a first attempt's, is replaced); both mark ``side``."""
+        # U24: pass the same mask (quality.frozen_paths) to both phases, so the
+        # two sides of the pair run under the same conditions.
+        phase = self._make_phase(job.handle, job.dirs)
+        if not self._paired:
+            return phase, None
+        handle = self._git.add_worktree(job.twin.worktree, job.base)
+        twin = self._make_phase(handle, job.twin)
+        return _marked(phase, side, False), _marked(twin, side, True)
 
     def _point(self, job: _Job, commit: str, progress: _Progress) -> None:
         """Move the own ref from where this trial left it to ``commit``."""

@@ -754,8 +754,11 @@ dogfood needs a new package, the Lead proposes 3b first at the 3c briefing.
   `Trial.base_measurements`, and the judges node judges the trial against them
   (objectives and guardrails from the run baseline, completeness on both
   sides, as `combine_node.py:213-224` does). The suite runs once, on B. A retry
-  re-measures the same way. `PAIRED_TRIALS=False`, or a runner filling no A
-  rows (the stubs), keeps Step 2.
+  re-measures the same way. A crash on the twin (the base code) is an
+  `EngineError` that stops the run with its spend kept, as a base crash in
+  `GitBaselineRunner.measure` is; it is never retried or learned as the
+  hypothesis's failure (Lead, U20 review). `PAIRED_TRIALS=False`, or a runner
+  filling no A rows (the stubs), keeps Step 2.
 - **(b) Confirmation before keep.** For a would-be `keep` or `review`, the
   verdicts node re-tests the trial alone through the combiner
   (`orchestrator/confirm.py`, `confirm_one`: `combine_kept`'s re-test on one
@@ -772,8 +775,10 @@ dogfood needs a new package, the Lead proposes 3b first at the 3c briefing.
   (`tests/orchestrator/test_nodes.py:2325`, keep → combine) holds.
 - **(c) Per-project floor.** A `NoiseCalibrator` (the baseline runner) adds
   `NOISE_CALIBRATION_BLOCKS` (3) A/A blocks: the base ABAB against a second base
-  worktree, giving per block and workload the relative gap of each time
-  objective. `floor = max(MIN_RELATIVE_GAIN, NOISE_GAP_MULTIPLIER × largest
+  worktree, giving per block and workload the relative gap of wall time, the
+  engine's time objective (CPU time at tick granularity would inflate the
+  floor; a user's custom `cpu_time_s` objective relies on the 2 % minimum;
+  Lead, U20 review). `floor = max(MIN_RELATIVE_GAIN, NOISE_GAP_MULTIPLIER × largest
   |gap|)`, never below 2 %. The baseline node raises each time objective's
   `min_relative_gain` to it (a larger user value stays) before any trial, so
   every judge, confirmation and combine applies it (`CombineRules` copies the
