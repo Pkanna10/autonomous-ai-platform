@@ -896,6 +896,13 @@ jobs:
               status=1
             fi
           done
+          # 006: a lesson may record the review outcome (D35)
+          if [ "$(query "SELECT count(*) FROM pg_constraint WHERE conname = 'chk_lesson_outcome' AND conrelid = 'public.lessons'::regclass AND pg_get_constraintdef(oid) LIKE '%''review''%'")" = "1" ]; then
+            echo "constraint chk_lesson_outcome: allows review"
+          else
+            echo "::error::constraint chk_lesson_outcome does not allow review (006)"
+            status=1
+          fi
           exit "${status}"
 
   # Database init exactly as a developer runs it: docker compose starts the
@@ -968,7 +975,7 @@ jobs:
           echo "public tables: ${count}"
           docker compose exec -T postgres psql -U dev -d ai_platform -c '\dt'
           if [ "${count}" != "14" ]; then
-            echo "::error::expected 14 tables after 001 -> 005 (004 and 005 add none), found ${count}"
+            echo "::error::expected 14 tables after 001 -> 006 (004 to 006 add none), found ${count}"
             exit 1
           fi
 

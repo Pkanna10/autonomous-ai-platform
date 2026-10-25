@@ -1322,10 +1322,11 @@ def test_reapplying_003_onward_leaves_the_catalog_unchanged(
     """
     before = _catalog(postgres_dsn)
     again = [p for p in schema_files if p.name[:4] >= "003_"]
-    assert [p.name for p in again][:3] == [
+    assert [p.name for p in again][:4] == [
         "003_engine.sql",
         "004_engine_repository.sql",
         "005_lesson_ids.sql",
+        "006_review_outcome.sql",
     ]
 
     with psycopg.connect(postgres_dsn, autocommit=True) as conn:
@@ -1417,7 +1418,8 @@ def test_migration_005_keeps_legacy_uuid_lessons_and_applies_twice(
           ids (and one with neither)
     WHEN 005 is applied, then applied again
     THEN the lessons read back with the same ids as text, the second apply
-         changes nothing, and the catalog equals a database built 001-005
+         changes nothing, and with the later migrations applied the catalog
+         equals a database built from every file
     """
     hypothesis, technique = new_id(), new_id()
     with psycopg.connect(legacy_dsn) as conn:
@@ -1438,10 +1440,68 @@ def test_migration_005_keeps_legacy_uuid_lessons_and_applies_twice(
     once = _catalog(legacy_dsn)
     with psycopg.connect(legacy_dsn, autocommit=True) as conn:
         conn.execute(migration.read_bytes())
+    assert _catalog(legacy_dsn) == once
+    with psycopg.connect(legacy_dsn, autocommit=True) as conn:
+        for later in schema_files:
+            if later.name[:4] > "005_":
+                conn.execute(later.read_bytes())
 
-    assert _catalog(legacy_dsn) == once == _catalog(postgres_dsn)
+    assert _catalog(legacy_dsn) == _catalog(postgres_dsn)
     lessons = PostgresRepository(legacy_dsn).list_lessons()
     assert [(x.text, x.hypothesis_id, x.technique_id) for x in lessons] == [
         ("legacy", hypothesis, technique),
         ("global", None, None),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Migration 006
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.postgres
+def test_a_review_lesson_is_saved_and_listed_back(
+    postgres_repository: PostgresRepository,
+) -> None:
+    """
+    GIVEN a lesson whose verdict sent the change to the review branch (D35)
+    WHEN it is saved and listed
+    THEN migration 006's outcome CHECK accepts it and it comes back equal
+    """
+    state = _state()
+    postgres_repository.save_run(state)
+    lesson = _lesson(
+        project_id=state["project"].id,
+        verdict_id=new_id(),
+        outcome=VerdictOutcome.review,
+    )
+
+    postgres_repository.save_lesson(lesson)
+
+    assert postgres_repository.list_lessons(state["project"].id) == (lesson,)
+
+
+@pytest.mark.postgres
+def test_migration_006_allows_every_verdict_outcome_and_no_other(
+    postgres_dsn: str,
+) -> None:
+    """
+    GIVEN the test database built from every migration
+    WHEN the lesson outcome CHECK is read and a direct insert tries a value
+        that is no VerdictOutcome
+    THEN the CHECK lists exactly the VerdictOutcome values, once, and the
+        insert fails it
+    """
+    ((definition,),) = _rows(
+        postgres_dsn,
+        "SELECT pg_get_constraintdef(oid) FROM pg_constraint"
+        " WHERE conrelid = 'public.lessons'::regclass"
+        " AND conname = 'chk_lesson_outcome'",
+    )
+    for outcome in VerdictOutcome:
+        assert f"'{outcome.value}'" in definition
+    with (
+        psycopg.connect(postgres_dsn, autocommit=True) as conn,
+        pytest.raises(psycopg.errors.CheckViolation, match="chk_lesson_outcome"),
+    ):
+        conn.execute("INSERT INTO lessons (outcome, text) VALUES ('merged', 'x')")

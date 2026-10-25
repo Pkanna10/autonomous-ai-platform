@@ -976,7 +976,7 @@ gains `fix_retries`, `retry_floor_usd`, `scorer`, `paired`.
   with `CHECK (col ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' AND col NOT LIKE
   '%..%' AND col !~ '(\.lock|\.)$')` (`state.py:64-85`); reads already cast
   (`postgres.py:170-178`); CI's column check updated (`ci.yml:775-800`).
-- **006_review_outcome.sql** (U11): `chk_lesson_outcome` with `review`
+- **006_review_outcome.sql** (U11a, landed early in batch 2): `chk_lesson_outcome` with `review`
   (`003:427-428`), comment at `003:444`.
 - **007** (3c): `heal` in `chk_hypothesis_source` (`003:384`), `reproduce` in
   `chk_task_phase` (`003:253-257`). **008** (3b): `packages` columns,
@@ -1377,7 +1377,7 @@ seams checklist in its brief.
 | U8 | Hypotheses node and router | `nodes.py` (`hypotheses`, `after_verdicts`), `test_hypotheses_node.py` | ~380 | U7 | correctness; spec |
 | U9 | Research node (matched, off) | `nodes.py` (`research`), `test_research_node.py` | ~200 | U8 | correctness |
 | U10 | Factory: roles, playbook, retry floor and cap, scorer, calibrator, noise and output flags | `orchestrator/factory.py`, `test_factory_roles.py` | ~280 | U6, U7, U18, U19, U20, U24 | security (transports) |
-| U11 | Review delivery, D38 labels, D42 lines, total time, retry notes | `nodes.py` (`_STATUS_AFTER_VERDICT`, `verdicts` event text, `combine`, `deliver`, `_report`), `006_review_outcome.sql`, `test_review_delivery.py` | ~360 | U21, U23 | spec (user decision 1, O7, O10); correctness |
+| U11 | Review delivery, D38 labels, D42 lines, total time, retry notes | `nodes.py` (`verdicts` event text, `combine`, `deliver`, `_report`), `test_review_delivery.py` (the `_STATUS_AFTER_VERDICT` entry landed with U2 and `006_review_outcome.sql` with U11a, Lead, batch 2, so `review` is mapped and storable before U21 emits it) | ~360 | U21, U23 | spec (user decision 1, O7, O10); correctness |
 | U12 | Offline discovery eval | `tests/live/discovery_grader.py`, `tests/live/discovery_sweep.py`, `tests/optimization/test_discovery_eval.py`, `tests/fixtures/discovery_eval/seed.json` | ~300 | U7 | weakened-test |
 | U13 | Live plumbing, timeouts, L0 | `tests/live/corpus.py`, `tests/live/oss.py`, `tests/live/test_*_guards.py`, `tests/live/noise.py` (paired path), `ci.yml` (live-smoke) | ~300 | U3, U10, the Lead's noise-suite import (§3.6) | cost (caps) |
 | U14 | E2E E3-A to E3-E | `tests/e2e/test_step3.py`, `tests/fixtures/step3/` | ~350 | U13, U16, U25 | correctness |
