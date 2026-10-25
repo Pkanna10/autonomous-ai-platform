@@ -2078,3 +2078,76 @@ def test_heal_hard_exports_its_set_only_for_its_own_suite() -> None:
     )
     assert guarded is not None, script
     assert script.count(name) == 1
+
+
+# ---------------------------------------------------------------------------
+# The python job's workload interpreters and pip-audit (spec D13, D19)
+# ---------------------------------------------------------------------------
+
+SECURITY_WORKFLOW = CI_WORKFLOW.with_name("security.yml")
+STAGE_GATE = SERVICE_DIR.parents[1] / "scripts" / "stage-gate.sh"
+WORKLOAD_VERSIONS = " ".join(f"3.{minor}" for minor in range(8, 15))  # 3.8-3.14
+PIP_AUDIT = "uv run pip-audit --progress-spinner off"
+SYNC = "uv sync --frozen --extra dev --extra database --extra experiments"
+
+
+def _step_names(block: str) -> list[str]:
+    return re.findall(r"^      - name: (.+)$", block, flags=re.MULTILINE)
+
+
+def _step(block: str, name: str) -> str:
+    begin = block.index(f"      - name: {name}\n")
+    after = block.find("\n      - name: ", begin + 1)
+    return block[begin : len(block) if after < 0 else after]
+
+
+def test_the_python_job_installs_and_checks_every_workload_interpreter() -> None:
+    """D13's live templates run under every ``python3.N`` on PATH and must
+    not skip in CI: the job installs 3.8-3.14 and fails if one is missing."""
+    job = _ci_block("  python:\n", "  python-macos:\n")
+    install = _step(job, "Install workload interpreters 3.8 to 3.14")
+    assert f"uv python install {WORKLOAD_VERSIONS}\n" in install
+    assert 'uv python dir --bin >> "$GITHUB_PATH"' in install
+    check = _step(job, "Workload interpreters are on PATH")
+    assert f"for version in {WORKLOAD_VERSIONS}; do\n" in check
+    assert "              status=1\n" in check  # a missing one fails the job
+    assert "::error::python${version} is not on PATH" in check
+    assert 'exit "${status}"' in check
+
+
+def test_the_python_job_audits_the_lock_after_mypy_as_the_gate_does() -> None:
+    """D19: a vulnerable lock fails the PR; the command is the gate's."""
+    job = _ci_block("  python:\n", "  python-macos:\n")
+    names = _step_names(job)
+    audit = "Audit dependencies with pip-audit"
+    assert names.index("Type check with Mypy") + 1 == names.index(audit)
+    step = _step(job, audit)
+    assert f"run: {PIP_AUDIT}\n" in step
+    assert "continue-on-error" not in step and "|| true" not in step
+    assert "\n        if:" not in step  # never skipped
+    assert PIP_AUDIT in STAGE_GATE.read_text(encoding="utf-8")
+
+
+def test_security_audits_the_unchanged_lock_every_week() -> None:
+    """D19: a new advisory against an unchanged lock turns the weekly run red;
+    the job syncs what the python job syncs and runs the gate's command."""
+    text = SECURITY_WORKFLOW.read_text(encoding="utf-8")
+    assert "  schedule:\n    # Run security scans every Monday at 9am UTC\n" in text
+    begin = text.index("  pip-audit:\n")
+    after = re.search(r"^  [\w-]+:\n", text[begin + 1 :], flags=re.MULTILINE)
+    job = text[begin : len(text) if after is None else begin + 1 + after.start()]
+    assert (
+        "if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'"
+        in job
+    )
+    assert "working-directory: ./services/python_agents" in job
+    assert f"run: {SYNC}\n" in job
+    assert SYNC in CI_WORKFLOW.read_text(encoding="utf-8")
+    step = _step(job, "Audit dependencies with pip-audit")
+    assert f"run: {PIP_AUDIT}\n" in step
+    assert "continue-on-error" not in job and "|| true" not in job
+    locked = _step(job, "Audit every locked package with pip-audit")
+    assert "uv export --frozen --all-extras --no-emit-project" in locked
+    assert "--disable-pip --require-hashes -r" in locked
+    for audit in (step, locked):
+        assert "\n        if:" not in audit  # never skipped

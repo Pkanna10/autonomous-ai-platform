@@ -389,20 +389,21 @@ jobs:
           uv run python -c 'import sys; print("engine python", sys.version)'
 
       # The profiler shim runs on workload interpreters >= 3.8, and its tests
-      # run every python3.N found on PATH (they skip the missing ones).
-      - name: Install workload interpreters 3.8 to 3.12
+      # run every python3.N found on PATH (they skip the missing ones). The
+      # retry's live error-message templates (spec D13) need 3.13 and 3.14 too.
+      - name: Install workload interpreters 3.8 to 3.14
         run: |
-          uv python install 3.8 3.9 3.10 3.11 3.12
+          uv python install 3.8 3.9 3.10 3.11 3.12 3.13 3.14
           uv python dir --bin >> "$GITHUB_PATH"
 
       - name: Workload interpreters are on PATH
         run: |
           status=0
-          for version in 3.8 3.9 3.10 3.11 3.12; do
+          for version in 3.8 3.9 3.10 3.11 3.12 3.13 3.14; do
             if command -v "python${version}" >/dev/null 2>&1; then
               echo "python${version}: $(command -v "python${version}") ($("python${version}" -c 'import sys; print(sys.version.split()[0])'))"
             else
-              echo "::error::python${version} is not on PATH, so the profiler shim tests for it would skip"
+              echo "::error::python${version} is not on PATH, so the profiler shim and retry template tests for it would skip"
               status=1
             fi
           done
@@ -416,6 +417,12 @@ jobs:
 
       - name: Type check with Mypy
         run: uv run mypy src tests
+
+      # A known vulnerability in the synced environment (the dev, database
+      # and experiments extras) fails the PR (spec D19), with the stage
+      # gate's command; security.yml audits the whole lock weekly.
+      - name: Audit dependencies with pip-audit
+        run: uv run pip-audit --progress-spinner off
 
       # Fails loudly (instead of letting REQUIRE_* turn every sandbox test red)
       # when the runner cannot give the engine its Linux sandbox: the exact
