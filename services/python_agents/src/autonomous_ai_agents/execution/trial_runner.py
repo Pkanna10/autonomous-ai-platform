@@ -11,7 +11,8 @@ already on its way).
 A trial (spec section 4, steps 1 to 8) is ``trial-<hypothesis id>``: the
 editor edits the worktree; the change is captured (``--no-renames``, strict
 UTF-8, a ``GitError`` fails the trial); ``check_capture`` and
-``check_diff_all`` run; any violation fails it and it is **never executed**.
+``check_diff_all`` run, and with a quality check ``check_quality_references``
+(D37's tripwire); any violation fails it and it is **never executed**.
 Otherwise it is committed with the engine identity, the base dates and an
 ``Engine-Trial: <id>`` trailer, ``clean -ffdx``-ed and put on its own ref
 ``refs/heads/<prefix>trial-<run>-<hyp>`` (decision 18: the id is
@@ -118,7 +119,15 @@ from autonomous_ai_agents.common.refnames import branch_prefix_problem
 from autonomous_ai_agents.execution.crash import parse_traceback
 from autonomous_ai_agents.execution.editor import STOP_BUDGET
 from autonomous_ai_agents.execution.editor_tools import EditorLimits
-from autonomous_ai_agents.execution.git import GitError, GitWorkspace, repo_fingerprint
+from autonomous_ai_agents.execution.git import (
+    _DIFF,
+    _PATCH,
+    GitError,
+    GitWorkspace,
+    _require_oid,
+    _require_path,
+    repo_fingerprint,
+)
 from autonomous_ai_agents.execution.measure import (
     Phase,
     RunOnce,
@@ -161,6 +170,7 @@ from autonomous_ai_agents.optimization.anticheat import (
     DEFAULT_MODULE_ROOTS,
     check_capture,
     check_diff_all,
+    check_quality_references,
     is_utf8,
 )
 
@@ -948,6 +958,11 @@ class GitTrialRunner(_PhaseOwner):
                 for c in changes
                 if c.status in ("A", "M") and c.new_mode in _REGULAR
             }
+            frozen = self._quality.mask  # D37's tripwire, base and patch lazily
+            modified = {c.path for c in changes if c.status == "M" and c.new_mode in _REGULAR}  # fmt: skip
+            base_of = functools.partial(_base_of, self._git, job.base, modified)
+            patch = functools.partial(_stream_added, self._git, job.handle, job.base)
+            references = check_quality_references(blobs, base_of, frozen, patch)
         except GitError as error:  # RepoTamperedError is no GitError: it propagates
             text = f"the change could not be captured: {error}"
             return _Tried(_failed(trial, text), result)
@@ -956,7 +971,7 @@ class GitTrialRunner(_PhaseOwner):
         violations = self._violations(
             changes, result, blobs, job.baseline, job.scope, job.tracked,
             job.patterns,
-        )  # fmt: skip
+        ) + references  # fmt: skip
         if violations:
             text = "; ".join(v.message for v in violations[:3])
             reason = f"the change breaks {len(violations)} anti-cheat rule(s): {text}"
@@ -1123,6 +1138,26 @@ class GitTrialRunner(_PhaseOwner):
             existing_dirs=_base_dirs(tracked),
         )
         return (*captured, *check_diff_all((c.path for c in changes), protected))
+
+
+def _base_of(
+    git: GitWorkspace, base: str, modified: AbstractSet[str], path: str
+) -> bytes | None:
+    """``path``'s content at ``base`` when the trial modified it, else ``None``
+    (an added file); ``GitError`` past ``MAX_OUTPUT_BYTES`` fails closed."""
+    return git.read_blob(base, path) if path in modified else None
+
+
+def _stream_added(
+    git: GitWorkspace, handle: WorktreeHandle, base: str, path: str,
+    sink: Callable[[bytes], None],
+) -> None:  # fmt: skip
+    """``path``'s staged ``-U0`` patch against ``base`` into ``sink``, nothing
+    kept: ``diff``'s flags (no renames, external diff or textconv), a literal
+    pathspec. ``GitWorkspace`` has no public streaming patch, so its own
+    ``_git`` and flags are used (git.py is not this unit's)."""
+    argv = (*_DIFF, *_PATCH, "-U0", "--cached", _require_oid(base), "--")
+    git._git(handle, *argv, f":(literal){_require_path(path)}", limit=0, sink=sink)
 
 
 def _run_id(branch: str, hypothesis_id: str, prefix: str) -> str:

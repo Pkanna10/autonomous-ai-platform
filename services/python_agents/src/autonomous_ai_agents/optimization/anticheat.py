@@ -9,7 +9,8 @@ baseline while outputs must stay equivalent.
 ``check_capture`` adds the Step 2 rules only the runner can see in the
 trial's git diff (file modes, compiled or binary files, git metadata,
 unrecorded writes, shadowed modules, process spawning); a trial that breaks
-any is never run.
+any is never run. ``check_quality_references`` (Step 3, D37) refuses one
+whose added lines name a frozen quality file: a tripwire, not closure.
 """
 
 from __future__ import annotations
@@ -17,9 +18,13 @@ from __future__ import annotations
 import ast
 import hashlib
 import math
+import posixpath
+import re
 import sys
+import unicodedata
 import warnings
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections import Counter
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 
@@ -295,6 +300,155 @@ def compare_fingerprints(
                 )
             )
     return tuple(violations)
+
+
+# ---------------------------------------------------------------------------
+# Quality data references (Step 3, D37): a tripwire on the added lines
+# ---------------------------------------------------------------------------
+
+_NAME_START = r"(?<![\w.\-])"
+"""A letter, digit, ``_``, ``.`` or ``-`` before the match continues a name."""
+_NAME_END = r"(?![.\-]*\w)"
+"""So does one after it, unless only ``.`` or ``-`` follow (``labels.csv.``)."""
+
+
+def _fold(text: str) -> str:
+    """``text`` as APFS compares names: NFC-normalised and case-folded."""
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFC", text).casefold())
+
+
+def _whole_name(frozen: str) -> re.Pattern[str]:
+    """``frozen``'s folded basename as a whole token of folded text."""
+    name = re.escape(_fold(posixpath.basename(frozen)))
+    return re.compile(_NAME_START + name + _NAME_END)
+
+
+def _text(blob: bytes) -> str:
+    """``blob`` decoded for matching: bytes that are not UTF-8 become U+FFFD,
+    so any base or new content reads (a binary file is ``check_capture``'s)."""
+    return blob.decode("utf-8", "replace")
+
+
+def _added_lines(base: bytes | None, new: bytes) -> list[str]:
+    """The fast path: the lines of ``new`` that ``base`` (``None``: an added
+    file) does not hold as often. Each is added as git shows it too; a line
+    git shows as moved is not among them (``check_quality_references`` asks
+    git for those)."""
+    left = Counter(_text(base).splitlines() if base else ())
+    added: list[str] = []
+    for line in _text(new).splitlines():
+        if left[line]:
+            left[line] -= 1
+        else:
+            added.append(line)
+    return added
+
+
+PatchStream = Callable[[str, Callable[[bytes], None]], None]
+"""Streams one modified file's ``git diff -U0`` against the base into a sink;
+a ``GitError`` it raises fails the trial (closed)."""
+
+
+class _AddedScan:
+    """A sink for one file's ``-U0`` patch: which ``needles`` its added lines
+    match, and whether git called the file binary. Keeps a flag per needle
+    and the pieces of the line being read: each byte is copied once."""
+
+    def __init__(self, needles: Sequence[re.Pattern[str]]) -> None:
+        self._needles, self._pending, self._hunk = needles, list[bytes](), False
+        self.hits, self.binary = [False] * len(needles), False
+
+    def feed(self, chunk: bytes) -> None:
+        start = 0
+        while (end := chunk.find(b"\n", start)) >= 0:
+            self._pending.append(chunk[start:end])
+            self._line(b"".join(self._pending))
+            self._pending.clear()
+            start = end + 1
+        if start < len(chunk):
+            self._pending.append(chunk[start:])
+
+    def close(self) -> list[bool]:
+        self._line(b"".join(self._pending))
+        return self.hits
+
+    def _line(self, line: bytes) -> None:
+        if line.startswith(b"diff "):  # a file's headers ('+++ b/...') follow
+            self._hunk = False
+        elif line.startswith(b"@@"):
+            self._hunk = True
+        elif not self._hunk and line.startswith(b"Binary files "):
+            self.binary = True  # no lines to read: fail closed
+        elif self._hunk and line.startswith(b"+"):
+            added = _fold(_text(line[1:]))
+            for index, needle in enumerate(self._needles):
+                self.hits[index] = self.hits[index] or bool(needle.search(added))
+
+
+def check_quality_references(
+    blobs: Mapping[str, bytes],
+    base_of: Callable[[str], bytes | None],
+    frozen_paths: Sequence[str],
+    patch: PatchStream,
+) -> tuple[Violation, ...]:
+    """One ``quality_data_reference`` per (changed file, frozen path) whose
+    added lines name the frozen file: its basename as a whole token, which
+    every spelling of its path (``data/labels.csv``, ``../data/labels.csv``)
+    ends in. ``blobs`` maps each added or modified file to its new content
+    (``check_capture``'s); ``base_of`` gives a modified file's base content
+    (``None``: an added file) and is asked only for a file whose new content
+    names a frozen file; ``frozen_paths`` are the quality check's (none:
+    nothing applies). Both sides are compared as ``_fold`` makes them. The
+    message names the frozen path, never the line.
+
+    Added lines are git's: a line git's patch shows as added (most moves
+    included) is flagged; a kept line whose neighbours are edited is context
+    there and is not, and the review branch's diff is the backstop (D37).
+    The fast path counts lines (``_added_lines``); when a file's new content
+    names a frozen file its counted lines do not (a modified file whose base
+    holds that line as often: kept, or moved; an added file's lines are all
+    counted), ``patch`` streams the file's ``-U0`` diff and its added lines
+    decide. A patch git prints as binary (a NUL early in the base, or a
+    ``binary`` or ``-diff`` attribute) has no lines to read, so it counts as
+    naming every frozen file left undecided (closed). The diff is taken with
+    ``--no-renames``, so a renamed file is all added lines and a reference it
+    already held refuses the trial (closed). A frozen basename without an
+    extension (``labels``) flags any added identifier of that name.
+
+    A tripwire, not closure (D37): it catches a trial that names the
+    evaluation data, not one that spells it in parts or bakes a lookup table
+    of label values into the code (a baked table names no path). Those go to
+    review with the diff.
+    """
+    if not frozen_paths:
+        return ()
+    needles = [(frozen, _whole_name(frozen)) for frozen in frozen_paths]
+    found: list[Violation] = []
+    for path, blob in blobs.items():
+        whole = _fold(_text(blob))
+        named = [index for index, (_, needle) in enumerate(needles) if needle.search(whole)]  # fmt: skip
+        if not named:
+            continue
+        added = _fold("\n".join(_added_lines(base_of(path), blob)))
+        hits = {index: bool(needles[index][1].search(added)) for index in named}
+        unsure = [index for index in named if not hits[index]]
+        unreadable = False
+        if unsure:
+            scan = _AddedScan([needles[index][1] for index in unsure])
+            patch(path, scan.feed)
+            scanned, unreadable = scan.close(), scan.binary
+            for index, hit in zip(unsure, scanned, strict=True):
+                hits[index] = hit or unreadable
+        for index in named:
+            frozen = needles[index][0]
+            if not hits[index]:
+                continue
+            if unreadable and index in unsure:
+                text = f"the trial's change to {path!r} could not be read as text, so it is treated as naming the frozen quality file {frozen!r}"  # fmt: skip
+            else:
+                text = f"the trial's added lines in {path!r} name the frozen quality file {frozen!r}"  # fmt: skip
+            found.append(_violation(ViolationRule.quality_data_reference, path, text, frozen))  # fmt: skip
+    return tuple(found)
 
 
 # ---------------------------------------------------------------------------

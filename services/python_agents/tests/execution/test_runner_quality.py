@@ -47,7 +47,7 @@ from autonomous_ai_agents.execution import protocols
 from autonomous_ai_agents.execution.combine import GitCombiner
 from autonomous_ai_agents.execution.editor import ClaudeEditor
 from autonomous_ai_agents.execution.editor_tools import WorktreeEditor
-from autonomous_ai_agents.execution.git import GitWorkspace
+from autonomous_ai_agents.execution.git import GitError, GitWorkspace
 from autonomous_ai_agents.execution.procrun import OutputCaps, RunSample
 from autonomous_ai_agents.execution.profiler import CProfiler
 from autonomous_ai_agents.execution.protocols import (
@@ -64,6 +64,7 @@ from autonomous_ai_agents.execution.trial_runner import (
     GitBaselineRunner,
     GitTrialRunner,
     NoteTap,
+    _stream_added,
 )
 from autonomous_ai_agents.optimization.anticheat import DEFAULT_PROTECTED_PATTERNS
 
@@ -169,10 +170,10 @@ class Rig:
     def trial(
         self, scorer: FrozenScorer | None, workloads: Sequence[Workload], *,
         text: str = BETTER, recorded: tuple[FrozenFile, ...] = (), paired: bool = True,
-        path: str = "model.txt", retries: int = 0,
+        path: str = "model.txt", retries: int = 0, then: str | None = None,
     ) -> Trial:  # fmt: skip
         def build(*, module_roots: AbstractSet[str], reserved_modules: AbstractSet[str]) -> CodeEditor:  # fmt: skip
-            return Edits(text, self.tasks, path)
+            return Edits(text, self.tasks, path, then)
 
         hypothesis = Hypothesis(
             project_id=self.project.id, source=HypothesisSource.novel, title="fix",
@@ -201,11 +202,13 @@ class Edits:
     text: str
     tasks: list[EditTask]
     path: str = "model.txt"
+    then: str | None = None  # a retry's text
 
     def edit(self, worktree: Path, task: EditTask, budget: Budget) -> EditResult:
+        text = self.text if task.feedback is None or self.then is None else self.then
         self.tasks.append(task)
-        (worktree / self.path).write_text(self.text)
-        return EditResult({self.path: len(self.text)}, cost_usd=0.01, tokens_used=1)
+        (worktree / self.path).write_text(text)
+        return EditResult({self.path: len(text)}, cost_usd=0.01, tokens_used=1)
 
 
 @pytest.fixture
@@ -397,6 +400,165 @@ def test_frozen_paths_show_literally_and_match_escaped(
     assert rig.tasks[0].brief.protected[-1] == path
     assert [v.rule.value for v in trial.violations] == ["protected_path"]
     assert rig.host.launches == []
+
+
+NAMES_LABELS = "rows = open('data/labels.txt').read()  # not x.txt\nprint(open('model.txt').read(), end='')\n"  # fmt: skip
+
+
+def test_a_trial_naming_a_frozen_file_is_rejected_unexecuted(rig: Rig) -> None:
+    """D37's tripwire at the call site, on the first attempt and before any
+    launch: an added line of ``predict.py`` names the labels."""
+    trial = rig.trial(
+        accuracy(), [rig.workload()], path="predict.py", text=NAMES_LABELS
+    )
+    assert [(v.rule.value, v.path, v.pattern) for v in trial.violations] == [
+        ("quality_data_reference", "predict.py", LABELS)
+    ]
+    assert trial.status.value == "failed" and trial.commit is None
+    assert rig.host.launches == []
+
+
+def test_a_line_the_base_already_has_is_context_not_a_reference(rig: Rig) -> None:
+    """The base of a modified file reaches the check: its unchanged line
+    naming the labels is context, so the trial is measured."""
+    named = "# the scorer reads data/labels.txt\n"
+    (rig.repo / "predict.py").write_text(named + FILES["predict.py"])
+    git(rig.repo, "commit", "-qam", "comment")
+    rig.base = git(rig.repo, "rev-parse", "HEAD")
+    text = named + "print(open('model.txt').read(), end='')  # faster\n"
+    trial = rig.trial(accuracy(), [rig.workload()], path="predict.py", text=text, paired=False)  # fmt: skip
+    assert trial.violations == () and trial.status.value == "measured"
+
+
+def test_a_line_moved_within_its_file_is_added_as_git_shows_it(rig: Rig) -> None:
+    """The fast path cannot tell a moved line (the new file holds it as often
+    as the base); git's ``-U0`` patch shows it as added, so the move is
+    refused unexecuted. A kept line whose neighbours change is context in
+    git's patch and is not flagged: a tripwire, not closure; the review
+    branch's diff is the backstop (D37)."""
+    train = "def train():\n    rows = open('data/labels.txt').read()\n    return rows\n\ndef predict():\n    return 1\n"  # fmt: skip
+    moved = "def train():\n    return 0\n\ndef predict():\n    rows = open('data/labels.txt').read()\n    return rows\n"  # fmt: skip
+    (rig.repo / "predict.py").write_text(train)
+    git(rig.repo, "commit", "-qam", "train")
+    rig.base = git(rig.repo, "rev-parse", "HEAD")
+    trial = rig.trial(accuracy(), [rig.workload()], path="predict.py", text=moved, paired=False)  # fmt: skip
+    assert [v.rule.value for v in trial.violations] == ["quality_data_reference"]
+    assert rig.host.launches == []
+
+
+def test_a_patch_that_cannot_be_read_fails_the_trial_unexecuted(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    named = "# the scorer reads data/labels.txt\n"
+    (rig.repo / "predict.py").write_text(named + FILES["predict.py"])
+    git(rig.repo, "commit", "-qam", "comment")
+    rig.base = git(rig.repo, "rev-parse", "HEAD")
+    real = GitWorkspace._git
+
+    def broken(ws: GitWorkspace, where: object, *args: str, **more: object) -> tuple[int, bytes]:  # fmt: skip
+        if "-U0" in args:
+            raise GitError("git diff failed (exit 128): boom")
+        return real(ws, where, *args, **more)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(GitWorkspace, "_git", broken)
+    text = named + "print(open('model.txt').read(), end='')  # faster\n"
+    trial = rig.trial(accuracy(), [rig.workload()], path="predict.py", text=text, paired=False)  # fmt: skip
+    assert trial.status.value == "failed" and "could not be captured" in str(
+        trial.error
+    )
+    assert rig.host.launches == []
+
+
+FIRST = "print(open('model.txt').read(), end='')  # first\n"
+
+
+def test_a_retry_keeping_a_base_reference_line_is_measured(rig: Rig) -> None:
+    """The retry's check reads the base too: a line the base already has
+    naming the labels stays context, so the retried trial is measured."""
+    named = "# the scorer reads data/labels.txt\n"
+    (rig.repo / "predict.py").write_text(named + FILES["predict.py"])
+    git(rig.repo, "commit", "-qam", "comment")
+    rig.base = git(rig.repo, "rev-parse", "HEAD")
+    rig.host.crash = 1
+    trial = rig.trial(accuracy(), [rig.workload()], path="predict.py", text=named + FIRST,
+                      paired=False, retries=1, then=named + FILES["predict.py"] + "# fixed\n")  # fmt: skip
+    assert trial.attempts == 2 and trial.status.value == "measured"
+
+
+def test_a_step_2_rule_and_the_tripwire_are_both_recorded(rig: Rig) -> None:
+    trial = rig.trial(accuracy(), [rig.workload()], path="test_predict.py", text=NAMES_LABELS)  # fmt: skip
+    assert {v.rule.value for v in trial.violations} == {"protected_path", "quality_data_reference"}  # fmt: skip
+    assert rig.host.launches == []
+
+
+@pytest.mark.parametrize("name", ["--output=x.py", "*.py"])
+def test_the_patch_stream_reads_one_staged_file_literally_and_writes_nothing(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    """``--`` keeps the pathspec a path (``:(literal)<name>`` would name the
+    staged blob of a file called ``(literal)<name>`` as a revision),
+    ``:(literal)`` keeps an option-like or glob name one file, ``--cached``
+    reads the index, not the worktree, and the patch only streams (``_git``
+    keeps none of it)."""
+    for path in (name, "x.py", "b.py", f"(literal){name}"):
+        (rig.repo / path).write_text("old\n")
+    git(rig.repo, "add", "-A")
+    git(rig.repo, "commit", "-qm", "odd names")
+    base = git(rig.repo, "rev-parse", "HEAD")
+    ws = GitWorkspace(rig.repo)
+    handle = ws.add_worktree(settings.WORKTREE_ROOT / RUN / "odd", base)
+    for path in (name, "b.py"):
+        (handle.path / path).write_text("staged = 'data/labels.txt'\n")
+    ws.stage_all(handle)
+    (handle.path / name).write_text("worktree only\n")
+    before = sorted(p.name for p in handle.path.iterdir())
+    kept: list[bytes] = []
+    real = GitWorkspace._git
+
+    def spy(ws: GitWorkspace, where: object, *args: str, **more: object) -> tuple[int, bytes]:  # fmt: skip
+        code, out = real(ws, where, *args, **more)  # type: ignore[arg-type]
+        if "-U0" in args:
+            kept.append(out)
+        return code, out
+
+    monkeypatch.setattr(GitWorkspace, "_git", spy)
+    chunks: list[bytes] = []
+    _stream_added(ws, handle, base, name, chunks.append)
+    patch = b"".join(chunks)
+    assert patch.count(b"diff --git") == 1 and f"+++ b/{name}".encode() in patch
+    assert b"+staged = 'data/labels.txt'" in patch and b"worktree only" not in patch
+    assert kept == [b""] and sorted(p.name for p in handle.path.iterdir()) == before
+    assert (handle.path / "x.py").read_text() == "old\n"
+
+
+def test_a_retry_naming_a_frozen_file_is_rejected_unexecuted(rig: Rig) -> None:
+    """The retry's union diff is checked too: its edit names the labels, so
+    it never runs and the first failure is kept, noted."""
+    rig.host.crash = 1
+    fixed = "print(open('model.txt').read(), end='')  # data/labels.txt\n"
+    trial = rig.trial(accuracy(), [rig.workload()], path="predict.py", text=FIRST,
+                      paired=False, retries=1, then=fixed)  # fmt: skip
+    assert [t.feedback is not None for t in rig.tasks] == [False, True]
+    assert len(rig.host.workloads()) == 1  # the first attempt's crash only
+    assert trial.attempts == 2 and trial.status.value == "failed"
+    assert any("quality_data_reference" in note for note in trial.retry_notes)
+
+
+def test_without_a_quality_check_naming_a_file_is_step_2(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No scorer: the same edit is measured, and no base blob is read for it."""
+    reads: list[str] = []
+    real = GitWorkspace.read_blob
+
+    def read(ws: GitWorkspace, commit: str, path: str, *, limit: int | None = None) -> bytes:  # fmt: skip
+        reads.append(path)
+        return real(ws, commit, path, limit=limit)
+
+    monkeypatch.setattr(GitWorkspace, "read_blob", read)
+    trial = rig.trial(None, [rig.workload()], path="predict.py", text=NAMES_LABELS, paired=False)  # fmt: skip
+    assert trial.violations == () and trial.status.value == "measured"
+    assert "predict.py" not in reads
 
 
 def test_an_unscoreable_output_gives_no_row_and_never_its_bytes(rig: Rig) -> None:
