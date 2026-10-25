@@ -1537,6 +1537,64 @@ def test_check_loop_guards_pass_a_clean_whole_loop(
     check_loop_guards(loop, run, result, Isolation("required", None))
 
 
+@pytest.mark.parametrize("ref", ["created", "missing"])
+def test_check_loop_guards_read_titles_from_the_engine_not_the_candidates(
+    ref: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A wired run's trials test ideas the engine generated, which are not
+    the loop's candidates (L1a, run 40241616564: KeyError on every repo);
+    the trial refs are still checked."""
+    loop, run = _loop(CORPUS[0], tmp_path, monkeypatch)
+    _send(run, [{"role": "user", "content": "understand"}], cost_usd=0.2)
+    _sandboxed(loop, "preflight", "baseline", "profile", "trial-x")
+    generated = loop.candidates[0].model_copy(
+        update={"id": "wired-0", "title": "an idea the engine generated"}
+    )
+    sha = _commit(loop.user, {"README.md": "x\n"}, tmp_path / "t")
+    trial = Trial(hypothesis_id=generated.id, round=1, status=TrialStatus.measured)
+    trial = trial.model_copy(update={"commit": sha})
+    result = _scripted(
+        loop, run, tmp_path / "s", Delivered(("# tidy",)), trials=(trial,)
+    )
+    result.state["hypotheses"].append(generated)
+    if ref == "created":
+        check_loop_guards(loop, run, result, Isolation("required", None))
+        return
+    git(loop.user.path, "update-ref", "-d", f"refs/heads/engine/trial-{result.run_id}-wired-0")  # fmt: skip
+    with pytest.raises(AssertionError):
+        check_loop_guards(loop, run, result, Isolation("required", None))
+
+
+@pytest.mark.parametrize("ref", ["created", "missing", "unannounced"])
+def test_check_loop_guards_expect_the_review_branch_of_a_review_delivery(
+    ref: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Step 3's review delivery adds ``engine/review-<id>`` (D10): expected
+    when the state holds one, and only then."""
+    loop, run = _loop(CORPUS[0], tmp_path, monkeypatch)
+    _send(run, [{"role": "user", "content": "understand"}], cost_usd=0.2)
+    _sandboxed(loop, "preflight", "baseline", "profile", "trial-x")
+    result = _scripted(loop, run, tmp_path / "s", Delivered(("# tidy",)))
+    branch = f"engine/review-{result.run_id}"
+    sha = _commit(loop.user, {"README.md": "x\n"}, tmp_path / "t")
+    if ref != "missing":
+        git(loop.user.path, "update-ref", f"refs/heads/{branch}", sha)
+    if ref != "unannounced":
+        result.state["review_delivery"] = Delivery(
+            project_id=loop.project.id,
+            kind=DeliveryKind.branch,
+            branch=branch,
+            commit=sha,
+            combined_diff="",
+            report_markdown="review",
+        )
+    if ref == "created":
+        check_loop_guards(loop, run, result, Isolation("required", None))
+        return
+    with pytest.raises(AssertionError):
+        check_loop_guards(loop, run, result, Isolation("required", None))
+
+
 def _violating(loop: Loop, commit: str | None) -> tuple[Trial, Verdict]:
     hypothesis = loop.candidates[1].id
     trial = Trial(

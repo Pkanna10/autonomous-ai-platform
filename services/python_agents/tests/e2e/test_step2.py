@@ -340,6 +340,9 @@ def _check_repo_untouched(
     assert delivery is not None
     if delivery.kind is DeliveryKind.branch:
         expected[f"refs/heads/engine/run-{run}"] = delivery.commit
+    review = state["review_delivery"]  # Step 3 (D10): engine/review-<id>
+    if review is not None:
+        expected[f"refs/heads/engine/review-{run}"] = review.commit
     created = {ref: sha for ref, sha in after.refs.items() if ref not in before.refs}
     assert created == expected
     assert {ref: after.refs.get(ref) for ref in before.refs} == before.refs

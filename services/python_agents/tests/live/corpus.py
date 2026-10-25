@@ -590,13 +590,14 @@ def check_loop_guards(
     state = result.state
     assert result.status == "done", state["error"]
     check_spend(run, result)
-    titles = {h.id: h.title for h in loop.candidates}
+    # The engine's hypotheses, not the loop's candidates: a wired run's
+    # trials test ideas the engine generated (L1a, run 40241616564)
+    ideas = state["hypotheses"]
+    titles = {h.id: h.title for h in ideas}
     committed = {
-        titles[t.hypothesis_id]
-        for t in state["trials"]
-        if t.commit is not None and t.hypothesis_id in titles
+        titles[t.hypothesis_id] for t in state["trials"] if t.commit is not None
     }
-    _check_repo_untouched(loop.user, loop.before, result, loop.candidates, committed)
+    _check_repo_untouched(loop.user, loop.before, result, ideas, committed)
     check_sandboxed(loop.launches, isolation)
     check_no_violating_trial_ran(result, loop.user)
 
