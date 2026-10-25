@@ -30,17 +30,13 @@
           "title": "range-filter-fast-path",
           "aimed": true,
           "rationale": "SpecifierSet.filter runs every candidate through _ranges.filter_by_ranges, which re-coerces each item with coerce_version and then calls the interval's bound methods and Version.is_prerelease (which reads the pre and dev properties again) per version. Hoist the per-call lookups out of the loop, skip coercion for items that already are Version objects, and read the pre-release flag once per version; the filtered versions, their order and every pre-release decision must stay the same.",
-          "files": [
-            "src/packaging/_ranges.py"
-          ]
+          "files": ["src/packaging/_ranges.py"]
         },
         {
           "title": "tokenizer-rule-cache",
           "aimed": false,
           "rationale": "Look up the tokenizer's compiled rule regular expressions through a local dictionary bound once per Tokenizer instead of the instance attribute on every check call, on the idea that requirement parsing pays for the attribute access; every parsed requirement, marker and error message must stay the same.",
-          "files": [
-            "src/packaging/_tokenizer.py"
-          ]
+          "files": ["src/packaging/_tokenizer.py"]
         }
       ],
       "profile": "cProfile, 4.4 s under the profiler (1.0 s plain): SpecifierSet filtering dominates: _ranges.filter_by_ranges 225,800 generator steps (0.80 s own, 2.59 s cumulative), coerce_version 1.21 M calls (0.49 s), Version.is_prerelease 648,000 (0.45 s), Version comparisons 0.5 s; requirement and marker parsing 0.77 s (Tokenizer.check 249,500 calls, 0.27 s)."
@@ -75,17 +71,13 @@
           "title": "loads-scan-slices",
           "aimed": true,
           "rationale": "toml.loads walks the whole document one character at a time over a list copy of the string, tracking quote, array and comment state with many comparisons per character, before load_line splits each line again. Skip runs of ordinary characters with str.find or a precompiled regular expression instead of the per-character loop, and avoid the list copy; the parsed document, its types and every TomlDecodeError (message and position) must stay the same.",
-          "files": [
-            "toml/decoder.py"
-          ]
+          "files": ["toml/decoder.py"]
         },
         {
           "title": "dump-section-join",
           "aimed": false,
           "rationale": "In the encoder, build each dumped section with a list and one join instead of repeated string concatenation; the dumped TOML text must stay byte-identical.",
-          "files": [
-            "toml/encoder.py"
-          ]
+          "files": ["toml/encoder.py"]
         }
       ],
       "profile": "cProfile, 2.8 s under the profiler (1.1 s plain): loads is 2.64 s of it, 0.67 s of that its own per-character loop over 16 parses of a 112 KB document; load_line 67,200 calls (1.68 s cumulative), load_value 129,600 (1.18 s), _unescape 28,800 (0.17 s), len 1.25 M calls (0.16 s); dumps 0.03 s."
@@ -123,17 +115,13 @@
           "title": "order-tuple-fast-path",
           "aimed": true,
           "rationale": "The ordering methods attrs builds in _make._make_order (__lt__, __le__, __gt__, __ge__) call attrs_to_tuple on both sides, which builds each tuple through two nested generator expressions with a getattr and an order_key test per attribute. Build the tuple without generators (an operator.attrgetter over the attribute names when no attribute has an order_key, the key applied only where one is set), computed once per class; every comparison result, NotImplemented for other classes, and the order_key semantics must stay the same.",
-          "files": [
-            "src/attr/_make.py"
-          ]
+          "files": ["src/attr/_make.py"]
         },
         {
           "title": "instance-of-type-cache",
           "aimed": false,
           "rationale": "Cache the type tuple the instance_of validator checks against in a local of its __call__ instead of reading the attribute on every call, on the idea that validation pays for it; every accepted value and every TypeError (message and arguments) must stay the same.",
-          "files": [
-            "src/attr/validators.py"
-          ]
+          "files": ["src/attr/validators.py"]
         }
       ],
       "profile": "cProfile, 4.2 s under the profiler (1.1 s plain): sorting dominates: the generated __lt__ 318,900 calls (2.67 s cumulative) through attrs_to_tuple 637,900 calls (0.76 s own, 2.44 s cumulative) and its two generator expressions (2.8 M steps, 1.36 s own), getattr 2.4 M calls; validators 0.3 s (instance_of 400,400 calls, 0.15 s), evolve 0.17 s, asdict 0.12 s."
@@ -169,17 +157,13 @@
           "title": "betweenness-inline-weights",
           "aimed": true,
           "rationale": "In networkx/algorithms/centrality/betweenness.py, _single_source_dijkstra_path_basic calls the generic weight function (a lambda doing a dict get per edge) and iterates the graph's adjacency views (Mapping __iter__ and AtlasView __getitem__) for every edge of every one of the n searches. When weight is an attribute name, read it inline from the raw adjacency dicts (G._adj) with the same default of 1, and bind heappush, heappop and the counter in locals; every centrality value must stay bit-identical, as must the visiting order and the handling of equal-length paths.",
-          "files": [
-            "networkx/algorithms/centrality/betweenness.py"
-          ]
+          "files": ["networkx/algorithms/centrality/betweenness.py"]
         },
         {
           "title": "kruskal-union-local",
           "aimed": false,
           "rationale": "In the minimum spanning tree's Kruskal implementation, bind the union-find methods in locals inside the edge loop, on the idea that the spanning tree pays for attribute lookups; the tree's edges, their order and the total weight must stay the same.",
-          "files": [
-            "networkx/algorithms/tree/mst.py"
-          ]
+          "files": ["networkx/algorithms/tree/mst.py"]
         }
       ],
       "profile": "cProfile, 10.5 s under the profiler (3.6-3.8 s plain, of which the bare import is 0.51-0.60 s, about 15 %): betweenness_centrality 9.56 s, its _single_source_dijkstra_path_basic 600 calls (3.62 s own, 9.24 s cumulative): the weight lambda 4.61 M calls (1.95 s), adjacency-view iteration 4.68 M steps (2.49 s), AtlasView __getitem__ 4.32 M (0.72 s); imports 0.55 s (no bytecode cache), Dijkstra path lengths 0.28 s."
@@ -210,17 +194,13 @@
           "title": "handlenode-cheap-checks",
           "aimed": true,
           "rationale": "Checker.handleNode runs for every AST node and evaluates the futuresAllowed property (an isinstance on the current scope plus an attribute read) before the cheap nodeDepth == 0 test, and iter_child_nodes tests every field with isinstance against ast.AST and list. Test nodeDepth first, and walk each node class's fields once per class through a cached tuple; every reported message, its order, line and column must stay the same.",
-          "files": [
-            "pyflakes/checker.py"
-          ]
+          "files": ["pyflakes/checker.py"]
         },
         {
           "title": "message-sort-attrgetter",
           "aimed": false,
           "rationale": "Sort the checker's messages with operator.attrgetter('lineno') instead of a lambda in api.check, on the idea that the sort key is called per message; the reported messages and their order must stay the same.",
-          "files": [
-            "pyflakes/api.py"
-          ]
+          "files": ["pyflakes/api.py"]
         }
       ],
       "profile": "cProfile, 2.5 s under the profiler (1.0 s plain): Checker.handleNode 160,400 calls (0.22 s own, 1.82 s cumulative), iter_child_nodes 186,300 steps (0.24 s), handleNodeLoad 40,300 calls (0.27 s), the futuresAllowed property 149,000 calls (0.11 s), _is_typing_helper 66,900 (0.14 s), isinstance 1.36 M calls (0.20 s); stdlib ast.parse 0.44 s."
@@ -251,17 +231,13 @@
           "title": "add-token-locals",
           "aimed": true,
           "rationale": "BaseParser._add_token in parso/parser.py runs once per token: it looks up the transition through a helper, retries the DFA lookup in a try/except loop that pops finished stack nodes through _pop (334,800 calls, each building a node or reusing a single child), and converts the leaf through a method and a dict. Bind the stack, the transitions and the leaf map in locals, inline the single-child case of _pop, and avoid the exception path for final DFAs where a membership test decides; the parse tree, error recovery and every error node must stay the same.",
-          "files": [
-            "parso/parser.py"
-          ]
+          "files": ["parso/parser.py"]
         },
         {
           "title": "grammar-normalizer-cache",
           "aimed": false,
           "rationale": "Cache the normalizer configuration a Grammar builds for iter_errors on the grammar object, on the idea that repeated error listing pays for building it; every reported issue, its position and message must stay the same.",
-          "files": [
-            "parso/grammar.py"
-          ]
+          "files": ["parso/grammar.py"]
         }
       ],
       "profile": "cProfile, 2.8 s under the profiler (1.0 s plain): parsing 1.83 s: BaseParser._add_token 68,000 calls (0.49 s own, 1.32 s cumulative), _pop 334,800 (0.47 s), tokenize_lines 69,500 steps (0.45 s); the error normalizer walk 0.63 s (visit 95,000 calls); get_code joins 0.72 s cumulative."
@@ -292,17 +268,13 @@
           "title": "decoder-call-fast-path",
           "aimed": true,
           "rationale": "The BER decoder's Decoder.__call__ in pyasn1/codec/ber/decoder.py is a generator re-entered for every tag and value (86,600 times here): each call copies options, checks the nesting depth, the LOG flag and the end-of-octets sentinel, and reads the tag and length through readFromStream generators of one or two octets. Read short tags and definite lengths from the stream directly when the substrate allows it and skip the per-call work that does not apply; every decoded value, its tags, the remaining substrate and every error raised for malformed input must stay the same.",
-          "files": [
-            "pyasn1/codec/ber/decoder.py"
-          ]
+          "files": ["pyasn1/codec/ber/decoder.py"]
         },
         {
           "title": "length-octets-to-bytes",
           "aimed": false,
           "rationale": "Encode long-form length octets with int.to_bytes instead of the shift-and-mask loop in the BER encoder, on the idea that length encoding is a measurable share of encoding; every encoded octet must stay byte-identical.",
-          "files": [
-            "pyasn1/codec/ber/encoder.py"
-          ]
+          "files": ["pyasn1/codec/ber/encoder.py"]
         }
       ],
       "profile": "cProfile, 3.9 s under the profiler (1.2 s plain): decoding 2.27 s: Decoder.__call__ 86,600 generator calls (0.43 s own, 2.23 s cumulative), the constructed valueDecoder 21,400 (2.17 s cumulative), _decodeComponentsSchemaless 1.24 s, readFromStream 243,200 steps (0.16 s); encoding 0.82 s (encode 43,300 calls); Asn1Item.clone 48,900 calls (0.49 s)."
@@ -333,17 +305,13 @@
           "title": "iterencode-batch-chunks",
           "aimed": true,
           "rationale": "The pure-Python encoder in simplejson/encoder.py yields one small string per token from the nested generators _iterencode_dict and _iterencode_list (1.99 M and 1.19 M generator steps here), testing each value's type with a chain of isinstance checks. Collect the chunks of scalar-only containers into one string before yielding, and test the common exact types (str, int, float, bool, None) by identity of type first; the encoded text must stay byte-identical for every option (sort_keys, indent, separators, ensure_ascii, use_decimal).",
-          "files": [
-            "simplejson/encoder.py"
-          ]
+          "files": ["simplejson/encoder.py"]
         },
         {
           "title": "scanstring-chunk-cache",
           "aimed": false,
           "rationale": "In the pure-Python decoder, bind the string chunk regular expression's match method in a local of py_scanstring, on the idea that the scanner pays for the attribute lookup; every decoded string and every JSONDecodeError (message and position) must stay the same.",
-          "files": [
-            "simplejson/decoder.py"
-          ]
+          "files": ["simplejson/decoder.py"]
         }
       ],
       "profile": "cProfile, 3.6 s under the profiler (0.95 s plain): encoding 2.23 s: _iterencode_dict 1.99 M generator steps (0.76 s own, 1.91 s cumulative), _iterencode_list 1.19 M (0.46 s own), isinstance 1.46 M calls (0.20 s), py_encode_basestring_ascii 200,000 (0.37 s); decoding 1.22 s: JSONObject 48,000 calls (0.26 s own), _scan_once 232,000, py_scanstring 200,000 (0.53 s)."
