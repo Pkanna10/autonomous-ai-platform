@@ -86,6 +86,30 @@ DEFAULT_PROTECTED_PATTERNS: tuple[str, ...] = (
     "**/package-lock.json",
     "**/pnpm-lock.yaml",
     "**/yarn.lock",
+    # Install and interpreter configuration (Step 3, D23): each changes what
+    # is installed or which Python runs, for the engine or a test command
+    # such as ``uv run pytest``. ``*`` crosses ``/``, so a pip-tools
+    # ``requirements/dev.in`` is covered too.
+    "**/pip.conf",
+    "**/uv.toml",
+    "**/requirements*.in",
+    "**/constraints*.txt",
+    "**/pylock*.toml",
+    "**/pdm.lock",
+    "**/.python-version",
+    "**/.python-versions",  # uv's multi-version pin
+    "**/.pdm-python",  # PDM's selected interpreter
+    "**/pdm.toml",
+    "**/poetry.toml",
+    "**/hatch.toml",  # an added one wins over pyproject's [tool.hatch]
+    "**/tox.toml",
+    "**/.tool-versions",  # asdf and mise pins, read by a shim on PATH
+    "**/mise.toml",
+    "**/.mise.toml",
+    "**/pip.ini",
+    "**/pixi.toml",
+    "**/pixi.lock",
+    "**/requirements*.lock",  # rye
     # Interpreter start-up hooks and environment files.
     "**/sitecustomize.py",
     "**/usercustomize.py",
