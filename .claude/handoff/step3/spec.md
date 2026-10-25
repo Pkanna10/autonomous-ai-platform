@@ -1424,6 +1424,11 @@ seams checklist in its brief.
 | U24 | Scoring and masks in the runners; editor read-deny | `execution/trial_runner.py` (score hooks, label-leak note), `execution/combine.py` (`_measure` both sides), `execution/protocols.py` (`TrialBrief.read_deny`), `execution/editor.py` and `execution/editor_tools.py` (the handler's `read_deny`), `tests/execution/test_runner_quality.py` | ~260 | U19, U20 | security |
 | U25 | define modes, default output check, freeze, proposal, brief `read_deny`, empty-output check | `nodes.py` (`define`, `baseline` warning, `trials` brief, `_require_trustworthy_baseline`, `_run_conditions`), `orchestrator/understand.py`, `test_define_modes.py` | ~340 | U11, U19, U24 | security; spec (O7, O9) |
 | U26 | E2E E3-F to E3-I | `tests/e2e/test_step3_quality.py`, `tests/fixtures/step3_quality/` | ~300 | U13, U16, U25 | correctness; weakened-test |
+| U27 | `quality_data_reference` tripwire (Lead-assigned, **done**, `a78275a`): added lines naming a frozen basename are rejected before any launch | `optimization/anticheat.py`, `execution/trial_runner.py` (call site) + tests | not planned (741 changed, 199 in `src`) | U24, U25 | security |
+
+U27 was added during the build (U25's security review): D37 named the rule
+(`ViolationRule.quality_data_reference`) and §4.6 its failure mode, but no row
+of this table owned it, so no unit would have built it.
 
 Build order (`nodes.py`: U2, U8, U9, U11, U16, U17, U22, U23, U25;
 `ci.yml`: U3, U13; `trial_runner.py`: U6, U20, U24; `editor.py` and

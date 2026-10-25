@@ -1,6 +1,6 @@
 # Python Agents Service - Claude Code Configuration
 
-**Service:** `python_agents` **Version:** 4.3.0 **Primary Language:** Python
+**Service:** `python_agents` **Version:** 4.4.0 **Primary Language:** Python
 3.11+ **Framework:** LangGraph 1.x **Testing:** pytest **Key Libraries:**
 langgraph, langchain, anthropic (1.x), pydantic 2, pydantic-settings, structlog,
 psycopg 3 (the `database` extra)
@@ -17,18 +17,20 @@ Home of the improvement engine: the LangGraph orchestrator loop (L2), research
 (L4), the local execution layer (L5), optimization judges (L6) and the lessons
 store (L7). Persistence talks to PostgreSQL through `infrastructure/schema/`.
 
-**Current state (Step 2 built, stage gate pending):** the loop runs for real on
-CPU-bound Python workloads. `orchestrator/factory.py` wires the real preflight,
-Claude understander, cProfile profiler, git baseline and trial runners (each
-trial edited by Claude in its own sandboxed worktree), combiner and branch
-publisher; the Postgres repository persists runs. The hypothesis generator
-(`optimization/generate.py`), the playbook and its matcher
-(`research/playbook.py`) and the structured-output client
-(`clients/structured.py`) exist and are measured live (Window 0), but are not
-yet wired into the graph: the `research` node and `watch` are still stubs and
-candidates come through `NodeContext.candidates` (wiring is Step 3's first
-unit). There is no CLI (Step 4). `default_context()` and the `langgraph.json`
-entry point still use the Step 1 stubs.
+**Current state (Step 3 Wave 1 built, E2E and live runs next):** the loop runs
+for real on CPU-bound Python workloads. `orchestrator/factory.py` wires the real
+preflight, Claude understander, cProfile profiler, git baseline and trial
+runners (each trial edited by Claude in its own sandboxed worktree), combiner
+and branch publisher; the Postgres repository persists runs. Step 3 Wave 1 wires
+discovery: the hypotheses node asks the generator
+(`optimization/hypothesis_source.py` over `generate.py`) when no caller or
+pooled idea is left, so a factory-built run needs no candidates; the `research`
+node is no longer a stub: blind retrieval (the default) copies the context's
+techniques with no request, matched retrieval (off, D1) asks the matcher over
+the playbook. It also adds one fix retry per run, the review branch, the two
+output modes with the quality check, and the noise rule (below). `watch` is
+still a stub. There is no CLI (Step 4). `default_context()` and the
+`langgraph.json` entry point still use the Step 1 stubs.
 
 Models come from settings, never from string literals: `settings.ENGINE_MODEL`
 (default `claude-opus-5-5`) and `settings.TRIAGE_MODEL` (default
@@ -42,6 +44,36 @@ the git, test and output limits, the editor and understand limits (and their
 the README's "Environment Variables" lists them with their defaults. All are
 validated at startup (`MODEL_PRICING` must price every model the engine may
 bill).
+
+Step 3 settings (`common/config.py`). Each request has a **role**,
+`Role = Literal["engine", "editor", "generator", "matcher"]`:
+`role_chain(cfg, role)` is every model a request of that role may bill,
+`role_settings(base, role)` a validated copy whose engine chain is that role's,
+so a transport built from it serves the role. The engine (and the editor while
+`EDITOR_MODEL` is unset) keeps the fallback chain; the other roles run their
+model alone.
+
+- Discovery: `GENERATOR_MODEL` / `GENERATOR_EFFORT` (`claude-sonnet-5-5`,
+  `medium`), `GENERATOR_N=5`, `GENERATOR_MAX_TOKENS=16000`,
+  `GENERATOR_MAX_CALLS=2`; `MATCHER_MODEL` / `MATCHER_EFFORT` (Sonnet 5.5,
+  `medium`), `MATCHER_K=3`; `RESEARCH_RETRIEVAL` (`blind` or `matched`);
+  `GENERATED_CLASSES` (`efficiency`, `behaviour`; never `novel`);
+  `DISCOVERY_MAX_SHARE=0.25` of the cap.
+- Editor and retry: `EDITOR_MODEL` (`None` = `ENGINE_MODEL`);
+  `EDITOR_FIX_RETRIES=1` per trial and `EDITOR_FIX_RETRIES_PER_RUN=1` per run,
+  both bounded 0-1 (O8; B-R2 may lift the run bound only);
+  `RETRY_CLOSURE_MAX_SOURCE_BYTES` (8 MiB).
+- Output and quality: `DEFAULT_OUTPUT_CHECK=True`, `OUTPUT_TOLERANCE_MAX_BYTES`
+  (16 MiB), `QUALITY_MAX_FROZEN_BYTES` (64 MiB, a total over the frozen files),
+  `QUALITY_MAX_ROWS` (1,000,000), `QUALITY_TIMEOUT_S` (300).
+- Noise: `PAIRED_TRIALS=True`, `CONFIRM_WINNERS=True`,
+  `NOISE_CALIBRATION_BLOCKS=3` (0-5; 0 keeps Step 2),
+  `NOISE_GAP_MULTIPLIER=2.0`.
+
+These defaults are the product's (O8-O10) and only the factory reads them; every
+`NodeContext`, constructor, model and serde default reproduces Step 2 (D4). A
+test that needs Step 2's behaviour from the factory pins those settings itself,
+as `tests/e2e/test_step2.py` does.
 
 ---
 
@@ -63,14 +95,17 @@ START -> connect -> understand -> define -> baseline -> profile -> research
                                               keep only, or nothing pending
 
 Frozen, outside the state (trial code cannot touch them):
-  judges, protected-path patterns, the noise rule, output fingerprints
+  judges, protected-path patterns, the noise rule, output fingerprints,
+  the quality check's files and scorer (sha256 recorded at baseline)
 ```
 
-`after_verdicts` routes to `approval_gate` when any verdict `needs_approval`, to
-`combine` when at least one verdict is `keep` (and nothing is pending), and back
-to `hypotheses` for another round when nothing was kept, `round < max_rounds`
-and an untrialled candidate remains. A gate decision always proceeds to
-`combine`, so a run ends with a report even when nothing is kept.
+`after_verdicts` routes, in order: to `approval_gate` when an approval is
+pending (only `novel` verdicts pend); to `combine` when the budget is exhausted,
+when any verdict is `keep` or when `round >= max_rounds`; back to `hypotheses`
+while an untried idea is in `ctx.candidates` or `candidate_pool`, or the
+generator can still be called and afforded; otherwise to `combine`. A `review`
+verdict never routes. A gate decision always proceeds to `combine`, so a run
+ends with a report even when nothing is kept.
 
 ### Package map
 
@@ -78,10 +113,11 @@ and an untrialled candidate remains. A gate decision always proceeds to
 | --------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `common/`       | all   | `config.py` settings, `models.py` data model, `errors.py` every engine error, `paths.py` path rules and pattern constants, `refnames.py` branch rules                                                                                                    |
 | `clients/`      | L2/L5 | `transport.py` (the only SDK client, `call()` retry loop, `ScriptedTransport`), `cost.py` (worst-case estimate, response cost), `budget.py` (`Budget`), `structured.py` (fenced, schema-validated replies)                                               |
-| `orchestrator/` | L2    | `state.py`, `nodes.py`, `main.py` (graph, `Orchestrator`), `factory.py` (`build_context`), `understand.py`, `combine_node.py`, `serde.py`, `events.py`                                                                                                   |
-| `research/`     | L4    | `playbook.py` + `playbook.json` (technique cards, matcher); arXiv monitor and PDF parser (placeholders until Step 3)                                                                                                                                     |
+| `orchestrator/` | L2    | `state.py`, `nodes.py`, `main.py` (graph, `Orchestrator`), `factory.py` (`build_context`), `understand.py`, `combine_node.py`, `confirm.py`, `serde.py`, `events.py`                                                                                     |
+| `research/`     | L4    | `playbook.py` + `playbook.json` (technique cards, matcher); arXiv monitor and PDF parser (placeholders; papers conditional, D2)                                                                                                                          |
 | `execution/`    | L5    | `runner.py` and `protocols.py` (seams), `fakes.py`, `git.py`, `sandbox.py`, `launcher.py`, `procrun.py`, `measure.py`, `phase.py`, `profiler.py` (+ `_profile_shim.py`), `editor.py`, `editor_tools.py`, `preflight.py`, `trial_runner.py`, `combine.py` |
-| `optimization/` | L6    | `anticheat.py` (protected paths, capture rules), `judges.py`, `ranking.py`, `generate.py` (hypothesis generation)                                                                                                                                        |
+|                 | L5    | Step 3: `outputs.py` (tolerant fingerprints, mask), `crash.py` and `retry.py` (closed crash feedback), `quality.py` (frozen scorer)                                                                                                                      |
+| `optimization/` | L6    | `anticheat.py` (protected paths, capture rules, tripwire), `judges.py`, `ranking.py`, `generate.py`, `sources.py` and `hypothesis_source.py` (generator, matcher)                                                                                        |
 | `learning/`     | L7    | `lessons.py` (verdict -> lesson)                                                                                                                                                                                                                         |
 | `persistence/`  | DB    | `Repository` protocol, `InMemoryRepository`, `postgres.py` (`PostgresRepository`)                                                                                                                                                                        |
 
@@ -113,6 +149,15 @@ survives a checkpoint. `orchestrator/serde.py` (`dump_state`, `load_state`)
 round-trips the state through JSON with one `TypeAdapter` per key, because
 `TypeAdapter(EngineState)` fails on Python 3.11.
 
+Step 3 keys (U2): `candidate_pool` (generated ideas not yet sliced into a
+round), `parked` (ideas held back with a `parked_reason`, such as a generated
+`novel` one), `technique_matches`, `generator_calls`, `discovery_cost_usd` (also
+counted in `cost_usd`), `discovery_exhausted`, and the review branch's
+`review_combination` and `review_delivery`. The quality check's frozen files and
+the noise calibration travel in `Baseline` (`quality_files`, `calibration`), and
+the raised floor only in `Baseline.objectives`: `state["objectives"]` stays the
+user's.
+
 ### Data model (`common/models.py`)
 
 Every model extends `EngineModel`: pydantic v2, `frozen=True`, `extra="forbid"`.
@@ -140,9 +185,11 @@ test fails when a new model is not added.
 
 - `DEFAULT_PROTECTED_PATTERNS`: tests, benchmarks, `conftest.py`,
   `pyproject.toml`, CI files, lockfiles and manifests, `.env*`,
-  `sitecustomize.py` and `*.pth`. A trial diff touching any of them is a
-  `Violation(protected_path)` and the verdict is `reject` whatever the judges
-  say.
+  `sitecustomize.py` and `*.pth`, and since Step 3 install and interpreter
+  config (`pip.conf`, `uv.toml`, `requirements*.in`, `constraints*.txt`,
+  `pylock*.toml`, `pdm.lock`, `.python-version` and their kin, D23). A trial
+  diff touching any of them is a `Violation(protected_path)` and the verdict is
+  `reject` whatever the judges say.
 - `normalize_path` (in `common/paths.py`) rejects absolute paths, `~`, drive
   letters and any `..` segment (`path_traversal`).
 - Noise rule:
@@ -165,6 +212,13 @@ test fails when a new model is not added.
   runner under a module root) and `process_spawn` (an AST scan, when CPU time or
   memory is judged). A trial with a violation is `failed` with
   `Trial.violations` set and is never executed.
+- Quality tripwire (Step 3, `check_quality_references`): with a quality check, a
+  trial whose added lines name a frozen file (its basename as a whole token,
+  case- and NFC-folded) is a `quality_data_reference` violation. A binary patch
+  counts as naming it and a git error fails the trial (closed). A tripwire, not
+  closure: a baked table of label values, or a kept line with edited neighbours,
+  names nothing git shows as added; the review branch's diff is the backstop.
+  Any added mention counts, comments included.
 
 ### Judges and the verdict order (`optimization/judges.py`)
 
@@ -177,10 +231,12 @@ class Judge(Protocol):
     def evaluate(self, baseline: Baseline, trial: Trial) -> JudgeResult: ...
 ```
 
-`default_judges()` returns `SpeedJudge`, `MemoryJudge`, `EquivalenceJudge`,
-`GuardrailMetricJudge` and `TestSuiteJudge`. They are frozen dataclasses held in
-the node context, never in the state, and they do no I/O: every number they see
-was measured by the runner before they run.
+`default_judges(noise_multiplier, *, quality=None)` returns `SpeedJudge`,
+`MemoryJudge`, `EquivalenceJudge`, `GuardrailMetricJudge` and `TestSuiteJudge`;
+keep `EquivalenceJudge` in any judge set, since it is the only judge that sets
+`JudgeResult.output_changed`. They are frozen dataclasses held in the node
+context, never in the state, and they do no I/O: every number they see was
+measured by the runner before they run.
 
 `derive_verdict(trial, hypothesis, judge_results, violations)` is pure and
 ordered:
@@ -191,39 +247,109 @@ ordered:
 4. primary-objective or guardrail judge `inconclusive` -> `inconclusive` (a
    secondary objective inside the noise is neutral)
 5. no objective judge `passed` -> `inconclusive`
-6. all pass: `efficiency` -> `keep`; `behaviour` or `novel` -> `needs_approval`
+6. all pass (rule 6, D35): any result with `output_changed` -> `review` (`novel`
+   stays `needs_approval`); otherwise `efficiency` -> `keep`, `behaviour` ->
+   `review`, `novel` -> `needs_approval`. Behaviour goes to review, novel needs
+   approval, and an output change is never kept on the run branch.
+
+A `review` verdict sets the hypothesis `trialled`, never pauses the run and is
+delivered on `engine/review-<run_id>` (below).
+
+### Output modes, the quality check and the noise rule (Step 3)
+
+- **Exactly one output mode per run** (define, D35, D40):
+  - _exact_ (the default; `NodeContext.default_output_check`, which the factory
+    sets from `DEFAULT_OUTPUT_CHECK`): an `output_equivalence` guardrail. A
+    change to stdout or the declared `output_file` fails rule 3, whatever its
+    class; stderr, logging and undeclared files are not compared.
+  - _quality_: the caller's confirmed `QualityCheck`
+    (`build_context(..., quality=)`; Step 4 asks it as one question) becomes a
+    `metric_bound` guardrail `quality:<name>` and there is no
+    `output_equivalence`. `EquivalenceJudge` still compares fingerprints: a
+    changed output passes with `output_changed` set (so rule 6 sends it to
+    review); a missing or unstable one fails. A caller passing both, or its own
+    `quality:` bound, is refused.
+- **The quality number** comes from a frozen evaluator, never from text the
+  trial prints: a builtin (`accuracy`, `error_rate`, `macro_f1`, `mae`, `rmse`,
+  one value per output line against a labels file) or an external scorer
+  (`python -s -B <copy>/<script>`, its stdout exactly
+  `aip-quality/1 <name>=<decimal>`). The frozen paths are read at the base
+  commit and their sha256 recorded (`Baseline.quality_files`); they are
+  protected, read-denied to the editor ("evaluation data, off limits"), deleted
+  from every worktree before each workload launch but the suite's, and copied
+  into `<run>/quality` only while a scoring runs. The input is the workload's
+  `output_file`, else its complete stdout; an `output_file` over
+  `OUTPUT_TOLERANCE_MAX_BYTES` is unscoreable. `max_drop` is in points of the
+  metric by default (`DropUnit.absolute`).
+- **Tolerance** (`Workload.output_tolerance`, a caller option): `float_digits`
+  (6-15 significant digits, whole-token decimals only) and `unordered_lines`
+  ("line order ignored, except an unterminated last line").
+  `Measurement.raw_fingerprint` keeps the exact one; scores are cached by it.
+- **The noise rule** (D41): with `PAIRED_TRIALS` each trial attempt is measured
+  ABBA against a twin worktree at the base (`Trial.base_measurements`) and
+  judged against those A rows; a twin crash is an `EngineError`. With
+  `NOISE_CALIBRATION_BLOCKS` the baseline runs A/A blocks and raises the
+  wall-time objective's `min_relative_gain` to
+  `max(2 %, NOISE_GAP_MULTIPLIER x the largest gap)` (`cpu_time_s` to at least 2
+  %); a floor of 100 % or more stops the run ("no gain can be proven on this
+  host"). With `CONFIRM_WINNERS` every would-be keep or review gets one fresh
+  paired re-test through the combiner (`orchestrator/confirm.py`): a keep stands
+  only on a keep look, a review on a keep or review look; otherwise
+  `inconclusive` ("did not confirm"). Reports give each gain with its margin,
+  confirmations and a small (< 5 %), solid (5-20 %) or large (> 20 %) label
+  (D42).
+- **Branches:** confirmed keeps whose outputs are unchanged combine onto
+  `engine/run-<run_id>`; the review set (reviews, plus an approved keep whose
+  output changed) is re-tested from the same base with `accept={keep, review}`
+  and published create-only to `engine/review-<run_id>`. Neither is merged into
+  the other or pushed; the report says merging both is unproven.
 
 ### Ranking and lessons
 
 `optimization/ranking.py`:
 `score = expected_gain × provability × (1 − risk) × (1 + lesson_boost)` with
 `lesson_boost = clamp(0.1·keeps − 0.1·rejects, ≤ 0.5)` over lessons whose
-context tags match. `learning/lessons.py` turns every verdict into a `Lesson`
-("frozen encoder + repeated epochs -> cache embeddings: keep (+41.7%)");
-approved verdicts count as keeps, rejected ones as rejects.
+context tags match. Generated ideas keep the model's order and only lessons
+reorder them: `rank_generated` scores `(1 + lesson_boost) / (1 + position)`
+(D8); caller candidates rank first. `learning/lessons.py` turns every verdict
+into a `Lesson` ("frozen encoder + repeated epochs -> cache embeddings: keep
+(+41.7%)"); approved verdicts count as keeps, rejected ones as rejects, and
+`review` lessons are neutral. A confirmed keep's lesson carries D42's two-look
+gain.
 
 ### Injection points
 
 Nodes come from `make_nodes(ctx: NodeContext)`. `NodeContext` is a frozen
 dataclass carrying the `TrialRunner`, the `BaselineRunner`, the judges, the
-`Repository`, the protected patterns, the branch prefix, the rigour knobs and,
-until the research layer exists, the candidate hypotheses. Step 2 added five
+`Repository`, the protected patterns, the branch prefix, the rigour knobs and
+the caller's candidate hypotheses (optional since Step 3). Step 2 added five
 seams, each defaulting to `None` (the node then keeps its Step 1 behaviour):
 `preflight`, `understander`, `profiler`, `combiner` and `publisher`, plus
 `min_trial_budget_usd` (default 0; the trials node starts no trial that cannot
-afford it).
+afford it). Step 3 adds, each defaulting to Step 2's behaviour: `generator`,
+`matcher`, `retrieval`, `generated_classes`, `generator_n`,
+`generator_max_calls`, `matcher_k`, `discovery_max_share`, `fix_retries_per_run`
+(0), `playbook`; `quality` (`None`), `default_output_check` (False),
+`calibrator` (`None`), `calibration_blocks` (0) and `confirm_winners` (False).
 
-- `orchestrator/factory.py`: `build_context(project, *, candidates, ...)` builds
-  the real context: `GitPreflight`, `ClaudeUnderstander`, `CProfiler`,
+- `orchestrator/factory.py`:
+  `build_context(project, *, candidates=(), quality=None, ...)` builds the real
+  context: `GitPreflight`, `ClaudeUnderstander`, `CProfiler`,
   `GitBaselineRunner`, `GitTrialRunner` (with `ClaudeEditor` over
   `WorktreeEditor`), `GitCombiner` and `GitBranchPublisher` on one
   `GitWorkspace`, one pair of isolation modes and one launcher, and
-  `min_trial_budget_usd` = one worst-case editor request. Connect rebinds the
-  runners to the test command preflight resolved, so a context serves one run at
-  a time. Without `ANTHROPIC_API_KEY` there is no transport: understand keeps
-  its stub and the trials need an injected `editor`, else `LLMConfigError`.
-  Keyword overrides (`transport`, `editor`, `run`, `network`, `fs`, `sleep`)
-  exist for tests.
+  `min_trial_budget_usd` = one worst-case editor request (priced on the editor's
+  chain, also the retry floor). In Step 3 it builds each role's transport from
+  `role_settings` (engine, editor, generator; the matcher and the playbook only
+  under matched retrieval), feeds the settings above into the runners and the
+  context, and with a quality check shares one `FrozenScorer` among the runners
+  and the profiler. `role_transports={"generator": ...}` injects a role's
+  transport; with `transport=` injected and no role transports it builds none,
+  so there is no generator. Connect rebinds the runners to the test command
+  preflight resolved, so a context serves one run at a time. Without
+  `ANTHROPIC_API_KEY` there is no transport: understand keeps its stub and the
+  trials need an injected `editor`, else `LLMConfigError`. Keyword overrides
+  (`transport`, `editor`, `run`, `network`, `fs`, `sleep`) exist for tests.
 - `execution/runner.py`:
   `TrialRunner.run(hypothesis, workloads, baseline, *, round, branch, budget_usd, brief) -> Trial`
   and
@@ -306,10 +432,10 @@ engine until the step that needs them; the vision documents in
 - `Workload.command` is argv, never a shell string, and `working_dir` is
   validated by `normalize_path`.
 - `Paper.pdf_url` must be https; every fetched URL is validated before use.
-- Branches are `engine/run-<run_id>` (delivery) and
-  `engine/trial-<run_id>-<hypothesis_id>` (trials): full ids, never nested,
-  validated as git refnames by `assert_safe_branch`, which also refuses
-  `project.default_branch`. Run ids and candidate ids are validated
+- Branches are `engine/run-<run_id>` (delivery), `engine/review-<run_id>` (the
+  review set, Step 3) and `engine/trial-<run_id>-<hypothesis_id>` (trials): full
+  ids, never nested, validated as git refnames by `assert_safe_branch`, which
+  also refuses `project.default_branch`. Run ids and candidate ids are validated
   (`[A-Za-z0-9][A-Za-z0-9._-]{0,63}`, no `..`, no `.lock`); the prefix must be
   non-empty and end with `/`.
 - Report text (`Delivery.report_markdown`) is sanitised: line breaks collapsed,
@@ -397,6 +523,37 @@ Step 2 (repository code now runs on the user's machine):
 - **Delivery**: create-only `update-ref` under the prefix, never on a
   checked-out or default branch (or one it symrefs to), never pushed.
 
+Step 3:
+
+- **Retry feedback is closed** (D13, `execution/retry.py`): only a workload's
+  own run exiting with a fixable Python error is retried, once a run. What
+  reaches the editor is the exception type, a message that fully matches one of
+  the per-version CPython templates (3.8-3.14) with every name in the closure
+  set (identifiers of the diff and of the tracked base sources), at most two
+  numbers of at most 4 digits, and at most three innermost frames as (path,
+  function, line); never source lines, stdout, timings, fingerprints, quality
+  values or verdicts. The residual is about 18 bytes a run; a second retried
+  trial a run waits for B-R2's safeguards and attack tests. Feedback travels in
+  its own `untrusted_run_output` fence, and the hypothesis sits inside the
+  repository fence for every source (D11).
+- **The run's retry cap survives resumes**: the trials node counts spent retries
+  over the checkpointed trials and the repository's saved trials, the larger
+  count winning; an unreadable repository grants 0.
+- **The quality scorer** runs from an engine copy of the recorded blobs (sha256
+  re-checked, written `O_EXCL|O_NOFOLLOW`), under its own sandbox policy
+  (network off, writes confined to the copy and its scratch), with the output on
+  stdin, `-s -B` and the forced hash seed; symlinks and other non-regular blobs
+  are refused at freeze. Errors never carry output, label or scorer text.
+  Residual: confinement is write-only, so code can still read the labels through
+  the main repository, the object store or an unfrozen input that carries them,
+  and with `NETWORK_ISOLATION=off` a `setsid` child can outlive its run while a
+  scoring copy exists; every output change goes to review for that reason.
+- **Editor read-deny**: frozen paths are refused to `view` and omitted from
+  listings, case-insensitively and NFC-normalised (APFS-safe).
+- **Generated hypotheses are untrusted**: titles and descriptions derive from
+  repository text, so they enter the editor prompt only inside the fence, and a
+  text holding the fence token is refused unsent.
+
 ---
 
 ## Testing Conventions
@@ -450,14 +607,30 @@ Step 2 (repository code now runs on the user's machine):
   `REQUIRE_NETWORK_SANDBOX=1` / `REQUIRE_FS_SANDBOX=1` (CI) make them fail
   instead. The launcher's setup runs in-process with injected `Ops`, and the
   darwin branches are tested on Linux through an injected `platform`.
-- **Profiler tests** run the shim under `python3.8` to `python3.12` when they
-  are on `PATH` (`uv python install 3.8 3.9 3.10 3.11 3.12`); `-P` cases are
-  generated only for 3.11 and later.
+- **Profiler and retry-template tests** run under `python3.8` to `python3.14`
+  when they are on `PATH`
+  (`uv python install 3.8 3.9 3.10 3.11 3.12 3.13 3.14`); a missing one skips
+  locally and fails CI. `-P` cases are generated only for 3.11 and later.
 - **E2E** (`tests/e2e/test_step2.py`, marker `slow`): E2E-A to E2E-C on the
   `dedupe_repo` fixture with real git, sandbox and measurement and scripted
-  Claude replies; Postgres when `TEST_DATABASE_URL` is set. The Step 1 graph
-  scenarios on stubs stay in `tests/orchestrator/test_graph_e2e.py`. Graph tests
-  use `InMemorySaver` and a unique `thread_id` per test.
+  Claude replies; Postgres when `TEST_DATABASE_URL` is set. Its fixture pins
+  Step 2's settings (no pairing, confirmation or calibration), so it keeps
+  proving Step 2's behaviour under the Step 3 factory. Step 3's E3-A to E3-I
+  (`tests/e2e/test_step3.py`, `tests/e2e/test_step3_quality.py`, fixtures under
+  `tests/fixtures/step3*`) are in progress. The Step 1 graph scenarios on stubs
+  stay in `tests/orchestrator/test_graph_e2e.py`. Graph tests use
+  `InMemorySaver` and a unique `thread_id` per test.
+- **New node tests go in new files** (`test_nodes.py` is past 5,000 lines):
+  `test_hypotheses_node.py`, `test_research_node.py`, `test_noise_rule.py`,
+  `test_confirm.py`, `test_review_delivery.py`, `test_define_modes.py`,
+  `test_run_retry_cap.py`, `test_factory_roles.py` in `tests/orchestrator`.
+- **Live suites in Step 3**: `LIVE_CORPUS_MODE=wired` hands over no candidates
+  and turns the generator on through captured role transports; the
+  `editor_model` input picks the editor; every suite names its noise rule in
+  `ci.yml` (the Step 3 rule for `noise`, `corpus`, `hard`, `oss`), and the
+  `noise` suite's paired path is L0. The offline discovery eval
+  (`tests/optimization/test_discovery_eval.py`) replays recorded generator
+  replies; its seed is synthetic until L4 records a real one.
 
 ---
 
@@ -466,51 +639,58 @@ Step 2 (repository code now runs on the user's machine):
 Paths are relative to `src/autonomous_ai_agents/` unless they start with
 `tests/`.
 
-| File                                        | Status      | Purpose                                                                                  |
-| ------------------------------------------- | ----------- | ---------------------------------------------------------------------------------------- |
-| `common/config.py`                          | real        | pydantic-settings: models, pricing, isolation, limits, DB                                |
-| `common/models.py`                          | real        | Data model, enums, serde allowlist                                                       |
-| `common/errors.py`                          | real        | Every engine error class                                                                 |
-| `common/paths.py`                           | real        | `normalize_path`, `matches_pattern`, deny lists, reserved modules                        |
-| `common/refnames.py`                        | real        | Git refname rules, `assert_safe_branch`                                                  |
-| `clients/transport.py`                      | real        | `AnthropicTransport`, `ScriptedTransport`, `call()` retry loop                           |
-| `clients/cost.py`, `clients/budget.py`      | real        | Worst-case estimate, response cost, `Budget`                                             |
-| `orchestrator/state.py`                     | real        | `EngineState`, `initial_state`, `REDUCER_KEYS`                                           |
-| `orchestrator/nodes.py`                     | real        | One function per node, `after_verdicts`; `research`, `watch` stub                        |
-| `orchestrator/main.py`                      | real        | `create_graph`, `Orchestrator`; `default_context()` uses stubs                           |
-| `orchestrator/factory.py`                   | real        | `build_context`: the real engine for one project                                         |
-| `orchestrator/understand.py`                | real        | `ClaudeUnderstander`                                                                     |
-| `orchestrator/combine_node.py`              | real        | Re-judge the combination, fall back once                                                 |
-| `orchestrator/serde.py`                     | real        | Typed JSON round trip of `EngineState`                                                   |
-| `orchestrator/events.py`                    | real        | `make_event`, `emit`                                                                     |
-| `execution/runner.py`                       | stub        | `TrialRunner`, `BaselineRunner` protocols and their stubs                                |
-| `execution/protocols.py`                    | real        | The Step 2 seams and carriers                                                            |
-| `execution/fakes.py`                        | test double | Fakes for every seam, `ScriptedEditor`                                                   |
-| `execution/git.py`                          | real        | Hardened `GitWorkspace`, `repo_fingerprint`                                              |
-| `execution/sandbox.py`, `launcher.py`       | real        | Sandbox policy and environment; the measuring launcher                                   |
-| `execution/procrun.py`                      | real        | `run_once`: one sandboxed, measured run                                                  |
-| `execution/measure.py`                      | real        | Warm-ups, timed runs, fingerprints, ABAB, the test suite                                 |
-| `execution/phase.py`                        | real        | Phase dirs and their shared cleanup                                                      |
-| `execution/profiler.py`, `_profile_shim.py` | real        | `CProfiler` and the shim it runs in the workload's interpreter                           |
-| `execution/editor.py`, `editor_tools.py`    | real        | `ClaudeEditor` loop; `WorktreeEditor` tool handler                                       |
-| `execution/preflight.py`                    | real        | `GitPreflight`                                                                           |
-| `execution/trial_runner.py`                 | real        | `GitTrialRunner`, `GitBaselineRunner`                                                    |
-| `execution/combine.py`                      | real        | `GitCombiner`, `GitBranchPublisher`                                                      |
-| `optimization/anticheat.py`                 | real        | Protected paths, capture rules, noise rule, fingerprints                                 |
-| `optimization/judges.py`                    | real        | Judge protocol, five judges, `derive_verdict`                                            |
-| `optimization/ranking.py`                   | real        | Hypothesis score with lesson boost                                                       |
-| `optimization/generate.py`                  | real        | `generate_hypotheses` (not yet wired into the graph)                                     |
-| `clients/structured.py`                     | real        | Fenced untrusted input, strict JSON replies (`UnusableReplyError` in `common/errors.py`) |
-| `research/playbook.py`, `playbook.json`     | real        | Technique cards with preconditions, `match_techniques`                                   |
-| `learning/lessons.py`                       | real        | Verdict -> `Lesson`                                                                      |
-| `persistence/repository.py`                 | real        | `Repository` protocol, `InMemoryRepository`                                              |
-| `persistence/postgres.py`                   | real        | `PostgresRepository` (003 + 004 schema)                                                  |
-| `research/arxiv_monitor.py`                 | placeholder | arXiv monitoring (Step 3; not from GitHub runners, which arXiv throttles)                |
-| `tests/live/experiments/`                   | test only   | Window 0 raw-SDK harness: probes, triage, papers, web, prescreen                         |
-| `research/pdf_parser.py`                    | placeholder | PDF parsing (Step 3)                                                                     |
-| `tests/e2e/test_step2.py`                   | real        | E2E-A, E2E-B, E2E-C on the `dedupe_repo` fixture                                         |
-| `tests/orchestrator/test_graph_e2e.py`      | real        | The Step 1 graph scenarios on stubs (11 tests)                                           |
-| `tests/conftest.py`                         | real        | Shared fixtures                                                                          |
+| File                                        | Status      | Purpose                                                                                   |
+| ------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------- |
+| `common/config.py`                          | real        | pydantic-settings: models, pricing, isolation, limits, DB                                 |
+| `common/models.py`                          | real        | Data model, enums, serde allowlist                                                        |
+| `common/errors.py`                          | real        | Every engine error class                                                                  |
+| `common/paths.py`                           | real        | `normalize_path`, `matches_pattern`, deny lists, reserved modules                         |
+| `common/refnames.py`                        | real        | Git refname rules, `assert_safe_branch`                                                   |
+| `clients/transport.py`                      | real        | `AnthropicTransport`, `ScriptedTransport`, `call()` retry loop                            |
+| `clients/cost.py`, `clients/budget.py`      | real        | Worst-case estimate, response cost, `Budget`                                              |
+| `orchestrator/state.py`                     | real        | `EngineState`, `initial_state`, `REDUCER_KEYS`                                            |
+| `orchestrator/nodes.py`                     | real        | One function per node, `after_verdicts`; `research` blind or matched; `watch` stub        |
+| `orchestrator/confirm.py`                   | real        | `confirm_one` (the second look), D42's gain, margin and label                             |
+| `orchestrator/main.py`                      | real        | `create_graph`, `Orchestrator`; `default_context()` uses stubs                            |
+| `orchestrator/factory.py`                   | real        | `build_context`: the real engine for one project                                          |
+| `orchestrator/understand.py`                | real        | `ClaudeUnderstander`                                                                      |
+| `orchestrator/combine_node.py`              | real        | Re-judge the combination, fall back once                                                  |
+| `orchestrator/serde.py`                     | real        | Typed JSON round trip of `EngineState`                                                    |
+| `orchestrator/events.py`                    | real        | `make_event`, `emit`                                                                      |
+| `execution/runner.py`                       | stub        | `TrialRunner`, `BaselineRunner` protocols and their stubs                                 |
+| `execution/protocols.py`                    | real        | The Step 2 seams and carriers                                                             |
+| `execution/fakes.py`                        | test double | Fakes for every seam, `ScriptedEditor`                                                    |
+| `execution/git.py`                          | real        | Hardened `GitWorkspace`, `repo_fingerprint`                                               |
+| `execution/sandbox.py`, `launcher.py`       | real        | Sandbox policy and environment; the measuring launcher                                    |
+| `execution/procrun.py`                      | real        | `run_once`: one sandboxed, measured run                                                   |
+| `execution/measure.py`                      | real        | Warm-ups, timed runs, fingerprints, ABBA order, the mask, the test suite                  |
+| `execution/outputs.py`                      | real        | Tolerant fingerprints (D39), output retention, the frozen-path mask                       |
+| `execution/crash.py`, `execution/retry.py`  | real        | `parse_traceback`; `classify`, the closure set and the CPython templates                  |
+| `execution/quality.py`                      | real        | `FrozenScorer`: freeze, builtins, the external scorer, `label_column_leaks`               |
+| `execution/phase.py`                        | real        | Phase dirs and their shared cleanup                                                       |
+| `execution/profiler.py`, `_profile_shim.py` | real        | `CProfiler` and the shim it runs in the workload's interpreter                            |
+| `execution/editor.py`, `editor_tools.py`    | real        | `ClaudeEditor` loop; `WorktreeEditor` tool handler                                        |
+| `execution/preflight.py`                    | real        | `GitPreflight`                                                                            |
+| `execution/trial_runner.py`                 | real        | `GitTrialRunner`, `GitBaselineRunner`                                                     |
+| `execution/combine.py`                      | real        | `GitCombiner`, `GitBranchPublisher`                                                       |
+| `optimization/anticheat.py`                 | real        | Protected paths, capture rules, noise rule, fingerprints                                  |
+| `optimization/judges.py`                    | real        | Judge protocol, five judges, `derive_verdict`                                             |
+| `optimization/ranking.py`                   | real        | Hypothesis score with lesson boost; `rank_generated`                                      |
+| `optimization/generate.py`                  | real        | `generate_hypotheses`                                                                     |
+| `optimization/sources.py`                   | real        | `HypothesisGenerator`, `TechniqueMatcher` protocols                                       |
+| `optimization/hypothesis_source.py`         | real        | `ClaudeHypothesisGenerator`, `ClaudeTechniqueMatcher` (each refuses another role's chain) |
+| `clients/structured.py`                     | real        | Fenced untrusted input, strict JSON replies (`UnusableReplyError` in `common/errors.py`)  |
+| `research/playbook.py`, `playbook.json`     | real        | Technique cards with preconditions, `match_techniques`                                    |
+| `learning/lessons.py`                       | real        | Verdict -> `Lesson`                                                                       |
+| `persistence/repository.py`                 | real        | `Repository` protocol, `InMemoryRepository`                                               |
+| `persistence/postgres.py`                   | real        | `PostgresRepository` (003 to 006 schema)                                                  |
+| `research/arxiv_monitor.py`                 | placeholder | arXiv monitoring (only if D2's re-test calls for papers; not from GitHub runners)         |
+| `tests/live/experiments/`                   | test only   | Window 0 raw-SDK harness: probes, triage, papers, web, prescreen                          |
+| `research/pdf_parser.py`                    | placeholder | PDF parsing (conditional, D2)                                                             |
+| `tests/e2e/test_step2.py`                   | real        | E2E-A, E2E-B, E2E-C on the `dedupe_repo` fixture                                          |
+| `tests/e2e/test_step3*.py`                  | in progress | E3-A to E3-I (U14, U26)                                                                   |
+| `tests/orchestrator/test_graph_e2e.py`      | real        | The Step 1 graph scenarios on stubs (11 tests)                                            |
+| `tests/conftest.py`                         | real        | Shared fixtures                                                                           |
 
 "stub" means the module holds a deterministic stand-in kept for tests and the
 default context; "test double" means it exists for tests only.
@@ -524,17 +704,26 @@ uv sync --extra dev --extra database
 uv run ruff check . && uv run ruff format --check .
 uv run mypy src tests
 TEST_DATABASE_URL=postgresql://dev:devpass@localhost:5432/ai_platform uv run pytest
-uv run pytest tests/e2e --no-cov                # the Step 2 E2E only
+uv run pytest tests/e2e --no-cov                # the E2E scenarios only
 uv run pytest -o addopts="" -m "not live" -n 2  # without coverage, keeps live off
 uv run pip-audit && uv run bandit -q -r src -c pyproject.toml
 ```
 
 ---
 
-**Version:** 4.3.0 **Last Updated:** 2026-10-24
+**Version:** 4.4.0 **Last Updated:** 2026-10-25
 
 **Changelog:**
 
+- **4.4.0 (2026-10-25):** Step 3 Wave 1: the current state (discovery wired,
+  research no longer a stub, `watch` still one), the role keys and Step 3
+  settings with the defaults rule, the router, the package map's new modules,
+  the Step 3 state keys, D23's patterns and the quality tripwire, rule 6
+  (behaviour goes to review, novel needs approval, an output change is never
+  kept on the run branch), the output modes, the quality check, the noise rule
+  and the two branches, `rank_generated` and neutral review lessons, the
+  `NodeContext` fields and factory roles, Step 3 security notes, test
+  conventions (3.8-3.14, new node test files, wired live suites), key files
 - **4.3.0 (2026-10-24):** Step 2 close-out: the generator, playbook, matcher and
   structured client in the current state, package map and key files (not yet
   wired); the Window 0 experiment harness; git gotchas from the research notes

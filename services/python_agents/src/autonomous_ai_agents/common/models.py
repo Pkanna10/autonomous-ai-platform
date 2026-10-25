@@ -160,7 +160,7 @@ class GuardrailKind(StrEnum):
 
 
 class ChangeClass(StrEnum):
-    """Drives autonomy: efficiency ships, behaviour is flagged, novel needs approval."""
+    """Drives autonomy: efficiency ships, behaviour goes to review, novel needs approval."""
 
     efficiency = "efficiency"
     behaviour = "behaviour"
@@ -625,8 +625,9 @@ class Measurement(EngineModel):
     samples: tuple[float, ...] = Field(min_length=1)
     output_fingerprint: str | None = Field(default=None, pattern=SHA256_PATTERN)
     raw_fingerprint: str | None = Field(default=None, pattern=SHA256_PATTERN)
-    """The exact-bytes fingerprint when ``output_fingerprint`` is canonical
-    under a tolerance (D39); scores are cached by it (D37)."""
+    """The exact-bytes fingerprint (D39): equal to ``output_fingerprint``
+    without a tolerance; ``None`` when the runs agreed only within one. Scores
+    are cached by it, so a ``None`` row is scored uncached (D37)."""
     hardware: ScalarDict = Field(default_factory=dict)
     measured_at: datetime = Field(default_factory=utc_now)
 
@@ -801,8 +802,10 @@ class Trial(EngineModel):
 
     ``commit`` is the measured trial commit (``None`` until committed).
     ``violations`` are capture-time problems only the runner can see in the
-    git diff (modes, binaries, git metadata, unrecorded writes); a trial with
-    any is ``failed`` and never executed.
+    git diff (modes, binaries, git metadata, unrecorded writes, the D37
+    tripwire); a trial with any is ``failed`` and never executed. The judges
+    node also adds a measured paired trial's incomplete base rows here with a
+    "paired base: " prefix, which rejects it.
 
     ``attempts`` counts editor attempts (2 after a fix retry, D12);
     ``retry_notes`` says why a retry ran or did not ("not retried: the

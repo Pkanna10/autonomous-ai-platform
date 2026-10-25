@@ -7,7 +7,8 @@
 ## Current Step
 
 **Build step:** 3 (wired discovery, engine self-retry, review delivery, quality
-check, noise rule), Wave 1 building. Step 2 is merged (PR
+check, noise rule). Wave 1 is built and committed (25 units); its E2E (U14, U26)
+is in progress, then the live runs L0 to L2. Step 2 is merged (PR
 [#12](https://github.com/Pkanna10/autonomous-ai-platform/pull/12)); the Window 0
 live experiments are closed out on PR
 [#21](https://github.com/Pkanna10/autonomous-ai-platform/pull/21). **Branch:**
@@ -34,31 +35,58 @@ history at `5ce95a4` (`git show 5ce95a4:.claude/handoff/step2/spec.md`).
   models, tokens and the decision it fed are in "Experiment register (Window 0)"
   and the ledger under "Live API testing plan"; read the register before
   planning a live run, so the next one adds to it instead of repeating it.
-- **Next: Step 3, Wave 1.** The owner approved the spec (revision 4,
-  `.claude/handoff/step3/spec.md`, on `claude/step3-research`) on 2026-10-24,
-  with the decisions in `.claude/handoff/step3/owner-step3-review.md`. U1 (the
-  Postgres id fix) is done (`3ee4e76`); the build order is the spec's section 7.
-  Wave 3 waits for Wave 1's live runs.
+- **Step 3, Wave 1 is built and committed** on `claude/step3-research`
+  (2026-10-25; see "Step 3 Wave 1 summary"). The owner approved the spec
+  (revision 4, `.claude/handoff/step3/spec.md`) on 2026-10-24, with the
+  decisions in `.claude/handoff/step3/owner-step3-review.md`. Units and commits:
+  U1 `3ee4e76`, U2 `427fdbe`, U3 `7eaa3b2`, U4 `6342eca`, U5 `b67130a`, U6
+  `183c538`, U7 `806b87d`, U8 `373d4c2`, U9 `753a158`, U10 `04088f7`, U11a
+  `b848717`, U11 `60cee15`, U12 `6b3db0c`, U13 `08ba4ec`, U16 `4ac8798`, U17
+  `34b1360`, U18 `82e93c5`, U19 `1d05562`, U20 `414f03b`, U21 `6ebd118`, U22
+  `65891ea`, U23 `e27aed6`, U24 `1285820`, U25 `ce937d4`, U27 `a78275a` (Lead-
+  assigned, see Lessons); Lead fixes `f1080dc` (macOS interpreters) and
+  `3e04294` (graphwalk size).
+- **In progress:** the E2E units U14 (`tests/e2e/test_step3.py`, E3-A to E3-E:
+  built, 8 tests, about 3 min 15 s serially, under review, not committed) and
+  U26 (`tests/e2e/test_step3_quality.py`, E3-F to E3-I: building), then U15
+  (these docs, Lead). U14's exact frame lines are proven on Python 3.13 only so
+  far; CI's python job runs 3.11.
+- **Next: the live runs L0 to L2** (spec section 6), in order: L0 (`noise`, the
+  paired path, no API call), L1a (`hard`, `wired`), L1b (`corpus`, `wired`), L2a
+  (`oss`, `wired`, Sonnet low editor, 2 repetitions; L2b with the Opus editor
+  only if L2a delivers fewer than 10 of 20). The ordering rule is met: U11 made
+  behaviour -> review unconditional (`60cee15`) before any live run. Before L2a
+  the Lead re-pins the hard and OSS timeouts from L1a's measured wall time (the
+  2.6x estimate is unverified).
+- **Wave 2 is approved** (O6: hard corpus v2, the `ledgerclose` rebuild, the A/B
+  instrument, grader labels, L3-L5). **Wave 3 is held** until Wave 1's live runs
+  report (O6); each of its units has its own gate (spec section 7).
 - **Credit:** Window 1's $200 expires 2026-11-25; plan to have it used by
   2026-11-23 (the owner's buffer).
 - **Environment:** the database tests need Postgres 16 with pgvector and a role
   that may create databases (`TEST_DATABASE_URL`; the Docker Compose database
-  works). The profiler tests also run `python3.8` to `python3.12`
-  (`uv python install 3.8 3.9 3.10 3.11 3.12` puts them in `~/.local/bin`); a
-  missing one skips locally but runs in CI. Check both before a long run; do not
-  assume an environment setup script ran. In the Lead's container the
-  `ledgerclose` partial-fix guard fails (see Known gaps); CI is the reference.
+  works). The profiler and retry-template tests also run `python3.8` to
+  `python3.14` (`uv python install 3.8 3.9 3.10 3.11 3.12 3.13 3.14` puts them
+  in `~/.local/bin`); a missing one skips locally but fails CI (U3, `f1080dc`).
+  Check both before a long run; do not assume an environment setup script ran.
+  In the Lead's container the `ledgerclose` partial-fix guard fails (see Known
+  gaps); CI is the reference.
 - **How a unit was built in Step 2:** the Workflow tool ran one unit per run
   (Builder tests first, correctness and security Reviewers on a different model,
   fixer; a missing review halts the run); the script is
   `.claude/handoff/step2/build-wave.workflow` at `5ce95a4`. The Lead verifies,
-  commits one unit per commit and pushes.
+  commits one unit per commit and pushes. In Step 3 up to four Builders shared
+  the worktree on disjoint files, under the builder rules in the session
+  scratchpad; the hygiene they learned is in CLAUDE.md ("Builders in a shared
+  worktree") and the Step 3 Wave 1 lessons below.
 - **Lead verification before every commit** (from `services/python_agents`):
   `uv run ruff check . && uv run ruff format --check . && uv run mypy src tests`,
   `uv run bandit -q -r src -c pyproject.toml`,
   `TEST_DATABASE_URL=postgresql://dev:devpass@localhost:5432/postgres uv run pytest -q`
   (coverage gate 90 %; 100 % line and branch with Postgres), and the suite on a
-  Python 3.11 venv with `-o addopts="-n auto --no-cov -m 'not live'"`.
+  Python 3.11 venv with `-o addopts="-n auto --no-cov -m 'not live'"`. The
+  Lead's gate runs alone on a clean copy of the branch: it is the authority for
+  timing guards, which concurrent Builders' gates are not.
 - **Never run live tests from a container**: always pass `-m "not live"` when
   overriding `addopts`. Live suites run only in CI's `live-smoke` job. Cloud
   containers set `ANTHROPIC_BASE_URL` for their own use; the engine follows only
@@ -77,13 +105,25 @@ the step.
 | 1    | Engine design (typed state, data model, judges, migration 003)            | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed |
 | 2    | Core loop end to end on CPU Python workloads + E2E fixture test           | 2026-10-21 | 2026-10-21 | 2026-10-24 | [#12](https://github.com/Pkanna10/autonomous-ai-platform/pull/12) | passed |
 | W0   | Window 0 live experiments (discovery, A/B, noise, evolution, heal, build) | 2026-10-23 | 2026-10-23 | 2026-10-25 | [#21](https://github.com/Pkanna10/autonomous-ai-platform/pull/21) | passed |
-| 3    | Research: arXiv, PDF, playbook, claim extraction, matcher                 |            |            |            |                                                                   |        |
+| 3    | Discovery and proof: generator, retry, review branch, quality, noise rule | 2026-10-24 | 2026-10-24 |            | [#22](https://github.com/Pkanna10/autonomous-ai-platform/pull/22) |        |
+| 3c   | Self-healing of the user's code (designed in the Step 3 spec; before 3b)  |            |            |            |                                                                   |        |
+| 3b   | Capability acquisition: automatic package policy (designed in Step 3)     |            |            |            |                                                                   |        |
 | 4    | Interfaces + runner: live CLI, hardware detection, `--goal`               |            |            |            |                                                                   |        |
 | 5    | Dogfood: fixtures, OSS repos, real ML training pipeline                   |            |            |            |                                                                   |        |
+| 6    | Production loop: error monitoring into the healer, gradual rollout        |            |            |            |                                                                   |        |
+
+Step 3 in full (O1, CLAUDE.md build order): the generator wired, the engine
+self-retry, review delivery, the quality check and the noise rule (Wave 1); hard
+corpus v2 and the retrieval re-test (Wave 2); lessons and evolution (Wave 3,
+gated); paper intake conditional. Wave 1 was built on 2026-10-25 (U1 on
+2026-10-24) on draft PR #22; its E2E and live runs are next, so the row has no
+completion date or gate yet. 3c (D33-D34) and 3b (D27-D32) are designed in the
+Step 3 spec and built after it, 3c first (O5).
 
 Recommended Claude Code model and effort per step: 0 Opus 5.5 High; 1 Fable 5.1
-Extra; 2-4 Opus 5.5 Ultracode (Fable 5.1 for the paper matcher); 5 Opus 5.5
-High, Fable 5.1 Max only when stuck.
+Extra; 2-4 and 3b Opus 5.5 Ultracode; 3c, 5 and 6 Opus 5.5 High (Fable 5.1 Max
+only when stuck). In Step 3 every unit's Reviewer ran on Fable 5.1, a different
+model from the Opus 5.5 Builders.
 
 ### Step 0 summary (2026-10-21)
 
@@ -299,30 +339,302 @@ that runs on real code under a hard cost cap.
 - the paper pipeline's priority, set by the A/B (E5) result;
 - the 3b and 3c designs, with the user's three integrity rules.
 
+### Step 3 Wave 1 summary (2026-10-24 to 2026-10-25, built; E2E and live runs next)
+
+A run built by the factory no longer needs a hypothesis handed over, a fixable
+crash gets one second chance, a change that alters behaviour or output goes to
+its own review branch, the output check is on by default, an output change can
+be judged by a quality number the user confirmed, and every gain is measured
+alternately, against a per-project floor, and confirmed on a second look. No
+paper code is built (D1: the A/B result); the playbook matcher is built and off.
+
+```
+define      exact (output_equivalence, the default) | quality (quality:<name>
+            bound, frozen files protected, read-denied, masked); never both
+baseline    + 3 A/A blocks -> floor = max(2 %, 2 x largest wall-time gap);
+            quality scored twice on the base output (determinism)
+research    blind (default: no request) | matched (off): one matcher request
+hypotheses  caller ideas first, then the pool; Sonnet 5.5 generator when the
+            pool is dry (<= 2 calls, a trial's reserve kept, <= 25 % of the
+            cap); novel ideas parked
+trials      worktree + base twin, ABBA; one fenced, closure-checked fix retry a
+            run; quality mode: added lines naming a frozen file are rejected
+verdicts    rule 6: output changed or behaviour -> review; novel -> approval;
+            every would-be keep or review confirmed on a fresh paired re-test
+deliver     confirmed keeps -> engine/run-<id>; review set re-tested ->
+            engine/review-<id>; neither pushed; D42 gain lines, D38 labels
+```
+
+By layer, with the commits (all on `claude/step3-research`):
+
+- **Foundations:** caller ids in lessons, trials and verdicts, migration 005
+  (`3ee4e76`, U1); contracts for discovery and retry (`427fdbe`, U2) and for the
+  quality check and noise calibration (`34b1360`, U17); migration 006, a lesson
+  may record `review` (`b848717`, U11a, pulled forward from U11).
+- **CI:** pip-audit in the Python job and weekly over the whole lock,
+  interpreters 3.8-3.14 (`7eaa3b2`, U3); the macOS job installs them too
+  (`f1080dc`).
+- **L6 optimization:** install and interpreter config protected (`b67130a`, U5,
+  D23); generator and matcher adapters and `rank_generated` (`806b87d`, U7);
+  rule 6, `output_changed` and absolute drops (`6ebd118`, U21); the
+  `quality_data_reference` tripwire (`a78275a`, U27).
+- **L5 execution:** crash parser and closure-checked feedback, 27 CPython
+  templates for 3.8-3.14 (`6342eca`, U4); one fenced fix retry (`183c538`, U6);
+  tolerant fingerprints, masking and ABBA order (`82e93c5`, U18); paired trials
+  against a base twin and A/A calibration (`414f03b`, U20); the frozen quality
+  scorer (`1d05562`, U19); scoring and masks in every runner, editor read-deny
+  (`1285820`, U24).
+- **L2 orchestrator:** generation when the pool runs dry (`373d4c2`, U8);
+  matched retrieval, off (`753a158`, U9); the calibrated floor and paired
+  judging (`65891ea`, U22); confirmation before keep (`e27aed6`, U23); review
+  delivery and the Step 3 report (`60cee15`, U11); the factory wiring of roles,
+  retry, noise and quality (`04088f7`, U10); define's two modes, the default
+  output check and the quality freeze (`ce937d4`, U25); the per-run retry cap
+  across resumes (`4ac8798`, U16).
+- **Live plumbing and evals:** the offline discovery eval over a recorded seed
+  (`6b3db0c`, U12); `LIVE_CORPUS_MODE=wired`, the `editor_model` input, a noise
+  rule named per suite and the paired L0 path (`08ba4ec`, U13); graphwalk at
+  170,000 nodes (`3e04294`).
+
+**Evidence so far:** each unit was committed by the Lead after its review round,
+with the findings fixed in the unit's own commit or recorded under Decisions and
+Technical Debt below, and after the Lead's gate on a clean copy (ruff check and
+format, mypy, pytest with Postgres at 100 % line and branch coverage; bandit and
+pip-audit run in CI). Security-focused reviews are recorded for U4 (two: a
+110-byte and a 24-byte channel closed), U5, U6, U10, U16 (one blocker, fixed),
+U18, U19, U21, U24, U25 and U27 (two); U13's review focused on cost and caps. No
+live run has used the Step 3 loop yet, so nothing here is a live result.
+
+**Spend:** 0 USD of Window 1 in Step 3 Wave 1 (no live run yet).
+
+**Not yet proven:** the E2E scenarios E3-A to E3-I (in progress); a real
+`GitCombiner` running per-winner confirmations and then the final combine in one
+run (worktree reuse, left to U14 and U26); the 2.6x wall-time estimate of the
+noise rule (L1a); the false-keep rate on the paired path (L0); wired wins on the
+hard and OSS corpora (L1a, L2a).
+
 ---
 
 ## What Exists Today
 
-| Component                                                                            | State                                    |
-| ------------------------------------------------------------------------------------ | ---------------------------------------- |
-| Docker Compose: Postgres 16 + pgvector, Redis, Qdrant                                | Working                                  |
-| Schema `001` to `004_engine_repository.sql`                                          | Working; applied in CI on every PR       |
-| CI: lint, typecheck, tests, coverage, Python CI (Linux, macOS), live smoke (manual)  | Working; the macOS job not blocking yet  |
-| Security: OSV, Trivy, Docker Scout, pip-audit, bandit, safety, secret scan, Renovate | Working                                  |
-| `packages/agent-core` Claude client + shutdown                                       | Working (33 Vitest tests)                |
-| `services/python_agents` settings                                                    | Working                                  |
-| LangGraph orchestrator (`EngineState`, 15 nodes, router, `Orchestrator`, factory)    | Working on CPU Python workloads (Step 2) |
-| Preflight, understand, baseline, profiler, trial runner, editor, combine, publisher  | Working (Step 2)                         |
-| Data model, anti-cheating, judges, ranking, lessons, `PostgresRepository`            | Working (Steps 1 and 2)                  |
-| `research/arxiv_monitor.py`, `pdf_parser.py`; the `research` and `watch` nodes       | Placeholders / stubs (Step 3)            |
-| `packages/research-engine`, `execution-engine`                                       | TypeScript placeholders                  |
-| Research matcher, CLI, live log, hardware detection, web console                     | Not started                              |
+| Component                                                                            | State                                              |
+| ------------------------------------------------------------------------------------ | -------------------------------------------------- |
+| Docker Compose: Postgres 16 + pgvector, Redis, Qdrant                                | Working                                            |
+| Schema `001` to `006_review_outcome.sql`                                             | Working; applied in CI on every PR                 |
+| CI: lint, typecheck, tests, coverage, Python CI (Linux, macOS), live smoke (manual)  | Working; the macOS job blocking                    |
+| Security: OSV, Trivy, Docker Scout, pip-audit, bandit, safety, secret scan, Renovate | Working                                            |
+| `packages/agent-core` Claude client + shutdown                                       | Working (33 Vitest tests)                          |
+| `services/python_agents` settings                                                    | Working                                            |
+| LangGraph orchestrator (`EngineState`, 15 nodes, router, `Orchestrator`, factory)    | Working on CPU Python workloads (Step 2)           |
+| Preflight, understand, baseline, profiler, trial runner, editor, combine, publisher  | Working (Step 2)                                   |
+| Data model, anti-cheating, judges, ranking, lessons, `PostgresRepository`            | Working (Steps 1 and 2)                            |
+| `research/arxiv_monitor.py`, `pdf_parser.py`; the `watch` node                       | Placeholders / stub (paper intake conditional, D2) |
+| `packages/research-engine`, `execution-engine`                                       | TypeScript placeholders                            |
+| Step 3 Wave 1: generator wired, fix retry, review branch, quality check, noise rule  | Built; E2E in progress, no live run                |
+| Research matcher (matched retrieval)                                                 | Built, off by default (D1)                         |
+| CLI, live log, hardware detection, web console                                       | Not started                                        |
 
 ---
 
 ## Decisions
 
-### 2026-10-24 (the A/B result sets Step 3's research priority)
+### 2026-10-25 (pre-registered before L5a: the retrieval re-test's pooled rule)
+
+Recorded before any re-test run, as D2 and O3 require, so the decision cannot be
+fitted to the result.
+
+- **The rule.** Over the slowdowns of hard corpus v2 (L5b, both arms, 2
+  repetitions) and the OSS set (L5c, both arms, 1 repetition, when it runs),
+  pooled: `c - b >= 3`, where `c` counts tasks playbook-matched generation (arm
+  B) won and blind generation (arm A) lost, and `b` the reverse; and B's false
+  wins on controls do not exceed A's. **Met:** `RESEARCH_RETRIEVAL` flips to
+  `matched` (W6) and paper intake becomes a conditional step (P) with its own
+  briefing and approval. **Not met:** the playbook stays a test fixture and
+  papers stay deprioritised, recorded here with the data.
+- **The order, cheapest first.** L5a runs arm A alone on v2: if blind wins at
+  least 90 % of the v2 slowdowns, v2 is saturated, it is revised and arm B is
+  not paid for; L5a re-runs once on the revised v2, and a second saturation ends
+  the re-test. L5c is skipped when its 10 tasks cannot change the pooled
+  decision.
+- **Why a re-test at all:** E5 ran where blind generation won 44/44, so it could
+  detect harm, not help (Window 0 lessons). The Window 0 close-out proposed
+  dropping L5 (`0cdfb7a`, above); spec revision 4 came after it and keeps L5,
+  and the owner approved Wave 2 with it (O6).
+
+### 2026-10-25 (Step 3 Wave 1: Lead decisions and accepted trade-offs)
+
+From the per-unit reviews and the Lead's handoff notes (session scratchpad, not
+kept). The ones that changed the spec are in its D12, D37, D39 and D41; where a
+decision changed the spec, the code follows the decision.
+
+**Defaults and modes**
+
+- **The `Settings` defaults are the product's; "defaults = Step 2" applies to
+  constructor and `NodeContext` defaults.** `PAIRED_TRIALS` and
+  `CONFIRM_WINNERS` are on, `NOISE_CALIBRATION_BLOCKS` is 3,
+  `DEFAULT_OUTPUT_CHECK` is on and both retry caps are 1, read only by the
+  factory; every `NodeContext`, constructor, model and serde default reproduces
+  Step 2. `tests/e2e/test_step2.py` and the offline evolution guard pin Step 2's
+  settings in their own fixtures (U10). Why: the owner chose what a real run
+  does (O8-O10), while the Step 2 tests prove Step 2's behaviour and must keep
+  proving it; a test that inherits a moved default silently changes meaning. The
+  evolution guard showed why: an A/A calibration of a millisecond workload on a
+  loaded host gave a 110 % floor, which stops the run by design.
+- **Every live suite names its noise rule** (U13, `ci.yml`): the Step 3 rule for
+  `noise`, `corpus`, `hard` and `oss`, Step 2's for the rest. Why: the same
+  reason, and calibration needs workloads well above timer noise (about 0.3 s or
+  more), which not every older suite's fixtures have. L0 is the noise suite; L1
+  and L2 run under the rule they will ship with.
+- **Behaviour -> review is unconditional** (U11 deleted U21's `review_behaviour`
+  staging keyword instead of leaving it dead; the Step 2 approval tests moved to
+  a `novel` H4). Why: with the keyword off, generated behaviour ideas (D9) would
+  have stopped unattended runs at the approval gate. Ordering rule (U21 review):
+  no live run and no PR marked ready before this landed; met at `60cee15`.
+- **An approved `novel` change whose output changed goes to the review set,
+  never the run branch**, with or without a combiner (Lead, U11 review S6). Why:
+  D35 keeps every output change off `engine/run-<id>`; the human approved the
+  idea, not an output change nobody has looked at.
+- **define refuses a caller's own `quality:` bound and both modes together;
+  trials refuse a resume whose context lacks the defining check** (U25 security
+  review S1). Accepted risk: a run defined without a check but resumed with
+  `ctx.quality` set is not refused. Why accepted: that direction is stricter
+  (the frozen paths are read-denied to the editor, and no quality guardrail is
+  judged, so the run's own output check still decides).
+
+**Retry**
+
+- **Spent retries are counted as the larger of the checkpointed trials' sum and
+  the repository's (`list_trials`)**; an unreadable repository grants 0 with a
+  warning naming only the error type; a re-run trial never lowers a saved
+  trial's `attempts` (U16; the security review's blocker B1: deterministic trial
+  ids let a re-run round overwrite the saved attempts, which granted a second
+  retry). Why: the owner's rule is exactly one second chance per run (O8), so a
+  crash inside the trials node must not regrant it.
+- **U16 residual, accepted** (spec D12): a trial lost after its retry request
+  (an engine error or a failed save) is not recorded, so resuming such a failed
+  run straight through the graph could grant one more retry. Why accepted:
+  `Orchestrator` refuses to resume a failed run, so no path reaches it today;
+  Step 4's resume must record the grant durably first (Technical Debt).
+- **What a retry may carry:** `EditTask.feedback` is the rendered
+  `TrialFeedback.render()` string (the type allows nothing else); the hypothesis
+  sits inside the `untrusted_repo_content` fence (D11), and text that plants or
+  closes a `<hypothesis>` element is refused unsent (U6 review S1).
+  `Trial.retry_notes` holds stderr-derived text and is for the report only:
+  never a prompt, a lesson or the generator. Why: D13's closure proof covers
+  only what `classify` sends.
+- **A `GitError` from the retry's reset ("still dirty") loses attempt 1's
+  record** through the exception path. Accepted: consistent with spec section
+  4.4 item 4, and the trial fails either way.
+
+**Quality check**
+
+- **Frozen paths are literal names** (U17): no `*`, `?`, `[`, control
+  characters, leading `-` or git metadata; consumers `glob.escape` them anyway.
+  Why: they feed the protected and read-deny lists, which match patterns, so a
+  metacharacter would protect or hide something other than the file the user
+  named.
+- **The external scorer runs as `<python> -s -B <copy>/<script>`**, `scorer[0]`
+  a Python interpreter by name or path, with cwd and `sys.path[0]` the frozen
+  copy; not `-E` (U19 security review). Why: `-E` would ignore the forced
+  `PYTHONHASHSEED=0`, so a scorer that iterates a set could score differently
+  run to run; `child_env` already drops every other `PYTHON*` name.
+- **Freeze refuses symlinks and other non-regular blobs** (U19). Why: a symlink
+  blob would freeze the link text and leave the real file unprotected.
+- **Runs that agree within a tolerance keep the first timed run's bytes for
+  scoring** (`raw_fingerprint=None`, scored uncached; U18 review). Why: one
+  score per measurement, and the cache is keyed by exact bytes, so only a
+  byte-identical output reuses a score.
+- **`measure.launch` masks by default; only the test suite opts out** (U18), and
+  the profile run is masked too (U24). Why: a launch path added later cannot
+  forget the mask.
+- **`=` joins D39's delimiters** (U18). Why: `name=value` metric lines then get
+  the float tolerance.
+- **The unordered-lines sentence is "line order ignored, except an unterminated
+  last line"** (U18, U11). Why: the unterminated last piece stays last so the
+  canonical form stays injective, and the report must not claim more.
+- **The editor's read-deny is case-insensitive and NFC-normalised** (U24
+  security review S1). Why: APFS treats `Labels.csv` and an NFD spelling as the
+  same file; denying the variant on Linux too errs on the safe side.
+- **The tripwire's limits** (U27, two security reviews): added lines naming a
+  frozen basename as a whole token (case- and NFC-folded) reject the trial; a
+  binary patch counts as naming it and a git error fails the trial (both
+  closed). F2 is a documented limit, not fixed: a kept line whose neighbours are
+  edited is context in git's `-U0` patch and is not flagged. Why: `-U1` would
+  flag every unchanged line next to an edit and reject honest trials; the review
+  branch's diff is the backstop. It over-flags any added mention, comments
+  included; accepted as the safe side and stated in the README.
+- **Residual, accepted (U19 security review N4):** with `NETWORK_ISOLATION=off`
+  there is no PID namespace, so a `setsid` workload child can outlive
+  `kill_group` and read the `<run>/quality` labels while a scoring runs. Why
+  accepted: the copy exists only during scoring, `off` is already documented as
+  weaker evidence, and every output change goes to review. Recorded here and in
+  the README rather than in D37's text.
+- **Deviation:** D38's "a builtin states its row count" is not met; the quality
+  rows carry no `n` (U11). Backlog below.
+
+**Noise rule**
+
+- **A crash on the base twin is an `EngineError`** (U20 review, D41 a). Why: the
+  twin runs the base code, so its crash is the host's or the program's, never
+  the hypothesis's, and must not become a rejection or a lesson.
+- **Calibration measures wall time only; a calibrated run's `cpu_time_s` gets at
+  least 2 %; throughput is not raised** (U20, U22). Why: CPU time at tick
+  granularity would inflate the floor; a user's own CPU-time objective relies on
+  the 2 % minimum.
+- **The raised floor lives only in `Baseline.objectives`; `state["objectives"]`
+  stays the user's** (U22). Why: the judges read the raised values from the
+  baseline, and a report or resume still shows what the user asked. A
+  block-count mismatch or a floor of 100 % or more stops the run at baseline
+  ("no gain can be proven on this host").
+- **A keep confirms only on a keep look; a review on a keep or review look**
+  (U23). Why: a would-be keep whose second look sees an output change must not
+  stand as a keep (D35), so D41 (b) is stricter than "keep or review".
+- **No note when `CONFIRM_WINNERS` is off** (Step 2 byte-identical); the
+  report's "Noise floor" line says "confirmation off" instead. D42's text says
+  "better", not "faster", because memory can be the primary objective.
+- **A confirmed keep's lesson carries D42's two-look mean** (U23 review N6, done
+  in U11). Why: the first look won the selection, so its gain is biased upward.
+
+**Discovery**
+
+- **Research failures:** `LLMRequestError` and `LLMConfigError` are soft notes
+  in the research node, which falls back to blind retrieval; `LLMConfigError` is
+  fatal in the generator. Only `d <= cost` (D7) sets `discovery_exhausted` (U9).
+  A matched success replaces the techniques with the matched cards only;
+  `ctx.techniques` is the blind fallback.
+- **The hypotheses node** (U8): no `needs_package` filter until 3b (`Hypothesis`
+  has no packages field); an `EngineError` when generation is due and the
+  objectives are empty ("define must run first"); the discovery delta keys
+  appear only when the generator was consulted, so Step 2's expected keys hold.
+  Noted for W1/W2: under D8's formula a keep lesson alone cannot lift idea 2
+  above idea 1.
+- **The OSS understand bound is 115,000 tokens** (U13): the prompt bound sat 70
+  tokens under 114,000.
+
+**Build and tests**
+
+- **graphwalk runs 170,000 nodes, not 120,000** (`3e04294`). Why: its CI
+  baseline was 0.296 s on `60cee15`, at the corpus guard's 0.30 s floor; the
+  `list.pop(0)` BFS grows about with the square of the size, so 170,000 roughly
+  doubles it, while the reference fix (a deque) stays fast.
+- **The `textindex` hard-guard flake is left as is.** It failed only locally,
+  under four concurrent Builders (load about 7 on 4 cores), where the min-of-3
+  gain fell to 0.268 against the 0.3 bar; at load 3 it is 0.47-0.49, and it has
+  never failed on CI. Why: the guard measures what it should; the host was
+  overloaded, and the Lead's sequential gate and CI are the authority for timing
+  guards.
+- **Mutation claims are valid only on a scratch copy run with
+  `-o pythonpath=<copy>/src` and a canary.** `pyproject.toml`'s
+  `pythonpath = ["src"]` beats `PYTHONPATH`, so a `PYTHONPATH=<copy>` run tested
+  the real `src`: the first U27 reviewer's "survived" list was invalid and was
+  redone. The U19, U23 and U24 reviewers used mutation plugins or copies, so
+  their claims stand. Why the canary: a mutation that must be killed proves the
+  run imports the mutated code.
+- **The noise suite came in with `master`** (merge `ec5ccbb`, PR #21), unchanged
+  since `923c8c8`, instead of the import commit the spec planned (section 3.6).
+  Why: PR #21 merged first, so a move commit would have duplicated it.
+- **U11a was pulled forward** (`b848717`, migration 006 in batch 2), so `review`
+  was storable before U21 could emit it.
 
 - **Retrieval stays off by default; the paper pipeline is deprioritised** behind
   the playbook as a lesson-and-ranking source, lessons and evolution (E5: blind
@@ -1135,22 +1447,26 @@ what each run measured and decided.
 ### Window 1: the credit that expires 2026-11-25 ($200; use by 2026-11-23)
 
 The owner's rule (2026-10-25): plan to have this credit used by 2026-11-23, two
-days before it expires. The table below is the 2026-10-23 plan; Step 3's own
-live plan (spec section 6: L0 noise re-check, L1 wired runs, L2 editor runs, L3
-grader, L4 recorded sweep, about 17-20 USD) replaces stage C, and the register
-below says which questions are already answered.
+days before it expires. The table below is the 2026-10-23 plan with stage C
+replaced by Step 3's own live plan (spec section 6, D24's spend rule); the
+register below says which questions are already answered.
 
-| Stage                          | When               | Live work                                                                                                                                                                                   | Est. per run    | Runs | Est. total |
-| ------------------------------ | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | ---- | ---------- |
-| A. Step 2 gate, U21 live suite | this week          | contract checks (tool version, `fallbacks` body, system notice, `count_tokens`, structured output, cache hits), live understand on varied repos, live E2E on the fixture, live attack repos | $6-9 (cap $12)  | 3-4  | ~$30       |
-| B. Cost calibration            | with A             | real usage replaces worst-case estimates; tighten `min_trial_budget_usd` and defaults                                                                                                       | $0              | -    | $0         |
-| C. Step 3 research             | early to mid Nov   | Haiku arXiv triage, Opus claim/precondition extraction (about 50 papers), live matcher tests                                                                                                | $5-10 per batch | 3-4  | ~$30       |
-| D. Weekly live regression      | weekly after merge | the Stage A suite, to catch API or model drift                                                                                                                                              | ~$8             | 4    | ~$32       |
-| E. Early dogfood pilot         | Nov 15-23          | the engine through the factory (no CLI yet) on 2-3 small OSS Python repos, real Claude trials                                                                                               | $10-15 (capped) | 4-6  | ~$60       |
-| Reserve                        | -                  | re-runs after fixes                                                                                                                                                                         | -               | -    | ~$40       |
+**Spent so far in Window 1: 0 USD by Step 3** (Wave 1 is built; no live run of
+it yet). The two Window 1 rows in the ledger (2026-10-23, 0.00 each) predate
+Step 3.
 
-Total about $190. Stage E is the flex: around Nov 15, check the ledger and size
-E to use what is left before the reset.
+| Stage                          | When               | Live work                                                                                                                                                                                   | Est. per run    | Runs  | Est. total  |
+| ------------------------------ | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | ----- | ----------- |
+| A. Step 2 gate, U21 live suite | done (Window 0)    | contract checks (tool version, `fallbacks` body, system notice, `count_tokens`, structured output, cache hits), live understand on varied repos, live E2E on the fixture, live attack repos | $6-9 (cap $12)  | 3-4   | ~$30        |
+| B. Cost calibration            | with A             | real usage replaces worst-case estimates; tighten `min_trial_budget_usd` and defaults                                                                                                       | $0              | -     | $0          |
+| C. Step 3 live plan (spec 6)   | after Wave 1 E2E   | L0 noise (no API call); L1a hard, L1b corpus, wired; L2a oss wired, Sonnet low editor, 2 reps (L2b if < 10/20); L3 grader; L4 sweep-record; L5a-c re-test (its rule: Decisions); W1 refresh | $0-4.9          | 10-12 | ~$16.5-19.5 |
+| D. Weekly live regression      | weekly after merge | the Stage A suite, to catch API or model drift                                                                                                                                              | ~$8             | 4     | ~$32        |
+| E. Early dogfood pilot         | Nov 15-23          | the engine through the factory (no CLI yet) on 2-3 small OSS Python repos, real Claude trials                                                                                               | $10-15 (capped) | 4-6   | ~$60        |
+| Reserve                        | -                  | re-runs after fixes                                                                                                                                                                         | -               | -     | ~$40        |
+
+Total about $180 (stage C was about $30 before Step 3's plan replaced it; about
+$22.5 for C if L2b runs). Stage E is the flex: around Nov 15, check the ledger
+and size E to use what is left before the reset.
 
 ### Window 2: 2026-11-24 to 2026-12-24 ($200)
 
@@ -1223,6 +1539,11 @@ repeat a row only to test a change to what it measured.
 | Self-healing (`heal`, `heal-hard`)  | Can the engine reproduce and fix reported bugs?         | Easy 8/8, hard 8/8, both false reports declined: feasible; 3c needs real bugs to discriminate                       | 2    | 0.30  | sonnet 5.5 85k/14k                                          |
 | Package policy (`acquire`)          | Does the automatic package policy work on PyPI and OSV? | Decoys rejected 10/10, 0 hallucinated names; needs a download source and compound-licence rule                      | 1    | 0.04  | sonnet 5.5 12k/1k                                           |
 | Build then improve (`build`)        | Can it build from English and then improve?             | 3/3 built, 2/3 pass spec-only tests, 1 improved by 37 %                                                             | 1    | 0.49  | opus 5.5 + sonnet 5.5 26k/24k/72k/32k                       |
+
+**graphwalk was measured at 120,000 nodes in Window 0.** Every Window 0 number
+for the benchmark corpus's `graphwalk` (corpus, editor model, escalation,
+sweeps, A/B) is at that size; since `3e04294` (2026-10-25) it runs 170,000
+nodes, so its baseline and gains in Step 3 runs are not comparable one to one.
 
 **Explored, so not worth repeating as is:** blind discovery on synthetic corpora
 (saturated), playbook retrieval on corpora and on 18 real libraries, model and
@@ -1400,8 +1721,8 @@ the judged-trials key question (closed by decision 35). Left:
 - [x] The macOS job blocking (`59888bd`), the close-out stage gate and second
       `/security-review` (2026-10-24, below), decisions still only in
       `.claude/handoff/` moved here and the folder deleted.
-- [ ] The Step 2 report and development-log row (with the A/B result), then the
-      user marks PR #12 ready.
+- [x] The Step 2 report and development-log row (with the A/B result); PR #12
+      merged on 2026-10-24 (`311212b`).
 
 Step 3 starts from the Window 0 findings (a fresh-context review of the branch
 on 2026-10-24 agreed):
@@ -1452,6 +1773,42 @@ on 2026-10-24 agreed):
 
 ### Known gaps carried to later steps
 
+**From Step 3 Wave 1 (backlog after Step 3):**
+
+- **B-R2, a second retried trial per run** (spec D13; Step 4 at the earliest).
+  Only the run bound lifts (`EDITOR_FIX_RETRIES_PER_RUN` to 2; the per-trial
+  bound stays 1). Order: the safeguards first (the run's second retry sends the
+  type and template id only, under a byte, so the per-run residual is about
+  18-19 bytes, not 36; a per-project rolling retry budget in Step 4's project
+  store), then the five attack tests at the 19-byte bound (capacity,
+  accumulation over 10 runs, template fuzzing per CPython 3.8-3.14, forgery, a
+  live `attack_crash` repository), then the owner's flip on a STATUS entry with
+  the recorded wire bodies, the decoders' output and the test run; the Lead
+  proposes and does not flip it. Also needed: U16's carry-forward of saved
+  attempts must become additive
+  (`attempts = trial.attempts + prior.attempts - 1`) or record each retry
+  request, since "never lower the saved count" is enough only at a cap of 1.
+- **Step 4: the durable retry-grant marker.** A resume path for failed runs must
+  record the retry grant before the retry request (the U16 residual, D12).
+- **Step 4: the scorer's interpreter.** `scorer[0]` resolves on the engine's
+  `PATH` (the engine's venv), so the project's own packages are not importable
+  by an external scorer; Step 4's venv and hardware detection should offer the
+  project interpreter (U19 security review N3).
+- **A builtin quality row states no row count** (D38 asks for it): record `n` on
+  the `quality:<name>` row and print it in the label (U11; U24's hooks drop it).
+- **Retry closure at scale (Step 5):** the closure spawns one
+  `git cat-file blob` per tracked `.py`; move to
+  `git archive --format=tar <base> -- '*.py'` (keeps `git.py`'s no-stdin rule;
+  U6 review N2) or `cat-file --batch` when large repositories are dogfooded.
+- **Already done in Wave 1:** a confirmed keep's lesson carries the two-look
+  gain (U11, from U23 review N6); `judges.is_point_measure` is public, so the
+  nodes no longer import the private `_POINT_MEASURES`.
+
+**Carried from Step 2:**
+
+- **Fixed in Step 3 (U1, `3ee4e76`):** non-UUID candidate ids failed late on
+  Postgres; migration 005 widened the lesson id columns. The entry is kept below
+  for its history.
 - **Non-UUID candidate ids fail late on Postgres** (found by the Step 3 design's
   research, 2026-10-24). `Hypothesis.id` accepts any safe id (`h1`), but the
   `lessons` table stores `hypothesis_id` and `technique_id` as UUIDs and
@@ -1499,7 +1856,7 @@ on 2026-10-24 agreed):
   `fix_gain`, so on a memory-slow machine a settle-only fix of `ledgerclose`
   would be credited as the full fix. Follow-up: rebuild the repository with two
   hot spots of the same kind (both C-level loops over Python objects), keeping
-  its multi category. Owner: Step 3's corpus rework.
+  its multi category. Owner: Step 3's corpus rework (Wave 2, V3).
 - **Multiprocessing `spawn`/`forkserver` fail in the Linux sandbox.** The
   seccomp filter that closes path-based AF_UNIX egress refuses every
   `socket(AF_UNIX)`, and those start methods need an AF_UNIX listener; `fork`
@@ -1559,8 +1916,90 @@ on 2026-10-24 agreed):
 | 1    | ~4.5 h                                                                       | 2 (GHA cache; README format)                                                                          | 6 (regroup, 5 review)              | 0       |
 | 2    | ~60 h (2026-10-21 18:18 to 2026-10-24 ~07:00, Window 0 experiments included) | 4 (`dbec415` Python 3.10 on the runner, `3b2ffee`, `92cefe7`, `a02e55e` the orderlookup timing floor) | 28 `fix` commits of 116            | 0       |
 | W0   | ~2 days (2026-10-23 to 2026-10-25), 52 live runs, $77.78                     | 0                                                                                                     | 4 (lint of fixtures, review fixes) | 0       |
+| 3 W1 | ~36 h (spec 2026-10-24 08:00 to U27 2026-10-25 20:11 UTC; build ~11.5 h)     | 2 (`6342eca` macOS interpreters, `60cee15` graphwalk at the floor)                                    | 2 (`f1080dc`, `3e04294`) of 27     | 0       |
+
+Step 3 Wave 1: the build ran from U5 (08:41) to U27 (20:11 UTC) on 2026-10-25,
+U1 on 2026-10-24. The CI-red pushes were the macOS job missing `python3.9` and
+`3.10` for U4's template tests (fixed in `f1080dc`) and graphwalk's CI baseline
+at the corpus floor (fixed in `3e04294`); review fixes landed inside each unit's
+own commit, so they are not counted as rework.
 
 ## Lessons (retro per step)
+
+### Step 3 Wave 1 (2026-10-24 to 2026-10-25)
+
+Each lesson ends with what it changes: in `CLAUDE.md` ("Builders in a shared
+worktree", 4.4.0) or in the builder rules every brief carries.
+
+- **Units ran 2-6x over their rows, and the tests were the overrun.** Changed
+  lines per commit (added + removed, tests and fixtures included; `src` in
+  brackets) against the spec's row:
+
+  | Unit | Row  | Actual      | Unit | Row | Actual      |
+  | ---- | ---- | ----------- | ---- | --- | ----------- |
+  | U1   | ~200 | 885 (64)    | U13  | 300 | 1,529 (0)   |
+  | U2   | 330  | 830 (337)   | U16  | 120 | 558 (93)    |
+  | U3   | 50   | 135 (0)     | U17  | 300 | 999 (401)   |
+  | U4   | 410  | 1,841 (616) | U18  | 330 | 926 (397)   |
+  | U5   | 60   | 208 (24)    | U19  | 380 | 1,168 (452) |
+  | U6   | 400  | 1,007 (445) | U20  | 330 | 593 (194)   |
+  | U7   | 250  | 684 (185)   | U21  | 250 | 712 (251)   |
+  | U8   | 380  | 722 (215)   | U22  | 250 | 544 (147)   |
+  | U9   | 200  | 500 (113)   | U23  | 380 | 796 (304)   |
+  | U10  | 280  | 856 (235)   | U24  | 260 | 858 (306)   |
+  | U11  | 360  | 2,051 (737) | U25  | 340 | 1,000 (382) |
+  | U11a | -    | 132 (0)     | U27  | -   | 741 (199)   |
+  | U12  | 300  | 953 (0)     |      |     |             |
+
+  The 25 units changed about 21,200 lines against about 6,500 planned (3.3x),
+  but their `src` came to about 6,100: the rows held roughly for source and the
+  tests ran 2-3x the source, as a first-principles test plan (every refusal,
+  bound and fallback pinned) implies. No Builder stopped at the cap as the rules
+  ask; U4 and U6 also skipped the red run of their first fix. **Changes:** a
+  unit row states source and test lines separately; the ~400-line cap applies to
+  source; a Builder stops and reports when its source passes 1.5x its row, and
+  every fix round shows its own red run.
+
+- **A shared `.coverage` file gave a false 66 %.** Concurrent Builders wrote one
+  coverage data file in the shared worktree, so a gate read another's partial
+  data. **Change:** each Builder sets a private `COVERAGE_FILE` (in the
+  scratchpad, named for the unit).
+- **Repo-wide `ruff format` touched other Builders' files.** U10 and U11 each
+  ran `ruff format .` once; the change was formatting only, but it rewrote work
+  in progress that was not theirs. **Change:** a Builder formats only its own
+  files and runs the repo-wide check with `--check`.
+- **A mutation script in the shared worktree fed mutated code to other runs.**
+  U27's reviewer mutated files in place while other Builders' suites ran.
+  **Change:** mutate scratch copies only; the Lead's clean-copy gate is the
+  guard.
+- **`PYTHONPATH` does not reach a mutated copy.** `pyproject.toml` sets pytest's
+  `pythonpath = ["src"]`, which beats `PYTHONPATH`, so a `PYTHONPATH=<copy>`
+  mutation run tested the real `src` and its "survived" list was invalid.
+  **Change:** run mutations with `-o pythonpath=<copy>/src` plus a canary
+  mutation that must be killed; a mutation claim without its canary is not
+  evidence.
+- **Missing-module reds prove nothing about a protection.** U19's red run failed
+  only on the missing module, and 10 of 12 security mutations survived its first
+  tests (security review S3). **Change:** every red run shows at least one
+  assertion failure, and a security unit shows a red for each protection (remove
+  it, the named test fails).
+- **A spec rule with no unit row is never built.** D37 named
+  `quality_data_reference` and section 4.6 its failure mode, but no section 7
+  row owned it; U25's security review found the gap, and the Lead assigned U27.
+  **Change:** before a build starts, the Lead maps every rule in the decisions,
+  the failure-mode table and the security table to the unit that builds it, and
+  the spec's Reviewer checks the map.
+- **Timing guards need about 2x margin, measured on CI.** graphwalk's baseline
+  ran 0.296 s on a CI runner against the guard's 0.30 s floor (`60cee15`), and
+  `textindex`, `tokenparse` and graphwalk all flaked near their limits.
+  **Change:** a corpus or timing guard's floor sits at about half what CI
+  measures (or its fixture is sized to give that), checked on the first CI run.
+- **Concurrent Builders make timing guards unreliable locally.** With four
+  Builders on 4 cores (load about 7), `textindex`'s gain fell to 0.268 against a
+  0.3 bar, and `tokenparse` and two Step 2 E2E tests failed once each; all
+  passed alone and on CI. **Change:** a Builder reports a timing failure under
+  load as such and runs its own tests; the Lead's sequential clean-copy gate and
+  CI decide.
 
 ### Window 0 (live experiments, 2026-10-23 to 2026-10-25)
 
@@ -1708,6 +2147,33 @@ on 2026-10-24 agreed):
   `xargs -n1 git update-ref -d`; run with nothing left to delete, GNU `xargs`
   still calls `git update-ref -d` once and it prints its usage. The README's
   `update-ref --stdin` form is a no-op then, and deletes in one transaction.
+
+From Step 3 Wave 1 (2026-10-25):
+
+- `optimization/anticheat.py`'s tripwire (U27) reaches git through the private
+  `GitWorkspace._git` for its `-U0` patch; add a public
+  `GitWorkspace.stream_patch` in `git.py` and use it.
+- The L0 noise suite's `AaRunner` (`tests/live/noise.py`) uses
+  `GitBaselineRunner`'s protected members; give `GitBaselineRunner.calibrate` a
+  way to return its rows, or a public A/A block method.
+- `_Freezing`, a private protocol, is declared twice (`orchestrator/factory.py`
+  and `orchestrator/nodes.py`); one shared declaration.
+- `git.py`'s `_OVERRIDE_KEYS` does not list `diff.<driver>.binary`. On git older
+  than 2.40 (no `--attr-source`) a committed `.gitattributes` `binary` or
+  `-diff` attribute reaches the tripwire's slow path; its fail-closed rule for
+  binary patches covers it today. Consider the key in a `git.py` cleanup.
+- `tests/live/discovery.py`'s `model_settings` is a one-line delegate to
+  `role_settings` kept for its callers (`test_discovery_guards.py`,
+  `discovery_escalation.py`, `discovery_ab.py`, `build_improve.py`,
+  `test_sweep_live.py`); migrate them and delete it.
+- `procrun.run_once` could take an optional `stdin_path`, so the quality scorer
+  (U19) can drop its stdin shim.
+- Source modules have grown past the ~400-line cap again (lines on 2026-10-25):
+  `nodes.py` 3,346, `trial_runner.py` 1,242, `models.py` 1,109, `git.py` 948,
+  `judges.py` 880, `anticheat.py` 853, `measure.py` 698, `editor.py` 583,
+  `editor_tools.py` 567, `factory.py` 566, `config.py` 546, `retry.py` 516,
+  `quality.py` 438. Split `nodes.py` first (the report, the baseline helpers and
+  the verdict helpers are separable) when Wave 2 or 3 touches it.
 
 ---
 

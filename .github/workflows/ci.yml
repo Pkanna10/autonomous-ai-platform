@@ -556,9 +556,9 @@ jobs:
   # Live Claude smoke test: costs money, so it runs only when started by hand
   # (Actions > CI > Run workflow), never on push or pull_request. The key is
   # passed to the test step only and never echoed (GitHub masks it as well).
-  # Environment 'live' must have required reviewers and hold ANTHROPIC_API_KEY
-  # as an environment secret (not a repository secret), so starting a run on
-  # any branch still needs a second person before the key reaches the runner.
+  # Environment 'live' holds ANTHROPIC_API_KEY as an environment secret (not a
+  # repository secret). The owner removed its required reviewers on 2026-10-24
+  # (STATUS.md), so each run's hard cost cap is what bounds the spend.
   live-smoke:
     name: Live Claude API suite (manual)
     runs-on: ubuntu-22.04
