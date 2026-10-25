@@ -1280,6 +1280,14 @@ builds it.
 
 ### 2026-10-24 (Window 0 final experiments: what they decide)
 
+- **Close-out gate (2026-10-25, clean pass)**: `pnpm stage-gate` on `af40ccf`
+  with Postgres passed every check: pnpm and pip audits, bandit, secret grep,
+  typecheck, lint, `format:check`, Vitest with coverage, ruff, mypy, and pytest
+  (5605 passed, 66 skipped, coverage 100 %). Two warnings only: `pnpm outdated`
+  and `uv outdated` list available updates, which Dependabot proposes weekly.
+  The CI audit of all 382 runs since 2026-10-22 found one open failure, this
+  branch's Lint Code job (fixed in `4dbfc29`); the rest were superseded by green
+  runs or are the intended Dependabot npm block until 2026-10-27.
 - **Retrieval stays off, now on real code too.** The OSS A/B is the re-test the
   E5 decision asked for: a set blind generation does not saturate (55 % win
   rate). Playbook-matched generation tied blind generation (11/20 each, b = 2, c
