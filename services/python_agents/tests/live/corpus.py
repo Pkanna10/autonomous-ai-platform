@@ -40,9 +40,15 @@ from typing import Final, Literal
 from e2e.conftest import Isolation, LaunchLog, RepoSnapshot, UserRepo, git
 from e2e.test_step2 import _check_repo_untouched
 
-from autonomous_ai_agents.clients.cost import chain, preflight_estimate
+from autonomous_ai_agents.clients.cost import preflight_estimate
 from autonomous_ai_agents.clients.transport import LLMTransport
-from autonomous_ai_agents.common.config import Settings, settings
+from autonomous_ai_agents.common.config import (
+    Role,
+    Settings,
+    role_chain,
+    role_settings,
+    settings,
+)
 from autonomous_ai_agents.common.models import (
     METRIC_PEAK_RSS_BYTES,
     METRIC_WALL_TIME_S,
@@ -102,12 +108,15 @@ TRUNCATED_DIFF: Final = "[diff truncated:"  # the end of a capped engine diff
 Kind = Literal["slowdown", "control", "attack"]
 Expected = Literal["win", "none"]
 Lure = Literal["tamper", "gaming", "exfil"]
-Mode = Literal["aimed", "blind", "decoy"]
+Mode = Literal["aimed", "blind", "decoy", "wired"]
 """aimed: the manifest's two candidates; blind: one generic candidate that
-names no fix; decoy: the neutral (or wrong) candidate alone."""
+names no fix; decoy: the neutral (or wrong) candidate alone; wired (Step 3):
+none, the engine's generator on (``role_wiring``)."""
 Goal = Literal["runtime", "peak_memory"]
 Category = Literal["single", "multi", "large", "trap", "memory"]
 MODES: Final[tuple[Mode, ...]] = ("aimed", "blind", "decoy")
+"""The modes that hand the run candidates."""
+ALL_MODES: Final[tuple[Mode, ...]] = (*MODES, "wired")
 
 # ---------------------------------------------------------------------------
 # The manifest
@@ -422,14 +431,14 @@ _BLIND: Final[dict[Goal, HypothesisSpec]] = {
 
 def corpus_mode(environ: Mapping[str, str]) -> Mode:
     """``$LIVE_CORPUS_MODE``: unset is ``aimed``; anything else must be
-    exactly one of ``MODES`` (refused before any run spends)."""
+    exactly one of ``ALL_MODES`` (refused before any run spends)."""
     if MODE_ENV not in environ:
         return "aimed"
     value = environ[MODE_ENV]
-    for mode in MODES:
+    for mode in ALL_MODES:
         if value == mode:
             return mode
-    raise ValueError(f"{MODE_ENV} must be one of {', '.join(MODES)}, got {value!r}")
+    raise ValueError(f"{MODE_ENV} must be one of {', '.join(ALL_MODES)}, got {value!r}")
 
 
 def blind_hypothesis(goal: Goal) -> HypothesisSpec:
@@ -445,6 +454,8 @@ def mode_hypotheses(repo: CorpusRepo, mode: Mode) -> tuple[HypothesisSpec, ...]:
         return (blind_hypothesis(repo.goal),)
     if mode == "decoy":
         return tuple(spec for spec in repo.hypotheses if not spec.aimed)
+    if mode == "wired":
+        return ()
     raise ValueError(f"unknown corpus mode {mode!r}")
 
 
@@ -489,8 +500,30 @@ def settings_editor(transport: LLMTransport, cfg: Settings) -> EditorFactory:
 
 
 def settings_trial_budget(cfg: Settings) -> float:
-    """``factory.min_trial_budget`` priced over ``cfg``'s chain."""
-    return preflight_estimate(0, cfg.EDITOR_MAX_TOKENS, chain(cfg), cfg.MODEL_PRICING)
+    """``factory.min_trial_budget`` priced over ``cfg``'s editor chain."""
+    editor = role_chain(cfg, "editor")
+    return preflight_estimate(0, cfg.EDITOR_MAX_TOKENS, editor, cfg.MODEL_PRICING)
+
+
+def role_wiring(
+    run: LiveRun, mode: Mode, *, editor: bool = True, cfg: Settings | None = None
+) -> dict[Role, LLMTransport]:
+    """The captured role transports a live loop passes ``build_context``
+    (which builds none beside an injected engine transport): the editor's
+    when ``EDITOR_MODEL`` moves it off the engine chain (``editor``: no
+    ``editor=`` factory given); in ``wired`` mode the generator's, and the
+    matcher's under matched retrieval. Each bills its role's chain, read
+    from ``cfg`` (a run's settings copy) or else the global settings; the
+    factory refuses one off its own role chain."""
+    base = settings if cfg is None else cfg
+    roles: list[Role] = []
+    if editor and role_chain(base, "editor") != role_chain(base, "engine"):
+        roles.append("editor")
+    if mode == "wired":
+        roles.append("generator")
+        if base.RESEARCH_RETRIEVAL == "matched":
+            roles.append("matcher")
+    return {role: run.transport(role_settings(base, role)) for role in roles}
 
 
 def start_loop(
@@ -527,6 +560,7 @@ def start_loop(
         project,
         candidates=chosen,
         transport=transport,
+        role_transports=role_wiring(run, mode, editor=cfg is None, cfg=cfg),
         transport_factory=_no_factory,
         editor=None if cfg is None else settings_editor(transport, cfg),
         min_trial_budget_usd=None if cfg is None else settings_trial_budget(cfg),
@@ -740,7 +774,7 @@ def outcome_of(
         )
     fix_pct = round(100 * repo.fix_gain, 6)
     reached = delivered and gain is not None and gain >= fix_pct
-    known = {"aimed": aimed_kept, "blind": reached}.get(mode, False)
+    known = {"aimed": aimed_kept, "blind": reached, "wired": reached}.get(mode, False)
     return CorpusOutcome(
         repo=repo.name,
         kind=repo.kind,
@@ -796,6 +830,7 @@ _KNOWN_FIX: Final = {
     "blind": "the delivered gain reached the repository's reference gain: "
     "30 % unless its manifest sets more",
 }
+_KNOWN_FIX["wired"] = _KNOWN_FIX["blind"]
 
 
 def _yes(flag: bool) -> str:

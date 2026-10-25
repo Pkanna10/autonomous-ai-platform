@@ -71,6 +71,7 @@ from .conftest import (
     restore_host_key,
 )
 from .corpus import (
+    ALL_MODES,
     ATTACK_CORPUS,
     ATTACK_RUN_CAP_USD,
     CORPUS,
@@ -781,7 +782,7 @@ def test_an_unknown_mode_refuses_before_any_run_spends(tmp_path: Path) -> None:
     recorder = mode_recorder("Benchmark corpus", {MODE_ENV: "blind"})
     assert recorder.mode == "blind" and recorder.outcomes == []
     assert CorpusRecorder("Attack corpus", {MODE_ENV: "blind"}).mode == "aimed"
-    for stem in ("test_corpus_live", "test_hard_corpus_live"):
+    for stem in ("test_corpus_live", "test_hard_corpus_live", "test_oss_live"):
         source = (TESTS_DIR / "live" / f"{stem}.py").read_text(encoding="utf-8")
         assert '@pytest.fixture(scope="module")' in source, stem
         assert "mode_recorder(" in source and "mode=recorder.mode" in source, stem
@@ -1110,11 +1111,11 @@ def test_every_suite_choice_names_existing_test_paths() -> None:
 def test_the_mode_input_is_a_strict_choice() -> None:
     inputs = _ci_block("      mode:", "      engine_model:")
     assert "type: choice" in inputs
-    assert f"options: [{', '.join(MODES)}]" in inputs
+    assert f"options: [{', '.join(ALL_MODES)}]" in inputs
     assert "default: aimed" in inputs
     step = _ci_block("      - name: Run live tests", "      - name: Upload live corpus")
     assert "INPUT_MODE: ${{ inputs.mode }}" in step
-    for mode in MODES:
+    for mode in ALL_MODES:
         assert f"            {mode}) ;;" in step, mode
     assert 'export LIVE_CORPUS_MODE="${INPUT_MODE}"' in step
 
@@ -1760,8 +1761,10 @@ def _dispatch(
     cap: str,
     mode: str = "aimed",
     oss_repo: str = "",
+    editor_model: str = "default",
 ) -> tuple[int, str, str]:
-    """The run step under bash -e with a fake ``uv`` that records its call."""
+    """The run step under bash -e with a fake ``uv`` that records its call
+    (and, in ``rule.txt``, the noise rule, the editor and the noise path)."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     called = tmp_path / "called.txt"
@@ -1770,7 +1773,11 @@ def _dispatch(
         "#!/bin/sh\n"
         f'printf "%s\\n" "$*" "$ENGINE_MODEL" "${{ENGINE_FALLBACKS:-on}}" '
         f'"$LIVE_SUITE_CAP_USD" "$LIVE_CORPUS_MODE" > "{called}"\n'
-        f'printf "%s" "${{LIVE_OSS_AB_REPOS-unset}}" > "{tmp_path / "repos.txt"}"\n',
+        f'printf "%s" "${{LIVE_OSS_AB_REPOS-unset}}" > "{tmp_path / "repos.txt"}"\n'
+        f'printf "%s " "${{PAIRED_TRIALS-unset}}" "${{CONFIRM_WINNERS-unset}}" '
+        f'"${{NOISE_CALIBRATION_BLOCKS-unset}}" "${{EDITOR_MODEL-unset}}" '
+        f'"${{EDITOR_EFFORT-unset}}" "${{LIVE_NOISE_PATH-unset}}" '
+        f'> "{tmp_path / "rule.txt"}"\n',
         encoding="utf-8",
     )
     fake.chmod(0o755)
@@ -1785,6 +1792,7 @@ def _dispatch(
         "INPUT_SUITE_CAP_USD": cap,
         "INPUT_MODE": mode,
         "INPUT_OSS_REPO": oss_repo,
+        "INPUT_EDITOR_MODEL": editor_model,
         "LIVE_RESULTS_PATH": str(tmp_path / "results.jsonl"),
     }
     proc = subprocess.run(

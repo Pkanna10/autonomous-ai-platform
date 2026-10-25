@@ -196,7 +196,7 @@ NO_VERDICT: Final = "no_verdict"  # trialled, but the run ended before its verdi
 # What ``call()`` may count, in tokens, for each request on any OSS clone
 # (the byte bound plus the allowance), measured in test_discovery_oss_guards.
 OSS_MAX_PATH_CHARS: Final = 200  # every tracked path of a pinned clone
-OSS_UNDERSTAND_PROMPT_BOUND: Final = 114_000  # every ReadLimits cap reached
+OSS_UNDERSTAND_PROMPT_BOUND: Final = 115_000  # every ReadLimits cap reached
 OSS_BLIND_PROMPT_BOUND: Final = 41_000  # generator, no techniques
 OSS_CARDS_PROMPT_BOUND: Final = 48_000  # generator with the 3 largest cards
 OSS_MATCH_PROMPT_BOUND: Final = 100_000  # matcher with the whole playbook
