@@ -1801,7 +1801,7 @@ def _wall_mean(result: EngineRunResult | None) -> float:
 
 @pytest.mark.slow
 def test_real_rounds_offline_measure_the_moved_clone_and_retest_the_original(
-    dry: Path,
+    dry: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``LiveSteps`` exactly as the live module runs it, every guard
     included, on the dedupe fixture served as a pinned upstream: round 1
@@ -1809,7 +1809,18 @@ def test_real_rounds_offline_measure_the_moved_clone_and_retest_the_original(
     commit, its generator is told round 1, and its idle idea delivers
     nothing; round 3 is told both and is empty too, so the stop rule ends
     it. Then the real ABAB re-test (sandboxed launches, the engine's
-    judge) measures the original pin against the final tip."""
+    judge) measures the original pin against the final tip.
+
+    The noise rule (D41) is off here, as in Step 2: this checks the
+    evolution mechanics, and A/A calibration of the millisecond dedupe
+    workload on a loaded host can set a floor above 100 %, which stops
+    the run by design (U13 picks each live suite's noise mode)."""
+    for key, value in {
+        "PAIRED_TRIALS": False,
+        "CONFIRM_WINNERS": False,
+        "NOISE_CALIBRATION_BLOCKS": 0,
+    }.items():
+        monkeypatch.setattr(settings, key, value)
     _require_sandbox()
     (dry / "wt-root").mkdir()
     repo, user = _rehearsal_user(dry)

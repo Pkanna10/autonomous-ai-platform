@@ -111,6 +111,21 @@ SLOW_LOOP = (
     "    return result\n"
 )
 Json = dict[str, object]
+STEP2_MODE = {
+    "PAIRED_TRIALS": False,
+    "CONFIRM_WINNERS": False,
+    "NOISE_CALIBRATION_BLOCKS": 0,
+}
+"""The Step 2 loop, which this file verifies: the noise rule (D41) off."""
+
+
+@pytest.fixture(autouse=True)
+def step2_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin ``STEP2_MODE`` in the settings and the environment (the killed
+    run's child process reads its settings from the environment)."""
+    for key, value in STEP2_MODE.items():
+        monkeypatch.setattr(settings, key, value)
+        monkeypatch.setenv(key, str(value).lower())
 
 
 # ---------------------------------------------------------------------------
