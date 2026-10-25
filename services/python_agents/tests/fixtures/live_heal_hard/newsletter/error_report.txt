@@ -1,0 +1,10 @@
+People who sign up with a plus address cannot subscribe. Ann tried
+ann+news@example.com (a perfectly valid address, Gmail and Fastmail both
+deliver those) and the sign-up form failed:
+
+Traceback (most recent call last):
+  File "/srv/site/forms/signup.py", line 33, in post
+    subscribers.subscribe(form["email"], form["name"])
+  File "/srv/site/vendor/newsletter/newsletter/subscribers.py", line 24, in subscribe
+    raise InvalidEmailError(f"not a valid email address: {address!r}")
+newsletter.subscribers.InvalidEmailError: not a valid email address: 'ann+news@example.com'

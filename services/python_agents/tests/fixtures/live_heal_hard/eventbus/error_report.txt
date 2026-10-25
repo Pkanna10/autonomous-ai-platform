@@ -1,0 +1,12 @@
+Since the refactoring of the shop's handlers into eventbus/shop.py, paying an
+order no longer sends the receipt: the payment callback crashes. Nothing about
+the order.paid handlers changed, they are still decorated with
+@on("order.paid").
+
+Traceback (most recent call last):
+  File "/srv/shop/payments/callback.py", line 57, in confirm
+    results = publish("order.paid", order)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/srv/shop/vendor/eventbus/eventbus/dispatch.py", line 18, in publish
+    raise UnknownEventError(f"no handler listens to {event!r}") from None
+eventbus.dispatch.UnknownEventError: no handler listens to 'order.paid'

@@ -1,0 +1,1075 @@
+[
+  {
+    "run_id": "39939504871",
+    "suite": "stage-a",
+    "branch": "claude/adoring-clarke-xpo1py",
+    "head_sha": "bb1981abc6c0a4597dfdc4792b6c798df38f2b0a",
+    "created_at": "2026-10-23T10:29:48Z",
+    "conclusion": "failure",
+    "total_usd": 0,
+    "per_model": [],
+    "note": "Suite inferred as stage-a: this older workflow ran 'pytest tests/live tests/execution/test_editor.py' and printed no 'suite <name>, mode' line. No cost table: 9 of 11 live tests failed at the API with HTTP 401 authentication_error (bad ANTHROPIC_API_KEY). The log says 'live API cost: 0.0000 USD over 10 test(s)'."
+  },
+  {
+    "run_id": "39958890445",
+    "suite": "stage-a",
+    "branch": "claude/adoring-clarke-xpo1py",
+    "head_sha": "33d65d7cfabeff763127a4385d5bbeb3f7e0bebd",
+    "created_at": "2026-10-23T13:09:28Z",
+    "conclusion": "failure",
+    "total_usd": 0,
+    "per_model": [],
+    "note": "Suite inferred as stage-a: this older workflow printed no 'suite <name>, mode' line. No cost table: 10 of 11 tests failed with HTTP 400 'API key is not scoped to a workspace' (needs the anthropic-workspace-id header). The log says 'live API cost: 0.0000 USD'."
+  },
+  {
+    "run_id": "39962457418",
+    "suite": "stage-a",
+    "branch": "claude/adoring-clarke-xpo1py",
+    "head_sha": "8f53ddba1aaaf124d25bde07281e8b0cb19e04f6",
+    "created_at": "2026-10-23T13:35:19Z",
+    "conclusion": "success",
+    "total_usd": 0.3062,
+    "per_model": [],
+    "note": "Suite inferred as stage-a: this older workflow printed no 'suite <name>, mode' line. Stage A suite (contract, attack, E2E dedupe, understand, editor): 11 passed. The log has no markdown cost table because it went only to the job summary. The only figure is 'live API cost: 0.3062 USD over 10 test(s)', so the per-model split is unknown."
+  },
+  {
+    "run_id": "39972311136",
+    "suite": "corpus",
+    "branch": "claude/adoring-clarke-xpo1py",
+    "head_sha": "aaa89cfa11f7375f79b161b1db1e1f56ebb09b13",
+    "created_at": "2026-10-23T14:45:09Z",
+    "conclusion": "success",
+    "total_usd": 1.499,
+    "per_model": [
+      {
+        "model": "claude-opus-5-5",
+        "input": 33583,
+        "output": 39692,
+        "cache_read": 309232,
+        "cache_write": 101789,
+        "usd": 1.4992
+      }
+    ],
+    "note": "Benchmark corpus whole loop, 15 repos, ENGINE_MODEL opus-5-5: 12 delivered, the 3 controls not delivered; 15 passed. Row sum 1.4992 vs table total 1.4990 (rounding)."
+  },
+  {
+    "run_id": "39978570791",
+    "suite": "corpus",
+    "branch": "claude/adoring-clarke-xpo1py",
+    "head_sha": "4b59d0c18b1c1cd4a13bfdfa4b937cd10e74ec76",
+    "created_at": "2026-10-23T15:28:32Z",
+    "conclusion": "success",
+    "total_usd": 0.6785,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 33587,
+        "output": 31859,
+        "cache_read": 292405,
+        "cache_write": 93688,
+        "usd": 0.6787
+      }
+    ],
+    "note": "Benchmark corpus whole loop, 15 repos, ENGINE_MODEL sonnet-5-5: 12 delivered, the 3 controls not delivered; 15 passed. Row sum 0.6787 vs table total 0.6785."
+  },
+  {
+    "run_id": "39981157005",
+    "suite": "attack",
+    "branch": "claude/adoring-clarke-xpo1py",
+    "head_sha": "69da74fc9ba2175dd1ea411b7c61a50a21a939ce",
+    "created_at": "2026-10-23T15:46:30Z",
+    "conclusion": "success",
+    "total_usd": 0.3084,
+    "per_model": [
+      {
+        "model": "claude-opus-5-5",
+        "input": 5000,
+        "output": 5276,
+        "cache_read": 36757,
+        "cache_write": 15528,
+        "usd": 0.2105
+      },
+      {
+        "model": "claude-opus-4-8, claude-opus-5-5",
+        "input": 4622,
+        "output": 2029,
+        "cache_read": 19428,
+        "cache_write": 5621,
+        "usd": 0.0979
+      }
+    ],
+    "note": "Attack corpus whole loop (tamper, gaming, exfil) on opus-5-5: no capture violations, all 3 delivered; 3 passed. The exfil row lists both opus-4-8 and opus-5-5 as its models."
+  },
+  {
+    "run_id": "39998493959",
+    "suite": "probes",
+    "branch": "claude/adoring-clarke-xpo1py",
+    "head_sha": "93b46e2fee0aef476097775ef3b8e5f6184dec52",
+    "created_at": "2026-10-23T17:51:21Z",
+    "conclusion": "success",
+    "total_usd": 0.0152,
+    "per_model": [
+      {
+        "model": "claude-haiku-5-5",
+        "input": 15772,
+        "output": 368,
+        "cache_read": 0,
+        "cache_write": 0,
+        "usd": 0.0118
+      },
+      {
+        "model": "claude-opus-4-8, claude-haiku-5-5",
+        "input": 46,
+        "output": 205,
+        "cache_read": 0,
+        "cache_write": 0,
+        "usd": 0.0035
+      }
+    ],
+    "note": "E1 API compatibility probes: batch fallbacks and citations with output format refused; strict tool, effort, PDF in tool result and web_search format accepted; 7 passed. Two zero-cost rows had no model ('-')."
+  },
+  {
+    "run_id": "40056352236",
+    "suite": "triage",
+    "branch": "claude/adoring-clarke-xpo1py",
+    "head_sha": "e89eaa3c5a61044f98c15b300c0a9c44ab8c001b",
+    "created_at": "2026-10-24T02:57:56Z",
+    "conclusion": "failure",
+    "total_usd": 0,
+    "per_model": [],
+    "note": "Failed before spend: the E2 arXiv fetch returned 0 abstracts (needs 50), so no API call was made and there is no cost table."
+  },
+  {
+    "run_id": "40056353986",
+    "suite": "papers",
+    "branch": "claude/adoring-clarke-xpo1py",
+    "head_sha": "e89eaa3c5a61044f98c15b300c0a9c44ab8c001b",
+    "created_at": "2026-10-24T02:57:58Z",
+    "conclusion": "success",
+    "total_usd": 1.3189,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5, claude-opus-5-5, claude-haiku-5-5",
+        "input": 171942,
+        "output": 8155,
+        "cache_read": 0,
+        "cache_write": 2248,
+        "usd": 0.5265
+      },
+      {
+        "model": "claude-sonnet-5-5, claude-haiku-5-5",
+        "input": 407367,
+        "output": 14441,
+        "cache_read": 11240,
+        "cache_write": 0,
+        "usd": 0.7925
+      }
+    ],
+    "note": "E7 paper claim and precondition extraction on 4 arXiv papers plus an injection test; 6 passed, 1 skipped. Each row names several models, so per_model is keyed by the model-set string as printed."
+  },
+  {
+    "run_id": "40056355592",
+    "suite": "prescreen",
+    "branch": "claude/adoring-clarke-xpo1py",
+    "head_sha": "e89eaa3c5a61044f98c15b300c0a9c44ab8c001b",
+    "created_at": "2026-10-24T02:57:59Z",
+    "conclusion": "success",
+    "total_usd": 0.0061,
+    "per_model": [
+      {
+        "model": "claude-haiku-5-5",
+        "input": 43227,
+        "output": 3539,
+        "cache_read": 0,
+        "cache_write": 0,
+        "usd": 0.006
+      }
+    ],
+    "note": "E8b sandbox pre-screen through code execution, fresh vs reused container, on haiku-5-5: ranking matched in both; 2 passed."
+  },
+  {
+    "run_id": "40056357297",
+    "suite": "escalation",
+    "branch": "claude/adoring-clarke-xpo1py",
+    "head_sha": "e89eaa3c5a61044f98c15b300c0a9c44ab8c001b",
+    "created_at": "2026-10-24T02:58:01Z",
+    "conclusion": "success",
+    "total_usd": 0.593,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 33596,
+        "output": 26874,
+        "cache_read": 296773,
+        "cache_write": 90976,
+        "usd": 0.5932
+      }
+    ],
+    "note": "Editor escalation: cheap sonnet-5-5 editor on the 15 corpus repos; 15 passed. No row billed opus."
+  },
+  {
+    "run_id": "40057574628",
+    "suite": "triage",
+    "branch": "claude/adoring-clarke-xpo1py",
+    "head_sha": "a02e55e03212249a0737ff1d325dc5a55add816b",
+    "created_at": "2026-10-24T03:15:41Z",
+    "conclusion": "failure",
+    "total_usd": 0,
+    "per_model": [],
+    "note": "Failed before spend: the arXiv fetch got HTTP 429 after 4 attempts and returned 0 abstracts, so no API call was made and there is no cost table."
+  },
+  {
+    "run_id": "40058317364",
+    "suite": "triage",
+    "branch": "claude/adoring-clarke-xpo1py",
+    "head_sha": "51a6beba3f6775fee23fdd1cf6096c4676e7c2a5",
+    "created_at": "2026-10-24T03:26:39Z",
+    "conclusion": "failure",
+    "total_usd": 0,
+    "per_model": [],
+    "note": "Failed before spend: arXiv returned HTTP 429 after 4 attempts on both the search and the id_sample fallback, 0 abstracts, so no API call was made and there is no cost table."
+  },
+  {
+    "run_id": "40058550106",
+    "suite": "sweep",
+    "branch": "claude/adoring-clarke-xpo1py",
+    "head_sha": "51a6beba3f6775fee23fdd1cf6096c4676e7c2a5",
+    "created_at": "2026-10-24T03:30:06Z",
+    "conclusion": "success",
+    "total_usd": 6.0111,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5, claude-opus-5-5, claude-opus-4-8",
+        "input": 310522,
+        "output": 175355,
+        "cache_read": 176688,
+        "cache_write": 249171,
+        "usd": 5.4002
+      },
+      {
+        "model": "claude-sonnet-5-5, claude-opus-5-5",
+        "input": 5970,
+        "output": 25596,
+        "cache_read": 24540,
+        "cache_write": 24476,
+        "usd": 0.5545
+      },
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 8,
+        "output": 26,
+        "cache_read": 21049,
+        "cache_write": 21543,
+        "usd": 0.0562
+      }
+    ],
+    "note": "E3 blind hypothesis sweep, 25 repos x 5 arms (opus-5-5 low/medium/high, sonnet-5-5 medium/high) plus a generator cache probe; 26 passed. Each row names several models, so per_model is keyed by the model-set string as printed."
+  },
+  {
+    "run_id": "40058552438",
+    "suite": "web",
+    "branch": "claude/adoring-clarke-xpo1py",
+    "head_sha": "51a6beba3f6775fee23fdd1cf6096c4676e7c2a5",
+    "created_at": "2026-10-24T03:30:08Z",
+    "conclusion": "success",
+    "total_usd": 1.1066,
+    "per_model": [
+      {
+        "model": "claude-haiku-5-5",
+        "input": 157666,
+        "output": 17950,
+        "cache_read": 0,
+        "cache_write": 0,
+        "usd": 0.1046
+      },
+      {
+        "model": "claude-opus-5-5",
+        "input": 161816,
+        "output": 13728,
+        "cache_read": 0,
+        "cache_write": 0,
+        "usd": 1.0019
+      }
+    ],
+    "note": "suite web (mode aimed), job 120766844156, 18 cost rows; cap 52 USD, spent 1.1066 (2.1%)."
+  },
+  {
+    "run_id": "40060175467",
+    "suite": "web",
+    "branch": "claude/adoring-clarke-xpo1py",
+    "head_sha": "73a67dbfdaa64f30622a43cdb0e0511e38beec6f",
+    "created_at": "2026-10-24T03:53:57Z",
+    "conclusion": "success",
+    "total_usd": 1.061,
+    "per_model": [
+      {
+        "model": "claude-haiku-5-5",
+        "input": 189887,
+        "output": 18847,
+        "cache_read": 0,
+        "cache_write": 0,
+        "usd": 0.0884
+      },
+      {
+        "model": "claude-opus-5-5",
+        "input": 158691,
+        "output": 13890,
+        "cache_read": 0,
+        "cache_write": 0,
+        "usd": 0.9727
+      }
+    ],
+    "note": "suite web (mode aimed), job 120771759686, 18 cost rows; cap 52 USD, spent 1.0610 (2.0%)."
+  },
+  {
+    "run_id": "40061538065",
+    "suite": "sweep-fable",
+    "branch": "claude/adoring-clarke-xpo1py",
+    "head_sha": "c61d47a1409bad3620056ed1070eb3a7a1d88691",
+    "created_at": "2026-10-24T04:14:10Z",
+    "conclusion": "success",
+    "total_usd": 2.6608,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5, claude-opus-4-8",
+        "input": 119381,
+        "output": 43622,
+        "cache_read": 34356,
+        "cache_write": 51087,
+        "usd": 1.0331
+      },
+      {
+        "model": "claude-fable-5-1, claude-opus-4-8",
+        "input": 28478,
+        "output": 22425,
+        "cache_read": 17996,
+        "cache_write": 26722,
+        "usd": 1.5101
+      },
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 5930,
+        "output": 3702,
+        "cache_read": 25956,
+        "cache_write": 26556,
+        "usd": 0.1178
+      }
+    ],
+    "note": "suite sweep-fable (mode aimed), job 120775913527, 38 cost rows; cap 33 USD, spent 2.6608 (8.1%). A model cell that lists two models (primary plus fallback claude-opus-4-8) is kept as one combined label because the table does not split it."
+  },
+  {
+    "run_id": "40061539774",
+    "suite": "hard",
+    "branch": "claude/adoring-clarke-xpo1py",
+    "head_sha": "c61d47a1409bad3620056ed1070eb3a7a1d88691",
+    "created_at": "2026-10-24T04:14:12Z",
+    "conclusion": "success",
+    "total_usd": 1.1351,
+    "per_model": [
+      {
+        "model": "claude-opus-5-5",
+        "input": 46902,
+        "output": 29218,
+        "cache_read": 163300,
+        "cache_write": 66100,
+        "usd": 1.1351
+      }
+    ],
+    "note": "suite hard (mode blind), job 120775919341, 10 cost rows; cap 50 USD, spent 1.1351 (2.3%)."
+  },
+  {
+    "run_id": "40061541473",
+    "suite": "oss",
+    "branch": "claude/adoring-clarke-xpo1py",
+    "head_sha": "c61d47a1409bad3620056ed1070eb3a7a1d88691",
+    "created_at": "2026-10-24T04:14:13Z",
+    "conclusion": "success",
+    "total_usd": 2.9623,
+    "per_model": [
+      {
+        "model": "claude-opus-5-5",
+        "input": 185361,
+        "output": 53077,
+        "cache_read": 727629,
+        "cache_write": 202755,
+        "usd": 2.9624
+      }
+    ],
+    "note": "suite oss (mode aimed), job 120775924935, 10 cost rows; cap 50 USD, spent 2.9623 (5.9%). The row sum of 2.9624 differs from the total row by rounding."
+  },
+  {
+    "run_id": "40063812021",
+    "suite": "ab",
+    "branch": "claude/adoring-clarke-xpo1py",
+    "head_sha": "7dd6c9c7009461dcc2f594daa0ea10e3902e8edb",
+    "created_at": "2026-10-24T04:48:45Z",
+    "conclusion": "success",
+    "total_usd": 10.2001,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 483663,
+        "output": 484364,
+        "cache_read": 4099110,
+        "cache_write": 1591699,
+        "usd": 10.2002
+      }
+    ],
+    "note": "suite ab (mode aimed), job 120782729462, 150 cost rows; cap 140 USD, spent 10.2001 (7.3%)."
+  },
+  {
+    "run_id": "40073866420",
+    "suite": "web",
+    "branch": "claude/step3-research",
+    "head_sha": "322f08fb9dd96754fe2673e1c4b79a03d36f4eaa",
+    "created_at": "2026-10-24T07:22:18Z",
+    "conclusion": "success",
+    "total_usd": 1.2502,
+    "per_model": [
+      {
+        "model": "claude-haiku-5-5",
+        "input": 168793,
+        "output": 18849,
+        "cache_read": 0,
+        "cache_write": 0,
+        "usd": 0.1063
+      },
+      {
+        "model": "claude-opus-5-5",
+        "input": 193735,
+        "output": 14447,
+        "cache_read": 0,
+        "cache_write": 0,
+        "usd": 1.1438
+      }
+    ],
+    "note": "suite web (mode aimed), job 120814783394 (run_attempt 2), 18 cost rows; cap 52 USD, spent 1.2502 (2.4%). The live job in attempt 1 failed after about 1 s without running any steps, so it spent nothing."
+  },
+  {
+    "run_id": "40073868204",
+    "suite": "stage-a",
+    "branch": "claude/step3-research",
+    "head_sha": "322f08fb9dd96754fe2673e1c4b79a03d36f4eaa",
+    "created_at": "2026-10-24T07:22:20Z",
+    "conclusion": "success",
+    "total_usd": 0.3115,
+    "per_model": [
+      {
+        "model": "claude-opus-5-5",
+        "input": 17534,
+        "output": 6418,
+        "cache_read": 41742,
+        "cache_write": 20938,
+        "usd": 0.3115
+      }
+    ],
+    "note": "suite stage-a (mode aimed), job 120814842713 (run_attempt 2), 10 cost rows; cap 9 USD, spent 0.3115 (3.5%). The live job in attempt 1 failed after about 2 s without running any steps, so it spent nothing."
+  },
+  {
+    "run_id": "40079672945",
+    "suite": "sweep-record",
+    "branch": "claude/window0-experiments",
+    "head_sha": "873acb8827a04e0125ada9745cd51e8e7d27de2b",
+    "created_at": "2026-10-24T08:51:34Z",
+    "conclusion": "success",
+    "total_usd": 1.121,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5, claude-opus-4-8",
+        "input": 118596,
+        "output": 41514,
+        "cache_read": 34356,
+        "cache_write": 50644,
+        "usd": 1.0011
+      },
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 5956,
+        "output": 3913,
+        "cache_read": 25950,
+        "cache_write": 26514,
+        "usd": 0.1198
+      }
+    ],
+    "note": "suite sweep-record (mode aimed), job 120830407117, 26 cost rows; cap 17 USD, spent 1.1210 (6.6%). A model cell that lists two models (primary plus fallback claude-opus-4-8) is kept as one combined label."
+  },
+  {
+    "run_id": "40079674498",
+    "suite": "acquire",
+    "branch": "claude/window0-experiments",
+    "head_sha": "873acb8827a04e0125ada9745cd51e8e7d27de2b",
+    "created_at": "2026-10-24T08:51:36Z",
+    "conclusion": "success",
+    "total_usd": 0.038,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 11731,
+        "output": 1451,
+        "cache_read": 0,
+        "cache_write": 0,
+        "usd": 0.038
+      }
+    ],
+    "note": "suite acquire (mode aimed), job 120830412673, 2 cost rows (one free Part A row with model '-' and zero tokens, left out); cap 1 USD, spent 0.0380 (3.8%)."
+  },
+  {
+    "run_id": "40079676141",
+    "suite": "attack",
+    "branch": "claude/window0-experiments",
+    "head_sha": "873acb8827a04e0125ada9745cd51e8e7d27de2b",
+    "created_at": "2026-10-24T08:51:37Z",
+    "conclusion": "success",
+    "total_usd": 0.142,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 7312,
+        "output": 6348,
+        "cache_read": 63686,
+        "cache_write": 23013,
+        "usd": 0.142
+      }
+    ],
+    "note": "suite attack (mode aimed, ENGINE_MODEL sonnet), job 120830421470, 3 cost rows; cap 12 USD, spent 0.1420 (1.2%)."
+  },
+  {
+    "run_id": "40082852536",
+    "suite": "noise",
+    "branch": "claude/window0-experiments",
+    "head_sha": "521c8c740d60e13e22d4925f24e89fdb29a103a8",
+    "created_at": "2026-10-24T09:40:01Z",
+    "conclusion": "success",
+    "total_usd": 0,
+    "per_model": [],
+    "note": "suite noise (mode aimed), job 120839786565: the cost table has 14 rows, all with model '-' and 0 tokens, so no model calls; cap 1 USD, spent 0.0000."
+  },
+  {
+    "run_id": "40082854689",
+    "suite": "heal",
+    "branch": "claude/window0-experiments",
+    "head_sha": "521c8c740d60e13e22d4925f24e89fdb29a103a8",
+    "created_at": "2026-10-24T09:40:03Z",
+    "conclusion": "success",
+    "total_usd": 0.1286,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 36142,
+        "output": 5635,
+        "cache_read": 0,
+        "cache_write": 0,
+        "usd": 0.1285
+      }
+    ],
+    "note": "suite heal (mode aimed), job 120839793789, 8 cost rows; cap 6 USD, spent 0.1286 (2.1%)."
+  },
+  {
+    "run_id": "40082857033",
+    "suite": "evolve",
+    "branch": "claude/window0-experiments",
+    "head_sha": "521c8c740d60e13e22d4925f24e89fdb29a103a8",
+    "created_at": "2026-10-24T09:40:05Z",
+    "conclusion": "success",
+    "total_usd": 5.2222,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 679495,
+        "output": 175666,
+        "cache_read": 2087473,
+        "cache_write": 759129,
+        "usd": 5.2222
+      }
+    ],
+    "note": "suite evolve (mode aimed), job 120839798926, 36 cost rows; cap 104 USD, spent 5.2222 (5.0%)."
+  },
+  {
+    "run_id": "40082858972",
+    "suite": "oss-ab",
+    "branch": "claude/window0-experiments",
+    "head_sha": "521c8c740d60e13e22d4925f24e89fdb29a103a8",
+    "created_at": "2026-10-24T09:40:06Z",
+    "conclusion": "success",
+    "total_usd": 0.9276,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 57220,
+        "output": 35154,
+        "cache_read": 340803,
+        "cache_write": 171026,
+        "usd": 0.9276
+      }
+    ],
+    "note": "suite oss-ab (mode aimed), job 120839803478, 6 cost rows; cap 103 USD, spent 0.9276 (0.9%). The 15 runs total 28.267 USD; the same data is saved at /tmp/claude-0/-home-user-autonomous-ai-platform/b0055c45-9f04-5276-ac4b-c180c851948e/scratchpad/register/part2.json."
+  },
+  {
+    "run_id": "40083998469",
+    "suite": "oss-ab",
+    "branch": "claude/window0-experiments",
+    "head_sha": "521c8c740d60e13e22d4925f24e89fdb29a103a8",
+    "created_at": "2026-10-24T09:57:36Z",
+    "conclusion": "success",
+    "total_usd": 1.5708,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 96090,
+        "output": 51988,
+        "cache_read": 1005286,
+        "cache_write": 303283,
+        "usd": 1.5708
+      }
+    ],
+    "note": "job 120843108995; mode aimed, sonnet, cap 103 USD; oss discovery A/B on more_itertools (arms -1/-2, 6 rows); 2 passed, 28 skipped in 1061.72s"
+  },
+  {
+    "run_id": "40084000235",
+    "suite": "oss-ab",
+    "branch": "claude/window0-experiments",
+    "head_sha": "521c8c740d60e13e22d4925f24e89fdb29a103a8",
+    "created_at": "2026-10-24T09:57:38Z",
+    "conclusion": "success",
+    "total_usd": 1.2753,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 122151,
+        "output": 41976,
+        "cache_read": 511683,
+        "cache_write": 224020,
+        "usd": 1.2752
+      }
+    ],
+    "note": "job 120843114629; mode aimed, sonnet, cap 103 USD; oss-ab on sortedcontainers (6 rows); 2 passed, 28 skipped in 701.52s; row sum 1.2752 vs total 1.2753 (rounding)"
+  },
+  {
+    "run_id": "40084002451",
+    "suite": "oss-ab",
+    "branch": "claude/window0-experiments",
+    "head_sha": "521c8c740d60e13e22d4925f24e89fdb29a103a8",
+    "created_at": "2026-10-24T09:57:40Z",
+    "conclusion": "success",
+    "total_usd": 1.4199,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 118869,
+        "output": 47611,
+        "cache_read": 478405,
+        "cache_write": 263272,
+        "usd": 1.4199
+      }
+    ],
+    "note": "job 120843120248; mode aimed, sonnet, cap 103 USD; oss-ab on mistune (6 rows); 2 passed, 28 skipped in 673.42s"
+  },
+  {
+    "run_id": "40084004057",
+    "suite": "oss-ab",
+    "branch": "claude/window0-experiments",
+    "head_sha": "521c8c740d60e13e22d4925f24e89fdb29a103a8",
+    "created_at": "2026-10-24T09:57:42Z",
+    "conclusion": "success",
+    "total_usd": 1.4064,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 92854,
+        "output": 53937,
+        "cache_read": 522970,
+        "cache_write": 251598,
+        "usd": 1.4064
+      }
+    ],
+    "note": "job 120843125113; mode aimed, sonnet, cap 103 USD; oss-ab on sqlparse (6 rows); 2 passed, 28 skipped in 724.87s"
+  },
+  {
+    "run_id": "40084006301",
+    "suite": "oss-ab",
+    "branch": "claude/window0-experiments",
+    "head_sha": "521c8c740d60e13e22d4925f24e89fdb29a103a8",
+    "created_at": "2026-10-24T09:57:44Z",
+    "conclusion": "success",
+    "total_usd": 1.4001,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 122227,
+        "output": 44852,
+        "cache_read": 692306,
+        "cache_write": 255155,
+        "usd": 1.4
+      }
+    ],
+    "note": "job 120843131575; mode aimed, sonnet, cap 103 USD; oss-ab on pyparsing (6 rows); 2 passed, 28 skipped in 589.73s; row sum 1.4000 vs total 1.4001 (rounding)"
+  },
+  {
+    "run_id": "40084007988",
+    "suite": "oss-ab",
+    "branch": "claude/window0-experiments",
+    "head_sha": "521c8c740d60e13e22d4925f24e89fdb29a103a8",
+    "created_at": "2026-10-24T09:57:45Z",
+    "conclusion": "success",
+    "total_usd": 1.7011,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 145667,
+        "output": 53950,
+        "cache_read": 788064,
+        "cache_write": 316602,
+        "usd": 1.7012
+      }
+    ],
+    "note": "job 120843136247; mode aimed, sonnet, cap 103 USD; oss-ab on markdown (6 rows); 2 passed, 28 skipped in 617.13s; row sum 1.7012 vs total 1.7011 (rounding)"
+  },
+  {
+    "run_id": "40084009672",
+    "suite": "oss-ab",
+    "branch": "claude/window0-experiments",
+    "head_sha": "521c8c740d60e13e22d4925f24e89fdb29a103a8",
+    "created_at": "2026-10-24T09:57:47Z",
+    "conclusion": "success",
+    "total_usd": 1.0143,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 90208,
+        "output": 34877,
+        "cache_read": 349864,
+        "cache_write": 180059,
+        "usd": 1.0143
+      }
+    ],
+    "note": "job 120843140779; mode aimed, sonnet, cap 103 USD; oss-ab on idna (6 rows); 2 passed, 28 skipped in 532.04s"
+  },
+  {
+    "run_id": "40084011364",
+    "suite": "oss-ab",
+    "branch": "claude/window0-experiments",
+    "head_sha": "521c8c740d60e13e22d4925f24e89fdb29a103a8",
+    "created_at": "2026-10-24T09:57:48Z",
+    "conclusion": "success",
+    "total_usd": 1.6777,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 157696,
+        "output": 59258,
+        "cache_read": 563238,
+        "cache_write": 285377,
+        "usd": 1.6778
+      }
+    ],
+    "note": "job 120843145739; mode aimed, sonnet, cap 103 USD; oss-ab on tomli (6 rows); 2 passed, 28 skipped in 584.96s; row sum 1.6778 vs total 1.6777 (rounding)"
+  },
+  {
+    "run_id": "40084013689",
+    "suite": "oss-ab",
+    "branch": "claude/window0-experiments",
+    "head_sha": "521c8c740d60e13e22d4925f24e89fdb29a103a8",
+    "created_at": "2026-10-24T09:57:50Z",
+    "conclusion": "success",
+    "total_usd": 1.4322,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 110044,
+        "output": 50800,
+        "cache_read": 782572,
+        "cache_write": 250332,
+        "usd": 1.4323
+      }
+    ],
+    "note": "job 120843151056; mode aimed, sonnet, cap 103 USD; oss-ab on pycparser (6 rows); 2 passed, 28 skipped in 577.71s; row sum 1.4323 vs total 1.4322 (rounding)"
+  },
+  {
+    "run_id": "40096374015",
+    "suite": "oss",
+    "branch": "claude/window0-experiments",
+    "head_sha": "0cdfb7ac2111d6ed1f996781d37b5ab94191bd70",
+    "created_at": "2026-10-24T13:01:32Z",
+    "conclusion": "success",
+    "total_usd": 1.498,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 185352,
+        "output": 46280,
+        "cache_read": 725148,
+        "cache_write": 236786,
+        "usd": 1.498
+      }
+    ],
+    "note": "job 120879381617; mode aimed, ENGINE_MODEL claude-sonnet-5-5, cap 50 USD; 10 rows over idna, markdown, mistune, more_itertools, pycparser, pyparsing, sortedcontainers, sqlparse, tabulate, tomli; 10 passed in 714.78s"
+  },
+  {
+    "run_id": "40096375921",
+    "suite": "oss",
+    "branch": "claude/window0-experiments",
+    "head_sha": "0cdfb7ac2111d6ed1f996781d37b5ab94191bd70",
+    "created_at": "2026-10-24T13:01:33Z",
+    "conclusion": "success",
+    "total_usd": 1.3858,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 185316,
+        "output": 46752,
+        "cache_read": 504069,
+        "cache_write": 198888,
+        "usd": 1.3858
+      }
+    ],
+    "note": "job 120879386277; mode aimed, ENGINE_MODEL claude-sonnet-5-5, cap 50 USD; same 10 OSS repos (repeat of the sonnet arm); 10 passed in 960.86s"
+  },
+  {
+    "run_id": "40096377905",
+    "suite": "oss",
+    "branch": "claude/window0-experiments",
+    "head_sha": "0cdfb7ac2111d6ed1f996781d37b5ab94191bd70",
+    "created_at": "2026-10-24T13:01:35Z",
+    "conclusion": "success",
+    "total_usd": 3.0461,
+    "per_model": [
+      {
+        "model": "claude-opus-5-5",
+        "input": 185350,
+        "output": 54559,
+        "cache_read": 799184,
+        "cache_write": 210745,
+        "usd": 3.0462
+      }
+    ],
+    "note": "job 120879392240; mode aimed, ENGINE_MODEL claude-opus-5-5 (opus arm), cap 50 USD; same 10 OSS repos; 10 passed in 961.67s; row sum 3.0462 vs suite total 3.0461 (rounding)"
+  },
+  {
+    "run_id": "40096859300",
+    "suite": "evolve-more",
+    "branch": "claude/window0-experiments",
+    "head_sha": "9e06febf2ca93717a3d6e2bdaef3e4458034d62a",
+    "created_at": "2026-10-24T13:08:33Z",
+    "conclusion": "success",
+    "total_usd": 8.7258,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 994081,
+        "output": 311829,
+        "cache_read": 3520749,
+        "cache_write": 1306906,
+        "usd": 8.7259
+      }
+    ],
+    "note": "job 120880828795; mode aimed, ENGINE_MODEL claude-sonnet-5-5, cap 138 USD; 58 rows of test_evolution_on_real_code over idna, mistune, pycparser, sqlparse; 4 passed in 4346.07s; row sum 8.7259 vs total 8.7258 (rounding)"
+  },
+  {
+    "run_id": "40102293433",
+    "suite": "heal-hard",
+    "branch": "claude/window0-experiments",
+    "head_sha": "25ee6190e3c3dbbb8eb5da5ee97a31b8b5a12c7d",
+    "created_at": "2026-10-24T14:23:41Z",
+    "conclusion": "success",
+    "total_usd": 0.1739,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 49023,
+        "output": 7588,
+        "cache_read": 0,
+        "cache_write": 0,
+        "usd": 0.1739
+      }
+    ],
+    "note": "job 120896751822; mode aimed, ENGINE_MODEL claude-sonnet-5-5, cap 8 USD; 10 test_heal_repo rows (accessctl, depot, durations, evalsplit, eventbus, gradebook, newsletter, pagekit, stockbook, vatcheck); 10 passed in 102.10s"
+  },
+  {
+    "run_id": "40102295372",
+    "suite": "build",
+    "branch": "claude/window0-experiments",
+    "head_sha": "25ee6190e3c3dbbb8eb5da5ee97a31b8b5a12c7d",
+    "created_at": "2026-10-24T14:23:42Z",
+    "conclusion": "success",
+    "total_usd": 0.4872,
+    "per_model": [
+      {
+        "model": "claude-opus-5-5, claude-sonnet-5-5",
+        "input": 12500,
+        "output": 14625,
+        "cache_read": 0,
+        "cache_write": 0,
+        "usd": 0.2788
+      },
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 13927,
+        "output": 9351,
+        "cache_read": 72281,
+        "cache_write": 31943,
+        "usd": 0.2084
+      }
+    ],
+    "note": "job 120896758774; mode aimed, ENGINE_MODEL claude-sonnet-5-5, cap 27 USD; 7 test_build_then_improve rows (salesreport, wordpairs, gridroute); 3 passed in 251.34s; the 3 BUILD rows name 'claude-opus-5-5, claude-sonnet-5-5' together and the table does not split them, so they are kept as one combined-model entry"
+  },
+  {
+    "run_id": "40102644897",
+    "suite": "oss-ab",
+    "branch": "claude/window0-experiments",
+    "head_sha": "4aeb3f00e3a1215eef09e5ac764ec55d2b68d85b",
+    "created_at": "2026-10-24T14:28:26Z",
+    "conclusion": "success",
+    "total_usd": 1.2284,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 115302,
+        "output": 38904,
+        "cache_read": 360784,
+        "cache_write": 229052,
+        "usd": 1.2283
+      }
+    ],
+    "note": "job 120897777451; mode aimed, sonnet, cap 103 USD; oss-ab on packaging (6 rows); 2 passed, 52 skipped in 607.43s; row sum 1.2283 vs total 1.2284 (rounding)"
+  },
+  {
+    "run_id": "40102647328",
+    "suite": "oss-ab",
+    "branch": "claude/window0-experiments",
+    "head_sha": "4aeb3f00e3a1215eef09e5ac764ec55d2b68d85b",
+    "created_at": "2026-10-24T14:28:28Z",
+    "conclusion": "success",
+    "total_usd": 1.1821,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 77131,
+        "output": 42274,
+        "cache_read": 414561,
+        "cache_write": 225475,
+        "usd": 1.1822
+      }
+    ],
+    "note": "job 120897785373; mode aimed, sonnet, cap 103 USD; oss-ab on toml (6 rows); 2 passed, 52 skipped in 589.97s; row sum 1.1822 vs total 1.1821 (rounding)"
+  },
+  {
+    "run_id": "40102649307",
+    "suite": "oss-ab",
+    "branch": "claude/window0-experiments",
+    "head_sha": "4aeb3f00e3a1215eef09e5ac764ec55d2b68d85b",
+    "created_at": "2026-10-24T14:28:29Z",
+    "conclusion": "success",
+    "total_usd": 0.9446,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 106069,
+        "output": 29858,
+        "cache_read": 518886,
+        "cache_write": 152786,
+        "usd": 0.9446
+      }
+    ],
+    "note": "job 120897791357; mode aimed, sonnet, cap 103 USD; oss-ab on attrs (6 rows); 2 passed, 52 skipped in 390.70s"
+  },
+  {
+    "run_id": "40102651365",
+    "suite": "oss-ab",
+    "branch": "claude/window0-experiments",
+    "head_sha": "4aeb3f00e3a1215eef09e5ac764ec55d2b68d85b",
+    "created_at": "2026-10-24T14:28:31Z",
+    "conclusion": "success",
+    "total_usd": 1.1627,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 170746,
+        "output": 34218,
+        "cache_read": 293920,
+        "cache_write": 179853,
+        "usd": 1.1627
+      }
+    ],
+    "note": "job 120897795821; mode aimed, sonnet, cap 103 USD; oss-ab on networkx (6 rows); 2 passed, 52 skipped in 933.53s"
+  },
+  {
+    "run_id": "40102653575",
+    "suite": "oss-ab",
+    "branch": "claude/window0-experiments",
+    "head_sha": "4aeb3f00e3a1215eef09e5ac764ec55d2b68d85b",
+    "created_at": "2026-10-24T14:28:33Z",
+    "conclusion": "success",
+    "total_usd": 1.0724,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 87677,
+        "output": 38746,
+        "cache_read": 483750,
+        "cache_write": 184465,
+        "usd": 1.0723
+      }
+    ],
+    "note": "job 120897803092; mode aimed, sonnet, cap 103 USD; oss-ab on pyflakes (6 rows); 2 passed, 52 skipped in 590.07s; row sum 1.0723 vs total 1.0724 (rounding)"
+  },
+  {
+    "run_id": "40102655838",
+    "suite": "oss-ab",
+    "branch": "claude/window0-experiments",
+    "head_sha": "4aeb3f00e3a1215eef09e5ac764ec55d2b68d85b",
+    "created_at": "2026-10-24T14:28:35Z",
+    "conclusion": "success",
+    "total_usd": 1.3168,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 99665,
+        "output": 44987,
+        "cache_read": 522894,
+        "cache_write": 246130,
+        "usd": 1.3167
+      }
+    ],
+    "note": "job 120897810087; mode aimed, sonnet, cap 103 USD; oss-ab on parso (6 rows); 2 passed, 52 skipped in 878.43s; row sum 1.3167 vs total 1.3168 (rounding)"
+  },
+  {
+    "run_id": "40102657915",
+    "suite": "oss-ab",
+    "branch": "claude/window0-experiments",
+    "head_sha": "4aeb3f00e3a1215eef09e5ac764ec55d2b68d85b",
+    "created_at": "2026-10-24T14:28:36Z",
+    "conclusion": "success",
+    "total_usd": 2.0227,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 117085,
+        "output": 69296,
+        "cache_read": 1170392,
+        "cache_write": 391417,
+        "usd": 2.0228
+      }
+    ],
+    "note": "job 120897816311; mode aimed, sonnet, cap 103 USD; oss-ab on pyasn1 (6 rows); 2 passed, 52 skipped in 897.31s; row sum 2.0228 vs total 2.0227 (rounding)"
+  },
+  {
+    "run_id": "40102659864",
+    "suite": "oss-ab",
+    "branch": "claude/window0-experiments",
+    "head_sha": "4aeb3f00e3a1215eef09e5ac764ec55d2b68d85b",
+    "created_at": "2026-10-24T14:28:38Z",
+    "conclusion": "success",
+    "total_usd": 1.6294,
+    "per_model": [
+      {
+        "model": "claude-sonnet-5-5",
+        "input": 92725,
+        "output": 63312,
+        "cache_read": 532184,
+        "cache_write": 303032,
+        "usd": 1.6293
+      }
+    ],
+    "note": "job 120897821199; mode aimed, sonnet, cap 103 USD; oss-ab on simplejson (6 rows); 2 passed, 52 skipped in 709.17s; row sum 1.6293 vs total 1.6294 (rounding). Saved file: /tmp/claude-0/-home-user-autonomous-ai-platform/b0055c45-9f04-5276-ac4b-c180c851948e/scratchpad/register/part3.json; total over all 23 runs 38.7737 USD (oss-ab first 9: 12.8978, last 8: 10.5591)"
+  }
+]

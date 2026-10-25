@@ -1,0 +1,1 @@
+"""Pagination for search results."""

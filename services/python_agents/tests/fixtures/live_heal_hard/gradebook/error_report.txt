@@ -1,0 +1,6 @@
+Since we added the 50-point final exam to the exams category, the letter-grade
+export crashes for some students with ValueError: score out of range: 156.0.
+It only happens for good students (the student it fails on, Ben, has 9/10 and
+10/10 in homework and 9/10, 8/10 and 42/50 in the exams), so I am fairly sure
+letter_for() mishandles high scores: it should simply give an A to anything
+above 100 instead of crashing.

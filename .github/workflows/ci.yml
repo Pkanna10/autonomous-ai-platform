@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: 'Live suite: stage-a, corpus, attack, hard, oss, or an experiment (probes, triage, papers, web, prescreen, sweep, sweep-fable, ab, escalation) (one at a time: together they need more than the 150 USD ceiling)'
+        description: 'Live suite: stage-a, corpus, attack, hard, oss, or an experiment (probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, heal-hard, build) (one at a time: together they need more than the 150 USD ceiling)'
         type: choice
         options:
           [
@@ -30,8 +30,17 @@ on:
             prescreen,
             sweep,
             sweep-fable,
+            sweep-record,
             ab,
             escalation,
+            acquire,
+            noise,
+            heal,
+            oss-ab,
+            evolve,
+            evolve-more,
+            heal-hard,
+            build,
           ]
         default: stage-a
       mode:
@@ -45,9 +54,13 @@ on:
         options: [claude-opus-5-5, claude-sonnet-5-5]
         default: claude-opus-5-5
       suite_cap_usd:
-        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75, hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 77, sweep-fable 33, ab 140, escalation 43'
+        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75, hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 77, sweep-fable 33, sweep-record 17, ab 140, escalation 43, acquire 1, noise 0, heal 6, oss-ab 103, evolve 104, evolve-more 138, heal-hard 8, build 27'
         type: string
         default: '12'
+      oss_repo:
+        description: 'oss-ab only, and required there: the one OSS library this dispatch runs (LIVE_OSS_AB_REPOS), from the first or second set, e.g. tabulate or toml'
+        type: string
+        default: ''
 
 # Least privilege by default; a job that needs more says so itself.
 permissions:
@@ -525,7 +538,7 @@ jobs:
     # runs 2, attack 3, corpus 15, hard 10 and oss at most 10 (larger
     # repositories). A killed job loses the cost table, so each suite gets room
     # for its loops (the hosted maximum is 360).
-    timeout-minutes: ${{ inputs.suite == 'sweep' && 240 || inputs.suite == 'sweep-fable' && 180 || inputs.suite == 'ab' && 360 || inputs.suite == 'escalation' && 90 || inputs.suite == 'triage' && 90 || inputs.suite == 'papers' && 60 || inputs.suite == 'web' && 90 || inputs.suite == 'corpus' && 180 || inputs.suite == 'oss' && 180 || inputs.suite == 'hard' && 120 || inputs.suite == 'attack' && 45 || 30 }}
+    timeout-minutes: ${{ inputs.suite == 'sweep' && 240 || inputs.suite == 'sweep-fable' && 180 || inputs.suite == 'sweep-record' && 150 || inputs.suite == 'ab' && 360 || inputs.suite == 'noise' && 90 || inputs.suite == 'oss-ab' && 120 || inputs.suite == 'evolve' && 300 || inputs.suite == 'evolve-more' && 300 || inputs.suite == 'build' && 120 || inputs.suite == 'escalation' && 90 || inputs.suite == 'triage' && 90 || inputs.suite == 'papers' && 60 || inputs.suite == 'web' && 90 || inputs.suite == 'corpus' && 180 || inputs.suite == 'oss' && 180 || inputs.suite == 'hard' && 120 || inputs.suite == 'attack' && 45 || 30 }}
     defaults:
       run:
         working-directory: ./services/python_agents
@@ -620,19 +633,26 @@ jobs:
           INPUT_MODE: ${{ inputs.mode }}
           INPUT_ENGINE_MODEL: ${{ inputs.engine_model }}
           INPUT_SUITE_CAP_USD: ${{ inputs.suite_cap_usd }}
+          INPUT_OSS_REPO: ${{ inputs.oss_repo }}
           LIVE_RESULTS_PATH: ${{ runner.temp }}/live-results.jsonl
         run: |
           if [ -z "${ANTHROPIC_API_KEY}" ]; then
             echo "::error::the ANTHROPIC_API_KEY secret of environment 'live' is not set"
             exit 1
           fi
-          corpus=(--ignore=tests/live/test_corpus_live.py --ignore=tests/live/test_attack_corpus_live.py --ignore=tests/live/test_hard_corpus_live.py --ignore=tests/live/test_oss_live.py --ignore=tests/live/experiments --ignore=tests/live/test_sweep_live.py --ignore=tests/live/test_ab_live.py --ignore=tests/live/test_escalation_live.py)
+          corpus=(--ignore=tests/live/test_corpus_live.py --ignore=tests/live/test_attack_corpus_live.py --ignore=tests/live/test_hard_corpus_live.py --ignore=tests/live/test_oss_live.py --ignore=tests/live/experiments --ignore=tests/live/test_sweep_live.py --ignore=tests/live/test_ab_live.py --ignore=tests/live/test_escalation_live.py --ignore=tests/live/test_noise_live.py --ignore=tests/live/test_oss_ab_live.py --ignore=tests/live/test_evolution_live.py --ignore=tests/live/test_build_live.py)
           # need: the sum of the caps the suite's live tests ask the ledger for
           # (Stage A 8.55, corpus 15 x 5, attack 3 x 4, hard 10 x 5, oss at most
           # 10 x 5; the Window 0 experiments under tests/live/experiments: probes
           # 0.46, triage 1.25, papers 3 x 1.25 + 2 x 2.75 + 0.75, web 18 caps 51.08, prescreen 2 x 1.11; the discovery
           # suites: sweep 76.15, sweep-fable 33 (one Sonnet arm and Fable 5.1 on
-          # the 12 slowdowns), ab 2 reps 140, escalation 42.9),
+          # the 12 slowdowns), sweep-record 16.2 (one Sonnet arm, recorded), ab 2
+          # reps 140, escalation 42.9; acquire 0.60 (Part B; Part A is free);
+          # noise 0 (no request); heal 8 x 0.75; oss-ab one library 102.6 (2
+          # reps x (1.30 generation + 2 arms x 10 trials x 2.50)); evolve 3
+          # repos x 10 rounds x (0.45 + 3); evolve-more the same on 4 more
+          # libraries, 138; heal-hard 10 x 0.75; build 3 specs x (0.80 build +
+          # 0.60 generation + 7.50 loop)),
           # rounded up; a smaller cap would refuse, and fail, the later
           # tests of the suite.
           case "${INPUT_SUITE}" in
@@ -648,10 +668,19 @@ jobs:
             prescreen) paths=(tests/live/experiments/test_prescreen_live.py); need=3 ;;
             sweep) paths=(tests/live/test_sweep_live.py); need=77 ;;
             sweep-fable) paths=(tests/live/test_sweep_live.py); need=33 ;;
+            sweep-record) paths=(tests/live/test_sweep_live.py); need=17 ;;
             ab) paths=(tests/live/test_ab_live.py); need=140 ;;
             escalation) paths=(tests/live/test_escalation_live.py); need=43 ;;
+            acquire) paths=(tests/live/experiments/test_acquire_live.py); need=1 ;;
+            noise) paths=(tests/live/test_noise_live.py); need=0 ;;
+            heal) paths=(tests/live/experiments/test_heal_live.py); need=6 ;;
+            oss-ab) paths=(tests/live/test_oss_ab_live.py); need=103 ;;
+            evolve) paths=(tests/live/test_evolution_live.py); need=104 ;;
+            evolve-more) paths=(tests/live/test_evolution_live.py); need=138 ;;
+            heal-hard) paths=(tests/live/experiments/test_heal_live.py); need=8 ;;
+            build) paths=(tests/live/test_build_live.py); need=27 ;;
             *)
-              echo "::error::unknown suite input (stage-a, corpus, attack, hard, oss, probes, triage, papers, web, prescreen, sweep, sweep-fable, ab or escalation)"
+              echo "::error::unknown suite input (stage-a, corpus, attack, hard, oss, probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, heal-hard or build)"
               exit 1
               ;;
           esac
@@ -659,6 +688,30 @@ jobs:
             # Fable 5.1 (the research plan's optional arm) beside the one arm
             # whose per-repository run phase 1 shares
             export LIVE_SWEEP_ARMS=sonnet-5-5-medium LIVE_SWEEP_FABLE=1
+          fi
+          if [ "${INPUT_SUITE}" = sweep-record ]; then
+            # one Sonnet arm, recording hypotheses, grader verdicts and the
+            # redacted replies for hand labels and offline replay
+            export LIVE_SWEEP_ARMS=sonnet-5-5-medium LIVE_SWEEP_RECORD=1
+          fi
+          if [ "${INPUT_SUITE}" = heal-hard ]; then
+            # the harder bugs: wrong-place causes, misleading reports, controls
+            export LIVE_HEAL_SET=hard
+          fi
+          if [ "${INPUT_SUITE}" = evolve-more ]; then
+            # the four other libraries the OSS A/B improved
+            export LIVE_EVOLVE_REPOS=idna,mistune,sqlparse,pycparser
+          fi
+          if [ "${INPUT_SUITE}" = oss-ab ]; then
+            # one library a dispatch: the whole plan needs more than the ceiling
+            if ! [[ "${INPUT_OSS_REPO}" =~ ^[a-z][a-z0-9_]{0,39}$ ]]; then
+              echo "::error::oss-ab needs oss_repo, one OSS library name (lower case)"
+              exit 1
+            fi
+            export LIVE_OSS_AB_REPOS="${INPUT_OSS_REPO}"
+          elif [ -n "${INPUT_OSS_REPO}" ]; then
+            echo "::error::oss_repo is only for the oss-ab suite"
+            exit 1
           fi
           case "${INPUT_MODE}" in
             aimed) ;;

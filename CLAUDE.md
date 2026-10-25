@@ -319,15 +319,22 @@ Shape Up for bets, Kanban for flow, XP for engineering, DORA for measurement.
 Phase approvals are unchanged: the user approves each step's spec and build plan
 before building starts. Within that, the Lead may, without asking:
 
-- mark a step's PR ready and merge it into `master` with a merge commit, once
-  its stage gate is recorded as a clean pass in `STATUS.md`, every required CI
-  check on the PR head is green, and the PR is mergeable with no conflicts;
+- mark a PR ready and merge it into `master` with a merge commit (a step's PR or
+  any other Lead PR, such as experiment branches; extended by the user on
+  2026-10-24), once its stage gate is recorded as a clean pass in `STATUS.md`,
+  every required CI check on the PR head is green, and the PR is mergeable with
+  no conflicts;
 - create a branch per step (`claude/<step-name>`) from the latest `master`, or
   stacked on the open step's head when the previous step is not merged yet, and
   open a draft PR for it;
 - retarget a stacked PR after its base merges, and merge `master` into a step
   branch to keep it current;
 - delete a branch after its PR is merged.
+
+Branches merge into `master` in order, each through its own PR; conflicts are
+resolved on the branch (by merging `master` into it and re-running the tests),
+never on `master`. The `live` environment accepts dispatches from `claude/*`
+branches.
 
 Still ask the user first: any direct push to `master`; any force-push; merging
 with a red, skipped-required or pending check; deleting an unmerged branch;

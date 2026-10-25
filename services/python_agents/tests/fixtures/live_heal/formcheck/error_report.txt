@@ -1,0 +1,17 @@
+Our sign-up endpoint starts rejecting good sign-ups after a bad one has come
+in. Restarting the service makes it work again until the next bad form.
+
+Reproduced in a fresh interpreter: the first form has no name and is rightly
+refused; the second form is fine but is refused with the first one's error.
+
+>>> from formcheck.rules import validate
+>>> validate({"name": "", "email": "kim@example.org", "age": "31"})
+Traceback (most recent call last):
+  ...
+formcheck.rules.ValidationError: name is required
+>>> validate({"name": "Lee", "email": "lee@example.org", "age": "27"})
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+  File "/srv/signup/venv/lib/python3.11/site-packages/formcheck/rules.py", line 24, in validate
+    raise ValidationError("; ".join(problems))
+formcheck.rules.ValidationError: name is required

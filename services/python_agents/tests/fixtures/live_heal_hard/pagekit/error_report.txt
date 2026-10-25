@@ -1,0 +1,4 @@
+The pager under our search results offers one page too many for some
+searches. A search with 30 hits (10 per page) shows links to pages 1 to 4, and
+opening page 4 fails with PageError: page 4 of 4 is empty. With 25 or 31 hits
+it is fine. Pages past the end should not be offered at all.
