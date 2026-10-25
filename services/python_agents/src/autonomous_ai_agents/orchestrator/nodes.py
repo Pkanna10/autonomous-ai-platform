@@ -45,7 +45,7 @@ import math
 import re
 import statistics
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
@@ -75,10 +75,12 @@ from autonomous_ai_agents.common.errors import (
 from autonomous_ai_agents.common.errors import DeliveryError as DeliveryError
 from autonomous_ai_agents.common.errors import EngineError as EngineError
 from autonomous_ai_agents.common.models import (
+    METRIC_CPU_TIME_S,
     METRIC_PEAK_RSS_BYTES,
     METRIC_TESTS_PASSED,
     METRIC_WALL_TIME_S,
     NOISE_CALIBRATION_BLOCKS_MAX,
+    NOISE_FLOOR_MIN,
     ApprovalDecision,
     ApprovalItem,
     ApprovalRequest,
@@ -871,7 +873,11 @@ def _generate(
         message = f"no request: discovery may spend up to {d:.6f} USD"
         event = _note(state, phase, unaffordable, message, level=warn)
         return _Generated([], {"discovery_exhausted": True}, [event])
-    if not state["objectives"]:
+    # The baseline's objectives carry the calibrated floor (D41 c); a direct
+    # call before any baseline (node tests) reads define's.
+    measured = state["baseline"]
+    objectives = state["objectives"] if measured is None else measured.objectives
+    if not objectives:
         raise EngineError("hypotheses needs an objective: define must run first")
     budget = Budget(cap_usd=d, spent_usd=cost, tokens=state["tokens_used"])
     try:
@@ -879,7 +885,7 @@ def _generate(
             project=state["project"],
             understanding=state["understanding"],
             hotspots=state["hotspots"],
-            objective=state["objectives"][0],
+            objective=objectives[0],
             techniques=state["techniques"],
             lessons=lessons,
             avoid_titles=[h.title for h in (*state["hypotheses"], *state["parked"])],
@@ -1130,6 +1136,85 @@ def _noisy_host(state: EngineState, noise: _Noise, name: str) -> EngineEvent:
             "cv": noise.cv,
             "smallest_provable_gain": noise.floor,
         },
+    )
+
+
+def _calibrated(
+    ctx: NodeContext, state: EngineState, objectives: tuple[Objective, ...]
+) -> tuple[tuple[Objective, ...], NoiseCalibration | None, float | None]:
+    """The objectives under the per-project noise floor, its calibration and
+    the floor applied (D41 c); with no blocks asked, Step 2's objectives and
+    ``None`` twice.
+
+    The raise is keyed by metric name, and only when calibrated: a
+    ``wall_time_s`` objective gets ``max(user value, NOISE_FLOOR_MIN,
+    calibrated floor)``; a ``cpu_time_s`` objective, not calibrated (U20),
+    gets ``max(user value, NOISE_FLOOR_MIN)``; every other metric (memory
+    among them) keeps the user's value. Fewer blocks than asked, or a floor no
+    gain can clear (100 % or more), stops the run with ``EngineError``.
+    """
+    if ctx.calibrator is None or not ctx.calibration_blocks:
+        return objectives, None, None
+    blocks = ctx.calibration_blocks
+    calibration = ctx.calibrator.calibrate(
+        state["workloads"],
+        run_id=state["run_id"],
+        commit=_require_commit(state, "the noise calibration"),
+        blocks=blocks,
+    )
+    if calibration.blocks != blocks:
+        raise EngineError(
+            f"the noise calibration ran {calibration.blocks} block(s), "
+            f"{blocks} were asked"
+        )
+    floor = max(NOISE_FLOOR_MIN, calibration.floor)
+    if not floor < 1:
+        raise EngineError(
+            f"the noise floor is {floor:.0%}: no gain can be proven on this host"
+        )
+    least = {METRIC_WALL_TIME_S: floor, METRIC_CPU_TIME_S: NOISE_FLOOR_MIN}
+    raised = tuple(
+        o.model_copy(
+            update={"min_relative_gain": max(o.min_relative_gain, least[o.metric])}
+        )
+        if o.metric in least
+        else o
+        for o in objectives
+    )
+    return raised, calibration, floor
+
+
+def _judged(
+    trial: Trial,
+    baseline: Baseline,
+    judges: Sequence[Judge],
+    completeness: Callable[[Sequence[Measurement]], tuple[Violation, ...]],
+) -> Trial:
+    """``trial`` judged against its paired A rows when it has them (D41 a: the
+    run baseline's objectives, guardrails and calibration over the twin's
+    rows), else against the run baseline (Step 2).
+
+    A measured trial's incomplete A rows become ``paired base:`` violations in
+    ``trial.violations`` (each once, so judging again adds none), as combine's
+    interleaved baseline does; the trial's
+    own rows are checked by the verdicts node, so both sides are complete
+    before a verdict. A failed trial is rejected for failing (rule 2).
+    """
+    reference = baseline
+    found: tuple[Violation, ...] = ()
+    if trial.base_measurements:
+        reference = baseline.model_copy(
+            update={"measurements": trial.base_measurements}
+        )
+        if trial.status is not TrialStatus.failed:
+            labelled = (
+                v.model_copy(update={"message": f"paired base: {v.message}"})
+                for v in completeness(trial.base_measurements)
+            )
+            found = tuple(v for v in labelled if v not in trial.violations)
+    results = tuple(judge.evaluate(reference, trial) for judge in judges)
+    return trial.model_copy(
+        update={"judge_results": results, "violations": (*trial.violations, *found)}
     )
 
 
@@ -1702,26 +1787,27 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
         _require_trustworthy_baseline(
             measurements, objectives, state["guardrails"], names
         )
+        objectives, calibration, floor = _calibrated(ctx, state, objectives)
         measured = Baseline(
             commit=state["base_commit"],
             measurements=measurements,
             objectives=objectives,
             guardrails=tuple(state["guardrails"]),
+            calibration=calibration,
         )
         summary = _summarize_primary(measurements, objectives)
         noise = _noise(measurements, objectives)
-        event = _announce(
-            state,
-            RunPhase.baseline,
-            summary.line(),
-            data={
-                "metric": summary.metric,
-                "n": summary.n,
-                "mean": summary.mean,
-                "workloads": summary.workloads,
-                "smallest_provable_gain": _worst_floor(noise),
-            },
-        )
+        data: ScalarDict = {
+            "metric": summary.metric,
+            "n": summary.n,
+            "mean": summary.mean,
+            "workloads": summary.workloads,
+            "smallest_provable_gain": _worst_floor(noise),
+        }
+        if calibration is not None:
+            data["noise_floor"] = floor
+            data["calibration_blocks"] = calibration.blocks
+        event = _announce(state, RunPhase.baseline, summary.line(), data=data)
         notes = [
             _noisy_host(state, n, names.get(n.workload_id, n.workload_id))
             for n in noise
@@ -1951,30 +2037,27 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
 
     def judges(state: EngineState) -> NodeDelta:
         measured = _require_baseline(state)
-        active = _active_judges(ctx.judges, measured.objectives)
+        rules = _combine_rules(ctx, measured)
         judged = [
-            trial.model_copy(
-                update={
-                    "judge_results": tuple(
-                        judge.evaluate(measured, trial) for judge in active
-                    )
-                }
-            )
+            _judged(trial, measured, rules.judges, rules.completeness)
             for trial in state["round_trials"]
         ]
         for trial in judged:
             ctx.repository.save_trial(state["run_id"], trial)
-        event = _announce(
-            state,
-            RunPhase.judges,
+        paired = sum(1 for trial in judged if trial.base_measurements)
+        message = (
             f"round {state['round']}: judged {len(judged)} trial(s) "
-            f"with {len(active)} judge(s)",
-            data={
-                "round": state["round"],
-                "trials": len(judged),
-                "judges": ", ".join(judge.name for judge in active),
-            },
+            f"with {len(rules.judges)} judge(s)"
         )
+        data: ScalarDict = {
+            "round": state["round"],
+            "trials": len(judged),
+            "judges": ", ".join(judge.name for judge in rules.judges),
+        }
+        if paired:
+            message += f", {paired} against a paired base"
+            data["paired"] = paired
+        event = _announce(state, RunPhase.judges, message, data=data)
         return {
             "phase": RunPhase.judges,
             "trials": judged,
