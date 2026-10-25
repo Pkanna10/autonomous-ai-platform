@@ -19,8 +19,10 @@ from autonomous_ai_agents.common.models import (
     METRIC_THROUGHPUT_PER_S,
     METRIC_WALL_TIME_S,
     Baseline,
+    BuiltinMeasure,
     ChangeClass,
     Direction,
+    DropUnit,
     Guardrail,
     GuardrailKind,
     Hypothesis,
@@ -30,6 +32,7 @@ from autonomous_ai_agents.common.models import (
     Measurement,
     Objective,
     ObjectiveKind,
+    QualityCheck,
     RunStats,
     Trial,
     TrialStatus,
@@ -48,6 +51,7 @@ from autonomous_ai_agents.optimization.judges import (
     SpeedJudge,
     default_judges,
     derive_verdict,
+    drop_text,
     primary_metric,
 )
 
@@ -1475,3 +1479,460 @@ def test_secondary_objective_inside_noise_is_neutral_but_primary_is_not() -> Non
     assert keep.outcome is VerdictOutcome.keep
     assert blocked.outcome is VerdictOutcome.inconclusive
     assert guarded.outcome is VerdictOutcome.inconclusive
+
+
+# ---------------------------------------------------------------------------
+# Step 3 (U21): rule 6 with review, the output mode, absolute drops (D35, D38)
+# ---------------------------------------------------------------------------
+
+QUALITY = "quality:accuracy"
+LABELS = "data/labels.txt"
+
+
+def _accuracy_check(max_drop: float = 0.005) -> QualityCheck:
+    return QualityCheck(
+        name="accuracy",
+        measure=BuiltinMeasure.accuracy,
+        labels=LABELS,
+        frozen_paths=(LABELS,),
+        max_drop=max_drop,
+    )
+
+
+def _quality_bound(
+    max_drop: float,
+    direction: Direction = Direction.maximize,
+    *,
+    metric: str = QUALITY,
+    unit: DropUnit = DropUnit.absolute,
+) -> Guardrail:
+    return Guardrail(
+        project_id=PROJECT,
+        kind=GuardrailKind.metric_bound,
+        metric=metric,
+        max_drop=max_drop,
+        direction=direction,
+        drop_unit=unit,
+        description=f"{metric} may drop at most {max_drop}",
+    )
+
+
+def _score(workload_id: str, value: float, metric: str = QUALITY) -> Measurement:
+    return _measurement(workload_id, metric, value, 0.0, unit="score")
+
+
+def _out(workload_id: str, payload: str, mean: float = 1.80) -> Measurement:
+    return _measurement(
+        workload_id, METRIC_WALL_TIME_S, mean, digest=fingerprint(payload)
+    )
+
+
+def _changed(flag: bool | None) -> JudgeResult:
+    return JudgeResult(
+        judge="equivalence", outcome=PASSED, reason="compared", output_changed=flag
+    )
+
+
+@pytest.mark.parametrize(
+    ("change_class", "changed", "review_behaviour", "expected"),
+    [
+        (ChangeClass.efficiency, None, False, VerdictOutcome.keep),
+        (ChangeClass.efficiency, False, True, VerdictOutcome.keep),
+        (ChangeClass.efficiency, True, False, VerdictOutcome.review),
+        (ChangeClass.efficiency, True, True, VerdictOutcome.review),
+        (ChangeClass.behaviour, None, False, VerdictOutcome.needs_approval),
+        (ChangeClass.behaviour, False, False, VerdictOutcome.needs_approval),
+        (ChangeClass.behaviour, None, True, VerdictOutcome.review),
+        (ChangeClass.behaviour, False, True, VerdictOutcome.review),
+        (ChangeClass.behaviour, True, False, VerdictOutcome.review),
+        (ChangeClass.behaviour, True, True, VerdictOutcome.review),
+        (ChangeClass.novel, None, True, VerdictOutcome.needs_approval),
+        (ChangeClass.novel, True, False, VerdictOutcome.needs_approval),
+        (ChangeClass.novel, True, True, VerdictOutcome.needs_approval),
+    ],
+)
+def test_rule_6_review_for_every_class_with_and_without_output_changed(
+    change_class: ChangeClass,
+    changed: bool | None,
+    review_behaviour: bool,
+    expected: VerdictOutcome,
+) -> None:
+    """
+    GIVEN all judges passed, each change class, output_changed unset, False or
+          True, and the review rule for behaviour off (Step 2) or on (Step 3)
+    WHEN the verdict is derived
+    THEN a changed output is never kept: review, or needs_approval if novel;
+         unchanged, efficiency keeps, behaviour is review only when asked
+    """
+    verdict = derive_verdict(
+        _trial(),
+        _hypothesis(change_class),
+        (SPEED_OK, _changed(changed), TESTS_OK),
+        (),
+        review_behaviour=review_behaviour,
+    )
+
+    assert verdict.outcome is expected
+    assert verdict.summary.startswith(f"{expected.value}:")
+    assert str(change_class) in verdict.summary
+    if changed:
+        assert "output changed" in verdict.summary
+
+
+@pytest.mark.parametrize(
+    ("results", "violations", "expected"),
+    [
+        ((SPEED_OK, _changed(True)), (_violation(),), VerdictOutcome.reject),
+        (
+            (SPEED_OK, _changed(True), _result("guardrail", FAILED)),
+            (),
+            VerdictOutcome.reject,
+        ),
+        (
+            (SPEED_OK, _changed(True), _result("guardrail", INCONCLUSIVE)),
+            (),
+            VerdictOutcome.inconclusive,
+        ),
+        ((_changed(True), TESTS_OK), (), VerdictOutcome.inconclusive),
+    ],
+    ids=["violation", "quality breached", "quality missing", "nothing faster"],
+)
+def test_rules_1_to_5_still_gate_a_changed_output(
+    results: Sequence[JudgeResult],
+    violations: Sequence[Violation],
+    expected: VerdictOutcome,
+) -> None:
+    """
+    GIVEN a changed output and a violation, a failed or inconclusive guardrail,
+          or no objective judge passed
+    WHEN the verdict is derived
+    THEN rules 1-5 decide before rule 6 can send it to review
+    """
+    verdict = _verdict(results, violations)
+
+    assert verdict.outcome is expected
+
+
+def test_equivalence_judge_runs_under_a_quality_guardrail_alone() -> None:
+    """
+    GIVEN a quality:<name> bound and no output_equivalence; or only a bound on
+          another metric
+    WHEN the equivalence judge evaluates
+    THEN it runs in quality mode for the former, is not_applicable for the latter
+    """
+    trial = _trial(_out(W1, "b"))
+    quality = _baseline(_out(W1, "a"), guardrails=(_quality_bound(0.0),))
+    other = _baseline(_out(W1, "a"), guardrails=(_bound(VAL_LOSS, 0.01),))
+
+    assert EquivalenceJudge().evaluate(quality, trial).outcome is PASSED
+    unrelated = EquivalenceJudge().evaluate(other, trial)
+    assert unrelated.outcome is NOT_APPLICABLE
+    assert unrelated.output_changed is None
+
+
+def test_quality_mode_passes_a_changed_output_and_flags_it() -> None:
+    """
+    GIVEN quality mode, w1's output changed and w2's did not
+    WHEN the equivalence judge evaluates, and again with no change at all
+    THEN both pass; output_changed is True naming w1, then False
+    """
+    baseline = _baseline(
+        _out(W1, "a"), _out(W2, "b"), guardrails=(_quality_bound(0.0),)
+    )
+    judge = EquivalenceJudge()
+
+    changed = judge.evaluate(baseline, _trial(_out(W1, "new"), _out(W2, "b")))
+    same = judge.evaluate(baseline, _trial(_out(W1, "a"), _out(W2, "b")))
+
+    assert changed.outcome is PASSED
+    assert changed.output_changed is True
+    assert f"output changed on 1 of 2 workload(s): {W1}" in changed.reason
+    assert changed.details == {"workloads": 2, "changed": 1}
+    assert same.outcome is PASSED
+    assert same.output_changed is False
+    assert same.details == {"workloads": 2, "changed": 0}
+
+
+@pytest.mark.parametrize(
+    ("baseline_rows", "trial_rows", "message"),
+    [
+        ((_out(W1, "a"),), (_measurement(W1, METRIC_WALL_TIME_S, 1.0),), "no output"),
+        ((_out(W1, "a"),), (_out(W1, "x"), _out(W1, "y")), "inconsistent"),
+        ((_out(W1, "a"), _out(W1, "c")), (_out(W1, "a"),), "inconsistent"),
+    ],
+    ids=["missing on trial", "unstable trial", "unstable baseline"],
+)
+def test_quality_mode_still_fails_missing_or_unstable_fingerprints(
+    baseline_rows: tuple[Measurement, ...],
+    trial_rows: tuple[Measurement, ...],
+    message: str,
+) -> None:
+    """
+    GIVEN quality mode and an output that cannot be scored once
+    WHEN the equivalence judge evaluates
+    THEN it fails and sets no output_changed
+    """
+    baseline = _baseline(*baseline_rows, guardrails=(_quality_bound(0.0),))
+
+    result = EquivalenceJudge().evaluate(baseline, _trial(*trial_rows))
+
+    assert result.outcome is FAILED
+    assert message in result.reason
+    assert result.output_changed is None
+
+
+def test_exact_mode_rejects_a_changed_output_even_beside_a_quality_bound() -> None:
+    """
+    GIVEN output_equivalence (alone, or beside a quality bound) and a change
+    WHEN judged and the verdict derived
+    THEN the judge fails, output_changed stays unset and rule 3 rejects
+    """
+    trial = _trial(_out(W1, "new", 1.0))
+    for guardrails in (
+        (_guardrail(GuardrailKind.output_equivalence),),
+        (_guardrail(GuardrailKind.output_equivalence), _quality_bound(0.0)),
+    ):
+        baseline = _baseline(_out(W1, "a"), guardrails=guardrails)
+        result = EquivalenceJudge().evaluate(baseline, trial)
+
+        assert result.outcome is FAILED
+        assert result.output_changed is None
+        assert _verdict((SPEED_OK, result)).outcome is VerdictOutcome.reject
+
+
+def test_absolute_drop_is_in_points_of_the_metric() -> None:
+    """
+    GIVEN accuracy 0.912 may drop at most 0.005 absolute
+    WHEN the trial scores 0.907 (on the bound), 0.906, or 0.920
+    THEN the first passes, the second fails, the third is a negative drop
+    """
+    baseline = _baseline(_score(W1, 0.912), guardrails=(_quality_bound(0.005),))
+    judge = GuardrailMetricJudge()
+
+    edge = judge.evaluate(baseline, _trial(_score(W1, 0.907)))
+    over = judge.evaluate(baseline, _trial(_score(W1, 0.906)))
+    better = judge.evaluate(baseline, _trial(_score(W1, 0.920)))
+
+    assert edge.outcome is PASSED
+    assert edge.gain == pytest.approx(-0.005)
+    assert over.outcome is FAILED
+    assert over.gain == pytest.approx(-0.006)
+    assert better.outcome is PASSED
+    assert better.gain == pytest.approx(0.008)
+    assert edge.details == {"guardrails": 1, "metric": QUALITY, "max_drop": 0.005}
+
+
+def test_absolute_drop_judges_a_zero_baseline_error_rate() -> None:
+    """
+    GIVEN an error rate of exactly 0 at baseline (a relative drop is undefined)
+    WHEN the trial keeps 0 or rises to 0.01 against a 0.005 absolute bound
+    THEN it is judged, not inconclusive: pass, then fail
+    """
+    metric = "quality:error_rate"
+    baseline = _baseline(
+        _score(W1, 0.0, metric),
+        guardrails=(_quality_bound(0.005, Direction.minimize, metric=metric),),
+    )
+    judge = GuardrailMetricJudge()
+
+    assert judge.evaluate(baseline, _trial(_score(W1, 0.0, metric))).outcome is PASSED
+    assert judge.evaluate(baseline, _trial(_score(W1, 0.01, metric))).outcome is FAILED
+
+
+def test_absolute_drops_print_in_the_metric_unit_not_as_a_percentage() -> None:
+    """
+    GIVEN an mae drop of 0.5 against 0.25, and an accuracy drop of 0.006
+          against 0.005 with and without the confirmed check
+    WHEN the guardrail judge explains the failure
+    THEN mae reads 0.5 (no "50.0%"); accuracy reads 0.6 of 0.5 points with
+         the builtin check, the raw 0.006 without it
+    """
+    metric = "quality:mae"
+    mae = _baseline(
+        _score(W1, 1.0, metric),
+        guardrails=(_quality_bound(0.25, Direction.minimize, metric=metric),),
+    )
+    accuracy = _baseline(_score(W1, 0.912), guardrails=(_quality_bound(0.005),))
+    worse = _trial(_score(W1, 0.906))
+
+    mae_reason = GuardrailMetricJudge().evaluate(mae, _trial(_score(W1, 1.5, metric)))
+    points = GuardrailMetricJudge(quality=_accuracy_check()).evaluate(accuracy, worse)
+    raw = GuardrailMetricJudge().evaluate(accuracy, worse)
+    within = GuardrailMetricJudge(quality=_accuracy_check()).evaluate(
+        accuracy, _trial(_score(W1, 0.910))
+    )
+
+    assert "dropped 0.5, more than the allowed 0.25" in mae_reason.reason
+    assert "%" not in mae_reason.reason
+    assert "dropped 0.6 points, more than the allowed 0.5 points" in points.reason
+    assert "dropped 0.006, more than the allowed 0.005" in raw.reason
+    assert "worst drop 0.2 points of quality:accuracy" in within.reason
+    assert "allowed 0.5 points" in within.reason
+
+
+def test_relative_drop_unit_is_unchanged_beside_an_absolute_one() -> None:
+    """
+    GIVEN a relative val_loss bound beside an absolute quality bound
+    WHEN val_loss rises 2 % against 1 % and quality holds
+    THEN the relative bound fails as in Step 2, printed as a percentage
+    """
+    baseline = _baseline(
+        _measurement(W1, VAL_LOSS, 0.500, 0.001, unit="nats"),
+        _score(W1, 0.9),
+        guardrails=(_bound(VAL_LOSS, 0.01), _quality_bound(0.005)),
+    )
+    trial = _trial(
+        _measurement(W1, VAL_LOSS, 0.510, 0.001, unit="nats"), _score(W1, 0.9)
+    )
+
+    result = GuardrailMetricJudge().evaluate(baseline, trial)
+
+    assert result.outcome is FAILED
+    assert "dropped 2.0%, more than the allowed 1.0%" in result.reason
+
+
+def test_default_judges_carry_the_quality_check_to_the_guardrail_judge() -> None:
+    """
+    GIVEN a confirmed quality check
+    WHEN the default judges are built with it, and without
+    THEN the guardrail judge holds it, else none
+    """
+    check = _accuracy_check()
+
+    assert GuardrailMetricJudge(quality=check) in default_judges(quality=check)
+    assert GuardrailMetricJudge() in default_judges()
+
+
+@pytest.mark.parametrize(
+    ("accuracy", "expected"),
+    [
+        (0.910, VerdictOutcome.review),
+        (0.900, VerdictOutcome.reject),
+        (None, VerdictOutcome.inconclusive),
+    ],
+    ids=["within the drop", "past the drop", "unscored"],
+)
+def test_quality_mode_end_to_end_through_the_default_judges(
+    accuracy: float | None, expected: VerdictOutcome
+) -> None:
+    """
+    GIVEN quality mode (accuracy 0.912, 0.005 allowed), an efficiency change
+          that is faster and changes its output
+    WHEN judged by the default judges and the verdict derived
+    THEN within the drop it is review, past it reject, unscored inconclusive
+    """
+    baseline = _baseline(
+        _out(W1, "a"),
+        _score(W1, 0.912),
+        objectives=(_objective(),),
+        guardrails=(_quality_bound(0.005),),
+    )
+    rows = (_out(W1, "b", 1.05),) + (
+        () if accuracy is None else (_score(W1, accuracy),)
+    )
+    trial = _trial(*rows)
+    judges = default_judges(quality=_accuracy_check())
+    results = tuple(judge.evaluate(baseline, trial) for judge in judges)
+
+    verdict = derive_verdict(trial, _hypothesis(), results, ())
+
+    assert verdict.outcome is expected
+    assert verdict.gain == pytest.approx(0.75 / 1.80)
+
+
+def test_the_worst_drop_is_the_one_using_most_of_its_allowance() -> None:
+    """
+    GIVEN relative val_loss at 0.5 % of its 1 % allowance (half used) beside
+          absolute accuracy down 0.004 of 0.005 points (80 % used)
+    WHEN the guardrail judge reports the worst drop
+    THEN it names accuracy, the tighter bound, with gain -0.004
+    """
+    baseline = _baseline(
+        _measurement(W1, VAL_LOSS, 0.500, 0.001, unit="nats"),
+        _score(W1, 0.912),
+        guardrails=(_bound(VAL_LOSS, 0.01), _quality_bound(0.005)),
+    )
+    trial = _trial(
+        _measurement(W1, VAL_LOSS, 0.5025, 0.001, unit="nats"), _score(W1, 0.908)
+    )
+
+    result = GuardrailMetricJudge(quality=_accuracy_check()).evaluate(baseline, trial)
+
+    assert result.outcome is PASSED
+    assert "worst drop 0.4 points of quality:accuracy" in result.reason
+    assert result.gain == pytest.approx(-0.004)
+    assert result.details == {"guardrails": 2, "metric": QUALITY, "max_drop": 0.005}
+
+
+def test_a_breach_of_a_zero_allowance_ranks_first_then_by_drop() -> None:
+    """
+    GIVEN val_loss 3x past its 1 % allowance (relative) and two quality checks
+          allowing no drop, one down 0.001 and one down 0.002
+    WHEN the guardrail judge fails the trial
+    THEN it names the zero-allowance breach with the larger drop
+    """
+    other = "quality:macro_f1"
+    baseline = _baseline(
+        _measurement(W1, VAL_LOSS, 0.500, 0.001, unit="nats"),
+        _score(W1, 0.912),
+        _score(W1, 0.800, other),
+        guardrails=(
+            _bound(VAL_LOSS, 0.01),
+            _quality_bound(0.0),
+            _quality_bound(0.0, metric=other),
+        ),
+    )
+    trial = _trial(
+        _measurement(W1, VAL_LOSS, 0.515, 0.001, unit="nats"),
+        _score(W1, 0.911),
+        _score(W1, 0.798, other),
+    )
+
+    result = GuardrailMetricJudge().evaluate(baseline, trial)
+
+    assert result.outcome is FAILED
+    assert result.details == {"guardrails": 3, "metric": other, "max_drop": 0.0}
+    assert result.gain == pytest.approx(-0.002)
+
+
+def test_a_zero_allowance_at_its_bound_ranks_as_fully_used() -> None:
+    """
+    GIVEN a quality check allowing no drop that held exactly, beside an
+          improved one and val_loss at half its allowance
+    WHEN the guardrail judge passes the trial
+    THEN the exactly-held zero allowance is the worst (all of it used)
+    """
+    other = "quality:macro_f1"
+    baseline = _baseline(
+        _measurement(W1, VAL_LOSS, 0.500, 0.001, unit="nats"),
+        _score(W1, 0.912),
+        _score(W1, 0.800, other),
+        guardrails=(
+            _bound(VAL_LOSS, 0.01),
+            _quality_bound(0.0),
+            _quality_bound(0.0, metric=other),
+        ),
+    )
+    trial = _trial(
+        _measurement(W1, VAL_LOSS, 0.5025, 0.001, unit="nats"),
+        _score(W1, 0.920),
+        _score(W1, 0.800, other),
+    )
+
+    result = GuardrailMetricJudge().evaluate(baseline, trial)
+
+    assert result.outcome is PASSED
+    assert result.details == {"guardrails": 3, "metric": other, "max_drop": 0.0}
+
+
+@pytest.mark.parametrize("value", [1e-17, -1e-17, 1e-13])
+def test_drop_text_snaps_float_dust_to_zero(value: float) -> None:
+    """
+    GIVEN a drop within 1e-12 of zero (the tolerance _Drop.breached uses)
+    WHEN printed in either unit
+    THEN it reads 0, never 1e-15 points or -0
+    """
+    assert drop_text(value, DropUnit.absolute, points=True) == "0 points"
+    assert drop_text(value, DropUnit.absolute) == "0"
+    assert drop_text(value, DropUnit.relative) == "0.0%"
+    assert drop_text(2e-12, DropUnit.absolute) == "2e-12"

@@ -29,9 +29,12 @@ from autonomous_ai_agents.common.models import (
     METRIC_PEAK_RSS_BYTES,
     METRIC_TESTS_PASSED,
     METRIC_WALL_TIME_S,
+    QUALITY_METRIC_PREFIX,
     Baseline,
+    BuiltinMeasure,
     ChangeClass,
     Direction,
+    DropUnit,
     Guardrail,
     GuardrailKind,
     Hypothesis,
@@ -40,6 +43,7 @@ from autonomous_ai_agents.common.models import (
     Measurement,
     NoiseCheck,
     Objective,
+    QualityCheck,
     RunStats,
     ScalarDict,
     Trial,
@@ -47,6 +51,7 @@ from autonomous_ai_agents.common.models import (
     Verdict,
     VerdictOutcome,
     Violation,
+    ViolationRule,
 )
 from autonomous_ai_agents.optimization.anticheat import (
     compare_fingerprints,
@@ -288,9 +293,58 @@ class MemoryJudge(MetricGainJudge):
 # ---------------------------------------------------------------------------
 
 
+def _is_quality_bound(guardrail: Guardrail) -> bool:
+    return guardrail.kind is GuardrailKind.metric_bound and (
+        guardrail.metric or ""
+    ).startswith(QUALITY_METRIC_PREFIX)
+
+
+def _changed_workloads(
+    baseline: Sequence[Measurement], trial: Sequence[Measurement]
+) -> list[str]:
+    """Workloads whose one agreed fingerprint differs between the two sides."""
+
+    def digests(rows: Sequence[Measurement]) -> dict[str, set[str]]:
+        seen: dict[str, set[str]] = {}
+        for row in rows:
+            bucket = seen.setdefault(row.workload_id, set())
+            if row.output_fingerprint is not None:
+                bucket.add(row.output_fingerprint)
+        return seen
+
+    before, after = digests(baseline), digests(trial)
+    return [
+        workload_id
+        for workload_id, expected in before.items()
+        if len(expected) == 1
+        and len(actual := after.get(workload_id, set())) == 1
+        and actual != expected
+    ]
+
+
+def _is_change_of(violation: Violation, changed: Sequence[str]) -> bool:
+    """True for ``compare_fingerprints``' "output changed" on a changed workload.
+
+    Matched by the exact message, never parsed: should that text ever
+    change, a change stops matching and fails, which errs towards rejecting.
+    """
+    return violation.rule is ViolationRule.fingerprint_mismatch and any(
+        violation.message == f"workload {workload_id}: output changed"
+        for workload_id in changed
+    )
+
+
 @dataclass(frozen=True)
 class EquivalenceJudge:
-    """Output fingerprints must match the baseline's for every workload."""
+    """Output fingerprints must match the baseline's for every workload.
+
+    Two modes (D35). *Exact*, under an ``output_equivalence`` guardrail: a
+    changed, missing or unstable fingerprint fails. *Quality*, under a
+    ``quality:<name>`` bound and no ``output_equivalence``: only a missing or
+    unstable fingerprint fails (the output could not be scored once); a
+    changed one passes with ``output_changed`` set, so rule 6 sends it to
+    review and the guardrail judge decides on the quality number.
+    """
 
     @property
     def name(self) -> str:
@@ -302,10 +356,11 @@ class EquivalenceJudge:
         return True
 
     def evaluate(self, baseline: Baseline, trial: Trial) -> JudgeResult:
-        """Compare output fingerprints per workload when the guardrail asks for it."""
-        if not any(
+        """Compare output fingerprints per workload when a guardrail asks for it."""
+        exact = any(
             g.kind is GuardrailKind.output_equivalence for g in baseline.guardrails
-        ):
+        )
+        if not exact and not any(_is_quality_bound(g) for g in baseline.guardrails):
             return JudgeResult(
                 judge=self.name,
                 outcome=JudgeOutcome.not_applicable,
@@ -322,24 +377,71 @@ class EquivalenceJudge:
                 details=details,
             )
         violations = compare_fingerprints(baseline.measurements, trial.measurements)
-        if violations:
+        changed = (
+            []
+            if exact
+            else _changed_workloads(baseline.measurements, trial.measurements)
+        )
+        problems = [v for v in violations if not _is_change_of(v, changed)]
+        if problems:
             return JudgeResult(
                 judge=self.name,
                 outcome=JudgeOutcome.failed,
-                reason="; ".join(v.message for v in violations),
+                reason="; ".join(v.message for v in problems),
                 details=details,
             )
+        if exact:
+            return JudgeResult(
+                judge=self.name,
+                outcome=JudgeOutcome.passed,
+                reason=f"outputs identical for {workloads} workload(s)",
+                details=details,
+            )
+        reason = (
+            f"output changed on {len(changed)} of {workloads} workload(s): "
+            f"{', '.join(changed)}; judged by the quality check"
+            if changed
+            else f"outputs identical for {workloads} workload(s)"
+        )
         return JudgeResult(
             judge=self.name,
             outcome=JudgeOutcome.passed,
-            reason=f"outputs identical for {workloads} workload(s)",
-            details=details,
+            reason=reason,
+            details={**details, "changed": len(changed)},
+            output_changed=bool(changed),
         )
 
 
 # ---------------------------------------------------------------------------
 # Guardrail metric judge: bounded drops
 # ---------------------------------------------------------------------------
+
+
+_POINT_MEASURES = frozenset(
+    {BuiltinMeasure.accuracy, BuiltinMeasure.error_rate, BuiltinMeasure.macro_f1}
+)
+"""Builtins bounded in [0, 1]: an absolute drop of 0.005 reads "0.5 points"."""
+
+_ZERO_TOL = 1e-12
+"""Absolute tolerance for "on the bound" and "zero" in drops."""
+
+
+def drop_text(value: float, unit: DropUnit, *, points: bool = False) -> str:
+    """A drop in the unit its bound is read in (D38), for reasons and labels.
+
+    ``relative`` is a percentage of the baseline mean (Step 2); ``absolute``
+    is the metric's own unit, as points for a builtin bounded in [0, 1]
+    (``points``), else the raw value (``mae``, ``rmse``, an external score).
+    Float dust within ``_ZERO_TOL`` of zero (``_Drop.breached``'s tolerance)
+    prints as 0, never as "1e-15 points" or "-0".
+    """
+    if math.isclose(value, 0.0, abs_tol=_ZERO_TOL):
+        value = 0.0
+    if unit is DropUnit.relative:
+        return _percent(value)
+    if points:
+        return f"{value * 100:.4g} points"
+    return f"{value:.4g}"
 
 
 @dataclass(frozen=True)
@@ -350,13 +452,37 @@ class _Drop:
     baseline: RunStats
     trial: RunStats
     drop: float
+    unit: DropUnit = DropUnit.relative
+    points: bool = False
+
+    def text(self, value: float) -> str:
+        """``value`` (this drop or its bound) in this bound's unit."""
+        return drop_text(value, self.unit, points=self.points)
 
     @property
     def breached(self) -> bool:
         """True when the drop is strictly beyond the bound."""
         return self.drop > self.max_drop and not math.isclose(
-            self.drop, self.max_drop, rel_tol=1e-9, abs_tol=1e-12
+            self.drop, self.max_drop, rel_tol=1e-9, abs_tol=_ZERO_TOL
         )
+
+    @property
+    def rank(self) -> tuple[float, float]:
+        """Sort key, largest worst: the share of the allowance used, then the drop.
+
+        Drops in different units compare by that share only. A zero
+        allowance has no share: breached it ranks above everything, held
+        exactly it counts as fully used (1.0), improved as nothing used.
+        """
+        if self.max_drop > 0:
+            used = self.drop / self.max_drop
+        elif self.breached:
+            used = math.inf
+        elif math.isclose(self.drop, 0.0, abs_tol=_ZERO_TOL):
+            used = 1.0
+        else:
+            used = -math.inf
+        return used, self.drop
 
 
 def _bound_fields(guardrail: Guardrail) -> tuple[str, Direction, float]:
@@ -370,13 +496,33 @@ def _bound_fields(guardrail: Guardrail) -> tuple[str, Direction, float]:
     return guardrail.metric, guardrail.direction, guardrail.max_drop
 
 
+def _drop(expected: RunStats, actual: RunStats, guardrail: Guardrail) -> float:
+    """Signed drop (negative is an improvement) in the guardrail's unit.
+
+    ``ValueError`` for a relative drop over a zero baseline mean.
+    """
+    _, direction, _ = _bound_fields(guardrail)
+    if guardrail.drop_unit is DropUnit.relative:
+        return -relative_gain(expected, actual, direction)
+    if direction is Direction.maximize:
+        return expected.mean - actual.mean
+    return actual.mean - expected.mean
+
+
 @dataclass(frozen=True)
 class GuardrailMetricJudge:
     """Every ``metric_bound`` guardrail's metric may drop at most ``max_drop``.
 
-    The drop is relative to the baseline mean and signed so that a negative
-    drop is an improvement; the result's gain is minus the worst drop.
+    The drop is signed so that a negative drop is an improvement, and read
+    in the guardrail's ``drop_unit`` (D38): relative to the baseline mean
+    (Step 2's rule), or absolute, in points of the metric (a quality check's
+    default; defined at a zero baseline). The result's gain is minus the
+    drop, in that unit; the worst is the one using most of its allowance
+    (``_Drop.rank``). ``quality``, the confirmed check, only says
+    whether its absolute drops print as points (a builtin bounded in [0, 1]).
     """
+
+    quality: QualityCheck | None = None
 
     @property
     def name(self) -> str:
@@ -402,7 +548,7 @@ class GuardrailMetricJudge:
         drops: list[_Drop] = []
         missing: list[str] = []
         for guardrail in bounds:
-            metric, direction, max_drop = _bound_fields(guardrail)
+            metric, _, max_drop = _bound_fields(guardrail)
             pairs = _pair(baseline.measurements, trial.measurements, metric)
             if not pairs:
                 missing.append(f"no baseline measurement for {metric}")
@@ -413,7 +559,7 @@ class GuardrailMetricJudge:
                     )
                     continue
                 try:
-                    drop = -relative_gain(expected.stats, actual.stats, direction)
+                    drop = _drop(expected.stats, actual.stats, guardrail)
                 except ValueError:
                     missing.append(
                         f"baseline mean of {metric} is zero (workload {workload_id})"
@@ -427,17 +573,20 @@ class GuardrailMetricJudge:
                         expected.stats,
                         actual.stats,
                         drop,
+                        guardrail.drop_unit,
+                        self._in_points(metric),
                     )
                 )
 
         breaches = [d for d in drops if d.breached]
         if breaches:
-            worst = max(breaches, key=lambda d: d.drop)
+            worst = max(breaches, key=lambda d: d.rank)
             return self._result(
                 JudgeOutcome.failed,
                 reason=(
-                    f"{worst.metric} dropped {_percent(worst.drop)}, more than the "
-                    f"allowed {_percent(worst.max_drop)} (workload {worst.workload_id})"
+                    f"{worst.metric} dropped {worst.text(worst.drop)}, more than the "
+                    f"allowed {worst.text(worst.max_drop)} "
+                    f"(workload {worst.workload_id})"
                 ),
                 guardrails=len(bounds),
                 worst=worst,
@@ -448,15 +597,22 @@ class GuardrailMetricJudge:
                 reason="; ".join(missing),
                 guardrails=len(bounds),
             )
-        worst = max(drops, key=lambda d: d.drop)
+        worst = max(drops, key=lambda d: d.rank)
         return self._result(
             JudgeOutcome.passed,
             reason=(
-                f"worst drop {_percent(worst.drop)} of {worst.metric} is within the "
-                f"allowed {_percent(worst.max_drop)} (workload {worst.workload_id})"
+                f"worst drop {worst.text(worst.drop)} of {worst.metric} is within the "
+                f"allowed {worst.text(worst.max_drop)} (workload {worst.workload_id})"
             ),
             guardrails=len(bounds),
             worst=worst,
+        )
+
+    def _in_points(self, metric: str) -> bool:
+        return (
+            self.quality is not None
+            and self.quality.metric == metric
+            and self.quality.measure in _POINT_MEASURES
         )
 
     def _result(
@@ -544,13 +700,20 @@ class TestSuiteJudge:
         )
 
 
-def default_judges(noise_multiplier: float = 2.0) -> tuple[Judge, ...]:
-    """The frozen judge set in evaluation order."""
+def default_judges(
+    noise_multiplier: float = 2.0, *, quality: QualityCheck | None = None
+) -> tuple[Judge, ...]:
+    """The frozen judge set in evaluation order (``quality``: the confirmed check).
+
+    Keep ``EquivalenceJudge`` in any judge set: it is the only judge that sets
+    ``output_changed``, which rule 6 of :func:`derive_verdict` relies on to
+    send a changed output to review instead of keeping it.
+    """
     return (
         SpeedJudge(noise_multiplier=noise_multiplier),
         MemoryJudge(noise_multiplier=noise_multiplier),
         EquivalenceJudge(),
-        GuardrailMetricJudge(),
+        GuardrailMetricJudge(quality=quality),
         TestSuiteJudge(),
     )
 
@@ -590,6 +753,7 @@ def derive_verdict(
     violations: Sequence[Violation],
     *,
     primary_metric: str | None = None,
+    review_behaviour: bool = False,
 ) -> Verdict:
     """Fold judge results and violations into a verdict, in a fixed order.
 
@@ -599,12 +763,21 @@ def derive_verdict(
     4. the primary objective judge or any guardrail judge inconclusive ->
        inconclusive (a secondary objective inside its noise floor is neutral);
     5. no objective judge (one carrying a metric) passed -> inconclusive;
-    6. all passed: efficiency -> keep, behaviour or novel -> needs_approval.
+    6. all passed (D35): any result with ``output_changed`` -> review, never
+       keep (novel stays needs_approval); otherwise efficiency -> keep,
+       novel -> needs_approval, and behaviour -> review with
+       ``review_behaviour`` (Step 3, D10), else needs_approval (Step 2).
+
+    Rule 6 relies on :class:`EquivalenceJudge` being among the judges that
+    produced ``judge_results``: it is the only judge that sets
+    ``output_changed``, so without it a changed output is never seen here.
     """
     results = tuple(judge_results)
     found = tuple(violations)
     change_class = hypothesis.change_class
-    outcome, summary = _decide(trial, change_class, results, found, primary_metric)
+    outcome, summary = _decide(
+        trial, change_class, results, found, primary_metric, review_behaviour
+    )
     return Verdict(
         trial_id=trial.id,
         hypothesis_id=hypothesis.id,
@@ -633,6 +806,7 @@ def _decide(
     results: tuple[JudgeResult, ...],
     violations: tuple[Violation, ...],
     primary: str | None,
+    review_behaviour: bool,
 ) -> tuple[VerdictOutcome, str]:
     if violations:
         rules = ", ".join(dict.fromkeys(str(v.rule) for v in violations))
@@ -671,10 +845,39 @@ def _decide(
             VerdictOutcome.inconclusive,
             "inconclusive: nothing proved better (no objective judge passed)",
         )
+    return _rule_6(change_class, results, review_behaviour)
+
+
+def _rule_6(
+    change_class: ChangeClass,
+    results: tuple[JudgeResult, ...],
+    review_behaviour: bool,
+) -> tuple[VerdictOutcome, str]:
+    """Rule 6, once rules 1-5 have let every result through."""
+    changed = any(r.output_changed is True for r in results)
+    if change_class is ChangeClass.novel:
+        note = "; output changed" if changed else ""
+        return (
+            VerdictOutcome.needs_approval,
+            f"needs_approval: all judges passed{note}; "
+            f"{change_class} change needs human approval",
+        )
+    if changed:
+        return (
+            VerdictOutcome.review,
+            f"review: all judges passed; output changed within the quality "
+            f"check; {change_class} change goes to the review branch",
+        )
     if change_class is ChangeClass.efficiency:
         return (
             VerdictOutcome.keep,
             "keep: all judges passed; efficiency change ships automatically",
+        )
+    if review_behaviour:
+        return (
+            VerdictOutcome.review,
+            f"review: all judges passed; {change_class} change goes to the "
+            "review branch",
         )
     return (
         VerdictOutcome.needs_approval,
