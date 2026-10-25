@@ -762,15 +762,27 @@ class GitWorkspace:
     def staged_blob(self, handle: WorktreeHandle, path: str) -> bytes:
         return self._git(handle, "cat-file", "blob", ":0:" + _require_path(path))[1]
 
-    def commit(self, handle: WorktreeHandle, message: str, *, base: str) -> str:
-        """Commit the index onto the worktree's HEAD; returns the new commit."""
+    def commit(
+        self,
+        handle: WorktreeHandle,
+        message: str,
+        *,
+        base: str,
+        parent: str | None = None,
+    ) -> str:
+        """Commit the index onto ``parent`` (``None``: the worktree's HEAD) and
+        move HEAD there from where it was; returns the new commit. A retried
+        trial passes ``parent=base``, so it stays one child of the base (D15)."""
         _require_message(message)
         _require_oid(base)
+        if parent is not None:
+            _require_oid(parent)
         tree = _oid(self._git(handle, "write-tree")[1])
-        head = ("rev-parse", "--verify", "--end-of-options", "HEAD^{commit}")
-        parent = _oid(self._git(handle, *head)[1])
-        new = self._commit_object(handle, tree, parent, message, base)
-        self._git(handle, *_UPDATE_REF, "HEAD", new, parent)
+        argv = ("rev-parse", "--verify", "--end-of-options", "HEAD^{commit}")
+        head = _oid(self._git(handle, *argv)[1])
+        onto = head if parent is None else parent
+        new = self._commit_object(handle, tree, onto, message, base)
+        self._git(handle, *_UPDATE_REF, "HEAD", new, head)
         return new
 
     def clean(self, handle: WorktreeHandle) -> None:

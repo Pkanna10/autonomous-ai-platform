@@ -133,7 +133,7 @@ def test_carriers_have_the_spec_fields_in_order() -> None:
     THEN they match the spec exactly, in order
     """
     expected: dict[type[Any], tuple[str, ...]] = {
-        TrialBrief: ("understanding", "hotspots", "protected"),
+        TrialBrief: ("understanding", "hotspots", "protected", "fix_retries_left"),
         Change: ("status", "old_mode", "new_mode", "path"),
         WorktreeHandle: ("path", "gitdir", "link_bytes"),
         PreflightReport: (
@@ -148,7 +148,7 @@ def test_carriers_have_the_spec_fields_in_order() -> None:
             "notes",
             "python_version",
         ),
-        EditTask: ("hypothesis", "brief", "boundary"),
+        EditTask: ("hypothesis", "brief", "boundary", "feedback"),
         EditResult: ("written", "cost_usd", "tokens_used", "stop", "error"),
         ProfileResult: ("hotspots", "notes"),
         UnderstandResult: ("understanding", "notes", "cost_usd", "tokens_used"),

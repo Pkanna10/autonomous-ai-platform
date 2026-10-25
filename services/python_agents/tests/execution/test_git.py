@@ -1035,6 +1035,24 @@ def test_commit_is_reproducible_with_the_engine_identity_and_base_dates(
     assert not any(line.startswith("gpgsig") for line in lines)
 
 
+def test_commit_with_a_parent_is_a_child_of_it_and_moves_head_from_the_last(
+    ws: GitWorkspace, root: Path, base: str
+) -> None:
+    """D15: a retried trial's second commit sits on the base, not on commit 1."""
+    handle = ws.add_worktree(root / "run1" / "trial-h1", base)
+    write(handle.path / "core.py", "v2\n")
+    ws.stage_all(handle)
+    first = ws.commit(handle, "one\n", base=base)
+    write(handle.path / "core.py", "v3\n")
+    ws.stage_all(handle)
+    second = ws.commit(handle, "two\n", base=base, parent=base)
+    assert out(handle.path, "rev-parse", "HEAD") == second != first
+    parents = out(handle.path, "rev-list", "--parents", "-n", "1", second)
+    assert parents.split() == [second, base]
+    with pytest.raises(ValueError, match="full object id"):
+        ws.commit(handle, "m", base=base, parent="HEAD")
+
+
 def test_commit_refuses_a_nul_in_the_message_or_a_bad_base(
     ws: GitWorkspace, root: Path, base: str
 ) -> None:

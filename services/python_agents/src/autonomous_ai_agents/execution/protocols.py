@@ -74,11 +74,24 @@ def _require_git_path(path: str) -> None:
 
 @dataclass(frozen=True)
 class TrialBrief:
-    """What a trial's editor is told: the understanding, its hotspots, the rules."""
+    """What a trial's editor is told: the understanding, its hotspots, the rules.
+
+    ``fix_retries_left`` is the run's fix retries still unspent (D12): the
+    trials node computes it, the runner retries only below it, and the editor
+    prompt never shows it. A field, not a ``run()`` keyword, so every
+    ``TrialRunner`` keeps its signature; the default 0 fails closed.
+    """
 
     understanding: ProjectUnderstanding | None
     hotspots: tuple[Hotspot, ...]
     protected: tuple[str, ...]
+    fix_retries_left: int = 0
+
+    def __post_init__(self) -> None:
+        if self.fix_retries_left < 0:
+            raise ValueError(
+                f"fix_retries_left must be at least 0, got {self.fix_retries_left}"
+            )
 
 
 @dataclass(frozen=True)
@@ -135,15 +148,23 @@ class PreflightReport:
 
 @dataclass(frozen=True)
 class EditTask:
-    """One hypothesis to implement, with its brief and the per-trial boundary."""
+    """One hypothesis to implement, with its brief and the per-trial boundary.
+
+    ``feedback`` is set on a fix retry only: ``TrialFeedback.render()`` of the
+    first attempt's crash and nothing else (D13), a string so no withheld
+    reason or raw run output can reach the editor through it.
+    """
 
     hypothesis: Hypothesis
     brief: TrialBrief
     boundary: str
+    feedback: str | None = None
 
     def __post_init__(self) -> None:
         if not self.boundary:
             raise ValueError("boundary must be a non-empty token")
+        if self.feedback is not None and not self.feedback:
+            raise ValueError("feedback must be non-empty when given")
 
 
 @dataclass(frozen=True)

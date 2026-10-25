@@ -27,6 +27,17 @@ An editor the cost cap stopped before anything was written or spent raises
 Any exception that ends a trial carries the money it spent (``add_spend``),
 and the own ref it moved is put back (nothing records that trial any more),
 unless a worktree checked it out meanwhile: that ref stays, with a note.
+
+Fix retry (D12-D15): when the trial's own workload crashes with a fixable
+Python error (``retry.classify``), the runner allows ``fix_retries`` and the
+brief's ``fix_retries_left`` both have one left and the trial's budget holds at
+least ``retry_floor_usd``, the worktree is reset to the first commit and the
+editor gets one fresh request whose only run output is the closed feedback's
+``render()``. The writes of both attempts merge (under the write limits),
+capture and every anti-cheat rule run again on the diff against the base, and
+the second commit's parent is the base, so the trial stays one child of it.
+Anything else keeps the first failure and its commit, with a ``retry_notes``
+line (the notes, never the prompt, name what was withheld).
 """
 
 from __future__ import annotations
@@ -46,7 +57,11 @@ from pathlib import Path, PurePath
 from typing import Protocol
 
 from autonomous_ai_agents.clients.budget import Budget
-from autonomous_ai_agents.common.config import IsolationMode, settings
+from autonomous_ai_agents.common.config import (
+    FIX_RETRIES_MAX,
+    IsolationMode,
+    settings,
+)
 from autonomous_ai_agents.common.errors import (
     EngineError,
     RepoTamperedError,
@@ -64,9 +79,16 @@ from autonomous_ai_agents.common.models import (
     Workload,
     utc_now,
 )
-from autonomous_ai_agents.common.paths import RESERVED_MODULES, normalize_path
+from autonomous_ai_agents.common.paths import (
+    READ_DENY_PATTERNS,
+    RESERVED_MODULES,
+    matches_pattern,
+    normalize_path,
+)
 from autonomous_ai_agents.common.refnames import branch_prefix_problem
+from autonomous_ai_agents.execution.crash import parse_traceback
 from autonomous_ai_agents.execution.editor import STOP_BUDGET
+from autonomous_ai_agents.execution.editor_tools import EditorLimits
 from autonomous_ai_agents.execution.git import GitError, GitWorkspace, repo_fingerprint
 from autonomous_ai_agents.execution.measure import (
     Phase,
@@ -92,6 +114,7 @@ from autonomous_ai_agents.execution.protocols import (
     TrialBrief,
     WorktreeHandle,
 )
+from autonomous_ai_agents.execution.retry import ClosureIndex, TrialFeedback, classify
 from autonomous_ai_agents.optimization.anticheat import (
     DEFAULT_MODULE_ROOTS,
     check_capture,
@@ -119,6 +142,10 @@ _INVOKE = frozenset({"invoke", "inv"})
 _EDIT_DONE = "end_turn"
 _REGULAR = frozenset({"100644", "100755"})
 _SUBJECT_CHARS = 72
+_KEPT = "first failure kept"
+_TYPE_CHARS = 64
+_NO_CLOSURE = ClosureIndex(frozenset(), {}, complete=False)
+"""Classifies fixability without reading any source (type only, nothing sent)."""
 
 
 @dataclass
@@ -139,6 +166,32 @@ class _Progress:
                 max(tokens, self.trial.tokens_used),
             )
         return min(usd, cap), tokens
+
+
+@dataclass(frozen=True)
+class _Job:
+    """One trial's fixed inputs, shared by its attempts."""
+
+    handle: WorktreeHandle
+    dirs: PhaseDirs
+    hypothesis: Hypothesis
+    workloads: tuple[Workload, ...]
+    baseline: Baseline
+    base: str
+    tracked: tuple[str, ...]
+    scope: RunScope
+    brief: TrialBrief
+    prior: str | None
+    own_ref: str
+
+
+@dataclass(frozen=True)
+class _Tried:
+    """One attempt's trial, the editor's record so far and its crash, if any."""
+
+    trial: Trial
+    result: EditResult
+    crash: RunFailure | None = None
 
 
 class EditorFactory(Protocol):
@@ -368,7 +421,9 @@ class GitTrialRunner(_PhaseOwner):
     gains ``INVOKE_PROTECTED`` when invoke runs. ``cost_usd`` is the larger of
     the editor's report and its ``Budget``'s record; above ``budget_usd`` the
     trial fails charged exactly ``budget_usd`` (and the same share of tokens).
-    Notes (``RunSample``, ``RunFailure``, ``Measured``) go to ``on_note``
+    ``fix_retries`` (0-1, default 0: off) and ``retry_floor_usd`` bound the fix
+    retry (module docstring). Notes (``RunSample``, ``RunFailure``,
+    ``Measured``) go to ``on_note``
     prefixed ``trial for hypothesis <id>:``. ``prefix`` is the engine branch
     prefix (default the setting's; the factory passes the context's): the
     branch must be ``<prefix>trial-<run>-<hyp>`` and only refs under it move.
@@ -389,7 +444,18 @@ class GitTrialRunner(_PhaseOwner):
         run: RunOnce = run_once,
         on_note: Callable[[str], None] | None = None,
         prefix: str | None = None,
+        fix_retries: int = 0,
+        retry_floor_usd: float = 0.0,
     ) -> None:
+        if not 0 <= fix_retries <= FIX_RETRIES_MAX:
+            raise ValueError(
+                f"fix_retries must be 0-{FIX_RETRIES_MAX}, got {fix_retries}"
+            )
+        if not math.isfinite(retry_floor_usd) or retry_floor_usd < 0:
+            raise ValueError(
+                f"retry_floor_usd must be finite and at least 0, got {retry_floor_usd}"
+            )
+        self._fix_retries, self._retry_floor = fix_retries, retry_floor_usd
         super().__init__(
             project, git=git, network=network, fs=fs, platform=platform,
             base_env=base_env, run=run, on_note=on_note,
@@ -511,78 +577,198 @@ class GitTrialRunner(_PhaseOwner):
         prior: str | None,
         progress: _Progress,
     ) -> Trial:
-        """Steps 2 to 6; every outcome but an exception is a Trial (draft: failed).
-        ``progress`` records the spend and the own ref's move as they happen."""
+        """Steps 2 to 6, then at most one fix retry; every outcome but an
+        exception is a Trial (draft: failed). ``progress`` records the spend and
+        the own ref's move as they happen."""
         base = str(baseline.commit)
         tracked = self._git.ls_tree(base)
         scope = run_scope(self._project, workloads, tracked, worktree=handle.path)
         protected = tuple(dict.fromkeys((*brief.protected, *scope.protected)))
-        task = EditTask(
-            hypothesis, replace(brief, protected=protected), secrets.token_hex(8)
-        )
+        job = _Job(
+            handle, dirs, hypothesis, tuple(workloads), baseline, base, tracked,
+            scope, replace(brief, protected=protected), prior,
+            f"refs/heads/{trial.branch}",
+        )  # fmt: skip
+        task = EditTask(hypothesis, job.brief, secrets.token_hex(8))
+        first = self._try(job, trial, task, progress, earlier=None)
+        if first.crash is None:
+            return first.trial
+        return self._retry(job, trial, first, first.crash, progress)
+
+    def _try(
+        self,
+        job: _Job,
+        trial: Trial,
+        task: EditTask,
+        progress: _Progress,
+        *,
+        earlier: EditResult | None,
+    ) -> _Tried:
+        """One attempt: edit, capture, check, commit, measure. ``earlier`` is
+        the first attempt's record on a retry: the writes merge (D15), the
+        commit's parent is the base and an unaffordable edit is a failure."""
         budget = progress.budget
-        result = self._editor(scope).edit(handle.path, task, budget)
+        edited = self._editor(job.scope).edit(job.handle.path, task, budget)
+        result = edited if earlier is None else _merged(earlier, edited)
         trial = progress.trial = _charged(trial, result, budget, budget.cap_usd)
-        self._git.check_link(handle)
+        self._git.check_link(job.handle)
         untouched = not result.written and trial.cost_usd == 0 and not trial.tokens_used
-        if result.stop == STOP_BUDGET and untouched:
+        if earlier is None and result.stop == STOP_BUDGET and untouched:
             raise TrialUnaffordable(
                 result.error or "the run's cost cap stopped the edit"
             )
         if trial.error is not None:
-            return trial
+            return _Tried(trial, result)
         if result.error is not None or result.stop != _EDIT_DONE:
             reason = result.error or "no reason given"
-            return _failed(trial, f"the editor stopped ({result.stop}): {reason}")
+            stopped = f"the editor stopped ({result.stop}): {reason}"
+            return _Tried(_failed(trial, stopped), result)
+        over = None if earlier is None else _over_limits(result.written)
+        if over is not None:
+            return _Tried(_failed(trial, over), result)
         try:
-            self._git.stage_all(handle)
-            changes = self._git.changes(handle, base)
+            self._git.stage_all(job.handle)
+            changes = self._git.changes(job.handle, job.base)
             bad = [ascii(c.path) for c in changes if not is_utf8(c.path)]
             if bad:
-                return _failed(
-                    trial, f"the diff names {bad[0]}, a path that is not valid UTF-8"
-                )
+                text = f"the diff names {bad[0]}, a path that is not valid UTF-8"
+                return _Tried(_failed(trial, text), result)
             if not changes:
-                return _failed(trial, "the editor changed nothing")
-            diff = self._git.diff(handle, base)
+                return _Tried(_failed(trial, "the editor changed nothing"), result)
+            diff = self._git.diff(job.handle, job.base)
             blobs = {  # what check_capture reads: added or modified regular files
-                c.path: self._git.staged_blob(handle, c.path)
+                c.path: self._git.staged_blob(job.handle, c.path)
                 for c in changes
                 if c.status in ("A", "M") and c.new_mode in _REGULAR
             }
         except GitError as error:  # RepoTamperedError is no GitError: it propagates
-            return _failed(trial, f"the change could not be captured: {error}")
+            text = f"the change could not be captured: {error}"
+            return _Tried(_failed(trial, text), result)
         touched = tuple(c.path for c in changes)
         trial = trial.model_copy(update={"diff": diff, "touched_paths": touched})
         violations = self._violations(
-            changes, result, blobs, baseline, scope, tracked, protected
-        )
+            changes, result, blobs, job.baseline, job.scope, job.tracked,
+            job.brief.protected,
+        )  # fmt: skip
         if violations:
             text = "; ".join(v.message for v in violations[:3])
             reason = f"the change breaks {len(violations)} anti-cheat rule(s): {text}"
-            return _failed(trial, reason, violations=violations)
-        message = _message(hypothesis, trial.id)
-        commit = self._git.commit(handle, message, base=base)
-        self._git.clean(handle)
-        if commit != prior:
-            own_ref = f"refs/heads/{trial.branch}"
-            self._refuse_checked_out(own_ref)  # checked out while the editor ran
-            self._git.update_ref(own_ref, commit, prior, prefix=self._prefix)
-            progress.moved = commit
+            return _Tried(_failed(trial, reason, violations=violations), result)
+        message = _message(job.hypothesis, trial.id)
+        parent = None if earlier is None else job.base
+        commit = self._git.commit(job.handle, message, base=job.base, parent=parent)
+        self._git.clean(job.handle)
+        self._point(job, commit, progress)
         trial = trial.model_copy(update={"commit": commit})
-        phase = self._make_phase(handle, dirs)
         try:
             rows = self._measure(
-                phase,
-                workloads,
-                prefix=f"trial for hypothesis {hypothesis.id}",
+                self._make_phase(job.handle, job.dirs),
+                job.workloads,
+                prefix=f"trial for hypothesis {job.hypothesis.id}",
                 trial_id=trial.id,
-                baseline_count=baseline_test_count(baseline.measurements),
+                baseline_count=baseline_test_count(job.baseline.measurements),
             )
         except RunFailure as failure:
-            return _failed(trial, failure.reason)
-        return trial.model_copy(
-            update={"status": TrialStatus.measured, "measurements": rows}
+            return _Tried(_failed(trial, failure.reason), result, failure)
+        measured = {"status": TrialStatus.measured, "measurements": rows}
+        return _Tried(trial.model_copy(update=measured), result)
+
+    def _point(self, job: _Job, commit: str, progress: _Progress) -> None:
+        """Move the own ref from where this trial left it to ``commit``."""
+        current = progress.moved or job.prior
+        if commit != current:
+            self._refuse_checked_out(job.own_ref)  # checked out meanwhile
+            self._git.update_ref(job.own_ref, commit, current, prefix=self._prefix)
+            progress.moved = commit
+
+    def _retry(
+        self,
+        job: _Job,
+        draft: Trial,
+        first: _Tried,
+        crash: RunFailure,
+        progress: _Progress,
+    ) -> Trial:
+        """At most one fix retry of an own fixable crash (D12-D15): a fresh
+        request carrying only the closed feedback's ``render()``, on the reset
+        worktree, with a new token and the same budget. Any way it does not run
+        or does not hold keeps the first failure, noted; the notes, never the
+        prompt, carry what was withheld."""
+        fixable = self._feedback(job, first.trial, crash, _NO_CLOSURE)
+        if fixable is None or first.trial.attempts > self._fix_retries:
+            return first.trial
+        kind, budget = fixable.exc_type, progress.budget
+        if first.trial.attempts - 1 >= job.brief.fix_retries_left:
+            return _noted(first.trial, f"{kind}; not retried: the run's fix retry is spent")  # fmt: skip
+        if budget.remaining < self._retry_floor:
+            return _noted(
+                first.trial,
+                f"{kind}; not retried: {budget.remaining:.6f} USD left, below"
+                f" the retry floor of {self._retry_floor:.6f} USD",
+            )
+        closure = self._closure(job, first.trial)
+        feedback = self._feedback(job, first.trial, crash, closure) or fixable
+        why = feedback.withheld
+        withheld = "" if why is None else f"; message withheld: {why}"
+        task = EditTask(
+            job.hypothesis, job.brief, secrets.token_hex(8), feedback=feedback.render()
+        )
+        self._git.reset(job.handle)  # attempt 1's commit, without the run's files
+        retried = draft.model_copy(update={"attempts": first.trial.attempts + 1})
+        second = self._try(job, retried, task, progress, earlier=first.result)
+        if second.trial.status is TrialStatus.measured:
+            return _noted(second.trial, f"{kind}; retried{withheld}")
+        what = second.trial.error  # engine text: a stop, a rule, a limit
+        if second.crash is not None:  # the raw reason stays in ``error`` only
+            again = parse_traceback(second.crash.exit_tail)
+            what = "crashed again" if again is None else again.exc_type[:_TYPE_CHARS]
+        self._point(job, str(first.trial.commit), progress)
+        kept = first.trial.model_copy(
+            update={
+                "attempts": retried.attempts,
+                "cost_usd": second.trial.cost_usd,
+                "tokens_used": second.trial.tokens_used,
+            }
+        )
+        return _noted(kept, f"{kind}{withheld}; retry: {what}, {_KEPT}")
+
+    def _feedback(
+        self, job: _Job, trial: Trial, crash: RunFailure, closure: ClosureIndex
+    ) -> TrialFeedback | None:
+        workdir = next(
+            (w.working_dir for w in job.workloads if w.id == crash.workload_id), "."
+        )
+        return classify(
+            crash, closure=closure, worktree=job.handle.path, tracked=job.tracked,
+            touched=trial.touched_paths, working_dir=workdir,
+        )  # fmt: skip
+
+    def _closure(self, job: _Job, trial: Trial) -> ClosureIndex:
+        """D13's closure, read from git and never from the worktree a run may
+        have rewritten: the tracked, non-deny-listed ``.py`` blobs at the base
+        and the touched files at the trial's commit, at most the setting's
+        bytes (past it the index is incomplete and messages are withheld)."""
+        cap, used = settings.RETRY_CLOSURE_MAX_SOURCE_BYTES, 0
+        sources: dict[str, str] = {}
+        for path in job.tracked:
+            if used > cap:
+                break
+            if path.endswith(".py") and not _read_denied(path):
+                blob = self._git.read_blob(job.base, path, limit=cap - used + 1)
+                used += len(blob)
+                sources[path] = blob.decode("utf-8", "replace")
+        commit = str(trial.commit)
+        present = frozenset(self._git.ls_tree(commit))
+        at_commit = {
+            path: self._git.read_blob(commit, path, limit=cap + 1).decode(
+                "utf-8", "replace"
+            )
+            if path in present
+            else None
+            for path in trial.touched_paths
+        }
+        return ClosureIndex.build(
+            trial.diff, sources, at_commit=at_commit, max_source_bytes=cap
         )
 
     @staticmethod
@@ -618,6 +804,45 @@ def _run_id(branch: str, hypothesis_id: str, prefix: str) -> str:
         raise ValueError(f"branch {branch!r} is not {head}<run>{tail}")
     require_dir_name("run id", inner)
     return inner
+
+
+def _noted(trial: Trial, note: str) -> Trial:
+    return trial.model_copy(update={"retry_notes": (*trial.retry_notes, note)})
+
+
+def _read_denied(path: str) -> bool:
+    return any(matches_pattern(path, pattern) for pattern in READ_DENY_PATTERNS)
+
+
+def _merged(first: EditResult, second: EditResult) -> EditResult:
+    """Both attempts' record (D15): bytes per path add up, so every path of the
+    union diff is recorded; so does the spend; the stop is the second's."""
+    written = dict(first.written)
+    for path, size in second.written.items():
+        written[path] = written.get(path, 0) + size
+    usd, tokens = (
+        first.cost_usd + second.cost_usd,
+        first.tokens_used + second.tokens_used,
+    )
+    return EditResult(written, usd, tokens, second.stop, second.error)
+
+
+def _over_limits(written: Mapping[str, int]) -> str | None:
+    """Why the attempts together wrote more than one trial may, or ``None``."""
+    limits = EditorLimits.from_settings()
+    files, total = len(written), sum(written.values())
+    largest = max(written.values(), default=0)
+    if (
+        files <= limits.max_files
+        and total <= limits.max_total_bytes
+        and largest <= limits.max_file_bytes
+    ):
+        return None
+    return (
+        f"the attempts together wrote {files} files and {total} bytes ({largest}"
+        f" in one file), over the trial's write limits ({limits.max_files} files,"
+        f" {limits.max_total_bytes} bytes, {limits.max_file_bytes} bytes per file)"
+    )
 
 
 def _failed(
