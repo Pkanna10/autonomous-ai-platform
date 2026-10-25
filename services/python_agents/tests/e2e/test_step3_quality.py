@@ -394,7 +394,9 @@ def test_e3_h_the_labels_are_protected_named_masked_hidden_and_a_table_is_review
     """
     launches = Launches()
     labels = (FIXTURE / "repo" / LABELS).read_text("utf-8")
-    table = f"    return {labels.split()!r}\n"
+    # One string, not a list literal: compiling 2,500 list items adds ~2 MB
+    # of peak RSS (+15 % on CPython 3.11), past the memory guardrail
+    table = f"    return list({''.join(labels.split())!r})\n"
     edits = [*_edit(MODEL, EDITS["list"], EDITS["named"], 0),
              *_edit(MODEL, EDITS["list"], EDITS["parts"], 1),
              *_edit(MODEL, EDITS["list"], table, 2, views=("data", LABELS))]  # fmt: skip
