@@ -52,13 +52,14 @@ history at `5ce95a4` (`git show 5ce95a4:.claude/handoff/step2/spec.md`).
   E3-F to E3-I, 6 tests, about 4 min; E3-I runs on a synthetic clock, so its
   verdicts are exact). U15's docs are `5acdfeb`; `46aed4b` formats U14's fixture
   (CI Lint Code was red on `de34b18`: the Lead's gate now also runs prettier).
-- **Next: the live runs L0 to L2** (spec section 6), in order: L0 (`noise`, the
-  paired path, no API call), L1a (`hard`, `wired`), L1b (`corpus`, `wired`), L2a
-  (`oss`, `wired`, Sonnet low editor, 2 repetitions; L2b with the Opus editor
-  only if L2a delivers fewer than 10 of 20). The ordering rule is met: U11 made
-  behaviour -> review unconditional (`60cee15`) before any live run. Before L2a
-  the Lead re-pins the hard and OSS timeouts from L1a's measured wall time (the
-  2.6x estimate is unverified).
+- **Next: the live runs L1a to L2** (spec section 6). L0 passed on 2026-10-25
+  (run 40237282461, $0: 0 of 130 single-look false wins, floors 2.0-5.9 %; the
+  ledger has the detail). In order: L1a (`hard`, `wired`), L1b (`corpus`,
+  `wired`), L2a (`oss`, `wired`, Sonnet low editor, 2 repetitions; L2b with the
+  Opus editor only if L2a delivers fewer than 10 of 20). The ordering rule is
+  met: U11 made behaviour -> review unconditional (`60cee15`) before any live
+  run. Before L2a the Lead re-pins the hard and OSS timeouts from L1a's measured
+  wall time (the 2.6x estimate is unverified).
 - **Wave 2 is approved** (O6: hard corpus v2, the `ledgerclose` rebuild, the A/B
   instrument, grader labels, L3-L5). **Wave 3 is held** until Wave 1's live runs
   report (O6); each of its units has its own gate (spec section 7).
@@ -1452,9 +1453,9 @@ days before it expires. The table below is the 2026-10-23 plan with stage C
 replaced by Step 3's own live plan (spec section 6, D24's spend rule); the
 register below says which questions are already answered.
 
-**Spent so far in Window 1: 0 USD by Step 3** (Wave 1 is built; no live run of
-it yet). The two Window 1 rows in the ledger (2026-10-23, 0.00 each) predate
-Step 3.
+**Spent so far in Window 1: 0 USD by Step 3** (L0, the free noise run, passed on
+2026-10-25; L1a is next). The two Window 1 rows in the ledger (2026-10-23, 0.00
+each) predate Step 3.
 
 | Stage                          | When               | Live work                                                                                                                                                                                   | Est. per run    | Runs  | Est. total  |
 | ------------------------------ | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | ----- | ----------- |
@@ -1599,6 +1600,7 @@ builds it.
 | 2026-10-24 | 0      | [40102293433](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40102293433)                                                                                                                                                                                         | 3c    | 0.17       | Hard self-healing set, 10 packages, Sonnet 5.5 medium, 102 s: 10/10 reproducers valid and failing 5 of 5 for the reported reason; 8/8 real bugs healed on the first attempt (cause in another module, misleading report, seed-dependent, shallow-patch trap, boundary, stale cache, float precision, caller traceback), none matched the shallow patch, 0 hacked; both control reports (intended behaviour, user error) declined with no fix sent. Even the hard set saturates.                                                                                                                                                                                                                                                           |
 | 2026-10-24 | 0      | [40102295372](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40102295372)                                                                                                                                                                                         | Bd    | 0.49       | Build then improve, 3 English specs, 4 min: Opus 5.5 built 3/3; Sonnet 5.5's tests written from the spec alone passed on 2/3 (`wordpairs` failed a tie-order test: the build and the spec disagree, and the run stopped there as designed); 3/3 deterministic; one blind engine loop improved `gridroute` by 36.8 % and found nothing past the floor on `salesreport`. 0.16 USD a spec.                                                                                                                                                                                                                                                                                                                                                   |
 | 2026-10-24 | 0      | 40102644897-40102659864 (8 runs)                                                                                                                                                                                                                                                   | E5o   | 10.56      | OSS A/B on a second set of 8 libraries (packaging, toml, attrs, networkx, pyflakes, parso, pyasn1, simplejson), 2 reps, two independent counts agree: blind A 12/16 (mean 18.2 %, median 10.2 %), playbook-matched B 13/16 (mean 17.7 %, median 10.5 %); b = 1, c = 2, p = 1.0. Both sets: A 23/36, B 24/36, b = 3, c = 4. Largest gains: attrs 45-49 %, networkx 24-37 %.                                                                                                                                                                                                                                                                                                                                                                |
+| 2026-10-25 | 1      | [40237282461](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40237282461)                                                                                                                                                                                         | L0    | 0.00       | Step 3 noise rule, paired path (`LIVE_NOISE_PATH=paired`, no API call), 13 repositories x 10 A/A looks, 34 min. Single-look false wins 0/130 (gate <= 1: pass), 0 kept, 0 speed passes (Window 0's single-run rule counted 2.8 %). Calibrated floors 2.0-5.9 % (four at the 2 % minimum; `sortedcontainers` 5.9 %, `sortstats` 5.7 %, `tabulate` 4.3 %); mean A/A gap -0.06 % (5 faster, 8 slower); row O clears 6/6; per-repository wall time 95-241 s. The first dispatch (40237169055) stopped at the input guard: a 0 cap is refused (help text fixed, `b7df752`).                                                                                                                                                                    |
 
 ### 2026-10-24 (Window 0 final experiments: what they decide)
 
@@ -2001,6 +2003,16 @@ worktree", 4.4.0) or in the builder rules every brief carries.
   passed alone and on CI. **Change:** a Builder reports a timing failure under
   load as such and runs its own tests; the Lead's sequential clean-copy gate and
   CI decide.
+- **The local gate ran a different Python from CI.** The workload's `python` is
+  the first on PATH, and `uv run` puts the service's venv first: 3.13 here, 3.11
+  on CI. E3-H's baked table, a 2,500-item list literal, raised peak RSS 3.5 %
+  under 3.13 but over the 10 % memory guardrail under 3.11, so CI rejected it on
+  the first look (`b7df752`). Under 3.11 locally the old test failed the same
+  way and the fixed one (one string literal, `list("0101...")`) passed.
+  **Change:** a memory-sensitive fixture is checked under 3.11 too, with
+  `PATH=<dir with python -> 3.11>:$PATH .venv/bin/python -m pytest` (not
+  `uv run`); a fixture keeps memory-heavy constructs out of edits that are not
+  about memory.
 
 ### Window 0 (live experiments, 2026-10-23 to 2026-10-25)
 
