@@ -19,6 +19,9 @@ and ``_probe`` dirs, prunes and ``rmdir``s an empty ``<run>``. Every call is
 self-contained: the node's fallback is a second call. A ``RunFailure`` returns the applied changes with no rows, so
 the node's completeness rule refuses the combination; its reason is a note.
 Notes go to ``last_notes`` (``CombineMeasured`` has no field for them).
+With a quality ``scorer`` (D37) it is frozen at the base once per run, both
+worktrees mask its frozen files before every workload launch, and each side
+gets its ``quality:<name>`` row (``trial_runner.QualityHooks``).
 
 ``GitBranchPublisher.publish`` refuses an unsafe branch
 (``refnames.assert_safe_branch`` with the publisher's prefix: outside it, the
@@ -47,6 +50,7 @@ from autonomous_ai_agents.common.config import IsolationMode, settings
 from autonomous_ai_agents.common.errors import DeliveryError, RepoTamperedError
 from autonomous_ai_agents.common.models import (
     CombineSkip,
+    FrozenFile,
     Measurement,
     Project,
     Workload,
@@ -67,6 +71,7 @@ from autonomous_ai_agents.execution.measure import (
 from autonomous_ai_agents.execution.phase import owned_phases, phase_dirs
 from autonomous_ai_agents.execution.procrun import RunFailure, run_once
 from autonomous_ai_agents.execution.protocols import CombineMeasured, KeptChange
+from autonomous_ai_agents.execution.trial_runner import QualityHooks, RunnerScorer
 
 TIP, BASE = "combine", "combine-base"
 CONFLICT = "conflict"
@@ -91,7 +96,8 @@ def _require_id(what: str, value: str) -> None:
 
 class GitCombiner:
     """The real ``Combiner``. ``git`` defaults to the project's ``GitWorkspace``;
-    the modes default to the settings (``make_phase``)."""
+    the modes default to the settings (``make_phase``); ``scorer`` is the run's
+    quality scorer, ``None`` for Step 2."""
 
     def __init__(
         self,
@@ -102,8 +108,10 @@ class GitCombiner:
         platform: str = sys.platform,
         base_env: Mapping[str, str] | None = None,
         run: RunOnce = run_once,
+        scorer: RunnerScorer | None = None,
     ) -> None:
         self._git = git
+        self._quality = QualityHooks(scorer)
         self._phase = functools.partial(
             make_phase, network=network, fs=fs, platform=platform, base_env=base_env
         )
@@ -124,11 +132,14 @@ class GitCombiner:
         workloads: Sequence[Workload],
         *,
         baseline_count: int | None = None,
+        quality_files: Sequence[FrozenFile] = (),
     ) -> CombineMeasured:
         """Merge ``kept`` greedily onto ``base_commit`` and re-test the tip.
 
         ``baseline_count`` is the baseline's passing-test count
         (``measure.baseline_test_count``); the suite on the tip must reach it.
+        ``quality_files`` are the baseline's recorded frozen files: the scorer
+        freezes against them (``EngineError`` when one changed; a resume).
         """
         _require_id("run_id", run_id)
         for change in kept:
@@ -146,17 +157,20 @@ class GitCombiner:
         tip, applied, skipped = self._merge(git, base_commit, kept)
         if not applied:
             return CombineMeasured(base_commit, (), skipped, (), ())
+        self._quality.freeze(git, run_id, base_commit, recorded=quality_files)
         sides = phase_dirs(run_id, TIP), phase_dirs(run_id, BASE)
         with owned_phases(git, "the combine", *sides):
             tip_wt = git.add_worktree(sides[0].worktree, tip)
             base_wt = git.add_worktree(sides[1].worktree, base_commit)
             tip_dirs, base_dirs = sides
+            mask = self._quality.mask  # the same on both sides
             b = self._phase(
                 git,
                 tip_wt,
                 scratch=tip_dirs.scratch,
                 probe=tip_dirs.probe,
                 run=self._run,
+                mask=mask,
             )
             a = self._phase(
                 git,
@@ -164,6 +178,7 @@ class GitCombiner:
                 scratch=base_dirs.scratch,
                 probe=base_dirs.probe,
                 run=self._run,
+                mask=mask,
             )
             rows = self._measure(a, b, project, workloads, baseline_count)
             if repo_fingerprint(git) != before:
@@ -223,8 +238,9 @@ class GitCombiner:
             for workload in workloads:
                 abab = measure_abab(a, b, workload)
                 notes.extend(abab.notes)
-                baseline.extend(abab.a)
-                combined.extend(abab.b)
+                score = functools.partial(self._quality.rows, workload, trial_id=None, notes=notes)  # fmt: skip
+                baseline.extend((*abab.a, *score(abab.a, abab.outputs_a)))
+                combined.extend((*abab.b, *score(abab.b, abab.outputs_b)))
             tests = run_tests(b, project, workloads, baseline_count=baseline_count)
             notes.extend(tests.notes)
             combined.extend(tests.measurements)

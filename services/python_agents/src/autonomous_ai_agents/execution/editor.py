@@ -241,6 +241,7 @@ class ClaudeEditor:
             files = WorktreeEditor(
                 worktree,
                 protected=task.brief.protected,
+                read_deny=task.brief.read_deny,
                 limits=self._limits,
                 reserved_modules=self._reserved,
                 module_roots=self._roots,

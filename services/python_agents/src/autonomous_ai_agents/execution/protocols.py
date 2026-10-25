@@ -26,6 +26,7 @@ from autonomous_ai_agents.clients.budget import Budget
 from autonomous_ai_agents.common.config import IsolationMode
 from autonomous_ai_agents.common.models import (
     CombineSkip,
+    FrozenFile,
     Guardrail,
     Hotspot,
     Hypothesis,
@@ -34,7 +35,7 @@ from autonomous_ai_agents.common.models import (
     ProjectUnderstanding,
     Workload,
 )
-from autonomous_ai_agents.common.paths import normalize_path
+from autonomous_ai_agents.common.paths import literal_project_file, normalize_path
 
 CHANGE_STATUSES: frozenset[str] = frozenset({"A", "M", "D", "T"})
 """``git diff --raw --no-renames`` letters: added, modified, deleted, type change."""
@@ -80,18 +81,28 @@ class TrialBrief:
     trials node computes it, the runner retries only below it, and the editor
     prompt never shows it. A field, not a ``run()`` keyword, so every
     ``TrialRunner`` keeps its signature; the default 0 fails closed.
+    ``read_deny`` lists the quality check's frozen files (D37), literal
+    project files the editor's tools refuse to read and never list.
     """
 
     understanding: ProjectUnderstanding | None
     hotspots: tuple[Hotspot, ...]
     protected: tuple[str, ...]
     fix_retries_left: int = 0
+    read_deny: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.fix_retries_left < 0:
             raise ValueError(
                 f"fix_retries_left must be at least 0, got {self.fix_retries_left}"
             )
+        for path in self.read_deny:
+            try:
+                literal = literal_project_file("read_deny", path) == path
+            except ValueError as error:
+                raise ValueError(f"read_deny {path!r}: {error}") from None
+            if not literal:
+                raise ValueError(f"read_deny {path!r} must be a normalised file path")
 
 
 @dataclass(frozen=True)
@@ -302,7 +313,8 @@ class ProjectUnderstander(Protocol):
 
 @runtime_checkable
 class Combiner(Protocol):
-    """Merges the kept changes onto ``base_commit`` and re-tests the tip."""
+    """Merges the kept changes onto ``base_commit`` and re-tests the tip;
+    ``quality_files`` (``Baseline.quality_files``) re-check the frozen files."""
 
     def combine(
         self,
@@ -313,6 +325,7 @@ class Combiner(Protocol):
         workloads: Sequence[Workload],
         *,
         baseline_count: int | None = None,
+        quality_files: Sequence[FrozenFile] = (),
     ) -> CombineMeasured: ...
 
 

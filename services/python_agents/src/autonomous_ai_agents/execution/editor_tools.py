@@ -13,12 +13,16 @@ sees as ``/repo``; the real path never appears in a result. Rules, in code:
 - Every command refuses a ``GIT_METADATA_NAMES`` component (case-insensitive:
   APFS folds case, and ``.git`` names the user's real git dir) and a path that
   is or lies inside a ``READ_DENY_PATTERNS`` match (reads reach the API;
-  ``str_replace`` match counts are an oracle). Writes also refuse
+  ``str_replace`` match counts are an oracle), and one of the trial's
+  ``read_deny`` files (the quality check's evaluation data, D37: literal
+  paths, ``glob.escape``-d before matching; it and the protected patterns
+  NFC-normalised like the request). Writes also refuse
   ``WRITE_DENY_PATTERNS``, the trial's protected patterns, and a new top-level
   module or package under any module root (by default ``/repo`` and
   ``/repo/src``, first on a trial's ``sys.path``) named after a reserved
   module, as the ``module_shadow`` capture rule has it: shadowing the stdlib
   or the test runner can make a failing suite pass.
+- A directory listing omits what a read would refuse.
 - Each existing component is ``lstat``-ed: a symlink is refused, never
   resolved, and files open with ``O_NOFOLLOW``. Only regular files with one
   hard link are read or written (another link may live outside the root).
@@ -33,6 +37,7 @@ the git-side capture rules audit the outcome afterwards.
 from __future__ import annotations
 
 import contextlib
+import glob
 import os
 import stat
 import unicodedata
@@ -151,7 +156,8 @@ class _EditError(Exception):
 class WorktreeEditor:
     """Executes text editor tool commands inside one worktree, seen as ``/repo``.
 
-    ``protected`` are the trial's protected patterns, enforced on writes.
+    ``protected`` are the trial's protected patterns, enforced on writes;
+    ``read_deny`` the literal files no command may read, write or list.
     ``reserved_modules`` (see ``RESERVED_MODULES``; a dotted name reserves
     its first component) and ``module_roots`` (repo-relative directories,
     ``""`` is the root) are full sets, not additions, exactly as the trial
@@ -169,6 +175,7 @@ class WorktreeEditor:
         limits: EditorLimits | None = None,
         reserved_modules: AbstractSet[str] = RESERVED_MODULES,
         module_roots: AbstractSet[str] = DEFAULT_MODULE_ROOTS,
+        read_deny: Sequence[str] = (),
     ) -> None:
         reserved = _members(reserved_modules, "reserved_modules")
         roots = _members(module_roots, "module_roots")
@@ -176,7 +183,8 @@ class WorktreeEditor:
         if not real.is_dir():
             raise ValueError(f"editor root {root} is not a directory")
         self._root = real
-        self._protected = tuple(protected)
+        self._protected = tuple(_nfc(pattern) for pattern in protected)
+        self._read_deny = tuple(glob.escape(_nfc(path)) for path in read_deny)
         self._reserved = frozenset(n.casefold().split(".", 1)[0] for n in reserved)
         self._roots = tuple(sorted({_root_parts(directory) for directory in roots}))
         self._limits = EditorLimits.from_settings() if limits is None else limits
@@ -248,6 +256,8 @@ class WorktreeEditor:
                 raise _EditError(
                     f"{_show(scope)} may hold secrets ({secret}): off limits"
                 )
+            if _first_match(scope, self._read_deny) is not None:
+                raise _EditError(f"{_show(scope)} is evaluation data, off limits")
         if not write:
             return rel
         if rel == ".":
@@ -439,7 +449,8 @@ class WorktreeEditor:
             children = sorted(found, key=lambda entry: entry.name)
         for entry in children:
             child = entry.name if rel == "." else f"{rel}/{entry.name}"
-            if not _listable(entry.name, child):
+            denied = _first_match(_nfc(child), self._read_deny) is not None
+            if not _listable(entry.name, child) or denied:
                 continue
             if len(out) >= LIST_MAX_ENTRIES:
                 return True
@@ -485,6 +496,12 @@ def _root_parts(directory: str) -> tuple[str, ...]:
     """Case-folded components of a repo-relative module root; ``()`` is the root."""
     clean = repo_relative(directory)
     return () if clean == "." else tuple(clean.casefold().split("/"))
+
+
+def _nfc(text: str) -> str:
+    """Requests are NFC-normalised, so is what they are matched against: git
+    keeps a path's bytes (maybe NFD), and APFS opens either spelling."""
+    return unicodedata.normalize("NFC", text)
 
 
 def _unprintable(text: str) -> bool:

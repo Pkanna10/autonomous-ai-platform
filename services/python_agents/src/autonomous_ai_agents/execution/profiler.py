@@ -85,6 +85,7 @@ from autonomous_ai_agents.execution.phase import (
 )
 from autonomous_ai_agents.execution.procrun import RunFailure, run_once
 from autonomous_ai_agents.execution.protocols import ProfileResult, WorktreeHandle
+from autonomous_ai_agents.execution.trial_runner import QualityHooks, RunnerScorer
 
 PHASE = "profile"
 PROFILE_NAME = "profile.json"
@@ -354,7 +355,9 @@ class ProfileGit(Protocol):
 class CProfiler:
     """The real ``Profiler``. ``git`` defaults to the project's ``GitWorkspace``
     and ``fingerprint`` to its ``repo_fingerprint`` (a git double brings its
-    own); the modes default to the settings (``make_phase``)."""
+    own); the modes default to the settings (``make_phase``). With the run's
+    quality ``scorer`` its frozen files are deleted before the profile run
+    (D37), the mask derived as every runner derives it."""
 
     def __init__(
         self,
@@ -367,6 +370,7 @@ class CProfiler:
         platform: str = sys.platform,
         base_env: Mapping[str, str] | None = None,
         run: RunOnce = run_once,
+        scorer: RunnerScorer | None = None,
     ) -> None:
         workspace = GitWorkspace(Path(project.root_path)) if git is None else git
         if fingerprint is None:
@@ -377,7 +381,7 @@ class CProfiler:
         self._phase = functools.partial(
             make_phase, network=network, fs=fs, platform=platform, base_env=base_env
         )
-        self._run = run
+        self._run, self._mask = run, QualityHooks(scorer).mask
         root = project.root_path
         self._roots = (Path(os.path.normpath(root)), Path(os.path.realpath(root)))
 
@@ -403,8 +407,9 @@ class CProfiler:
         with owned_phases(self._git, "the profiler", dirs):
             handle = self._git.add_worktree(dirs.worktree, commit)
             phase = self._phase(
-                self._git, handle, scratch=dirs.scratch, probe=dirs.probe, run=self._run
-            )
+                self._git, handle, scratch=dirs.scratch, probe=dirs.probe,
+                run=self._run, mask=self._mask,
+            )  # fmt: skip
             tracked = frozenset(self._git.ls_tree(commit))
             for workload, target in planned:
                 found, named = self._one(phase, workload, target, tracked, notes)

@@ -47,12 +47,25 @@ the twin is an ``EngineError`` (the base, not the hypothesis, failed, as at
 baseline): never retried, no verdict, the spend on the error.
 The noise calibration (D41 c, ``GitBaselineRunner.calibrate``) measures the
 base against a second base worktree in A/A blocks.
+
+Quality (D37, ``scorer``; without one every runner is Step 2's): every phase
+any runner builds deletes the check's frozen files before each workload
+launch (``make_phase(mask=)``; the suite is unmasked), and each measured side
+gets one ``quality:<name>`` row (``n=1``, unit ``score``) scored from its
+agreed output bytes, cached by ``raw_fingerprint``; an unscoreable output
+gets no row, so completeness rejects it (``missing_measurement``), with a
+note that names counts, never the bytes. The baseline freezes the files
+(``quality_files``), scores twice and notes a tracked input a workload names
+that carries the labels column (``label_leaks``; the check is sound only
+without one). A trial freezes against ``Baseline.quality_files`` once per run
+(a resume), and its editor's brief always protects and read-denies the files.
 """
 
 from __future__ import annotations
 
 import contextlib
 import functools
+import glob
 import math
 import os
 import posixpath
@@ -82,10 +95,13 @@ from autonomous_ai_agents.common.models import (
     NOISE_CALIBRATION_BLOCKS_MAX,
     NOISE_FLOOR_MIN,
     Baseline,
+    FrozenFile,
     Hypothesis,
     Measurement,
     NoiseCalibration,
     Project,
+    QualityCheck,
+    RunStats,
     Trial,
     TrialStatus,
     Violation,
@@ -119,7 +135,12 @@ from autonomous_ai_agents.execution.phase import (
     phase_dirs,
     require_dir_name,
 )
-from autonomous_ai_agents.execution.procrun import RunFailure, run_once
+from autonomous_ai_agents.execution.procrun import (
+    OutputCaps,
+    RunFailure,
+    RunSample,
+    run_once,
+)
 from autonomous_ai_agents.execution.protocols import (
     Change,
     CodeEditor,
@@ -128,7 +149,14 @@ from autonomous_ai_agents.execution.protocols import (
     TrialBrief,
     WorktreeHandle,
 )
+from autonomous_ai_agents.execution.quality import (
+    QualityGit,
+    QualityScorer,
+    UnscoreableError,
+    label_column_leaks,
+)
 from autonomous_ai_agents.execution.retry import ClosureIndex, TrialFeedback, classify
+from autonomous_ai_agents.execution.sandbox import SandboxPolicy
 from autonomous_ai_agents.optimization.anticheat import (
     DEFAULT_MODULE_ROOTS,
     check_capture,
@@ -206,6 +234,8 @@ class _Job:
     prior: str | None
     own_ref: str
     twin: PhaseDirs
+    patterns: tuple[str, ...]
+    """``brief.protected`` as the diff check matches it: frozen paths escaped."""
 
 
 @dataclass
@@ -330,8 +360,109 @@ def _base_dirs(tracked: Collection[str]) -> frozenset[str]:
     return frozenset(found)
 
 
+class RunnerScorer(QualityScorer, Protocol):
+    """``quality.FrozenScorer`` as the runners use it: its check names the
+    row's metric and the mask."""
+
+    @property
+    def check(self) -> QualityCheck: ...
+
+
+class NoteTap:
+    """A ``RunOnce`` keeping each distinct note of its runs: given to the
+    scorer and to the baseline runner, which reports the scorer's isolation
+    notes once (U19 review N4)."""
+
+    def __init__(self, run: RunOnce = run_once) -> None:
+        self._run, self._notes = run, dict[str, None]()
+
+    def __call__(
+        self, argv: Sequence[str], cwd: Path, env: Mapping[str, str],
+        sandbox: SandboxPolicy, timeout_s: float, caps: OutputCaps, *,
+        fresh_dirs: Sequence[Path] = (),
+    ) -> RunSample:  # fmt: skip
+        sample = self._run(argv, cwd, env, sandbox, timeout_s, caps, fresh_dirs=fresh_dirs)  # fmt: skip
+        self._notes.update(dict.fromkeys(sample.notes))
+        return sample
+
+    def drain(self) -> tuple[str, ...]:
+        notes, self._notes = tuple(self._notes), {}
+        return notes
+
+
+class QualityHooks:
+    """One runner's use of the shared scorer (D37): the mask, one freeze per
+    (run, commit), the rows. Without a scorer: no mask, freeze or row."""
+
+    def __init__(self, scorer: RunnerScorer | None) -> None:
+        self.scorer = scorer
+        self.mask = () if scorer is None else scorer.check.frozen_paths
+        self.files: tuple[FrozenFile, ...] = ()
+        self._key: tuple[str, str] | None = None
+
+    def freeze(
+        self, git: QualityGit, run_id: str, commit: str, *,
+        recorded: Sequence[FrozenFile] = (),
+    ) -> None:  # fmt: skip
+        if self.scorer is not None and self._key != (run_id, commit):
+            self.files = self.scorer.freeze(git, commit, run_id=run_id, recorded=recorded)  # fmt: skip
+            self._key = (run_id, commit)
+
+    def rows(
+        self, workload: Workload, measured: Sequence[Measurement], output: bytes | None,
+        *, trial_id: str | None, notes: list[str], baseline: bool = False,
+    ) -> tuple[Measurement, ...]:  # fmt: skip
+        """``workload``'s quality row: ``output`` (the agreed bytes) scored once,
+        keyed by the exact ``raw_fingerprint`` of its ``measured`` rows (``None``,
+        agreed only within a tolerance: scored uncached); unscoreable: none."""
+        if self.scorer is None:
+            return ()
+        raw = next((m.raw_fingerprint for m in measured), None)
+        score = self.scorer.score_baseline if baseline else self.scorer.score
+        try:
+            value = score(output, raw)
+        except UnscoreableError as error:  # its message never quotes the output
+            name = self.scorer.check.name
+            notes.append(f"workload {workload.name!r}: quality check {name!r}: {error}; no quality row")  # fmt: skip
+            return ()
+        stats = RunStats.from_samples((value,), unit="score")
+        metric = self.scorer.check.metric
+        return (Measurement(workload_id=workload.id, trial_id=trial_id, metric=metric, stats=stats, samples=(value,)),)  # fmt: skip
+
+
+def _label_leaks(
+    git: GitWorkspace, commit: str, check: QualityCheck, workloads: Sequence[Workload]
+) -> tuple[str, ...]:
+    """D37's precondition: each column of a tracked regular file a workload's
+    argv names (``argv[0]`` from the root, the rest from its working dir; not
+    a frozen file) holding the labels. Each is read once, at most the cap and
+    one byte; one past the cap is not scanned."""
+    if check.labels is None:
+        return ()
+    cap, modes = settings.QUALITY_MAX_FROZEN_BYTES, git.blob_modes(commit)
+    files: dict[str, bytes] = {}
+    seen = set(check.frozen_paths)
+    for workload in workloads:
+        for index, arg in enumerate(workload.command):
+            if arg.startswith("-") or os.path.isabs(arg):
+                continue
+            joined = arg if index == 0 else posixpath.join(workload.working_dir, arg)
+            try:
+                rel = normalize_path(posixpath.normpath(joined))
+            except ValueError:  # outside the repository
+                continue
+            if modes.get(rel) in _REGULAR and rel not in seen:
+                seen.add(rel)
+                data = git.read_blob(commit, rel, limit=cap + 1)
+                if len(data) <= cap:
+                    files[rel] = data
+    labels = git.read_blob(commit, check.labels, limit=cap + 1)
+    return label_column_leaks(labels, files)
+
+
 class _PhaseOwner:
-    """What both runners share: git, the phase factory, notes, the cleanup."""
+    """What both runners share: git, the phase factory, notes, the cleanup,
+    the quality hooks."""
 
     _what = "the runner"
 
@@ -346,8 +477,11 @@ class _PhaseOwner:
         base_env: Mapping[str, str] | None = None,
         run: RunOnce = run_once,
         on_note: Callable[[str], None] | None = None,
+        scorer: RunnerScorer | None = None,
+        scorer_notes: NoteTap | None = None,
     ) -> None:
         self._project = project
+        self._quality, self._scorer_notes = QualityHooks(scorer), scorer_notes
         self._git = GitWorkspace(Path(project.root_path)) if git is None else git
         self._phase = functools.partial(
             make_phase, network=network, fs=fs, platform=platform, base_env=base_env
@@ -364,14 +498,12 @@ class _PhaseOwner:
             for note in notes:
                 self._on_note(f"{prefix}: {note}")
 
-    def _make_phase(
-        self, handle: WorktreeHandle, dirs: PhaseDirs, *, mask: Sequence[str] = ()
-    ) -> Phase:
-        """The phase of ``handle``; ``mask`` lists the frozen files deleted
-        before each workload launch (D37; U24 passes the quality check's)."""
+    def _make_phase(self, handle: WorktreeHandle, dirs: PhaseDirs) -> Phase:
+        """The phase of ``handle``, masking the quality check's frozen files
+        before each workload launch (D37): every phase, so no side can differ."""
         return self._phase(
             self._git, handle, scratch=dirs.scratch, probe=dirs.probe, run=self._run,
-            mask=mask,
+            mask=self._quality.mask,
         )  # fmt: skip
 
     def _measure(
@@ -383,21 +515,32 @@ class _PhaseOwner:
         trial_id: str | None,
         baseline_count: int | None,
         twin: Phase | None = None,
+        baseline: bool = False,
     ) -> tuple[tuple[Measurement, ...], tuple[Measurement, ...]]:
-        """``measure_workload`` per workload, or ABBA against ``twin`` (A), then
+        """``measure_workload`` per workload, or ABBA against ``twin`` (A), each
+        side's quality row after its rows (``baseline``: scored twice), then
         the suite once on ``phase``: (the twin's rows, ``phase``'s rows); notes
         emitted. ``RunFailure`` propagates, its notes emitted."""
         base: list[Measurement] = []
         rows: list[Measurement] = []
+        hooks = self._quality
         try:
             for workload in workloads:
+                notes: list[str] = []
                 if twin is None:
                     alone = measure_workload(phase, workload, trial_id=trial_id)
-                    notes, own = alone.notes, alone.measurements
+                    notes.extend(alone.notes)
+                    own = (*alone.measurements, *hooks.rows(
+                        workload, alone.measurements, alone.outputs,
+                        trial_id=trial_id, notes=notes, baseline=baseline,
+                    ))  # fmt: skip
                 else:
                     paired = measure_abab(twin, phase, workload, trial_id_b=trial_id)
-                    notes, own = paired.notes, paired.b
-                    base.extend(paired.a)
+                    notes.extend(paired.notes)
+                    a = hooks.rows(workload, paired.a, paired.outputs_a, trial_id=None, notes=notes)  # fmt: skip
+                    b = hooks.rows(workload, paired.b, paired.outputs_b, trial_id=trial_id, notes=notes)  # fmt: skip
+                    base.extend((*paired.a, *a))
+                    own = (*paired.b, *b)
                 self._note(prefix, notes)
                 rows.extend(own)
             suite = run_tests(
@@ -444,9 +587,21 @@ class GitBaselineRunner(_PhaseOwner):
     """The real ``BaselineRunner``: every workload at ``commit``, then the suite
     once (its ``tests_passed`` rows record the passing count trials must reach).
     A ``RunFailure`` is an ``EngineError`` once F1 held. Notes go to
-    ``on_note`` prefixed ``baseline:``."""
+    ``on_note`` prefixed ``baseline:``; with a ``scorer`` (module docstring),
+    ``scorer_notes``, the scorer's ``NoteTap``, adds its run notes once."""
 
     _what = "the baseline"
+    _leaks: tuple[str, ...] = ()
+
+    @property
+    def quality_files(self) -> tuple[FrozenFile, ...]:
+        """The frozen files the latest ``measure`` recorded (``Baseline.quality_files``)."""
+        return self._quality.files
+
+    @property
+    def label_leaks(self) -> tuple[str, ...]:
+        """``path column N`` of each tracked input carrying the labels (D37)."""
+        return self._leaks
 
     def measure(
         self, workloads: Sequence[Workload], *, run_id: str, commit: str | None
@@ -455,6 +610,17 @@ class GitBaselineRunner(_PhaseOwner):
             raise ValueError("the baseline needs the pinned commit, got None")
         require_dir_name("run id", run_id)
         dirs = phase_dirs(run_id, BASELINE_PHASE)
+        self._quality.freeze(self._git, run_id, commit)
+        scorer = self._quality.scorer
+        check = None if scorer is None else scorer.check
+        self._leaks = () if check is None else _label_leaks(self._git, commit, check, workloads)  # fmt: skip
+        if check is not None and self._leaks:
+            where = _printable(", ".join(self._leaks))
+            self._note("baseline", [
+                f"quality check {check.name!r}: the labels also appear in {where};"
+                " a workload can read them there, so the check is sound only if"
+                " none does"
+            ])  # fmt: skip
         before = repo_fingerprint(self._git)
         failed: RunFailure | None = None
         rows: tuple[Measurement, ...] = ()
@@ -468,9 +634,13 @@ class GitBaselineRunner(_PhaseOwner):
                     prefix="baseline",
                     trial_id=None,
                     baseline_count=None,
+                    baseline=True,
                 )
             except RunFailure as failure:
                 failed = failure
+            if self._scorer_notes is not None:
+                scorer_notes = self._scorer_notes.drain()
+                self._note("baseline", [f"the quality scorer: {n}" for n in scorer_notes])  # fmt: skip
             self._tampered(before)
         if failed is not None:
             raise EngineError(f"the baseline could not be measured: {failed.reason}")
@@ -575,6 +745,7 @@ class GitTrialRunner(_PhaseOwner):
         fix_retries: int = 0,
         retry_floor_usd: float = 0.0,
         paired: bool = False,
+        scorer: RunnerScorer | None = None,
     ) -> None:
         if not 0 <= fix_retries <= FIX_RETRIES_MAX:
             raise ValueError(
@@ -588,7 +759,7 @@ class GitTrialRunner(_PhaseOwner):
         self._paired = paired
         super().__init__(
             project, git=git, network=network, fs=fs, platform=platform,
-            base_env=base_env, run=run, on_note=on_note,
+            base_env=base_env, run=run, on_note=on_note, scorer=scorer,
         )  # fmt: skip
         self._prefix = settings.TRIAL_BRANCH_PREFIX if prefix is None else prefix
         problem = branch_prefix_problem(self._prefix)
@@ -615,6 +786,8 @@ class GitTrialRunner(_PhaseOwner):
         if baseline.commit is None:
             raise ValueError("the trial needs the baseline's commit, got None")
         run_id = _run_id(branch, hypothesis.id, self._prefix)
+        recorded = baseline.quality_files  # a resumed run's scorer freezes here
+        self._quality.freeze(self._git, run_id, baseline.commit, recorded=recorded)
         dirs = phase_dirs(run_id, f"trial-{hypothesis.id}")
         own_ref = f"refs/heads/{branch}"
         exclude = frozenset({own_ref})
@@ -714,11 +887,14 @@ class GitTrialRunner(_PhaseOwner):
         base = str(baseline.commit)
         tracked = self._git.ls_tree(base)
         scope = run_scope(self._project, workloads, tracked, worktree=handle.path)
-        protected = tuple(dict.fromkeys((*brief.protected, *scope.protected)))
+        frozen = self._quality.mask  # literal: shown as is, escaped to match
+        protected = tuple(dict.fromkeys((*brief.protected, *scope.protected, *frozen)))
+        read_deny = tuple(dict.fromkeys((*brief.read_deny, *frozen)))
+        patterns = tuple(glob.escape(p) if p in frozen else p for p in protected)
         job = _Job(
             handle, dirs, hypothesis, tuple(workloads), baseline, base, tracked,
-            scope, replace(brief, protected=protected), prior,
-            f"refs/heads/{trial.branch}", _twin_dirs(dirs),
+            scope, replace(brief, protected=protected, read_deny=read_deny), prior,
+            f"refs/heads/{trial.branch}", _twin_dirs(dirs), patterns,
         )  # fmt: skip
         task = EditTask(hypothesis, job.brief, secrets.token_hex(8))
         first = self._try(job, trial, task, progress, earlier=None)
@@ -779,7 +955,7 @@ class GitTrialRunner(_PhaseOwner):
         trial = trial.model_copy(update={"diff": diff, "touched_paths": touched})
         violations = self._violations(
             changes, result, blobs, job.baseline, job.scope, job.tracked,
-            job.brief.protected,
+            job.patterns,
         )  # fmt: skip
         if violations:
             text = "; ".join(v.message for v in violations[:3])
@@ -818,8 +994,6 @@ class GitTrialRunner(_PhaseOwner):
     def _trial_phases(self, job: _Job, side: _Side) -> tuple[Phase, Phase | None]:
         """The trial's phase and, when paired, a fresh twin's at the base (an
         existing twin, a first attempt's, is replaced); both mark ``side``."""
-        # U24: pass the same mask (quality.frozen_paths) to both phases, so the
-        # two sides of the pair run under the same conditions.
         phase = self._make_phase(job.handle, job.dirs)
         if not self._paired:
             return phase, None
@@ -899,7 +1073,8 @@ class GitTrialRunner(_PhaseOwner):
 
     def _closure(self, job: _Job, trial: Trial) -> ClosureIndex:
         """D13's closure, read from git and never from the worktree a run may
-        have rewritten: the tracked, non-deny-listed ``.py`` blobs at the base
+        have rewritten: the tracked ``.py`` blobs at the base, neither
+        deny-listed nor in the brief's ``read_deny`` (the frozen files),
         and the touched files at the trial's commit, at most the setting's
         bytes (past it the index is incomplete and messages are withheld)."""
         cap, used = settings.RETRY_CLOSURE_MAX_SOURCE_BYTES, 0
@@ -907,7 +1082,8 @@ class GitTrialRunner(_PhaseOwner):
         for path in job.tracked:
             if used > cap:
                 break
-            if path.endswith(".py") and not _read_denied(path):
+            denied = _read_denied(path) or path in job.brief.read_deny
+            if path.endswith(".py") and not denied:
                 blob = self._git.read_blob(job.base, path, limit=cap - used + 1)
                 used += len(blob)
                 sources[path] = blob.decode("utf-8", "replace")
@@ -958,6 +1134,10 @@ def _run_id(branch: str, hypothesis_id: str, prefix: str) -> str:
         raise ValueError(f"branch {branch!r} is not {head}<run>{tail}")
     require_dir_name("run id", inner)
     return inner
+
+
+def _printable(text: str) -> str:
+    return "".join(ch if ch.isprintable() else "?" for ch in text)
 
 
 def _noted(trial: Trial, note: str) -> Trial:
