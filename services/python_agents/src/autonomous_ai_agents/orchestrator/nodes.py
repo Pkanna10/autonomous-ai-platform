@@ -51,6 +51,7 @@ from langgraph.types import interrupt
 from pydantic import ValidationError
 
 from autonomous_ai_agents.clients.budget import Budget
+from autonomous_ai_agents.clients.structured import shown
 from autonomous_ai_agents.common.config import (
     FIX_RETRIES_MAX,
     GENERATOR_MAX_CALLS_MAX,
@@ -59,13 +60,17 @@ from autonomous_ai_agents.common.config import (
     Retrieval,
     settings,
 )
-from autonomous_ai_agents.common.errors import DeliveryError as DeliveryError
-from autonomous_ai_agents.common.errors import EngineError as EngineError
 from autonomous_ai_agents.common.errors import (
+    BudgetExceeded,
+    LLMRequestError,
+    LLMUnavailable,
     TrialUnaffordable,
+    UnusableReplyError,
     add_spend,
     spend_of,
 )
+from autonomous_ai_agents.common.errors import DeliveryError as DeliveryError
+from autonomous_ai_agents.common.errors import EngineError as EngineError
 from autonomous_ai_agents.common.models import (
     METRIC_PEAK_RSS_BYTES,
     METRIC_TESTS_PASSED,
@@ -86,6 +91,7 @@ from autonomous_ai_agents.common.models import (
     Hotspot,
     Hypothesis,
     HypothesisStatus,
+    Lesson,
     Measurement,
     NoiseCalibration,
     Objective,
@@ -133,7 +139,7 @@ from autonomous_ai_agents.optimization.judges import (
     derive_verdict,
     primary_metric,
 )
-from autonomous_ai_agents.optimization.ranking import rank_hypotheses
+from autonomous_ai_agents.optimization.ranking import rank_generated, rank_hypotheses
 from autonomous_ai_agents.optimization.sources import (
     HypothesisGenerator,
     TechniqueMatcher,
@@ -741,6 +747,161 @@ def _understand_failed(state: EngineState, budget: Budget, exc: Exception) -> No
         "tokens_used": tokens_used,
         "events": [event],
     }
+
+
+_SOFT_DISCOVERY = (LLMUnavailable, LLMRequestError, UnusableReplyError)
+"""Generator outcomes that leave the run going (D18): a note, charged."""
+
+
+def _untried(
+    ctx: NodeContext, state: EngineState
+) -> tuple[list[Hypothesis], list[Hypothesis]]:
+    """Caller candidates and pooled ideas no trial ran and no round holds."""
+    seen = {trial.hypothesis_id for trial in state["trials"]} | {
+        hypothesis.id for hypothesis in state["hypotheses"]
+    }
+    return (
+        [h for h in ctx.candidates if h.id not in seen],
+        [h for h in state["candidate_pool"] if h.id not in seen],
+    )
+
+
+def _discovery_cap(ctx: NodeContext, state: EngineState) -> float:
+    """D7's ``d``: discovery keeps one trial's reserve and stays in its share."""
+    cap, cost = state["max_cost_usd"], state["cost_usd"]
+    share_left = ctx.discovery_max_share * cap - state["discovery_cost_usd"]
+    return min(cap - ctx.min_trial_budget_usd, cost + share_left)
+
+
+def _live_generator(
+    ctx: NodeContext, state: EngineState, *, priced: bool
+) -> HypothesisGenerator | None:
+    """The generator while a request is still allowed (calls, money), else None.
+
+    ``priced`` (the router) also needs ``d > cost_usd``, so no round is
+    scheduled only to find discovery unaffordable; the node leaves that check
+    to ``_generate``, which then records ``discovery_exhausted``."""
+    spent = state["generator_calls"] >= ctx.generator_max_calls
+    if spent or state["budget_exhausted"] or state["discovery_exhausted"]:
+        return None
+    if priced and _discovery_cap(ctx, state) <= state["cost_usd"]:
+        return None
+    return ctx.generator
+
+
+def _title_key(title: str) -> str:
+    """A title compared as ``generate.py`` dedupes: spacing and case aside."""
+    return " ".join(title.split()).casefold()
+
+
+def _usable_id(hypothesis_id: str, used: set[str]) -> bool:
+    try:
+        validate_run_id(hypothesis_id)
+    except ValueError:
+        return False
+    return hypothesis_id not in used
+
+
+@dataclass(frozen=True)
+class _Generated:
+    """One generator turn: new ideas (model order), state keys, events."""
+
+    hypotheses: list[Hypothesis]
+    delta: NodeDelta
+    events: list[EngineEvent]
+
+
+def _discovery_spend(state: EngineState, budget: Budget, *, called: bool) -> NodeDelta:
+    """The run and discovery totals after a generator turn (D7, D18)."""
+    cost_usd, tokens_used = _charged(state, budget)
+    spent = cost_usd - state["cost_usd"]
+    return {
+        "cost_usd": cost_usd,
+        "tokens_used": tokens_used,
+        "discovery_cost_usd": state["discovery_cost_usd"] + spent,
+        "generator_calls": state["generator_calls"] + int(called),
+    }
+
+
+def _sift(
+    ctx: NodeContext, state: EngineState, generated: Sequence[Hypothesis]
+) -> tuple[list[Hypothesis], list[Hypothesis], list[str]]:
+    """Kept and parked ideas, and a note per drop or park (spec 4.2, 3).
+
+    No ``needs_package`` filter yet: ``Hypothesis`` has no ``packages`` field
+    until 3b, and the generator prompt forbids new dependencies (D9)."""
+    known = [*ctx.candidates, *state["hypotheses"], *state["parked"]]
+    known += state["candidate_pool"]
+    titles = {_title_key(h.title) for h in known}
+    used = {t.hypothesis_id for t in state["trials"]} | {h.id for h in known}
+    kept: list[Hypothesis] = []
+    parked: list[Hypothesis] = []
+    notes: list[str] = []
+    for hypothesis in generated:
+        named, key = shown(hypothesis.title), _title_key(hypothesis.title)
+        if not _usable_id(hypothesis.id, used):
+            notes.append(f"dropped hypothesis {named}: its id is unusable or taken")
+        elif key in titles:
+            notes.append(f"dropped repeated hypothesis {named}")
+        elif hypothesis.change_class not in ctx.generated_classes:
+            reason = {"parked_reason": "needs approval"}
+            parked.append(hypothesis.model_copy(update=reason))
+            notes.append(f"parked {hypothesis.change_class.value} hypothesis {named}")
+        else:
+            kept.append(hypothesis)
+        used.add(hypothesis.id)
+        titles.add(key)
+    return kept, parked, notes
+
+
+def _generate(
+    ctx: NodeContext,
+    state: EngineState,
+    generator: HypothesisGenerator,
+    lessons: Sequence[Lesson],
+) -> _Generated:
+    """One generator request on D7's narrowed budget, or none when unaffordable."""
+    phase, cost, d = RunPhase.hypotheses, state["cost_usd"], _discovery_cap(ctx, state)
+    unaffordable, warn = "discovery_unaffordable", EventLevel.warning
+    if d <= cost:  # never a Budget: a negative cap is a ValueError (D7)
+        message = f"no request: discovery may spend up to {d:.6f} USD"
+        event = _note(state, phase, unaffordable, message, level=warn)
+        return _Generated([], {"discovery_exhausted": True}, [event])
+    if not state["objectives"]:
+        raise EngineError("hypotheses needs an objective: define must run first")
+    budget = Budget(cap_usd=d, spent_usd=cost, tokens=state["tokens_used"])
+    try:
+        result = generator.generate(
+            project=state["project"],
+            understanding=state["understanding"],
+            hotspots=state["hotspots"],
+            objective=state["objectives"][0],
+            techniques=state["techniques"],
+            lessons=lessons,
+            avoid_titles=[h.title for h in (*state["hypotheses"], *state["parked"])],
+            n=ctx.generator_n,
+            budget=budget,
+        )
+    except BudgetExceeded as exc:  # the reserve or the share refused it (D7)
+        spend = _discovery_spend(state, budget, called=budget.spent_usd > cost)
+        event = _note(state, phase, unaffordable, str(exc)[:300], level=warn)
+        return _Generated([], {**spend, "discovery_exhausted": True}, [event])
+    except _SOFT_DISCOVERY as exc:
+        message = f"{type(exc).__name__}: {str(exc)[:300]}"
+        event = _note(state, phase, "generate_failed", message, level=warn)
+        return _Generated([], _discovery_spend(state, budget, called=True), [event])
+    except Exception as exc:  # LLMConfigError or a bug: the run ends, charged
+        keep_progress(exc, _discovery_spend(state, budget, called=True))
+        raise
+    kept, parked, notes = _sift(ctx, state, result.hypotheses)
+    delta = _discovery_spend(state, budget, called=True)
+    delta["parked"] = [*state["parked"], *parked]
+    counts: ScalarDict = {"kept": len(kept), "parked": len(parked)}
+    summary = f"{len(kept)} hypothesis(es) kept, {len(parked)} parked"
+    events = [_note(state, phase, "generated", summary, data=counts)]
+    for note in (*result.notes, *notes):
+        events.append(_note(state, phase, "generate_note", note))
+    return _Generated(kept, delta, events)
 
 
 def _named(names: Mapping[str, str], workload_ids: Iterable[str]) -> str:
@@ -1531,36 +1692,48 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
 
     def hypotheses(state: EngineState) -> NodeDelta:
         round_number = state["round"] + 1
-        # A candidate is new when no trial ran it and no earlier round holds
-        # it; earlier rounds' hypotheses stay (with their statuses) so the
-        # report and the lessons see every idea the run tried.
-        seen = {trial.hypothesis_id for trial in state["trials"]} | {
-            hypothesis.id for hypothesis in state["hypotheses"]
-        }
-        candidates = [h for h in ctx.candidates if h.id not in seen]
+        # An idea is new when no trial ran it and no earlier round holds it;
+        # earlier rounds' hypotheses stay (with their statuses) so the report
+        # and the lessons see every idea the run tried. Generated ideas wait
+        # in the pool; the generator runs only once nothing is left (spec 4.2).
+        candidates, pool = _untried(ctx, state)
         lessons = ctx.repository.list_lessons(state["project"].id)
+        turn = _Generated([], {}, [])
+        live = None if candidates or pool else _live_generator(ctx, state, priced=False)
+        if live is not None:
+            turn = _generate(ctx, state, live, lessons)
+            pool = turn.hypotheses
+        # The pool keeps the model's order and is re-ranked every round with
+        # the current lessons, as caller candidates are (D8).
+        generated = rank_generated(pool, lessons)
+        ordered = [*rank_hypotheses(candidates, lessons), *generated]
+        limit = ctx.max_hypotheses_per_round
         ranked = [
             h.model_copy(update={"status": HypothesisStatus.proposed})
-            for h in rank_hypotheses(candidates, lessons)[
-                : ctx.max_hypotheses_per_round
-            ]
+            for h in ordered[:limit]
         ]
+        sliced = {h.id for h in ranked}
+        rest = [h for h in pool if h.id not in sliced]  # callers stay in ctx
         event = _announce(
             state,
             RunPhase.hypotheses,
-            f"round {round_number}: ranked {len(ranked)} of {len(candidates)} candidates",
+            f"round {round_number}: ranked {len(ranked)} of {len(ordered)} candidates",
             data={
                 "round": round_number,
                 "ranked": len(ranked),
-                "candidates": len(candidates),
+                "candidates": len(ordered),
             },
         )
-        return {
+        delta: NodeDelta = {
+            **turn.delta,
             "phase": RunPhase.hypotheses,
             "round": round_number,
             "hypotheses": [*state["hypotheses"], *ranked],
-            "events": [event],
+            "events": [*turn.events, event],
         }
+        if state["candidate_pool"] or rest:
+            delta["candidate_pool"] = rest
+        return delta
 
     def run_one(
         state: EngineState,
@@ -2037,9 +2210,9 @@ def make_router(ctx: NodeContext) -> RouterFn:
             return "combine"
         if state["round"] >= state["max_rounds"]:
             return "combine"
-        trialled = {trial.hypothesis_id for trial in state["trials"]}
-        if all(candidate.id in trialled for candidate in ctx.candidates):
-            return "combine"
-        return "hypotheses"
+        candidates, pool = _untried(ctx, state)  # a review verdict never routes
+        if candidates or pool or _live_generator(ctx, state, priced=True) is not None:
+            return "hypotheses"
+        return "combine"
 
     return after_verdicts
