@@ -676,12 +676,22 @@ labels; Wave 2 only records the tags, and claims are marked as claims.**
   refuses 1-hour breakpoints, `transport.py:117-126`). `<already_on_the_table>`,
   the lens, the examples and the ask come after the breakpoint, so S1 (which
   cannot hold its own titles) writes the cache and every lens lane reads it;
-  parallel lanes read because S1 has completed before the fan-out. The leap
-  lane and the reviewer are other models and write their own caches. Whether
+  parallel lanes read because S1 has completed before the fan-out. Whether
   the API's structured-output system addition sits before the user turn in
-  the cached prefix is **unverified**; E0b's usage (`cache_read_input_tokens`
-  per request, S1 included: zero on S1, non-zero on every lens lane) answers
-  it.
+  the cached prefix is **unverified**; E0b's usage answers it (see the E0b
+  row: the data block's read on every lens lane).
+- **No cache write where nothing reads it (caching investigation,
+  2026-10-26).** The leap lane, the reviewer and the E1 auditor send their
+  prompt once (another model, or once per call), so a cache write there
+  costs 1.25x the input with no read: they send the data block with **no**
+  breakpoint and no automatic tail caching (the transport's single `cache`
+  flag is split into "cache the system block" and "cache the request tail",
+  N2's `structured_request(prefix=)` sets the data-block breakpoint only for
+  S1 and the lens lanes, which also drop the automatic tail cache once the
+  explicit breakpoint exists). About $0.06 a pipeline call on Opus, $0.15 on
+  the Fable arm, $5-7 over Wave 2. The output schema of S1 and every lens is
+  pinned byte-identical by a test, since a schema change silently ends the
+  lanes' cache reads.
 
 **D60. No tools in any stage, no model-chosen paths, no code.** Every stage is
 a single structured-output request with no `tools`; hotspots resolve only
@@ -1571,7 +1581,7 @@ harness's phase-one cap, `OSS_PHASE_ONE_CAP_USD`, `tests/live/discovery_oss.py:2
 | **E0a** (done 2026-10-26, offline, `.claude/handoff/step3/e0/e0-spawn.md`) | Whether `process_spawn` refusals were a rule artefact (the real `check_capture` on the pinned clones, 3.11 and 3.13) | D62 (N0); which libraries count in the gates | 0 | 0 | Result: `more_itertools` a confirmed rule artefact; `tomli` and `mistune` editor-added; a parse failure is labelled `process_spawn`. **Consequence:** N0 lands before E2; `more_itertools` counts in E1/E2's denominators only with N0 in; `tomli` counts as a real idea test |
 | **E0b-A** (done 2026-10-26, offline, `.claude/handoff/step3/e0/e0-amdahl.md`; measurement blocked) | Headroom of the four "never" libraries from the manifest's pin-time profiles; `_spawn_problem` over every pinned file | D51, the E-gates' denominators | 0 | 0 | Result: `sortedcontainers` noise-limited (an expected-no-win control everywhere); `more_itertools` guard-limited; `pyparsing` and `tomli` not Amdahl-limited. The measured re-run (`.claude/handoff/step3/e0/amdahl_scripts/`) runs in a CI job with no API calls before E1 (Lead row, §7) |
 | **E0-R** (Lead/Researcher, offline, before E1; scripts under `.claude/handoff/step3/e0/`, no `src` change) | On the manifest profiles and STATUS's kept trials of L2a/L2b (`tabulate`, `idna`, `mistune`, `sqlparse`, `markdown`, `pycparser`, `sortedcontainers`): each kept trial's anchor ceiling (the function its diff changed, **unverified** that the CI artefacts hold the diffs; else from the STATUS gain notes); the textual-caller hit rate of D44 on the same files | D51's multiplier; D44's caller note | 0 | 0 | 1.5 is adopted only if no kept trial would have been dropped at 1.5 × its run's floor; otherwise the default stays 1.0 and the finding goes into STATUS |
-| **E0b** `ideas-probe`, `LIVE_IDEAS_ARMS=count`, 10 OSS libraries, after V7 | `count_tokens` on every stage prompt (S1, each lens, leap, reviewer with 16 ideas); S1 and the first lens lane sent for real; `cache_read_input_tokens` on both | D55's bounds; the `ideas-probe` caps | 10 × (0.205 + 0.205) = 4.1 → **5** | ~0.5 | Lane prompt ≤ 34,000 and reviewer ≤ 40,000 counted tokens on every library, and `cache_read_input_tokens` > 0 on the lens lane and 0 on S1; otherwise the caps, D55 and the E1 caps are re-derived before E1 |
+| **E0b** `ideas-probe`, `LIVE_IDEAS_ARMS=count`, 10 OSS libraries, after V7 | `count_tokens` on every stage prompt (S1, each lens, leap, reviewer with 16 ideas); S1 and the first lens lane sent for real; `cache_read_input_tokens` on both | D55's bounds; the `ideas-probe` caps | 10 × (0.205 + 0.205) = 4.1 → **5** | ~0.5 | Lane prompt ≤ 34,000 and reviewer ≤ 40,000 counted tokens on every library, and, on the lens lane, `cache_read_input_tokens` at least the counted data block's tokens (S1 may itself read the system block cached by the previous library's call, so S1's read is not required to be 0); otherwise the caps, D55 and the E1 caps are re-derived before E1 |
 | **E1** `ideas-probe`, 8 libraries (`more_itertools`, `pyparsing`, `tomli`, `sortedcontainers`, `mistune`, `sqlparse`, `markdown`, `idna`), 1 rep; arms A today's generator, B all-Sonnet, C the default, D Fable leap and reviewer, E Haiku lanes + Opus leap and reviewer; one auditor pass per library | Per library and arm: good ideas (the fixed definition above); unique signatures; own-reviewer agreement with the auditor; `stop_reason` and reviewer-refusal rates; cost per good idea; cache hits | Which arm E2 uses; whether Haiku lanes add mechanisms; the reviewer's value; the `max_tokens` budgets | per library 0.5 + 0.18 + 1.90 + 2.365 + 4.36 + 1.00 + 0.66 = 10.97 → 8 × 10.97 = 87.8, rounded to **90** (one dispatch) | ~30 | **Go to E2 only if the best arm gives ≥ 3 good ideas on ≥ 5 of the 7 counted libraries** (`sortedcontainers` is a control: reported, not counted; `more_itertools` counted only with N0 in, else replaced by `attrs` from `tests/fixtures/oss_v2/manifest.json`); E2's arm P is the cheapest arm whose mean good count per counted library is within 1 of the best. Arm D is never chosen as a default whatever it scores (D58). Budgets: a role whose `max_tokens`-stop rate is above 10 %, or a reviewer refused on more than 1 of 8 libraries, gets a re-derived `max_tokens` (from measured output tokens) before E2 |
 | **E1b** `ideas-probe`, `pyparsing`, `tomli`, `mistune`, `markdown`, lanes at `low` vs `high` (arm C otherwise), on E1's recorded facts (no phase 1) | Unique grounded mechanisms per library; grounding pass rate; cost | `IDEAS_LANE_EFFORT` | 4 × 2 × 2.365 = 18.9 → **20** | ~4 | Lanes stay `medium` unless one level gives ≥ 2 more unique grounded mechanisms per library on average *and* a grounding pass rate within 10 points of the other; a tie keeps `medium` |
 | **E2** `oss`, `wired`, Opus editor, 10 libraries × 2 reps, arm A (today's generator, `PORTFOLIO_ROUNDS=2`) vs arm P (E1's winner, `PORTFOLIO_ROUNDS=2`); four `oss` dispatches of 10 loops (one arm, one rep each); controls as two `corpus` dispatches with `corpus_select=controls` (one per arm, one rep) | Delivered gain per (library, rep); `c − b`; control false wins; share of kept gain from non-obvious ideas; any "never" library delivered; cost per run and per win; retry rate | The `IDEA_PIPELINE` flip (D43, D61) | 4 × 50 + 2 × 15 = **230** over six dispatches of ≤ 50 | ~48-58 (re-derived from E1's measured pipeline cost before dispatch) | **Primary:** over the 20 paired tasks, `c − b ≥ 3` where `c` counts tasks P delivered and A did not, or both delivered and P's confirmed gain exceeds A's by more than the project floor, and `b` the reverse; **and** P has no control false win. Met → `IDEA_PIPELINE=True`, `PORTFOLIO_ROUNDS=2` by default (per §8 Q2) once N0c is in. Not met → the pipeline stays opt-in, recorded with the data. `sortedcontainers` pairs count (both arms face the same control) |
@@ -1662,6 +1672,30 @@ scripted replies and the delta spawn rule is live; after V7 it can be
 measured.
 
 ---
+
+## 7b Notes from the 2026-10-26 investigations (Lead)
+
+Four read-only investigations ran beside the build; their reports are in
+this folder (`research-caching.md`, `research-advisor.md`,
+`research-batch.md`, `research-agents.md`).
+
+- **Caching.** The engine's caching is sound (Window 0's caching saved
+  about $42 of $120); realistic further saving is about 5 % of spend, folded
+  into D59 above. The 1-hour TTL stays refused.
+- **Advisor tool.** Not adopted: advisor tokens break the pre-call worst
+  case (`cost.py` already refuses the tool), its advice is encrypted (no
+  fence check), and Anthropic's own result is +1.7 points at about 2.1x
+  cost with Sonnet consulting 0 of 20 times at default effort. The same
+  idea is tested by E2 giving the Sonnet editor the reviewer's Opus change
+  plans; a Sonnet `medium`/`high` editor measurement (about $7) precedes any
+  advisor probe. D63's retention set now lists all four 30-day-retention
+  models (`cc2d416`).
+- **Batch API.** Not used in Wave 2 (about $3-4 batchable of $103-140;
+  batching E1's arms would measure a different path). It returns with
+  WATCH. Two harness gaps are logged in STATUS before any batch run.
+- **Claude agents.** No framework change in Wave 2; the recommendation (own
+  agent kernel at Step 3c, a quarantined research agent, Managed Agents only
+  for the public-data WATCH pilot) awaits the owner's decision.
 
 ## 8 Open questions for the owner
 

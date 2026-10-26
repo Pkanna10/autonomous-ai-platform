@@ -473,6 +473,32 @@ measurement. The judges, anti-cheating rules, output check, noise rule and the
 single fix retry stay as they are. The spec amendment (D43 on) is drafted by the
 design workflow and reviewed before any build.
 
+### 2026-10-26 (Lead: four side investigations, no change to the plan)
+
+The owner asked for read-only investigations beside the Wave 2 build; the
+reports are in
+`.claude/handoff/step3/research-{caching,advisor,batch,agents}.md`.
+
+- **Prompt caching** (the Console's "hit rate is low, save up to 11 %" banner):
+  the engine's caching is sound; most of the 11 % is input sent once, where
+  caching costs more. About 5 % more is realistic, folded into the Wave 2
+  amendment's D59 (no cache write on the leap, reviewer and auditor; E0b's gate
+  fixed). Output tokens, not caching, are about half of every run: a lower
+  editor effort with a high-effort retry on a judged failure is the larger
+  lever, to be measured.
+- **Advisor tool:** not adopted (breaks the pre-call worst case, encrypted
+  advice, small measured effect); E2's Sonnet editor with the reviewer's Opus
+  change plans tests the idea our way. D63's retention set gained Fable 5,
+  Mythos 5 and Mythos 5.1 (`cc2d416`).
+- **Batch API:** no use inside a run; about $3-4 of Wave 2 is batchable; adopt
+  with WATCH. Two harness gaps are logged under "Known gaps".
+- **Claude agents** (Managed Agents, the Agent SDK, the Messages-API building
+  blocks): the engine's editor is already a bounded agent; agents may act only
+  where a frozen check decides afterwards. Recommended: no framework in Wave 2;
+  the engine's own agent kernel at Step 3c (two-phase healer); a quarantined
+  research agent; Managed Agents only for a public-data WATCH pilot. Pilots
+  P0-P3 (about $8-15) await the owner.
+
 ### 2026-10-26 (owner: the Wave 2 idea-pipeline build plan signed off)
 
 The owner signed off the amendment `.claude/handoff/step3/spec-wave2-ideas.md`
@@ -1834,6 +1860,20 @@ on 2026-10-24 agreed):
   calibrated against executed outcomes.
 
 ### Known gaps carried to later steps
+
+**From the 2026-10-26 batch investigation (fix before any batch run):**
+
+- **A batch submit that times out reserves and charges nothing**
+  (`tests/live/experiments/harness.py:446-452`; only an HTTP 400 is tested), yet
+  the batch may exist and bill: a hole in the cost cap. Fix: reserve the batch's
+  worst case before the submit and settle it from `retrieve`.
+- **The E7 scale-up waits 3,600 s by default**
+  (`tests/live/experiments/test_extraction_live.py:356`), the whole 60-minute
+  `papers` job, so a killed job never records its reservation; and `ci.yml`
+  never passes `LIVE_EXTRACT_SCALE`. Fix with the batch path's submit/collect
+  split.
+- **Fallbacks in a batch:** STATUS recorded a 400 at creation, the docs describe
+  a per-request errored result; a batch path handles both.
 
 **From Step 3 Wave 1 (backlog after Step 3):**
 
