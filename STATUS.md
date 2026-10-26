@@ -473,6 +473,20 @@ measurement. The judges, anti-cheating rules, output check, noise rule and the
 single fix retry stay as they are. The spec amendment (D43 on) is drafted by the
 design workflow and reviewed before any build.
 
+### 2026-10-26 (owner: build V9, the upstream-fixes corpus)
+
+- **O20.** The owner approved V9: a corpus of real performance fixes merged by
+  open-source maintainers (the before-commit is the exam question, the
+  maintainer's fix the sealed key, the project's tests the guard). Built in
+  three separated roles under O19: a miner (Opus) that seals the keys and
+  prefers commits after the models' training cutoffs (each candidate records its
+  contamination risk, since an attempter may have seen a famous fix in
+  training); a benchmark writer of a different model (Fable 5.1) that sees only
+  the before-code and the touched paths, never the fix or the message; and a CI
+  verification job with no API calls that keeps only candidates whose maintainer
+  fix measurably speeds up the benchmark. The engine's copy of a repository
+  holds no later history.
+
 ### 2026-10-26 (owner: the setter, attempter and marker are kept apart)
 
 - **O19.** No result counts if the same context set the exam and sat it
