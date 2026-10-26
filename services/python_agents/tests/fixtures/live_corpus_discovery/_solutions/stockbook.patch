@@ -1,0 +1,23 @@
+diff --git a/stockbook/registry.py b/stockbook/registry.py
+index 4d60898..e479b50 100644
+--- a/stockbook/registry.py
++++ b/stockbook/registry.py
+@@ -6,13 +6,14 @@ class Registry:
+ 
+     def __init__(self) -> None:
+         self._codes: list[str] = []
++        self._rows: dict[str, int] = {}
+ 
+     def row(self, code: str) -> int:
+-        try:
+-            return self._codes.index(code)
+-        except ValueError:
++        row = self._rows.get(code)
++        if row is None:
++            row = self._rows[code] = len(self._codes)
+             self._codes.append(code)
+-            return len(self._codes) - 1
++        return row
+ 
+     def codes(self) -> list[str]:
+         return list(self._codes)

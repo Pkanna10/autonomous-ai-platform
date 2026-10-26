@@ -1,0 +1,15 @@
+diff --git a/statementrun/layout.py b/statementrun/layout.py
+index 69aae35..0e629fe 100644
+--- a/statementrun/layout.py
++++ b/statementrun/layout.py
+@@ -5,9 +5,7 @@ Row = tuple[str, str, int, int]  # date, description, cents, balance in cents
+ 
+ def money(cents: int) -> str:
+     """``cents`` as a signed amount with digit groups and two decimals."""
+-    sign = "-" if cents < 0 else ""
+-    whole, part = divmod(abs(cents), 100)
+-    return f"{sign}{whole:,}.{part:02d}"
++    return f"{cents / 100:,.2f}"
+ 
+ 
+ def cells(row: Row) -> tuple[str, str, str, str]:

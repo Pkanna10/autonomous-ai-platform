@@ -1,0 +1,32 @@
+diff --git a/clubroster/roster.py b/clubroster/roster.py
+index e075bd2..dca1885 100644
+--- a/clubroster/roster.py
++++ b/clubroster/roster.py
+@@ -1,5 +1,7 @@
+ """The ranked, paged roster."""
+ 
++from functools import cache
++
+ from clubroster.data import Member
+ 
+ 
+@@ -8,12 +10,17 @@ def standing_key(member: Member) -> tuple[int, str, str, int]:
+     then membership number."""
+     return (
+         -member.points,
+-        member.surname.casefold(),
+-        member.given.casefold(),
++        _folded(member.surname),
++        _folded(member.given),
+         member.number,
+     )
+ 
+ 
++@cache
++def _folded(name: str) -> str:
++    return name.casefold()
++
++
+ def page(crowd: list[Member], number: int, size: int) -> list[Member]:
+     """Page ``number`` (from 0) of the ranked roster, ``size`` members a page."""
+     start = number * size

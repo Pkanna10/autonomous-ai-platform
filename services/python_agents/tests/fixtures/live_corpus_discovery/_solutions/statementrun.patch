@@ -1,0 +1,34 @@
+diff --git a/statementrun/bank.py b/statementrun/bank.py
+index 40d9ee4..71b329f 100644
+--- a/statementrun/bank.py
++++ b/statementrun/bank.py
+@@ -8,6 +8,7 @@ class Bank:
+         self._entries: dict[str, list[tuple[str, str, int]]] = {}
+         for account, date, description, cents in rows:
+             self._entries.setdefault(account, []).append((date, description, cents))
++        self._widths: tuple[int, int, int, int] | None = None
+ 
+     def accounts(self) -> list[str]:
+         return sorted(self._entries)
+@@ -23,10 +24,14 @@ class Bank:
+ 
+     def column_widths(self) -> tuple[int, int, int, int]:
+         """The widest text of each column over every statement of the bank."""
+-        texts = [
+-            cells(row) for account in self.accounts() for row in self.statement(account)
+-        ]
+-        dates, descriptions, amounts, balances = (
+-            max(map(len, column)) for column in zip(*texts, strict=True)
+-        )
+-        return dates, descriptions, amounts, balances
++        if self._widths is None:
++            texts = [
++                cells(row)
++                for account in self.accounts()
++                for row in self.statement(account)
++            ]
++            dates, descriptions, amounts, balances = (
++                max(map(len, c)) for c in zip(*texts, strict=True)
++            )
++            self._widths = dates, descriptions, amounts, balances
++        return self._widths
