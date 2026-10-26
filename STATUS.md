@@ -447,6 +447,32 @@ confirmations and final combine in one run.
 
 ## Decisions
 
+### 2026-10-26 (owner: the idea pipeline joins Wave 2)
+
+After the Wave 1 report and the research report "Novel speed up idea generation"
+(how to make the engine propose bigger, less obvious speed-ups), the owner
+decided:
+
+- **O11.** The five-stage idea pipeline joins Step 3 Wave 2 as extra build
+  units. The pipeline: the generator reads the hot code; an obvious lane;
+  independent lens lanes built on idea-creation frameworks; a fresh-context
+  reviewer that may only remove ideas; and a deterministic portfolio of 3-5
+  non-obvious ideas.
+- **O12.** More budget is fine: the discovery share (D7's 25 %) may rise to what
+  the pipeline's worst-case pre-check needs (about 35-40 %).
+- **O13.** About $120 of Window 1's remaining ~$182 goes to the staged
+  experiments (E0 free checks; E1 idea-only probe across Sonnet, Opus and Fable;
+  E2 the executed A/B on the 10 OSS libraries; E2c a compute-matched control;
+  E3-E4 only if earlier gates pass), each with a pre-registered gate.
+
+**Why:** today one Sonnet call writes five ideas without seeing the code, and
+the engine stops at the first keep. The research found models repeat the same
+ideas unless forced through independent angles; their own novelty ratings are
+unreliable; and the systems with big wins coupled varied proposals to real
+measurement. The judges, anti-cheating rules, output check, noise rule and the
+single fix retry stay as they are. The spec amendment (D43 on) is drafted by the
+design workflow and reviewed before any build.
+
 ### 2026-10-25 (pre-registered before L5a: the retrieval re-test's pooled rule)
 
 Recorded before any re-test run, as D2 and O3 require, so the decision cannot be
