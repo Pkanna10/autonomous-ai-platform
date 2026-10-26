@@ -473,6 +473,20 @@ measurement. The judges, anti-cheating rules, output check, noise rule and the
 single fix retry stay as they are. The spec amendment (D43 on) is drafted by the
 design workflow and reviewed before any build.
 
+### 2026-10-26 (owner: agent pilots P0-P3 approved)
+
+- **O18.** The owner approved the agent pilots P0-P3 from
+  `.claude/handoff/step3/research-agents.md` (about $8-15 of Window 1; P1 with a
+  third repetition about $17): P0 contract probes, P1 a heal agent against
+  today's single heal request, P2 a quarantined research agent, P3 a Managed
+  Agents deployment for the arXiv WATCH job on public data only. They run in the
+  live experiment harness; the engine adopts no agent framework in Wave 2. Units
+  A0-A3 are in the Wave 2 amendment (section 7c). P3 creates objects on the
+  owner's account and deletes them; the Lead verifies the cleanup. The agent
+  roadmap (own kernel at 3c, research agent later, Managed Agents only for
+  public-data jobs) stays the Lead's recommendation until the 3c spec, informed
+  by P0-P3.
+
 ### 2026-10-26 (Lead: four side investigations, no change to the plan)
 
 The owner asked for read-only investigations beside the Wave 2 build; the

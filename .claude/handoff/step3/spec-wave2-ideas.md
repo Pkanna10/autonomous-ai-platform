@@ -1697,6 +1697,34 @@ this folder (`research-caching.md`, `research-advisor.md`,
   agent kernel at Step 3c, a quarantined research agent, Managed Agents only
   for the public-data WATCH pilot) awaits the owner's decision.
 
+## 7c Agent pilots P0-P3 (owner, O18, 2026-10-26)
+
+The owner approved pilots P0-P3 from `research-agents.md` (about $8-15; P1
+with a third repetition about $17), run in the live experiment harness
+(`tests/live/experiments/`, experiment code, not engine code). No engine
+framework changes in Wave 2; the agent kernel waits for Step 3c.
+
+| # | Unit (pilot) | Files (owned) | After | Live cap / expected | Gate (pre-registered) |
+| --- | --- | --- | --- | --- | --- |
+| A0 | P0 contract probes: per-message effort mid-conversation on Opus 5.5 (cache kept?), a mid-conversation system message carrying retry feedback, `count_tokens` with web tools (documented to error), the append-only thinking rule, a Managed Agents environment created without `networking` reports `unrestricted` (then deleted) | `tests/live/experiments/agent_probes.py`, `test_agent_probes_live.py`, guard tests; `ci.yml` suite row as a patch for the Lead | - | 1 / < 0.50 | Every probe matches the docs, or the kernel design (3c) changes first |
+| A1 | P1 heal agent vs single shot: about 12 hard planted bugs plus the 16 saturated ones as regression; Sonnet 5.5 medium; arm A today's heal probe, arm B a fixer loop (at most 12 turns; tools `text_editor` and an engine-side `run_reproducer` returning closed, fenced pass/fail output, never judge output) | the heal experiment modules under `tests/live/experiments/` (new arm and bug set), guard tests; `ci.yml` patch | - | 8 / 3-6 | Arm B fixes at least 2 more hard bugs, 0 reproducer or test edits (capture rules), at most $0.50 a bug |
+| A2 | P2 quarantined research agent: 5 hotspot descriptors (no source code ever); arm A one request with allowlisted web search/fetch (`max_uses` 5); arm B a loop with an engine-side fetch tool (fetch, sanitise, fence) and a strict `submit_card` tool; one planted-instruction page; citations checked locally | `tests/live/experiments/research_agent.py`, its live test and guard tests; `ci.yml` patch | - | 8 / 3-6 | At least 1 precondition-valid card per hotspot not in the playbook; 0 injections followed; at most $0.30 a hotspot |
+| A3 | P3 Managed Agents for WATCH: one cloud environment with `limited` networking (arXiv hosts only), Haiku 5.5, session budget 25 cents, a daily schedule for 3 runs writing an arXiv listing JSON to outputs; the engine side pulls it and triages it itself; one request to a blocked host; every session, the deployment and the environment are deleted after export, and the cleanup is verified | `tests/live/experiments/watch_managed.py`, its live test and guard tests; `ci.yml` patch | - | 3 / 0.50-2 | 3/3 runs fetch the listing; the blocked host is refused; overshoot at most one request; at most $0.25 a run |
+
+**Security and account hygiene.** No pilot sends repository source code to
+a hosted agent or a web tool (P2 sees descriptors only; P3 public arXiv data
+only). P3 creates persistent objects on the owner's account through the
+`live` key: the pilot deletes them and the Lead verifies the deletion in the
+ledger row. Managed Agents is beta and not ZDR-eligible; that is acceptable
+for public data only. Every pilot's spend goes through the experiment
+harness's ledger with a pre-call reservation (P3's hosted budget is a second
+bound, not the first).
+
+**Batching.** A0-A3 are built in parallel with batch 2-3 (disjoint
+`tests/live/experiments/` files; `ci.yml` rows arrive as patches the Lead
+applies one at a time). Live order: P0 first (its result can change P1-P3),
+then P1, P2 and P3 (P3 spans three days).
+
 ## 8 Open questions for the owner
 
 **Answered by the owner on 2026-10-26 (STATUS O14-O17):** the build plan is
