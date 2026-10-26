@@ -570,10 +570,11 @@ jobs:
     # runs 2, attack 3, corpus 15, hard 10 and oss at most 10 (larger
     # repositories). A killed job loses the cost table, so each suite gets room
     # for its loops (the hosted maximum is 360). Under the Step 3 noise rule
-    # (paired trials, confirmation, calibration: D41's estimate 2.6x the
-    # workload launches, unverified) hard gets 180 and oss 300; the Lead
-    # re-pins both from L1a's measured wall time.
-    timeout-minutes: ${{ inputs.suite == 'sweep' && 240 || inputs.suite == 'sweep-fable' && 180 || inputs.suite == 'sweep-record' && 150 || inputs.suite == 'ab' && 360 || inputs.suite == 'noise' && 90 || inputs.suite == 'oss-ab' && 120 || inputs.suite == 'evolve' && 300 || inputs.suite == 'evolve-more' && 300 || inputs.suite == 'build' && 120 || inputs.suite == 'escalation' && 90 || inputs.suite == 'triage' && 90 || inputs.suite == 'papers' && 60 || inputs.suite == 'web' && 90 || inputs.suite == 'corpus' && 180 || inputs.suite == 'oss' && 300 || inputs.suite == 'hard' && 180 || inputs.suite == 'attack' && 45 || 30 }}
+    # (paired trials, confirmation, calibration) and wired ideas, L1a and L1b
+    # measured hard 28-29 and corpus 34 minutes (2.3-2.9 a loop, 2026-10-25),
+    # so both sit at the 8-minutes-a-loop floor: hard 90, corpus 120. oss
+    # keeps 300 (D41's 2.6x estimate) until L2a measures it.
+    timeout-minutes: ${{ inputs.suite == 'sweep' && 240 || inputs.suite == 'sweep-fable' && 180 || inputs.suite == 'sweep-record' && 150 || inputs.suite == 'ab' && 360 || inputs.suite == 'noise' && 90 || inputs.suite == 'oss-ab' && 120 || inputs.suite == 'evolve' && 300 || inputs.suite == 'evolve-more' && 300 || inputs.suite == 'build' && 120 || inputs.suite == 'escalation' && 90 || inputs.suite == 'triage' && 90 || inputs.suite == 'papers' && 60 || inputs.suite == 'web' && 90 || inputs.suite == 'corpus' && 120 || inputs.suite == 'oss' && 300 || inputs.suite == 'hard' && 90 || inputs.suite == 'attack' && 45 || 30 }}
     defaults:
       run:
         working-directory: ./services/python_agents

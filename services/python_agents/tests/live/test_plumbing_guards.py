@@ -59,7 +59,7 @@ RULES = {  # PAIRED_TRIALS, CONFIRM_WINNERS, NOISE_CALIBRATION_BLOCKS
     "step3": ("true", "true", "3"),
     "step2": ("false", "false", "0"),
 }
-TIMEOUTS = {"hard": 180, "oss": 300, "noise": 90, "corpus": 180}
+TIMEOUTS = {"hard": 90, "oss": 300, "noise": 90, "corpus": 120}
 SPEC_CAPS = {  # section 6's L-table: runs per dispatch x the run cap, USD
     "noise": (13, 0.0),  # L0: no request
     "hard": (10, 5.0),  # L1a
@@ -325,8 +325,9 @@ def test_the_editor_model_input_reaches_the_run_or_is_refused(tmp_path: Path) ->
 
 
 def test_the_timeouts_are_pinned_under_the_job_limit() -> None:
-    """Hard 180 and OSS 300 from D41's 2.6x (the Lead re-pins them from
-    L1a's wall time), noise at ``noise.NOISE_JOB_MINUTES``."""
+    """Hard 90 and corpus 120 re-pinned from L1a and L1b (28-29 and 34
+    minutes measured; the 8-minutes-a-loop floor), OSS 300 from D41's 2.6x
+    until L2a measures it, noise at ``noise.NOISE_JOB_MINUTES``."""
     block = _ci_block("  live-smoke:", "    defaults:")
     found = re.search(r"timeout-minutes: \$\{\{ (.*) \}\}", block)
     assert found is not None
