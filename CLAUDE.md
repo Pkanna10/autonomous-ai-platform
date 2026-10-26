@@ -1,6 +1,6 @@
 # Autonomous AI Platform - Claude Code Configuration
 
-**Version:** 4.4.0 **Last Updated:** 2026-10-25 **Status:** Engine rebuild, Step
+**Version:** 4.5.0 **Last Updated:** 2026-10-26 **Status:** Engine rebuild, Step
 3 Wave 1 built on `claude/step3-research` (draft PR #22); its E2E and live runs
 next
 
@@ -319,6 +319,26 @@ Step 2), and review effort follows risk: one correctness Reviewer per unit, a
 security Reviewer only at trust boundaries, scoped to the diff and its callers.
 Every design decision gets a first-principles "why" in `STATUS.md`.
 
+**Setter, attempter, marker (owner, 2026-10-26, O19).** No result counts if the
+same context set the exam and sat it. For every test set, eval, label file,
+corpus, pilot or live experiment, name the three roles and keep them apart:
+
+- **Setter:** a different context from whoever built the thing under test, and a
+  different model where possible; best of all, human-authored material (real
+  open-source code, fixes that maintainers merged). Exams are tiered: basic
+  checks, hard cases, and adversarial "god mode" cases. Answer keys are sealed
+  (committed, with their hash recorded) before any attempt.
+- **Attempter:** sees only what a real run would see, never the keys, rubric or
+  labels.
+- **Marker:** deterministic where possible (the frozen judges); where judgement
+  is needed, a different model from the attempter with an adversarial rubric, a
+  second marker on disagreement, and a small sample for the owner to spot-check.
+
+A result whose setter and attempter share a context is reported as a smoke test,
+not as evidence. Builders still write tests first, but high-risk units (judges,
+anti-cheating, budget, security, the idea portfolio) also get acceptance tests
+written from the spec by a separate agent that never sees the implementation.
+
 ### Process
 
 Shape Up for bets, Kanban for flow, XP for engineering, DORA for measurement.
@@ -483,6 +503,8 @@ directory:
 
 ## Changelog
 
+- **4.5.0 (2026-10-26):** The setter/attempter/marker rule (O19) under
+  Development Workflow: no result counts if one context set the exam and sat it.
 - **4.4.0 (2026-10-25):** Step 3 Wave 1 built: the reality check (generated
   hypotheses, one fix retry per run, the review branch, the default output check
   and the quality check, the noise rule; schema 001-006); the Step 3 build-order
