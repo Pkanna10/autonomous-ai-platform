@@ -1036,6 +1036,7 @@ SUITES = (
     "evolve-more",
     "heal-hard",
     "build",
+    "grader",
 )
 DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_sweep_live.py",
@@ -1045,6 +1046,7 @@ DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_oss_ab_live.py",
     "tests/live/test_evolution_live.py",
     "tests/live/test_build_live.py",
+    "tests/live/test_grader_agreement_live.py",  # L3 (V5): the grader suite
 )
 EXPERIMENT_MINUTES = {
     "sweep": 240,
@@ -1729,6 +1731,7 @@ def _suite_needs() -> dict[str, float]:
     oss_ab = importlib.import_module(f"{__package__}.discovery_oss")
     evolve = importlib.import_module(f"{__package__}.evolution")
     build = importlib.import_module(f"{__package__}.build_improve")
+    grader = importlib.import_module(f"{__package__}.test_grader_agreement_live")
     one_library = {oss_ab.REPOS_ENV: OSS_AB_DISPATCH_REPO}
     return {
         "noise": noise.noise_need(noise.noise_plan({})),
@@ -1738,6 +1741,7 @@ def _suite_needs() -> dict[str, float]:
         "evolve-more": evolve.evolve_need(evolve.evolve_plan(EVOLVE_MORE_ENV)),
         "heal-hard": heal.heal_need(heal.heal_plan(HEAL_HARD_ENV)),
         "build": build.build_need(build.build_plan({})),
+        "grader": grader.agreement_cap(grader.load_groups()),
         "sweep": sweep.sweep_need(sweep.sweep_plan({})),
         "sweep-fable": sweep.sweep_need(sweep.sweep_plan(SWEEP_FABLE_ENV)),
         "sweep-record": sweep.sweep_need(sweep.sweep_plan(SWEEP_RECORD_ENV)),
