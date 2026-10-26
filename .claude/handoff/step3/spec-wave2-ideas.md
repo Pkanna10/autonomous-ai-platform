@@ -1665,6 +1665,12 @@ measured.
 
 ## 8 Open questions for the owner
 
+**Answered by the owner on 2026-10-26 (STATUS O14-O17):** the build plan is
+approved in full, N0b included (O14); Q1 as recommended, Fable on the public
+OSS libraries only (O15); Q2 as recommended, the owner flips the defaults (O16);
+Q3 **not** pre-registered, the owner decides the "more trials" branch after the
+data (O17). Q4-Q6 stand as recommended (the Lead's reading, open to objection).
+
 1. **Whose code may reach which model.** S0 sends up to 64 KiB of the
    project's source to the lane, leap and reviewer models (Sonnet and Opus by
    default); E1 arm D sends the public OSS libraries' code to Fable 5.1,

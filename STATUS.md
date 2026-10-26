@@ -473,6 +473,26 @@ measurement. The judges, anti-cheating rules, output check, noise rule and the
 single fix retry stay as they are. The spec amendment (D43 on) is drafted by the
 design workflow and reviewed before any build.
 
+### 2026-10-26 (owner: the Wave 2 idea-pipeline build plan signed off)
+
+The owner signed off the amendment `.claude/handoff/step3/spec-wave2-ideas.md`
+(revision 2) and answered its open questions:
+
+- **O14.** The build plan is approved in full: N0-N5 (N0b included), V7, V8 and
+  the amended V4 and V6, interleaved with V1-V6 and L3-L5 in the amendment's
+  five batches, then the staged experiments E0-E4.
+- **O15.** Fable 5.1 (30-day retention) may see code only in the experiment arm
+  on the public OSS libraries; the settings guard (D63) refuses Fable for any
+  other project unless the owner enables it.
+- **O16.** If E2 shows the pipeline wins, the owner decides on the STATUS entry
+  whether `IDEA_PIPELINE` and `PORTFOLIO_ROUNDS` become product defaults (about
+  $1.60-2.00 a run instead of $0.55).
+- **O17.** The "more trials" branch (adopt `GENERATOR_N=10`,
+  `PORTFOLIO_ROUNDS=2` for today's generator if E2c's control matches E2) is
+  **not** pre-registered: the owner decides it after seeing the data. The Lead
+  reports E2c's result with that caveat (a decision made after the data is open
+  to fitting).
+
 ### 2026-10-25 (pre-registered before L5a: the retrieval re-test's pooled rule)
 
 Recorded before any re-test run, as D2 and O3 require, so the decision cannot be
