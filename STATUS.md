@@ -60,12 +60,12 @@ history at `5ce95a4` (`git show 5ce95a4:.claude/handoff/step2/spec.md`).
   until L2a measures it).
 - **L2a delivered 8 of 20** (`oss`, `wired`, Sonnet low editor; rep 1 2/10, rep
   2 6/10, 5.94 USD), below W5's 10 of 20: the editor default stays Opus.
-- **Next: L2b** (`oss`, `wired`, Opus editor, 1 repetition, running), the
-  same-rule comparison (Q16); then the Wave 1 report. **Open:** on the L1a
-  re-run `eventagg` delivered 30.9 % (one kept idea) while its best trial
-  measured 92.3 % on peak RSS; the first L1a run kept that streaming idea at
-  92.3 %. Read the run's results artifact (the confirmation or the combine
-  dropped it) before the Wave 1 report.
+- **L2b delivered 7 of 10** (Opus editor, same rule, 5.46 USD): Opus stays the
+  editor default. Wave 1's live runs are done; next is the Wave 1 report.
+  **Open:** on the L1a re-run `eventagg` delivered 30.9 % (one kept idea) while
+  its best trial measured 92.3 % on peak RSS; the first L1a run kept that
+  streaming idea at 92.3 %. Read the run's results artifact (the confirmation or
+  the combine dropped it) before the Wave 1 report.
 - **Wave 2 is approved** (O6: hard corpus v2, the `ledgerclose` rebuild, the A/B
   instrument, grader labels, L3-L5). **Wave 3 is held** until Wave 1's live runs
   report (O6); each of its units has its own gate (spec section 7).
@@ -413,7 +413,8 @@ pip-audit run in CI). Security-focused reviews are recorded for U4 (two: a
 U18, U19, U21, U24, U25 and U27 (two); U13's review focused on cost and caps. No
 live run has used the Step 3 loop yet, so nothing here is a live result.
 
-**Spend:** 12.69 USD of Window 1 in Step 3 Wave 1 (L0, L1a twice, L1b, L2a).
+**Spend:** 18.15 USD of Window 1 in Step 3 Wave 1 (L0, L1a twice, L1b, L2a,
+L2b).
 
 **Not yet proven:** wired wins on the OSS corpus (L2a) and the noise rule's wall
 time there. Proven since (2026-10-25): the E2E scenarios E3-A to E3-I; the
@@ -1459,10 +1460,10 @@ days before it expires. The table below is the 2026-10-23 plan with stage C
 replaced by Step 3's own live plan (spec section 6, D24's spend rule); the
 register below says which questions are already answered.
 
-**Spent so far in Window 1: 12.69 USD by Step 3** (L0 0.00, L1a 2.21 with its
+**Spent so far in Window 1: 18.15 USD by Step 3** (L0 0.00, L1a 2.21 with its
 guards crashed in the harness, the L1a re-run 2.11, L1b 2.42, L2a 5.94 over two
-repetitions; L2b running). The two Window 1 rows in the ledger (2026-10-23, 0.00
-each) predate Step 3.
+repetitions, L2b 5.46; Wave 1's live runs are done). The two Window 1 rows in
+the ledger (2026-10-23, 0.00 each) predate Step 3.
 
 | Stage                          | When               | Live work                                                                                                                                                                                   | Est. per run    | Runs  | Est. total  |
 | ------------------------------ | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | ----- | ----------- |
@@ -1612,6 +1613,7 @@ builds it.
 | 2026-10-25 | 1      | [40244866489](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40244866489)                                                                                                                                                                                         | L1a   | 2.11       | L1a re-run on the guard fix (`fb99c4c`), same settings, 28 min: 10/10 delivered, 10/10 at the reference gain (gains 30.9-96.3 %; `fleetsim` 75.7 % this time), every guard held, 0 violations, $0.21 a run. In 5 repositories the combined gain is well above the best single trial (`deliveryround` 93.7 % against 34.6 %). `eventagg` delivered 30.9 % with one kept idea while its best trial measured 92.3 % on peak RSS (open: see Next). Tokens 50,786 in / 57,802 out / 405,023 cache read / 167,985 cache write.                                                                                                                                                                                                                                                                                                                  |
 | 2026-10-25 | 1      | [40244868276](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40244868276)                                                                                                                                                                                         | L1b   | 2.42       | Benchmark corpus, `wired`, Step 3 noise rule, Opus 5.5 engine and editor, Sonnet 5.5 medium generator, 34 min: 12/12 slowdowns delivered at the reference gain (70.3-98.3 %), 0/3 controls delivered (best trials 0.5-1.7 %), every guard held; $0.13 a win, $0.16 a run. Tokens 39,346 in / 68,327 out / 512,103 cache read / 204,994 cache write.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | 2026-10-26 | 1      | [40248472894](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40248472894), [40248475374](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40248475374)                                                                                             | L2a   | 5.94       | OSS corpus, `wired`, Step 3 noise rule, Opus 5.5 engine, Sonnet 5.5 medium generator, Sonnet 5.5 low editor, 2 repetitions in parallel, 36 and 40 min (OSS timeout 300). Delivered 8/20 (rep 1 2/10 at 3.25 USD, rep 2 6/10 at 2.69 USD), below W5's 10/20, so the editor default stays Opus and L2b runs. `tabulate` and `idna` delivered in both repetitions (41.0 and 12.0 %; 9.1 and 13.1 %); `mistune` 9.4, `sqlparse` 10.1, `markdown` 5.6, `pycparser` 2.9 % once; `more_itertools`, `sortedcontainers`, `pyparsing`, `tomli` never (best trials 1.3-6.7 %). `process_spawn` refused trials on `more_itertools` and `tomli` (both repetitions) and `mistune` (rep 1); every guard held. Window 0's aimed Opus run delivered 6/10 under the old rule. Tokens 378,868 in / 192,392 out / 2,081,012 cache read / 827,525 cache write. |
+| 2026-10-26 | 1      | [40252104199](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40252104199)                                                                                                                                                                                         | L2b   | 5.46       | OSS corpus, `wired`, Step 3 noise rule, Opus 5.5 engine and editor, Sonnet 5.5 medium generator, 42 min: delivered 7/10 (`tabulate` 47.2, `pycparser` 27.7, `idna` 15.5, `markdown` 9.5, `sqlparse` 8.8, `mistune` 6.1, `sortedcontainers` 2.6 %); `more_itertools`, `pyparsing`, `tomli` not (best trials 1.8-3.8 %); every guard held; $0.55 a run, $0.78 a win. Same rule as L2a (Q16): Opus editor 7/10 against Sonnet low 2/10 and 6/10. Tokens 189,379 in / 121,388 out / 1,529,350 cache read / 450,599 cache write.                                                                                                                                                                                                                                                                                                               |
 
 ### 2026-10-24 (Window 0 final experiments: what they decide)
 
