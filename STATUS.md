@@ -52,14 +52,19 @@ history at `5ce95a4` (`git show 5ce95a4:.claude/handoff/step2/spec.md`).
   E3-F to E3-I, 6 tests, about 4 min; E3-I runs on a synthetic clock, so its
   verdicts are exact). U15's docs are `5acdfeb`; `46aed4b` formats U14's fixture
   (CI Lint Code was red on `de34b18`: the Lead's gate now also runs prettier).
-- **Next: the live runs L1a to L2** (spec section 6). L0 passed on 2026-10-25
-  (run 40237282461, $0: 0 of 130 single-look false wins, floors 2.0-5.9 %; the
-  ledger has the detail). In order: L1a (`hard`, `wired`), L1b (`corpus`,
-  `wired`), L2a (`oss`, `wired`, Sonnet low editor, 2 repetitions; L2b with the
+- **Live runs so far (2026-10-25, $6.75):** L0 passed (0 of 130 single-look
+  false wins, floors 2.0-5.9 %); L1a (hard, `wired`) 10/10 delivered and 10/10
+  at the reference gain on its re-run, every guard held; L1b (corpus, `wired`)
+  12/12 slowdowns delivered at the reference gain, 0/3 controls; the ledger has
+  the detail. Timeouts re-pinned from them: hard 90, corpus 120 (OSS keeps 300
+  until L2a measures it).
+- **Next: L2a** (`oss`, `wired`, Sonnet low editor, 2 repetitions; L2b with the
   Opus editor only if L2a delivers fewer than 10 of 20). The ordering rule is
   met: U11 made behaviour -> review unconditional (`60cee15`) before any live
-  run. Before L2a the Lead re-pins the hard and OSS timeouts from L1a's measured
-  wall time (the 2.6x estimate is unverified).
+  run. **Open:** on the L1a re-run `eventagg` delivered 30.9 % (one kept idea)
+  while its best trial measured 92.3 % on peak RSS; the first L1a run kept that
+  streaming idea at 92.3 %. Read the run's results artifact (the confirmation or
+  the combine dropped it) before L2a's report.
 - **Wave 2 is approved** (O6: hard corpus v2, the `ledgerclose` rebuild, the A/B
   instrument, grader labels, L3-L5). **Wave 3 is held** until Wave 1's live runs
   report (O6); each of its units has its own gate (spec section 7).
@@ -407,13 +412,13 @@ pip-audit run in CI). Security-focused reviews are recorded for U4 (two: a
 U18, U19, U21, U24, U25 and U27 (two); U13's review focused on cost and caps. No
 live run has used the Step 3 loop yet, so nothing here is a live result.
 
-**Spend:** 0 USD of Window 1 in Step 3 Wave 1 (no live run yet).
+**Spend:** 6.75 USD of Window 1 in Step 3 Wave 1 (L0, L1a twice, L1b).
 
-**Not yet proven:** the E2E scenarios E3-A to E3-I (in progress); a real
-`GitCombiner` running per-winner confirmations and then the final combine in one
-run (worktree reuse, left to U14 and U26); the 2.6x wall-time estimate of the
-noise rule (L1a); the false-keep rate on the paired path (L0); wired wins on the
-hard and OSS corpora (L1a, L2a).
+**Not yet proven:** wired wins on the OSS corpus (L2a) and the noise rule's wall
+time there. Proven since (2026-10-25): the E2E scenarios E3-A to E3-I; the
+false-keep rate on the paired path (L0, 0 of 130); wired wins on the hard and
+benchmark corpora (L1a, L1b) with every guard, including a real `GitCombiner`'s
+confirmations and final combine in one run.
 
 ---
 
@@ -1453,9 +1458,9 @@ days before it expires. The table below is the 2026-10-23 plan with stage C
 replaced by Step 3's own live plan (spec section 6, D24's spend rule); the
 register below says which questions are already answered.
 
-**Spent so far in Window 1: 2.21 USD by Step 3** (L0, free, passed; L1a
-delivered 10/10 but its guards crashed in the harness, so it is re-run). The two
-Window 1 rows in the ledger (2026-10-23, 0.00 each) predate Step 3.
+**Spent so far in Window 1: 6.75 USD by Step 3** (L0 0.00, L1a 2.21 with its
+guards crashed in the harness, the L1a re-run 2.11, L1b 2.42; 2026-10-25). The
+two Window 1 rows in the ledger (2026-10-23, 0.00 each) predate Step 3.
 
 | Stage                          | When               | Live work                                                                                                                                                                                   | Est. per run    | Runs  | Est. total  |
 | ------------------------------ | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | ----- | ----------- |
@@ -1602,6 +1607,8 @@ builds it.
 | 2026-10-24 | 0      | 40102644897-40102659864 (8 runs)                                                                                                                                                                                                                                                   | E5o   | 10.56      | OSS A/B on a second set of 8 libraries (packaging, toml, attrs, networkx, pyflakes, parso, pyasn1, simplejson), 2 reps, two independent counts agree: blind A 12/16 (mean 18.2 %, median 10.2 %), playbook-matched B 13/16 (mean 17.7 %, median 10.5 %); b = 1, c = 2, p = 1.0. Both sets: A 23/36, B 24/36, b = 3, c = 4. Largest gains: attrs 45-49 %, networkx 24-37 %.                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | 2026-10-25 | 1      | [40237282461](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40237282461)                                                                                                                                                                                         | L0    | 0.00       | Step 3 noise rule, paired path (`LIVE_NOISE_PATH=paired`, no API call), 13 repositories x 10 A/A looks, 34 min. Single-look false wins 0/130 (gate <= 1: pass), 0 kept, 0 speed passes (Window 0's single-run rule counted 2.8 %). Calibrated floors 2.0-5.9 % (four at the 2 % minimum; `sortedcontainers` 5.9 %, `sortstats` 5.7 %, `tabulate` 4.3 %); mean A/A gap -0.06 % (5 faster, 8 slower); row O clears 6/6; per-repository wall time 95-241 s. The first dispatch (40237169055) stopped at the input guard: a 0 cap is refused (help text fixed, `b7df752`).                                                                                                                                                                                                                                  |
 | 2026-10-25 | 1      | [40241616564](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40241616564)                                                                                                                                                                                         | L1a   | 2.21       | Hard corpus, `wired` (the engine generates its own ideas), Step 3 noise rule, Opus 5.5 engine and generator, Sonnet 5.5 editor, 29 min (about 2.9 min a repository against the 180 min job limit). The engine delivered 10/10; 9/10 reached the reference gain (`fleetsim` 8.5 % < 30 %); gains 65.9-96.4 % elsewhere (two memory repositories 92-93 % on peak RSS); 0 violations; $0.22 a run (0.04 of the worst-case estimate). Tokens 50,773 in / 61,071 out / 409,400 cache read / 175,522 cache write. Every test then failed in the harness's own guard (`KeyError`: `check_loop_guards` read titles from the loop's candidates, which a wired run's ideas are not), so the safety guards never ran; fixed with a red test (plus the review-branch ref the same check did not expect) and re-run. |
+| 2026-10-25 | 1      | [40244866489](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40244866489)                                                                                                                                                                                         | L1a   | 2.11       | L1a re-run on the guard fix (`fb99c4c`), same settings, 28 min: 10/10 delivered, 10/10 at the reference gain (gains 30.9-96.3 %; `fleetsim` 75.7 % this time), every guard held, 0 violations, $0.21 a run. In 5 repositories the combined gain is well above the best single trial (`deliveryround` 93.7 % against 34.6 %). `eventagg` delivered 30.9 % with one kept idea while its best trial measured 92.3 % on peak RSS (open: see Next). Tokens 50,786 in / 57,802 out / 405,023 cache read / 167,985 cache write.                                                                                                                                                                                                                                                                                |
+| 2026-10-25 | 1      | [40244868276](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40244868276)                                                                                                                                                                                         | L1b   | 2.42       | Benchmark corpus, `wired`, Step 3 noise rule, Opus 5.5 engine and generator, Sonnet 5.5 editor, 34 min: 12/12 slowdowns delivered at the reference gain (70.3-98.3 %), 0/3 controls delivered (best trials 0.5-1.7 %), every guard held; $0.13 a win, $0.16 a run. Tokens 39,346 in / 68,327 out / 512,103 cache read / 204,994 cache write.                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 ### 2026-10-24 (Window 0 final experiments: what they decide)
 
