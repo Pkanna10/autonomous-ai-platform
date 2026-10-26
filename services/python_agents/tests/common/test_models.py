@@ -534,6 +534,7 @@ def test_violation_rules_cover_measurement_completeness() -> None:
         "module_shadow",
         # Step 3 (D37): added lines name a frozen quality file
         "quality_data_reference",
+        "unparsable_source",
     }
     assert ViolationRule("module_shadow").name == "module_shadow"
 

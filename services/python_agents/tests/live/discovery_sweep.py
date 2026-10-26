@@ -370,7 +370,7 @@ def sweep_generate(
         )
         return found, ()
 
-    result = run_arm(arm, run, base, work)
+    result = run_arm(arm, run, base, work, project=facts.project)
     return Generated(result, tuple(r for tap in taps for r in tap.replies))
 
 

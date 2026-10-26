@@ -23,6 +23,7 @@ from autonomous_ai_agents.common.models import (
     ModelPrice,
 )
 from autonomous_ai_agents.common.refnames import branch_prefix_problem
+from autonomous_ai_agents.optimization.idea_types import LENS_LANES, Lane
 
 IsolationMode = Literal["required", "best_effort", "off"]
 """``required`` fails closed; ``best_effort`` records what was applied; ``off``."""
@@ -34,8 +35,9 @@ Retrieval = Literal["blind", "matched"]
 """How research picks techniques for the generator (D1): ``blind`` shows the
 context's techniques as they are; ``matched`` asks the matcher first."""
 
-Role = Literal["engine", "editor", "generator", "matcher"]
-"""A Claude role with its own model chain (``role_chain``)."""
+Role = Literal["engine", "editor", "generator", "matcher", "lane", "leap", "reviewer"]
+"""A Claude role with its own model chain (``role_chain``); ``lane``, ``leap``
+and ``reviewer`` are the idea pipeline's (Step 3 Wave 2, D58)."""
 
 _LEVELS: Final[tuple[Effort, ...]] = get_args(Effort)
 _ALL: Final = frozenset(_LEVELS)
@@ -133,6 +135,15 @@ GENERATOR_MAX_CALLS_MAX: Final = 5
 """Most generation requests a run may send (``GENERATOR_MAX_CALLS``)."""
 FIX_RETRIES_MAX: Final = 1
 """Most self-retries, per trial and per run, until B-R2 lifts it (O8)."""
+PORTFOLIO_ROUNDS_MAX: Final = 3
+"""Most rounds a keep waits for before it ends exploration (D54): the default
+``MAX_TRIAL_ROUNDS``, past which rule 4 of the router ends the run anyway."""
+RETENTION_REQUIRED_MODELS: Final = frozenset(
+    {"claude-fable-5-1", "claude-fable-5", "claude-mythos-5-1", "claude-mythos-5"}
+)
+"""Models whose use requires 30-day data retention (D63; the advisor-tool docs
+name all four): refused in every role that sends repository text unless
+``ALLOW_RETENTION_MODELS`` is set."""
 
 
 class Settings(BaseSettings):
@@ -246,6 +257,94 @@ class Settings(BaseSettings):
     EDITOR_MODEL: str | None = None
     """``None`` keeps ``ENGINE_MODEL`` with its fallbacks; a model runs alone."""
 
+    # ============================================
+    # Step 3 Wave 2: the idea pipeline (D43-D65), opt-in until E2 passes.
+    # Only the factory reads these; with IDEA_PIPELINE off nothing changes.
+    # ============================================
+    IDEA_PIPELINE: bool = False
+    """Build ``IdeaPipelineGenerator`` instead of today's generator (D43)."""
+    IDEAS_DISCOVERY_MAX_SHARE: float = Field(
+        default=0.40, gt=0, lt=1, allow_inf_nan=False
+    )
+    """The discovery share with the pipeline on (D55); at least today's."""
+    PORTFOLIO_ROUNDS: int = Field(default=0, ge=0, le=PORTFOLIO_ROUNDS_MAX)
+    """Rounds before a keep ends exploration (D54); 0 keeps today's router."""
+    IDEAS_LANE_MODEL: str = "claude-sonnet-5-5"
+    IDEAS_LANE_EFFORT: Effort | None = "medium"
+    IDEAS_LANE_MAX_TOKENS: int = Field(default=12000, ge=1)
+    IDEAS_LANE_N: int = Field(default=6, ge=1, le=10)
+    IDEAS_LENSES: tuple[Lane, ...] = LENS_LANES
+    IDEAS_LANE_WORKERS: int = Field(default=4, ge=1, le=8)
+    IDEAS_LEAP_MODEL: str = "claude-opus-5-5"
+    IDEAS_LEAP_EFFORT: Effort | None = "high"
+    IDEAS_LEAP_MAX_TOKENS: int = Field(default=12000, ge=1)
+    IDEAS_LEAP_N: int = Field(default=3, ge=0, le=5)
+    """Ideas from the leap lane; 0 skips the lane (D47)."""
+    IDEAS_REVIEWER_MODEL: str = "claude-opus-5-5"
+    IDEAS_REVIEWER_EFFORT: Effort | None = "high"
+    IDEAS_REVIEWER_MAX_TOKENS: int = Field(default=16000, ge=1)
+    IDEAS_REVIEW: bool = True
+    """Off skips the reviewer: every idea ``unknown``, no plans (D49)."""
+    IDEAS_REVIEW_MAX_IDEAS: int = Field(default=16, ge=1, le=48)
+    """Most ideas the reviewer sees (D64); at least ``GENERATOR_N``."""
+    IDEAS_HOT_FUNCTIONS: int = Field(default=8, ge=1, le=30)
+    """Hot functions shown, by cumulative time (D44); 30 is ``MAX_HOTSPOTS``."""
+    IDEAS_MAX_FILES: int = Field(default=8, ge=1, le=20)
+    IDEAS_FILE_MAX_BYTES: int = Field(default=24 * _KIB, ge=1 * _KIB)
+    """Below it a whole file is shown (D44)."""
+    IDEAS_CODE_MAX_BYTES: int = Field(default=64 * _KIB, ge=1)
+    """Rendered code per call, line prefixes included (D44, D55)."""
+    IDEAS_PARSE_MAX_BYTES: int = Field(default=512 * _KIB, ge=1)
+    """Most of a file S0 reads to parse it; past it, unparsable (D44)."""
+    IDEAS_AMDAHL_MULTIPLIER: float = Field(default=1.0, ge=1.0, allow_inf_nan=False)
+    """An idea's ceiling must reach this times the floor (D51)."""
+    IDEAS_PORTFOLIO_MIN: int = Field(default=3, ge=1, le=10)
+    IDEAS_PORTFOLIO_MAX: int = Field(default=5, ge=1, le=10)
+    ALLOW_RETENTION_MODELS: bool = False
+    """Admit ``RETENTION_REQUIRED_MODELS`` in repository-text roles (D63).
+    Set only by the live harness, for fixture and pinned-OSS repositories."""
+
+    @field_validator("IDEAS_LENSES")
+    @classmethod
+    def _lenses_are_distinct_lens_lanes(
+        cls, value: tuple[Lane, ...]
+    ) -> tuple[Lane, ...]:
+        """A non-empty subset of the six lenses, each once (D46)."""
+        if (
+            not value
+            or len(set(value)) != len(value)
+            or not set(value) <= set(LENS_LANES)
+        ):
+            names = ", ".join(lane.value for lane in LENS_LANES)
+            raise ValueError(
+                f"IDEAS_LENSES must name each lens at most once, from {names}; "
+                f"got {[lane.value for lane in value]}"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _idea_bounds_are_consistent(self) -> Self:
+        """Byte caps in order and min <= max always; the knobs that bound
+        against today's settings only with the pipeline on, so no setting
+        valid with it off is refused (D43)."""
+        problems = []
+        if self.IDEAS_CODE_MAX_BYTES < self.IDEAS_FILE_MAX_BYTES:
+            problems.append("IDEAS_CODE_MAX_BYTES must be >= IDEAS_FILE_MAX_BYTES")
+        if self.IDEAS_PARSE_MAX_BYTES < self.IDEAS_FILE_MAX_BYTES:
+            problems.append("IDEAS_PARSE_MAX_BYTES must be >= IDEAS_FILE_MAX_BYTES")
+        if self.IDEAS_PORTFOLIO_MIN > self.IDEAS_PORTFOLIO_MAX:
+            problems.append("IDEAS_PORTFOLIO_MIN must be <= IDEAS_PORTFOLIO_MAX")
+        if self.IDEA_PIPELINE:
+            if self.IDEAS_DISCOVERY_MAX_SHARE < self.DISCOVERY_MAX_SHARE:
+                problems.append(
+                    "IDEAS_DISCOVERY_MAX_SHARE must be >= DISCOVERY_MAX_SHARE"
+                )
+            if self.IDEAS_REVIEW_MAX_IDEAS < self.GENERATOR_N:
+                problems.append("IDEAS_REVIEW_MAX_IDEAS must be >= GENERATOR_N")
+        if problems:
+            raise ValueError("; ".join(problems))
+        return self
+
     @field_validator("GENERATED_CLASSES")
     @classmethod
     def _generated_classes_never_novel(
@@ -263,6 +362,9 @@ class Settings(BaseSettings):
         "EDITOR_EFFORT",
         "GENERATOR_EFFORT",
         "MATCHER_EFFORT",
+        "IDEAS_LANE_EFFORT",
+        "IDEAS_LEAP_EFFORT",
+        "IDEAS_REVIEWER_EFFORT",
         mode="before",
     )
     @classmethod
@@ -414,12 +516,19 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _every_billed_model_is_priced(self) -> Self:
-        """Every model a request may bill needs a price, or no estimate is a bound."""
+        """Every model a request may bill needs a price, or no estimate is a bound.
+
+        The idea pipeline's roles bill only with ``IDEA_PIPELINE`` on, so a
+        price table valid today stays valid with it off (D43); a transport for
+        one of them is built from ``role_settings``, whose engine model is the
+        role's and is checked here either way.
+        """
+        roles = _ROLES if self.IDEA_PIPELINE else _TODAYS_ROLES
         needed = (
             self.ENGINE_MODEL,
             *self.ENGINE_FALLBACK_MODELS,
             self.TRIAGE_MODEL,
-            *(model for role in _ROLES for model in role_chain(self, role)),
+            *(model for role in roles for model in role_chain(self, role)),
         )
         missing = sorted({name for name in needed if name not in self.MODEL_PRICING})
         if missing:
@@ -439,6 +548,9 @@ class Settings(BaseSettings):
             ("EDITOR_EFFORT", "editor"),
             ("GENERATOR_EFFORT", "generator"),
             ("MATCHER_EFFORT", "matcher"),
+            ("IDEAS_LANE_EFFORT", "lane"),
+            ("IDEAS_LEAP_EFFORT", "leap"),
+            ("IDEAS_REVIEWER_EFFORT", "reviewer"),
         )
         for key, role in keys:
             level: Effort | None = getattr(self, key)
@@ -455,6 +567,27 @@ class Settings(BaseSettings):
                     raise ValueError(
                         f"{key} {level!r} is not accepted by {model}, which may "
                         f"serve the request (it accepts {takes})"
+                    )
+        return self
+
+    @model_validator(mode="after")
+    def _retention_models_need_the_flag(self) -> Self:
+        """A 30-day-retention model never receives repository text unless the
+        live harness set the flag (D63): every role sends it, and the engine's
+        fallbacks are checked whether or not they are sent (fail closed)."""
+        if self.ALLOW_RETENTION_MODELS:
+            return self
+        chains: list[tuple[str, tuple[str, ...]]] = [
+            (role, role_chain(self, role)) for role in _ROLES
+        ]
+        chains.append(("engine fallback", self.ENGINE_FALLBACK_MODELS))
+        for role, models in chains:
+            for model in models:
+                if model in RETENTION_REQUIRED_MODELS:
+                    raise ValueError(
+                        f"the {role} role would send repository text to {model}, "
+                        "which requires 30-day data retention; it runs only in the "
+                        "live harness, which sets ALLOW_RETENTION_MODELS"
                     )
         return self
 
@@ -496,6 +629,9 @@ class Settings(BaseSettings):
 
 
 _ROLES: Final[tuple[Role, ...]] = get_args(Role)
+PIPELINE_ROLES: Final[tuple[Role, ...]] = ("lane", "leap", "reviewer")
+"""The idea pipeline's roles (D58): they send requests only with it on."""
+_TODAYS_ROLES: Final = tuple(role for role in _ROLES if role not in PIPELINE_ROLES)
 
 
 def role_chain(cfg: Settings, role: Role) -> tuple[str, ...]:
@@ -510,6 +646,9 @@ def role_chain(cfg: Settings, role: Role) -> tuple[str, ...]:
         "editor": cfg.EDITOR_MODEL,
         "generator": cfg.GENERATOR_MODEL,
         "matcher": cfg.MATCHER_MODEL,
+        "lane": cfg.IDEAS_LANE_MODEL,
+        "leap": cfg.IDEAS_LEAP_MODEL,
+        "reviewer": cfg.IDEAS_REVIEWER_MODEL,
     }[role]
     if model is not None:
         return (model,)

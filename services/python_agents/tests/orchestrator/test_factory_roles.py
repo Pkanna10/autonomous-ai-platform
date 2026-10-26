@@ -97,7 +97,7 @@ STEP2 = {f.name for f in dataclasses.fields(NodeContext)} - {
     "generator", "matcher", "retrieval", "generated_classes", "generator_n",
     "generator_max_calls", "matcher_k", "discovery_max_share",
     "fix_retries_per_run", "playbook", "quality", "default_output_check",
-    "calibrator", "calibration_blocks", "confirm_winners",
+    "calibrator", "calibration_blocks", "confirm_winners", "portfolio_rounds",
 }  # fmt: skip
 
 
@@ -368,7 +368,7 @@ def test_the_default_context_keeps_every_step2_knob(
         "generator_n": 5, "generator_max_calls": 2, "matcher_k": 3,
         "discovery_max_share": 0.25, "fix_retries_per_run": 1, "playbook": (),
         "quality": None, "default_output_check": True, "calibrator": ctx.baseline_runner,
-        "calibration_blocks": 3, "confirm_winners": True,
+        "calibration_blocks": 3, "confirm_winners": True, "portfolio_rounds": 0,
     }  # fmt: skip
     assert {name: getattr(ctx, name) for name in new} == new
 

@@ -14,7 +14,8 @@ cost, so the node reads spend from the budget's delta (D7). ``BudgetExceeded``
 (before sending), ``LLMConfigError``, ``LLMRequestError``, ``LLMUnavailable``
 and ``UnusableReplyError`` (after charging) propagate: which of them are soft
 is the node's decision (D18, spec 4.1). ``lessons`` and ``avoid_titles`` are
-accepted and ignored until W1 (D21). The hypothesis text stays untrusted: the
+accepted and ignored until W1 (D21), and so are the run's facts the idea
+pipeline reads (``commit`` and the rest, D44): the request is unchanged. The hypothesis text stays untrusted: the
 editor fences it for every source (D11).
 """
 
@@ -88,6 +89,11 @@ class ClaudeHypothesisGenerator:
         avoid_titles: Sequence[str],  # noqa: ARG002 - W1 (D21)
         n: int,
         budget: Budget,
+        commit: str | None = None,  # noqa: ARG002 - the idea pipeline's (D44)
+        run_id: str | None = None,  # noqa: ARG002
+        call_index: int = 0,  # noqa: ARG002
+        protected: Sequence[str] = (),  # noqa: ARG002
+        read_deny: Sequence[str] = (),  # noqa: ARG002
     ) -> GenerateResult:
         notes: list[str] = []
         hypotheses = generate_hypotheses(

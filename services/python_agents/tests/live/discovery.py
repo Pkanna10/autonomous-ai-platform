@@ -41,6 +41,13 @@ retrieval A/B) and ``test_escalation_live.py`` (E8a, cheap editor first) use:
   billed over the cap. A transport timeout also charges the attempt's full
   estimate before the retry (``call()``: the money may be gone), so one
   timeout can push a later arm of the same run into a recorded refusal.
+- ``arm_settings``: the arm's copy (``role_settings`` on the engine role,
+  the arm's model alone). A model of ``RETENTION_REQUIRED_MODELS`` (Fable
+  5.1, 30-day retention, D63) gets ``ALLOW_RETENTION_MODELS`` here and
+  nowhere else, and only when the repository under test is a harness
+  repository (``harness_repository``: an engine corpus fixture or a pinned
+  OSS library, by project name); otherwise the copy is refused before any
+  spend. The ``sweep-fable`` suite reaches Fable only through this helper.
 - ``run_arm`` / ``generate_arm``: one arm's requests through a transport
   whose chain is that arm's model alone (no fallbacks), with the arm's
   cost, billed models, tokens (thinking tokens from
@@ -84,6 +91,7 @@ from autonomous_ai_agents.clients.cost import count_margin, preflight_estimate
 from autonomous_ai_agents.clients.structured import PROMPT_ALLOWANCE_TOKENS
 from autonomous_ai_agents.clients.transport import LLMRequest, LLMTransport
 from autonomous_ai_agents.common.config import (
+    RETENTION_REQUIRED_MODELS,
     Effort,
     Settings,
     role_settings,
@@ -115,6 +123,8 @@ from autonomous_ai_agents.research.playbook import TechniqueMatch
 
 from .conftest import LiveRun, usage_tokens
 from .corpus import (
+    CORPUS,
+    HARD_CORPUS,
     CorpusOutcome,
     CorpusRepo,
     Loop,
@@ -122,6 +132,8 @@ from .corpus import (
     outcome_of,
     start_loop,
 )
+from .oss import OSS_CORPUS
+from .oss_v2 import OSS_CORPUS_V2
 
 OPUS: Final = "claude-opus-5-5"
 SONNET: Final = "claude-sonnet-5-5"
@@ -280,9 +292,50 @@ Work = Callable[
 ]
 
 
-def run_arm(arm: Arm, run: LiveRun, base: Settings, work: Work) -> ArmResult:
-    """``work`` on the arm's own transport (chain: the arm's model alone)."""
-    cfg = role_settings(base, "engine", ENGINE_MODEL=arm.model, ENGINE_FALLBACKS=False)
+HARNESS_REPOSITORIES: Final = frozenset(
+    {
+        *(repo.name for repo in (*CORPUS, *HARD_CORPUS)),
+        *(repo.name for repo in (*OSS_CORPUS, *OSS_CORPUS_V2)),
+    }
+)
+"""The engine's corpus fixtures and the pinned OSS libraries, by name."""
+
+
+def harness_repository(project: Project) -> bool:
+    """Whether ``project`` is one of the harness's own repositories."""
+    return project.name in HARNESS_REPOSITORIES
+
+
+def arm_settings(arm: Arm, base: Settings, project: Project | None = None) -> Settings:
+    """The arm's settings copy: its model alone. A retention model (D63) is
+    admitted only for a harness repository, by setting the flag in this copy;
+    anywhere else it is refused before any request."""
+    update: dict[str, object] = {"ENGINE_MODEL": arm.model, "ENGINE_FALLBACKS": False}
+    if arm.model in RETENTION_REQUIRED_MODELS:
+        if project is None:
+            raise ValueError(
+                f"{arm.label}: {arm.model} needs a harness repository, got no repository"
+            )
+        if not harness_repository(project):
+            raise ValueError(
+                f"{arm.label}: {arm.model} requires 30-day retention and runs only "
+                f"on a corpus fixture or a pinned OSS library, not {project.name!r}"
+            )
+        update["ALLOW_RETENTION_MODELS"] = True
+    return role_settings(base, "engine", **update)
+
+
+def run_arm(
+    arm: Arm,
+    run: LiveRun,
+    base: Settings,
+    work: Work,
+    *,
+    project: Project | None = None,
+) -> ArmResult:
+    """``work`` on the arm's own transport (chain: the arm's model alone);
+    ``project`` is the repository under test (``arm_settings``)."""
+    cfg = arm_settings(arm, base, project)
     tap = UsageTap(run.transport(cfg))
     first = len(run.records)
     notes: list[str] = []
@@ -341,7 +394,7 @@ def generate_arm(
         )
         return found, ()
 
-    return run_arm(arm, run, base, work)
+    return run_arm(arm, run, base, work, project=facts.project)
 
 
 def check_calls(

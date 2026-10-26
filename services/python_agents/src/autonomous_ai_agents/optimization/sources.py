@@ -10,6 +10,13 @@ Claude-backed implementations live in ``optimization/hypothesis_source.py``
 Results are frozen dataclasses: they cross one call. What reaches the state
 is the engine models they carry (``Hypothesis``, ``TechniqueMatchRecord``).
 ``HypothesisSource`` (``common/models.py``) is the unrelated enum of origins.
+
+Step 3 Wave 2 (D44, D65): ``generate`` also takes the run's facts as
+keyword-only, defaulted parameters (the base commit, the run id, the index of
+this generator call, the run's protected patterns and the editor's read-deny
+paths), which today's adapter accepts and ignores; ``GenerateResult`` carries
+typed ``events`` for the node to emit and the idea pipeline's ``stats``
+(``None`` from today's generator), so the default path is unchanged.
 """
 
 from __future__ import annotations
@@ -29,14 +36,19 @@ from autonomous_ai_agents.common.models import (
     Technique,
     TechniqueMatchRecord,
 )
+from autonomous_ai_agents.optimization.idea_types import GenerateEvent, IdeaStats
 
 
 @dataclass(frozen=True)
 class GenerateResult:
-    """Validated hypotheses, the model's best first, and what was dropped."""
+    """Validated hypotheses, the model's best first, and what was dropped;
+    ``events`` the node emits with their codes and levels after ``generated``,
+    ``stats`` what the idea pipeline counted (D65)."""
 
     hypotheses: tuple[Hypothesis, ...] = ()
     notes: tuple[str, ...] = ()
+    events: tuple[GenerateEvent, ...] = ()
+    stats: IdeaStats | None = None
 
 
 @dataclass(frozen=True)
@@ -49,8 +61,15 @@ class MatchResult:
 
 @runtime_checkable
 class HypothesisGenerator(Protocol):
-    """Writes at most ``n`` hypotheses; ``lessons`` and ``avoid_titles`` are
-    context for the prompt (ignored until W1)."""
+    """Writes at most ``n`` obvious hypotheses plus the idea pipeline's
+    portfolio (D53); ``lessons`` and ``avoid_titles`` are context for the
+    prompt (ignored by today's generator until W1).
+
+    The run's facts (D44): ``commit`` is the base commit the code is read at
+    (``None``: no code context), ``run_id`` seeds the pipeline's rotation,
+    ``call_index`` counts this run's earlier generator calls, ``protected``
+    and ``read_deny`` are patterns and paths never to be shown.
+    """
 
     def generate(
         self,
@@ -64,6 +83,11 @@ class HypothesisGenerator(Protocol):
         avoid_titles: Sequence[str],
         n: int,
         budget: Budget,
+        commit: str | None = None,
+        run_id: str | None = None,
+        call_index: int = 0,
+        protected: Sequence[str] = (),
+        read_deny: Sequence[str] = (),
     ) -> GenerateResult: ...
 
 

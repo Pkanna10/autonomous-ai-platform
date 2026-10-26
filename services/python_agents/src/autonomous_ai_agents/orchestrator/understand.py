@@ -7,6 +7,8 @@ uncommitted edits and untracked files never reach the API. Names matching
 or non-UTF-8 names, binary and non-UTF-8 files are skipped, files and the
 listing are capped (git hands over only a blob's head, ``read_blob(limit=)``,
 so a huge tracked file is never held whole), and every skip becomes a note.
+The read rules and ``RepoReader`` live in ``common/repo_read.py`` (shared with
+the idea pipeline, D44) and are re-exported here.
 
 Repository-derived text goes inside ``<untrusted_repo_content boundary=T>``
 with a fresh ``secrets.token_hex(8)`` per request; any piece holding ``T`` is
@@ -32,7 +34,6 @@ other failure gives ``understanding=None`` with a note. ``cost_usd`` and
 
 from __future__ import annotations
 
-import codecs
 import json
 import posixpath
 import re
@@ -41,7 +42,7 @@ import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated, Final, Protocol
+from typing import Annotated, Final
 
 from anthropic.types.beta import BetaMessage, BetaOutputConfigParam, BetaTextBlock
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError
@@ -69,6 +70,12 @@ from autonomous_ai_agents.common.paths import (
     matches_pattern,
     normalize_path,
 )
+from autonomous_ai_agents.common.repo_read import (
+    BINARY_SNIFF_BYTES as BINARY_SNIFF_BYTES,
+)
+from autonomous_ai_agents.common.repo_read import RepoReader as RepoReader
+from autonomous_ai_agents.common.repo_read import read_text
+from autonomous_ai_agents.common.repo_read import unprintable as _unprintable
 from autonomous_ai_agents.execution.git import GitError, GitWorkspace
 from autonomous_ai_agents.execution.protocols import UnderstandResult
 from autonomous_ai_agents.execution.quality import label_column_leaks
@@ -85,11 +92,8 @@ MAX_MODULES: Final = 10  # ProjectUnderstanding.candidate_modules
 MAX_WORKLOAD_NOTES: Final = 100
 MAX_PATH_CHARS: Final = 1024
 MAX_TEXT_CHARS: Final = 500  # one workload note or one module reason
-BINARY_SNIFF_BYTES: Final = 8000  # git's rule: a NUL in the first 8000 bytes
 
 _WORD = re.compile(r"[a-z_]{1,40}")
-# C0, DEL, C1 (NEL), the line and paragraph separators and the bidi controls.
-_UNPRINTABLE = re.compile(r"[\x00-\x1f\x7f-\x9f\u200e\u200f\u2028-\u202e\u2066-\u2069]")
 _SHOWN_NAMES = 5
 _SHOWN_CHARS = 80
 
@@ -239,16 +243,6 @@ class ReadLimits:
         for name, value in vars(self).items():
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(f"{name} must be a whole number >= 1, got {value!r}")
-
-
-class RepoReader(Protocol):
-    """Git objects at a commit; ``GitWorkspace`` is the real one."""
-
-    def ls_tree(self, commit: str) -> tuple[str, ...]: ...
-
-    def read_blob(
-        self, commit: str, path: str, *, limit: int | None = None
-    ) -> bytes: ...
 
 
 class ClaudeUnderstander:
@@ -520,20 +514,12 @@ class _Snapshot:
             return f"not read (read limit {cap.max_read_attempts} files)"
         self.attempts += 1
         try:
-            # One byte past the cap shows a cut; never less than the sniff.
-            limit = max(cap.max_file_bytes + 1, BINARY_SNIFF_BYTES)
-            data = reader.read_blob(commit, path, limit=limit)
+            found = read_text(reader, commit, path, cap=cap.max_file_bytes)
         except GitError:
             return "unreadable in git"
-        if b"\0" in data[:BINARY_SNIFF_BYTES]:
-            return "not sent (binary)"
-        cut = len(data) > cap.max_file_bytes
-        try:  # only the head is decoded; a character split by the cut is left out
-            text = codecs.getincrementaldecoder("utf-8")().decode(
-                data[: cap.max_file_bytes], final=not cut
-            )
-        except UnicodeDecodeError:
-            return "not sent (not UTF-8)"
+        if isinstance(found, str):  # binary or not UTF-8 (denied: never listed)
+            return f"not sent ({found})"
+        text, cut = found.text, found.cut
         if _holds(text, self.token):
             return "not sent (they hold the boundary token)"
         size = len(text.encode())
@@ -766,15 +752,6 @@ def _no_constant(name: str) -> object:
 
 def _holds(text: str, token: str) -> bool:
     return token.casefold() in text.casefold()
-
-
-def _unprintable(text: str) -> bool:
-    """Controls, separators, bidi overrides (forged lines or markers), no UTF-8."""
-    try:
-        text.encode("utf-8")
-    except UnicodeEncodeError:
-        return True
-    return _UNPRINTABLE.search(text) is not None
 
 
 def _shorten(text: str) -> str:

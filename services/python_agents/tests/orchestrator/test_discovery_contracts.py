@@ -70,6 +70,11 @@ class _Generator:
         avoid_titles: Sequence[str],
         n: int,
         budget: Budget,
+        commit: str | None = None,
+        run_id: str | None = None,
+        call_index: int = 0,
+        protected: Sequence[str] = (),
+        read_deny: Sequence[str] = (),
     ) -> GenerateResult:
         return GenerateResult(hypotheses=self.hypotheses[:n], notes=("one",))
 

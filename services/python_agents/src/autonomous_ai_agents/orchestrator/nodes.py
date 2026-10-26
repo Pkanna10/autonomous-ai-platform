@@ -62,6 +62,7 @@ from autonomous_ai_agents.common.config import (
     GENERATOR_MAX_CALLS_MAX,
     GENERATOR_N_MAX,
     MATCHER_K_MAX,
+    PORTFOLIO_ROUNDS_MAX,
     Retrieval,
     settings,
 )
@@ -284,6 +285,9 @@ class NodeContext:
     ``DEFAULT_OUTPUT_CHECK``, the baseline runner with
     ``NOISE_CALIBRATION_BLOCKS``, and ``CONFIRM_WINNERS`` (D4, D41).
 
+    Step 3 Wave 2 (D54): ``portfolio_rounds`` (0-3, ``PORTFOLIO_ROUNDS``) is
+    how many rounds a keep waits before it ends exploration; 0 is Step 2's.
+
     Construction refuses duplicate or refname-unsafe candidate ids (each id
     names a trial branch), knobs below 1, a negative or non-finite
     ``min_trial_budget_usd`` and discovery or retry knobs outside their
@@ -326,6 +330,7 @@ class NodeContext:
     calibrator: NoiseCalibrator | None = None
     calibration_blocks: int = 0
     confirm_winners: bool = False
+    portfolio_rounds: int = 0
 
     def __post_init__(self) -> None:
         counts = Counter(candidate.id for candidate in self.candidates)
@@ -367,6 +372,7 @@ class NodeContext:
                 GENERATOR_MAX_CALLS_MAX,
             ),
             "fix_retries_per_run": (self.fix_retries_per_run, 0, FIX_RETRIES_MAX),
+            "portfolio_rounds": (self.portfolio_rounds, 0, PORTFOLIO_ROUNDS_MAX),
         }
         for name, (value, low, high) in ranges.items():
             if not low <= value <= high:

@@ -998,6 +998,7 @@ def test_max_is_accepted_on_the_other_current_engine_models(
     """
     monkeypatch.setenv("MODEL_PRICING", _priced_for(engine, "claude-opus-4-8"))
     monkeypatch.setenv("ENGINE_MODEL", engine)
+    monkeypatch.setenv("ALLOW_RETENTION_MODELS", "1")  # D63: Fable 5.1 needs it
     monkeypatch.setenv("UNDERSTAND_EFFORT", "max")
     monkeypatch.setenv("EDITOR_EFFORT", "max")
 

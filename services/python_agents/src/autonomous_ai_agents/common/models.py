@@ -59,6 +59,10 @@ _SCORER_INTERPRETER = re.compile(r"python(3(\.\d+)?)?")
 JsonScalar = str | int | float | bool | None
 ScalarDict = dict[str, JsonScalar]
 
+HYPOTHESIS_TAG: Final = re.compile(r"[a-z_]+:[a-z0-9_:.-]{1,64}")
+"""One ``Hypothesis.tags`` entry, matched whole (D57): a key, a colon, a value."""
+MAX_HYPOTHESIS_TAGS: Final = 24
+
 
 def new_id() -> str:
     """Return a fresh uuid4 as a string."""
@@ -222,6 +226,8 @@ class ViolationRule(StrEnum):
     module_shadow = "module_shadow"
     # Step 3 (D37): added lines name a frozen quality file (a tripwire).
     quality_data_reference = "quality_data_reference"
+    # Step 3 Wave 2 (D62): a new blob the engine's parser cannot read.
+    unparsable_source = "unparsable_source"
 
 
 class DeliveryKind(StrEnum):
@@ -770,6 +776,19 @@ class Hypothesis(EngineModel):
     status: HypothesisStatus = HypothesisStatus.proposed
     parked_reason: str | None = Field(default=None, min_length=1)
     """Why a generated idea was parked instead of trialled (Step 3, D9)."""
+    tags: tuple[str, ...] = Field(default=(), max_length=MAX_HYPOTHESIS_TAGS)
+    """Engine facts (``lane:``, ``review:``) and model claims (``claimed_``)
+    from the idea pipeline (Step 3 Wave 2, D57); recorded, read by nothing yet.
+    Each matches ``HYPOTHESIS_TAG`` whole, so no tag carries free text."""
+
+    @field_validator("tags")
+    @classmethod
+    def _tags_match_the_pattern(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        bad = [tag for tag in value if HYPOTHESIS_TAG.fullmatch(tag) is None]
+        if bad:
+            shown = [tag[:80] for tag in bad[:3]]
+            raise ValueError(f"tags must match {HYPOTHESIS_TAG.pattern}: {shown}")
+        return value
 
 
 class JudgeResult(EngineModel):
