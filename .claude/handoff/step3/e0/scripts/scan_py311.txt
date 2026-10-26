@@ -1,0 +1,12 @@
+== more_itertools (3 modules under more_itertools)
+  FLAG more_itertools/more.py: base='may start processes (line 4078: uses __import__)'; trivial-edit refused=True
+       msg: process_spawn: 'more_itertools/more.py' may start processes (line 4078: uses __import__) while cpu_time_s or peak_rss_bytes is judged
+  -> 1/3 modules flagged at base
+== tomli (4 modules under src/tomli)
+  -> 0/4 modules flagged at base
+== mistune (38 modules under src/mistune)
+  FLAG src/mistune/plugins/__init__.py: base='may start processes (line 1: imports importlib.import_module)'; trivial-edit refused=True
+       msg: process_spawn: 'src/mistune/plugins/__init__.py' may start processes (line 1: imports importlib.import_module) while cpu_time_s or peak_rss_bytes is judged
+  -> 1/38 modules flagged at base
+== pyparsing (17 modules under pyparsing)
+  -> 0/17 modules flagged at base

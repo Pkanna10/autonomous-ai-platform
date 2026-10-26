@@ -8,6 +8,8 @@ moved 6 lines, nothing else did). Paths are relative to `services/python_agents/
 unless they start with `tests/`, `infrastructure/` or `.github/`. Anything not
 re-read is marked **(not re-read)**, anything inferred **unverified**.
 
+**Revision 5 (2026-10-26, Wave 2 addition; pending the owner's sign-off of the build plan).** The owner added the idea pipeline to Wave 2 (O11), raised the discovery share (O12) and approved about 120 USD of staged experiments (O13). The amendment is `spec-wave2-ideas.md` in this folder (decisions D43-D65, units N0-N5 and V7-V8, experiments E0-E4, amendments to D7, D8, D10, D37 and section 4.3); it was drafted by Fable 5.1, reviewed by three Opus 5.5 reviewers (correctness, security, completeness) and revised; the free E0 checks it folds in are under `e0/`. Where the two differ, the amendment wins for the rules it names.
+
 **Revision 4 (owner, second round, binding).** O6-O10 (§0). D35 rewritten: an
 output change is judged by a quality check in Step 3 (D37-D40, new); the output
 check is on by default (D40); `EDITOR_FIX_RETRIES_PER_RUN` is 1, bound 1, with
