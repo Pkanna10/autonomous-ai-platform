@@ -457,6 +457,8 @@ def test_launch_report_is_a_total_typed_dict_with_the_spec_keys() -> None:
         "fs_isolated": bool,
         "net_isolated": bool,
         "error": str | None,
+        "child_cpu": float | None,
+        "strays": int | None,
     }
 
 

@@ -257,7 +257,10 @@ class CombineMeasured:
 
 
 class LaunchReport(TypedDict):
-    """The launcher's JSON report for one run (``maxrss`` in platform units)."""
+    """The launcher's JSON report for one run (``maxrss`` in platform units).
+
+    ``child_cpu`` (seconds) and ``strays`` are the child-process tripwire's
+    signals (D62, N0c), null on darwin."""
 
     wall_ns: int
     utime: float
@@ -267,6 +270,8 @@ class LaunchReport(TypedDict):
     fs_isolated: bool
     net_isolated: bool
     error: str | None
+    child_cpu: float | None
+    strays: int | None
 
 
 @runtime_checkable

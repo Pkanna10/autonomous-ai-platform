@@ -85,6 +85,8 @@ def sample(
     size: int = 2,
     stderr: bytes = b"",
     notes: tuple[str, ...] = (),
+    child: float | None = None,
+    strays: int | None = None,
 ) -> RunSample:
     return RunSample(
         wall_ns=wall_ns,
@@ -99,6 +101,8 @@ def sample(
         stdout_bytes=size,
         stderr_tail=stderr,
         notes=notes,
+        child_cpu_s=child,
+        strays=strays,
     )
 
 
@@ -529,11 +533,63 @@ def test_hardware_records_the_host_the_modes_and_the_isolated_runs(
         "runs": 5,
         "fs_isolated_runs": 3,
         "net_isolated_runs": 4,
+        "child_cpu_s": None,
+        "strays": None,
     }
     assert [m.hardware for m in measured.measurements] == [expected] * 3
     for row in measured.measurements:
         assert type(row.hardware["fs_isolated_runs"]) is int
         assert type(row.hardware["net_isolated_runs"]) is int
+
+
+@pytest.mark.parametrize(
+    ("last", "child", "strays"),
+    [(sample(child=0.0, strays=0), 0.3, 2), (sample(), None, None)],
+    ids=["every-run", "one-run-unreported"],
+)
+def test_hardware_records_the_worst_runs_child_cpu_and_strays(
+    area: Area,
+    events: list[str],
+    last: RunSample,
+    child: float | None,
+    strays: int | None,
+) -> None:
+    """
+    GIVEN a warm-up with 0.3 s of child CPU and 2 strays, timed runs with
+        less, and a last run that reports them or not (D62, N0c)
+    WHEN the workload is measured
+    THEN every row's hardware carries the worst launch's child CPU and
+        strays, warm-ups included, or null once a launch did not report them
+    """
+    run = FakeRun(
+        events,
+        scripted(
+            sample(child=0.3, strays=2),
+            sample(child=0.25, strays=1),
+            sample(child=0.0, strays=0),
+            last,
+        ),
+    )
+
+    measured = measure_workload(area.phase(run), workload())
+
+    for row in measured.measurements:
+        assert (row.hardware["child_cpu_s"], row.hardware["strays"]) == (child, strays)
+
+
+def test_the_suite_rows_carry_no_child_signals(area: Area, events: list[str]) -> None:
+    """
+    GIVEN a test suite run that reported child CPU and a stray
+    WHEN the suite is measured
+    THEN its rows carry neither: the tripwire watches workload runs only
+    """
+    stderr = b"Ran 3 tests in 0.010s\n\nOK\n"
+    run = FakeRun(events, scripted(sample(stderr=stderr, child=0.5, strays=1)))
+
+    result = run_tests(area.phase(run), project(), [workload()], trial_id="t1")
+
+    [row] = result.measurements
+    assert {"child_cpu_s", "strays"}.isdisjoint(row.hardware)
 
 
 # ---------------------------------------------------------------------------

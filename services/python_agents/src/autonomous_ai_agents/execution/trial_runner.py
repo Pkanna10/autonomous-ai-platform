@@ -52,6 +52,14 @@ it may read (a path the editor may not read gets no re-edit), so it carries
 nothing from the user's machine and adds nothing to D13's residual. A re-edit
 that does not hold keeps the refusal, its own ref put back.
 
+Child processes (D62, N0c, the runtime backstop to ``process_spawn``): a
+measured attempt whose runs, per workload, left more strays than its base
+(the twin's rows when paired, else the run baseline's) or used child CPU
+over a base with none, or over ``max(2 x, + 0.05 s)`` of a base that spawns,
+is failed with a ``child_processes`` violation and keeps its rows. A base
+value missing counts as none; a trial value missing (darwin's child CPU, a
+fake run) is not checked.
+
 Paired trials (D41 a, ``paired``): every attempt, a retry's too, is measured
 ABBA (``measure_abab``) against a fresh twin worktree at the base,
 ``twin-trial-<hyp>`` (a prefix no trial phase has); the twin's rows are
@@ -104,6 +112,7 @@ from autonomous_ai_agents.common.errors import (
     add_spend,
 )
 from autonomous_ai_agents.common.models import (
+    METRIC_CPU_TIME_S,
     METRIC_WALL_TIME_S,
     NOISE_CALIBRATION_BLOCKS_MAX,
     NOISE_FLOOR_MIN,
@@ -142,6 +151,8 @@ from autonomous_ai_agents.execution.git import (
     repo_fingerprint,
 )
 from autonomous_ai_agents.execution.measure import (
+    CHILD_CPU_KEY,
+    STRAYS_KEY,
     Phase,
     RunOnce,
     baseline_test_count,
@@ -218,6 +229,8 @@ _SUBJECT_CHARS = 72
 _KEPT = "first failure kept"
 _UNPARSABLE = ViolationRule.unparsable_source.value
 _TYPE_CHARS = 64
+CHILD_CPU_FACTOR, CHILD_CPU_SLACK_S = 2.0, 0.05
+"""D2: a base that spawns allows ``max(2 x, + 0.05 s)`` of its child CPU."""
 _NO_CLOSURE = ClosureIndex(frozenset(), {}, complete=False)
 """Classifies fixability without reading any source (type only, nothing sent)."""
 
@@ -1018,6 +1031,11 @@ class GitTrialRunner(_PhaseOwner):
             "measurements": rows,
             "base_measurements": base,
         }
+        spawned = child_violations(rows, base or job.baseline.measurements)
+        if spawned:
+            kept = trial.model_copy(update={**measured, "status": TrialStatus.failed})
+            text = "; ".join(v.message for v in spawned)
+            return _Tried(_failed(kept, text, violations=spawned), result)
         return _Tried(trial.model_copy(update=measured), result)
 
     def _trial_phases(self, job: _Job, side: _Side) -> tuple[Phase, Phase | None]:
@@ -1188,6 +1206,52 @@ class GitTrialRunner(_PhaseOwner):
             base_of=base_of,
         )
         return (*captured, *check_diff_all((c.path for c in changes), protected))
+
+
+def _children(
+    rows: Sequence[Measurement],
+) -> dict[str, tuple[float | None, int | None]]:
+    """Per workload, its CPU row's worst-run child CPU and strays (measure.py)."""
+    found: dict[str, tuple[float | None, int | None]] = {}
+    for row in rows:
+        if row.metric == METRIC_CPU_TIME_S:
+            cpu, strays = row.hardware.get(CHILD_CPU_KEY), row.hardware.get(STRAYS_KEY)
+            found[row.workload_id] = (
+                cpu if isinstance(cpu, float) else None,
+                strays
+                if isinstance(strays, int) and not isinstance(strays, bool)
+                else None,
+            )
+    return found
+
+
+def child_violations(
+    rows: Sequence[Measurement], base: Sequence[Measurement]
+) -> tuple[Violation, ...]:
+    """``child_processes`` per workload whose runs spawned beyond ``base``'s
+    (module docstring)."""
+    before, found = _children(base), []
+    for workload_id, (cpu, strays) in _children(rows).items():
+        base_cpu, base_strays = before.get(workload_id, (None, None))
+        cpu0, strays0 = base_cpu or 0.0, base_strays or 0
+        limit = max(CHILD_CPU_FACTOR * cpu0, cpu0 + CHILD_CPU_SLACK_S) if cpu0 else 0.0
+        problems = []
+        if strays is not None and strays > strays0:
+            problems.append(
+                f"{strays} process(es) left behind in a run (the base: {strays0})"
+            )
+        if cpu is not None and cpu > limit:
+            problems.append(
+                f"{cpu:.3f} s of child-process CPU in a run (the base: {cpu0:.3f} s,"
+                f" allowed {limit:.3f} s)"
+            )
+        if problems:
+            found.append(Violation(
+                rule=ViolationRule.child_processes,
+                message=f"workload {workload_id}: the measured runs started child"
+                f" processes: {'; '.join(problems)}",
+            ))  # fmt: skip
+    return tuple(found)
 
 
 def _base_of(

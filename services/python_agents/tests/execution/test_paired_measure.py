@@ -44,6 +44,7 @@ from autonomous_ai_agents.common.models import (
     RunStats,
     Trial,
     TrialStatus,
+    ViolationRule,
     Workload,
 )
 from autonomous_ai_agents.execution.procrun import OutputCaps, RunSample
@@ -93,6 +94,10 @@ class Clock:
     run_dir: Path
     wall_ms: Callable[[str, int], float] = lambda phase, n: 100.0
     crash_on: str = "-"
+    children: Callable[[str], tuple[float | None, int | None]] = lambda phase: (
+        None,
+        None,
+    )
     crashes: int = 0
     skip: int = 0
     calls: list[str] = field(default_factory=list)
@@ -124,8 +129,9 @@ class Clock:
                 ),
             )
         cpu = wall / 1000
+        child, strays = self.children(phase)
         return RunSample(int(wall * 1e6), cpu, 0.0, 1 << 20, exit, True, True,
-                         "1" * 64, b"", 0, err.encode())  # fmt: skip
+                         "1" * 64, b"", 0, err.encode(), child_cpu_s=child, strays=strays)  # fmt: skip
 
 
 @dataclass
@@ -384,3 +390,49 @@ def test_two_zero_means_are_no_gap(rig: Rig) -> None:
     load = rig.workload()
     found = rig.baseline_runner().calibrate([load], run_id="run1", commit=rig.base, blocks=1)  # fmt: skip
     assert (found.gaps, found.floor) == ({f"{load.id}:{METRIC_WALL_TIME_S}": 0.0}, 0.02)
+
+
+@pytest.mark.parametrize(
+    ("paired", "twin", "trial", "flagged"),
+    [
+        (True, (0.1, 0), (0.15, 0), None),
+        (True, (0.1, 0), (0.25, 0), "0.250 s of child-process CPU"),
+        (True, (0.0, 0), (0.01, 0), "0.010 s of child-process CPU"),
+        (True, (0.1, 1), (0.1, 2), "2 process(es) left behind"),
+        (True, (0.0, 0), (0.0, 0), None),
+        (False, (9.9, 9), (0.01, 0), "0.010 s of child-process CPU"),
+        (False, (9.9, 9), (0.0, 0), None),
+        (True, (0.0, 0), (None, 0), None),
+    ],
+    ids=["within", "over-2x", "new-spawn", "more-strays", "clean", "unpaired",
+         "unpaired-clean", "darwin-null"],
+)  # fmt: skip
+def test_child_processes_beyond_the_base_reject_the_measured_trial(
+    rig: Rig,
+    paired: bool,
+    twin: tuple[float, int],
+    trial: tuple[float | None, int],
+    flagged: str | None,
+) -> None:
+    """
+    GIVEN per-run child CPU and strays on the twin (A) and on the trial (B),
+        or unpaired against the run baseline, whose rows carry neither
+    WHEN the trial is measured (D62, N0c)
+    THEN it is failed with one child_processes violation, its rows kept, once
+        it shows strays beyond the base's, child CPU over a base with none, or
+        over max(2 x, + 0.05 s) of a base that spawns; within that, clean, or
+        with a null child CPU (darwin) it is measured
+    """
+    rig.clock.children = lambda phase: twin if phase.startswith("twin-") else trial
+
+    measured, _ = rig.trial(Edits([SAME]), [rig.workload()], paired=paired)
+
+    if flagged is None:
+        assert (measured.status, measured.violations) == (TrialStatus.measured, ())
+        return
+    assert measured.status is TrialStatus.failed
+    [violation] = measured.violations
+    assert violation.rule is ViolationRule.child_processes
+    assert flagged in violation.message and measured.error == violation.message
+    assert len(measured.measurements) == 4
+    rig.nothing_left()

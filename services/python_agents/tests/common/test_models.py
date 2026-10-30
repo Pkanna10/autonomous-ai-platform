@@ -535,6 +535,8 @@ def test_violation_rules_cover_measurement_completeness() -> None:
         # Step 3 (D37): added lines name a frozen quality file
         "quality_data_reference",
         "unparsable_source",
+        # Step 3 Wave 2 (D62, N0c): runtime child-process tripwire
+        "child_processes",
     }
     assert ViolationRule("module_shadow").name == "module_shadow"
 

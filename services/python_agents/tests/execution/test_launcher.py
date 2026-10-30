@@ -2,8 +2,9 @@
 
 In-process tests drive ``launcher.main`` through ``FakeOS``: every OS call
 the launcher makes (syscall, ioctl, prctl, capget/capset, open, connect,
-fork, execvp, wait4, _exit, signal handling) is recorded and scripted, so the
-isolation order, the fail-closed rules and the child's exec path are covered
+fork, execvp, wait4, waitid, the child-CPU read, the children listing, kill,
+_exit, signal handling) is recorded and scripted, so the isolation order, the
+fail-closed rules, the child's exec path and the stray drain are covered
 without confining or forking the test process. The report fd is a real pipe.
 
 The real tests run ``python -I -S launcher.py`` under ``unshare`` (user,
@@ -192,6 +193,7 @@ _PRCTL_NAMES = {
     24: "capbset_drop",
     47: "cap_ambient",
     28: "securebits",
+    36: "subreaper",
 }
 
 
@@ -215,6 +217,9 @@ class FakeOS:
         capbset_einval_at: int | None = None,
         child_error: bytes | None = None,
         caps: tuple[int, int, int] = USERNS_ROOT,
+        child_cpu: float | Exception = 0.5,
+        reaps: Sequence[int] = (),
+        children: Sequence[Sequence[int] | Exception] = (),
     ) -> None:
         self.platform = platform
         self.abi = abi
@@ -230,6 +235,9 @@ class FakeOS:
         self.capbset_einval_at = capbset_einval_at
         self.child_error = child_error
         self.caps = caps
+        self.child_cpu = child_cpu
+        self.reaps = list(reaps)  # wait4(-1): a pid, 0 (a live child), then ECHILD
+        self.children = list(children)  # one listing per call, then []
         self.errpipe: tuple[int, int] | None = None
         self.calls: list[tuple[object, ...]] = []
 
@@ -324,8 +332,34 @@ class FakeOS:
         raise self.exec_error
 
     def wait4(self, pid: int, options: int) -> tuple[int, int, resource.struct_rusage]:
-        self.calls.append(("wait4", pid, options))
-        return pid, self.status, rusage()
+        if pid > 0:
+            self.calls.append(("wait4", pid, options))
+            return pid, self.status, rusage()
+        self.calls.append(("reap_any", pid, options))
+        if not self.reaps:
+            raise ChildProcessError(errno.ECHILD, "No child processes")
+        found = self.reaps.pop(0)
+        return found, 0, rusage(0.0625, 0.0625) if found else rusage(0.0, 0.0, 0)
+
+    def waitid(self, pid: int) -> None:
+        self.calls.append(("waitid", pid))
+
+    def read_child_cpu(self, pid: int) -> float:
+        self.calls.append(("child_cpu", pid))
+        if isinstance(self.child_cpu, Exception):
+            raise self.child_cpu
+        return self.child_cpu
+
+    def list_children(self) -> list[int]:
+        self.calls.append(("children",))
+        found = self.children.pop(0) if self.children else []
+        if isinstance(found, Exception):
+            raise found
+        return list(found)
+
+    def kill(self, pid: int, signum: int) -> None:
+        self.calls.append(("kill", pid, signum))
+        self._maybe_fail("kill")
 
     def exit(self, code: int) -> NoReturn:
         self.calls.append(("exit", code))
@@ -351,6 +385,10 @@ class FakeOS:
             fork=self.fork,
             execvp=self.execvp,
             wait4=self.wait4,
+            waitid=self.waitid,
+            child_cpu=self.read_child_cpu,
+            children=self.list_children,
+            kill=self.kill,
             exit=self.exit,
             reset_signals=self.reset_signals,
             clear_handlers=self.clear_handlers,
@@ -458,9 +496,11 @@ def test_linux_applies_isolation_in_order_then_runs_and_reports(
         only, never /dev/shm), the write probe, the connect probe, the AF_UNIX
         probe and the clearing of Python's signal handlers
         (so a workload cannot kill PID 1 with SIGINT) run in that order before
-        the fork; the
-        report carries the raw rusage, exit 3 and both flags true; the launcher
-        exits with the workload's status (3)
+        the fork, the launcher becomes the child subreaper; after the fork it
+        waits for the exit without reaping, reads the child CPU, reaps, then
+        drains strays (none); the report carries the raw rusage, exit 3, both
+        flags true, the child CPU and 0 strays; the launcher exits with the
+        workload's status (3)
     """
     fake = FakeOS(status=3 << 8)
 
@@ -476,6 +516,8 @@ def test_linux_applies_isolation_in_order_then_runs_and_reports(
         "fs_isolated": True,
         "net_isolated": True,
         "error": None,
+        "child_cpu": 0.5,
+        "strays": 0,
     }
     assert isinstance(report["wall_ns"], int) and report["wall_ns"] >= 0
     assert fake.names() == [
@@ -492,8 +534,12 @@ def test_linux_applies_isolation_in_order_then_runs_and_reports(
         "connect",
         "unix_socket",
         "clear_handlers",
+        "subreaper",
         "fork",
+        "waitid",
+        "child_cpu",
         "wait4",
+        "reap_any",
     ]
 
 
@@ -526,13 +572,18 @@ def test_linux_steps_send_the_spec_values(dirs: Dirs, pipe: tuple[int, int]) -> 
     assert calls["restrict_self"][2:] == (0,)
     assert calls["connect"] == ("connect", "127.0.0.1", 40000)
     assert calls["wait4"] == ("wait4", 4242, 0)
+    assert calls["subreaper"] == ("subreaper", 36, 1)
+    assert calls["waitid"] == ("waitid", 4242)
+    assert calls["child_cpu"] == ("child_cpu", 4242)
+    assert calls["reap_any"] == ("reap_any", -1, os.WNOHANG)
 
 
 def test_darwin_runs_only_the_self_checks(dirs: Dirs, pipe: tuple[int, int]) -> None:
     """
     GIVEN a darwin spec with both modes required (sandbox-exec applied them)
     WHEN the probe write and connect fail with EPERM
-    THEN no Linux step runs and both flags are true
+    THEN no Linux step runs, both flags are true, and the child CPU and
+        strays are null (D3: no route proven on darwin yet)
     """
     eperm = OSError(errno.EPERM, "Operation not permitted")
     fake = FakeOS(platform="darwin", probe_error=eperm, connect_error=eperm)
@@ -541,6 +592,7 @@ def test_darwin_runs_only_the_self_checks(dirs: Dirs, pipe: tuple[int, int]) -> 
 
     assert code == 0
     assert (report["fs_isolated"], report["net_isolated"]) == (True, True)
+    assert (report["child_cpu"], report["strays"]) == (None, None)
     assert fake.names() == ["probe_write", "connect", "clear_handlers", "fork", "wait4"]
 
 
@@ -552,7 +604,8 @@ def test_modes_off_skip_every_isolation_step(
     GIVEN a spec with both modes off
     WHEN the launcher runs
     THEN it only clears the signal handlers, forks and waits (Linux still makes
-        itself non-dumpable first), and both flags are false
+        itself non-dumpable first and the child subreaper, reads the child
+        CPU and drains strays), and both flags are false
     """
     fake = FakeOS(platform=platform)
 
@@ -562,8 +615,14 @@ def test_modes_off_skip_every_isolation_step(
 
     assert code == 0
     assert (report["fs_isolated"], report["net_isolated"]) == (False, False)
-    dumpable = ["set_dumpable"] if platform == "linux" else []
-    assert fake.names() == [*dumpable, "clear_handlers", "fork", "wait4"]
+    linux = platform == "linux"
+    dumpable = ["set_dumpable"] if linux else []
+    after = ["subreaper", "fork", "waitid", "child_cpu", "wait4", "reap_any"]
+    assert fake.names() == [
+        *dumpable,
+        "clear_handlers",
+        *(after if linux else ["fork", "wait4"]),
+    ]
 
 
 def test_a_signalled_workload_reports_the_negative_signal(
@@ -591,6 +650,147 @@ def test_report_keys_match_the_launch_report_contract(
     _, report = run_main(FakeOS(), pipe, spec_json(dirs))
 
     assert set(report) == set(get_type_hints(LaunchReport))
+
+
+# ---------------------------------------------------------------------------
+# In-process: the child-process tripwire (D62, N0c)
+# ---------------------------------------------------------------------------
+
+
+def test_strays_are_reaped_counted_and_the_live_ones_killed_first(
+    dirs: Dirs, pipe: tuple[int, int]
+) -> None:
+    """
+    GIVEN the workload left an exited stray (77), then live strays (90, 91)
+        that the listing names, and 91 had already gone (ProcessLookupError)
+    WHEN the launcher drains after reaping the workload
+    THEN 77 is counted, both live ones are SIGKILLed and only then waited for
+        blocking, every stray is counted once and its CPU joins child_cpu
+    """
+    fake = FakeOS(
+        reaps=[77, 0, 90, 91],
+        children=[[90, 91]],
+        fail={"kill": ProcessLookupError(errno.ESRCH, "No such process")},
+    )
+
+    code, report = run_main(fake, pipe, spec_json(dirs))
+
+    assert code == 0
+    assert (report["strays"], report["child_cpu"]) == (3, 0.5 + 3 * 0.125)
+    drain = [c for c in fake.calls if c[0] in {"reap_any", "children", "kill"}]
+    assert drain == [
+        ("reap_any", -1, os.WNOHANG),
+        ("reap_any", -1, os.WNOHANG),
+        ("children",),
+        ("kill", 90, signal.SIGKILL),
+        ("kill", 91, signal.SIGKILL),
+        ("reap_any", -1, 0),
+        ("reap_any", -1, os.WNOHANG),
+        ("reap_any", -1, os.WNOHANG),
+    ]
+
+
+@pytest.mark.parametrize(
+    "listing", [[], OSError(errno.EACCES, "denied")], ids=["none", "error"]
+)
+def test_a_live_stray_it_cannot_name_counts_and_is_never_waited_for(
+    dirs: Dirs, pipe: tuple[int, int], listing: list[int] | Exception
+) -> None:
+    """
+    GIVEN a live stray (wait4 gives 0) that the children listing does not
+        name, or the listing fails
+    WHEN the launcher drains
+    THEN it counts one stray and stops: no kill, no blocking wait
+    """
+    fake = FakeOS(reaps=[0], children=[listing])
+
+    _, report = run_main(fake, pipe, spec_json(dirs))
+
+    assert report["strays"] == 1
+    assert "kill" not in fake.names()
+    assert ("reap_any", -1, 0) not in fake.calls
+
+
+def test_the_drain_stops_at_the_stray_cap(
+    dirs: Dirs, pipe: tuple[int, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    GIVEN more exited strays than the cap (a fork bomb's leftovers)
+    WHEN the launcher drains
+    THEN it stops at the cap; the count already flags the run
+    """
+    monkeypatch.setattr(launcher, "STRAYS_MAX", 3)
+    fake = FakeOS(reaps=[50, 51, 52, 53, 54])
+
+    _, report = run_main(fake, pipe, spec_json(dirs))
+
+    assert report["strays"] == 3
+    assert fake.names().count("reap_any") == 3
+
+
+def test_an_unreadable_child_cpu_is_null_and_the_workload_still_reaped(
+    dirs: Dirs, pipe: tuple[int, int], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """
+    GIVEN /proc/<pid>/stat cannot be read for the exited workload
+    WHEN the launcher reports
+    THEN child_cpu is null (procrun refuses such a Linux run), the workload is
+        still reaped and the strays drained, and stderr says why
+    """
+    fake = FakeOS(child_cpu=OSError(errno.ENOENT, "gone"))
+
+    code, report = run_main(fake, pipe, spec_json(dirs))
+
+    assert code == 0
+    assert (report["child_cpu"], report["strays"]) == (None, 0)
+    assert fake.names()[-4:] == ["waitid", "child_cpu", "wait4", "reap_any"]
+    assert "cannot read the workload's child CPU" in capsys.readouterr().err
+
+
+def test_a_failed_subreaper_refuses_before_the_fork(
+    dirs: Dirs, pipe: tuple[int, int]
+) -> None:
+    """
+    GIVEN prctl(PR_SET_CHILD_SUBREAPER) fails
+    WHEN the launcher runs, in any mode
+    THEN it refuses with exit 125 and a null child CPU and strays, no fork
+    """
+    fake = FakeOS(fail={"subreaper": OSError(errno.EINVAL, "Invalid argument")})
+
+    code, report = run_main(fake, pipe, spec_json(dirs, fs="off", net="off", port=None))
+
+    assert code == 125
+    assert "child subreaper" in str(report["error"])
+    assert (report["child_cpu"], report["strays"]) == (None, None)
+    assert "fork" not in fake.names()
+
+
+@pytest.mark.parametrize(
+    ("comm", "cpu"), [(b"python3", 0.42), (b"a) b (c", 0.42), (b")", 0.42)]
+)
+def test_stat_child_cpu_reads_fields_16_and_17_past_any_comm(
+    comm: bytes, cpu: float
+) -> None:
+    """
+    GIVEN a /proc/<pid>/stat line whose comm may hold ") " and spaces
+    WHEN the child CPU is read at 100 ticks per second
+    THEN it is (cutime + cstime) / ticks: fields 16 and 17, counted from
+        the last ")"
+    """
+    fields = [b"Z", b"1", *[b"0"] * 9, b"7", b"8", b"30", b"12", b"20", b"0"]
+    line = b"42 (" + comm + b") " + b" ".join(fields) + b"\n"
+
+    assert launcher.stat_child_cpu(line, 100) == pytest.approx(cpu)
+
+
+@pytest.mark.parametrize(
+    ("line", "ticks"),
+    [(b"42 (x) Z 1 2", 100), (b"no paren", 100), (b"42 (x) " + b"a " * 20, 100),
+     (b"42 (x) " + b"0 " * 20, 0)],
+)  # fmt: skip
+def test_stat_child_cpu_refuses_a_malformed_line(line: bytes, ticks: int) -> None:
+    with pytest.raises(ValueError):
+        launcher.stat_child_cpu(line, ticks)
 
 
 # ---------------------------------------------------------------------------
@@ -710,8 +910,12 @@ def test_best_effort_failures_record_false_and_still_run(
         "set_flags",
         "no_new_privs",
         "clear_handlers",
+        "subreaper",
         "fork",
+        "waitid",
+        "child_cpu",
         "wait4",
+        "reap_any",
     ]
 
 
@@ -1583,9 +1787,61 @@ def test_default_ops_are_the_real_os_calls() -> None:
     assert ops.seccomp is launcher.real_seccomp
     assert ops.unix_socket is launcher.real_unix_socket
     assert ops.clear_handlers is launcher.clear_signal_handlers
+    assert ops.kill is os.kill
+    assert ops.waitid is launcher.real_waitid
+    assert ops.child_cpu is launcher.real_child_cpu
+    assert ops.children is launcher.real_children
 
 
 linux_only = pytest.mark.skipif(sys.platform != "linux", reason="Linux syscalls")
+
+
+@linux_only
+def test_real_waitid_leaves_the_exited_child_for_its_cpu_read_and_reap() -> None:
+    """
+    GIVEN a child that waited for a grandchild doing about 60 ms of CPU
+    WHEN real_waitid returns
+    THEN the child is exited but unreaped: real_child_cpu reads the
+        grandchild's CPU from its /proc stat, real_children names it, and
+        wait4 still reaps it
+    """
+    busy = "import time\nt=time.process_time()\nwhile time.process_time()-t<0.06: pass"
+    code = f"import subprocess, sys\nsubprocess.run([sys.executable, '-c', {busy!r}])"
+    child = subprocess.Popen([sys.executable, "-c", code])
+
+    launcher.real_waitid(child.pid)
+    cpu = launcher.real_child_cpu(child.pid)
+    named = child.pid in launcher.real_children()
+    pid, status, _ = os.wait4(child.pid, 0)
+    child.returncode = os.waitstatus_to_exitcode(status)
+
+    assert (pid, child.returncode, named) == (child.pid, 0, True)
+    assert 0.04 <= cpu < 5.0
+
+
+@linux_only
+def test_real_children_names_a_live_child_and_skips_a_vanished_pid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    GIVEN a live child and a /proc listing that also holds a pid whose stat
+        is gone (it exited meanwhile) and a name that is no pid
+    WHEN the children are listed
+    THEN the live child is named and the others are skipped
+    """
+    real_listdir = os.listdir
+    monkeypatch.setattr(
+        os, "listdir", lambda path: [*real_listdir(path), "999999999", "self"]
+    )
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        found = launcher.real_children()
+    finally:
+        child.kill()
+        child.wait()
+
+    assert child.pid in found
+    assert 999999999 not in found
 
 
 @linux_only
@@ -2139,16 +2395,17 @@ while not os.path.exists(started) and time.monotonic() < deadline:
 
 @linux_only
 @pytest.mark.usefixtures("linux_sandbox")
-@pytest.mark.parametrize(("network", "survives"), [("required", False), ("off", True)])
+@pytest.mark.parametrize("network", ["required", "off"])
 def test_real_launcher_pid_namespace_kills_setsid_orphans(
-    dirs: Dirs, listener: int, network: IsolationMode, survives: bool
+    dirs: Dirs, listener: int, network: IsolationMode
 ) -> None:
     """
     GIVEN a workload that starts a setsid grandchild, waits until it runs,
         and exits while the grandchild still has 0.5 s to live
-    WHEN it runs in the PID namespace (and, as the control, without one)
-    THEN the orphan dies with the launcher inside the namespace, and
-        without one it lives on to write its "alive" marker
+    WHEN it runs in the PID namespace and without one
+    THEN the orphan never writes its "alive" marker: in the namespace it dies
+        with the launcher, and without one the launcher, its child
+        subreaper, kills it (N0c); both reports count it as one stray
     """
     started, alive = dirs.wt / "orphan-started", dirs.wt / "orphan-alive"
 
@@ -2165,7 +2422,8 @@ def test_real_launcher_pid_namespace_kills_setsid_orphans(
 
     assert run.code == 0, run.err
     assert started.exists()
-    assert alive.exists() is survives
+    assert alive.exists() is False
+    assert run.report is not None and run.report["strays"] == 1
 
 
 @linux_only

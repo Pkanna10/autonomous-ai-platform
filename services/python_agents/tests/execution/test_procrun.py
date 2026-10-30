@@ -69,6 +69,8 @@ GOOD: dict[str, object] = {
     "fs_isolated": True,
     "net_isolated": True,
     "error": None,
+    "child_cpu": 0.125,
+    "strays": 0,
 }
 OUTER = Accounting(wall_ns=5_000_000, utime=0.01, stime=0.002, maxrss=9000, exit=0)
 CAPS = OutputCaps(max_output_bytes=10 * MIB, head_bytes=1000, stderr_tail_bytes=100)
@@ -166,6 +168,8 @@ def test_parse_report_accepts_the_launchers_own_format() -> None:
     assert parse_report(encode(GOOD)) == GOOD
     signalled = {**GOOD, "exit": -9, "utime": 0.0, "error": "x"}
     assert parse_report(encode(signalled)) == signalled
+    darwin = {**GOOD, "child_cpu": None, "strays": None}
+    assert parse_report(encode(darwin)) == darwin
 
 
 def _replace(key: str, raw: bytes) -> bytes:
@@ -184,7 +188,7 @@ MALFORMED: list[tuple[bytes, str]] = [
     (b'"text"', "exactly the keys"),
     (encode({k: v for k, v in GOOD.items() if k != "error"}), "exactly the keys"),
     (encode({**GOOD, "forged": True}), "exactly the keys"),
-    (encode(GOOD).replace(b'{"error"', b'{"exit": 3, "error"'), "duplicate key"),
+    (b'{"exit": 3, ' + encode(GOOD)[1:], "duplicate key"),
     (_replace("utime", b"NaN"), "NaN"),
     (_replace("stime", b"Infinity"), "Infinity"),
     (_replace("utime", b"-Infinity"), "-Infinity"),
@@ -205,6 +209,12 @@ MALFORMED: list[tuple[bytes, str]] = [
     (_replace("net_isolated", b'"true"'), "net_isolated must be a boolean"),
     (_replace("error", b"5"), "error must be a string or null"),
     (_replace("error", b"{}"), "error must be a string or null"),
+    (_replace("child_cpu", b"1"), "child_cpu must be a finite, non-negative float"),
+    (_replace("child_cpu", b"-0.5"), "child_cpu must be a finite, non-negative"),
+    (_replace("child_cpu", b"true"), "child_cpu must be a finite, non-negative"),
+    (_replace("strays", b"1.5"), "strays must be a non-negative integer or null"),
+    (_replace("strays", b"-1"), "strays must be a non-negative integer or null"),
+    (_replace("strays", b"false"), "strays must be a non-negative integer or null"),
 ]
 
 
@@ -377,6 +387,7 @@ def finished(
     timed_out: bool = False,
     overflow: str | None = None,
     stderr_tail: bytes = b"tail",
+    group_leftover: bool = False,
 ) -> RunOutcome:
     return RunOutcome(
         outer=outer,
@@ -391,6 +402,7 @@ def finished(
         stdout_head=b"out",
         stdout_bytes=3,
         stderr_tail=stderr_tail,
+        group_leftover=group_leftover,
     )
 
 
@@ -419,7 +431,57 @@ def test_judge_builds_a_sample_with_scaled_maxrss(
         stdout_bytes=3,
         stderr_tail=b"tail",
         notes=(),
+        child_cpu_s=0.125,
+        strays=0,
     )
+
+
+@pytest.mark.parametrize("key", ["child_cpu", "strays"])
+def test_judge_refuses_a_linux_report_without_the_child_signals(
+    tmp_path: Path, key: str
+) -> None:
+    """
+    GIVEN a Linux report whose child CPU or stray count is null (the launcher
+        could not read /proc/<pid>/stat)
+    WHEN it is judged
+    THEN RunFailure: the tripwire is required on Linux (D62, N0c)
+    """
+    report = encode({**GOOD, key: None})
+
+    with pytest.raises(RunFailure, match="child processes"):
+        judge(finished(report), make_policy(tmp_path, platform="linux"))
+
+
+@pytest.mark.parametrize(
+    ("platform", "report", "leftover", "strays"),
+    [
+        ("darwin", {"child_cpu": None, "strays": None}, False, 0),
+        ("darwin", {"child_cpu": None, "strays": None}, True, 1),
+        ("linux", {"strays": 2}, True, 3),
+    ],
+    ids=["darwin-clean", "darwin-leftover", "linux-leftover"],
+)
+def test_judge_counts_a_process_that_outlived_the_launcher_as_a_stray(
+    tmp_path: Path,
+    platform: str,
+    report: dict[str, object],
+    leftover: bool,
+    strays: int,
+) -> None:
+    """
+    GIVEN a darwin report with null child signals (D3: no route proven
+        there), or a Linux one, and a process group that still had members
+        after the wrapper was reaped
+    WHEN it is judged
+    THEN the leftover counts one stray more (darwin's only stray signal), and
+        darwin's child CPU stays null
+    """
+    run = finished(encode({**GOOD, **report}), group_leftover=leftover)
+
+    sample = judge(run, make_policy(tmp_path, platform=platform))
+
+    assert sample.strays == strays
+    assert sample.child_cpu_s == (None if platform == "darwin" else 0.125)
 
 
 @pytest.mark.parametrize(
@@ -1744,6 +1806,8 @@ def forged(**changes: object) -> str:
         "fs_isolated": False,
         "net_isolated": False,
         "error": None,
+        "child_cpu": 0.0,
+        "strays": 0,
     }
     report.update(changes)
     return json.dumps(report, sort_keys=True)
@@ -1797,12 +1861,13 @@ print(child.pid)
 """
 
 
+@darwin_only
 def test_real_run_notes_an_output_pipe_held_by_an_escaped_orphan(
     dirs: Dirs, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """
-    GIVEN network off (no PID namespace) and a workload whose setsid
-        grandchild keeps stdout open (the documented limitation)
+    GIVEN darwin (no PID namespace, no subreaper) and a workload whose setsid
+        grandchild keeps stdout open (the documented limitation there)
     WHEN it runs
     THEN run_once returns after the grace period instead of hanging, with a
         note that an output pipe was still open
@@ -1817,6 +1882,36 @@ def test_real_run_notes_an_output_pipe_held_by_an_escaped_orphan(
         assert time.monotonic() - started < 5.0
         assert sample.exit == 0
         assert sample.notes == ("an output pipe was still open after the run",)
+    finally:
+        try:
+            os.kill(orphan, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+@linux_only
+def test_real_run_kills_a_setsid_orphan_without_a_pid_namespace(
+    dirs: Dirs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    GIVEN network off (no PID namespace) and a workload whose setsid
+        grandchild would keep stdout open (Step 2's documented limitation)
+    WHEN it runs on Linux
+    THEN the launcher, its child subreaper (N0c), kills and counts it: the
+        run returns at once, no output pipe stays open and one stray is
+        reported
+    """
+    monkeypatch.setattr(procrun, "IO_GRACE_S", 0.3)
+    started = time.monotonic()
+
+    sample = run(dirs, [sys.executable, "-c", ESCAPED_ORPHAN])
+
+    orphan = int(sample.stdout_head)
+    try:
+        assert time.monotonic() - started < 5.0
+        assert (sample.exit, sample.notes, sample.strays) == (0, (), 1)
+        with pytest.raises(ProcessLookupError):
+            os.kill(orphan, 0)
     finally:
         try:
             os.kill(orphan, signal.SIGKILL)

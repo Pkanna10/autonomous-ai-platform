@@ -756,11 +756,85 @@ engine cannot parse gets its own label (N0). D37's rule list is amended.**
   edit (the one-level check closes the direct case), and a base finding whose
   statement is rewritten to an equivalent form (refused: a changed statement
   is a new statement). The independent defence the AST rule cannot give is a
-  runtime count of child processes: N0c adds a `child_processes` tripwire
-  (`RUSAGE_CHILDREN` user plus system time above 0, or more than one process
-  in the trial's process group, at the end of a measured run; the hook in
-  `execution/procrun.py` is **unverified**, `:78` reads `getrusage` for
-  maxrss) and is required before the `IDEA_PIPELINE` flip, not before E2.
+  runtime count of child processes: N0c adds a `child_processes` tripwire,
+  required before the `IDEA_PIPELINE` flip, not before E2.
+- **Where the tripwire can look (N0c probes, 2026-10-30):** only in the
+  launcher, the workload's parent (`launcher.py:746` fork, `:754`
+  `ops.wait4`). `procrun.py` reaps only the wrapper (`:647`
+  `os.wait4(pgid, 0)`), whose rusage folds the whole tree into one number
+  (a forking workload: 0.16-0.19 s against 2 ticks of its own time), and
+  `procrun.py:78` is `_MAXRSS_SCALE`, not a `getrusage` call. A
+  process-group count after that reap sees only a live orphan, and only
+  with the PID namespace off; clean, fork, subprocess and multiprocessing
+  workloads all read empty in both modes. The two signals the launcher
+  records per run:
+  - `child_cpu`: the workload's `cutime + cstime` from `/proc/<pid>/stat`
+    (fields 16-17), read after `waitid(P_PID, pid, WEXITED | WNOWAIT)` and
+    before the `wait4`, plus every stray's CPU. It covers children the
+    workload waited for, in 10 ms ticks: a child's work under one tick
+    reads 0, and a child never waited for is not in it.
+  - `strays`: descendants left behind, drained after the reap by the
+    launcher as PID 1 of the namespace (`sandbox.py` `UNSHARE_ARGV`, `-f`),
+    or as `PR_SET_CHILD_SUBREAPER` without one. `wait4(-1, WNOHANG)` has
+    three outcomes, handled separately: ECHILD (none left; the count is
+    final), a pid (an exited stray; count it, add its CPU), and 0 (a live
+    stray, the daemonised-worker case: SIGKILL every child listed in
+    `/proc/<launcher>/task/*/children`, block for one, go round). The
+    launcher never blocks on a child it has not killed. Live children it
+    cannot name, or a 4096-stray cap, mark the count `truncated`, which
+    counts as a violation. A prototype with 20 tests (N0c Builder report,
+    2026-10-30) shows a double-forked sleeper as `strays >= 1`, killed and
+    not waited for, in both modes.
+  - On darwin both are null until a route is proven on the macOS job (N0c-3
+    below); the existing group kill still catches a live orphan there.
+- **Open decisions, recorded in STATUS before N0c is briefed:**
+  - **N0c-1, precision.** Accept the one-tick bound on `child_cpu` (the
+    `strays` count is exact), or require exact detection. On Linux, exact
+    means a seccomp deny of `clone` without `CLONE_THREAD`, which
+    prevents spawning instead of detecting it.
+  - **N0c-2, the rule.** Either the absolute rule (any `child_cpu > 0`, any
+    `strays > 0` or `truncated` in a measured trial run), which makes every
+    baseline that spawns unmeasurable (the launcher docstring keeps
+    multiprocessing's `fork` start method working, `launcher.py:16`). Or a
+    delta against the paired base rows `measure_abab` already returns
+    (`trial_runner.py:562`). A delta must be quantitative, not
+    presence-only: a 2-worker base would otherwise license 4 workers. Of
+    the candidates, the child-CPU share `child_cpu / (utime + stime)` does
+    not separate 2 from 4 workers on the same work (0.940 against 0.935).
+    Child CPU per wall second does on a quiet 4-core host (1.63 against
+    2.80, load 1.1), but not under load (1.66 against 1.46, load 1.8), so a
+    delta on it needs a noise floor from ABAB pairs. Strays: any excess
+    over the base. No fixture workload spawns, so the absolute rule does
+    not bite the fixtures.
+  - **N0c-3, darwin.** Either leftover-only for now (null signals, the group
+    kill), with kqueue `NOTE_EXIT` plus `proc_pid_rusage` on the zombie as
+    a follow-up proven on macOS CI, or that route inside N0c. The flip's
+    experiments run on Linux.
+- **Known gap, SIGCHLD ignored (N0c security review, 2026-10-30).** A
+  workload that sets SIGCHLD to SIG_IGN (or SA_NOCLDWAIT) before it spawns
+  hides its children from both signals: the kernel auto-reaps them in
+  `exit_notify`, so their time never reaches the workload's
+  `cutime`/`cstime`, and they are gone before the drain (Reviewer probe:
+  a fork and a `subprocess.run` child of 100 ms each read `child_cpu` 0.0,
+  `strays` 0, in both modes). With a hidden spawn (`getattr`/`__import__`,
+  which N0 concedes) it defeats both rules in one line. Recorded in the
+  launcher docstring and pinned by
+  `test_known_gap_children_auto_reaped_under_sigchld_ignored_read_clean`
+  (4 cases); a fix flips that test to "caught", never deletes it.
+  - **N0c-4, open (Lead).** The candidate third signal, the PID namespace's
+    `/proc/sys/kernel/ns_last_pid` read before the fork and after the drain
+    (`pids_created = after - before - 1`, null with the network off), does
+    see these children (clean 0, SIG_IGN fork 1, subprocess 1) but counts
+    every task, threads included: a `ThreadPoolExecutor(8)` workload reads
+    8 on each of three runs (N0c fix probe, CPython 3.11), so a delta on it
+    flags a thread-pool trial, a legitimate efficiency win, as
+    `child_processes`. Options: (a) a separate `tasks` label that flags
+    rather than fails; (b) SECCOMP_RET_USER_NOTIF on `clone`/`clone3`/
+    `fork`/`vfork` without `CLONE_THREAD`, counted by the launcher (exact,
+    detection only; `clone3` needs ENOSYS to force the `clone` fallback,
+    since BPF cannot read its struct); (c) accept the gap for the flip with
+    N0 as the defence. Network-off runs have no PID namespace, so (a) does
+    not cover them either.
 - *Why:* the rule fix recovers a library with 31 % of its profile locked for
   every editor, and it stops booking a syntax slip as a spawn attempt in
   every E-table; scanning only added lines is unsafe, the delta is not.
@@ -1310,7 +1384,7 @@ same triple twice in a run. Four, as the style:
 | Crafted source crashing S0 | The parse is bounded (512 KiB) and `SyntaxError`, `ValueError`, `RecursionError` and `MemoryError` all fall back to the file's head; no exception from S0 reaches `_generate`'s catch-all (D44) |
 | Pipeline wiring | With `IDEA_PIPELINE` on, a missing pipeline role transport refuses the build by name; never a silent fallback (§3.4) |
 | Lesson tags as a channel | Tags match a strict pattern, at most 24, enum-derived, model claims prefixed `claimed_`; never free text; lesson text unchanged (D57) |
-| `process_spawn` relaxed to a delta (N0) | Whole-file parse of base and new; refuses new spawn statements, new uses of spawn-bound names and calls into base findings; keyed on the enclosing function so swaps do not cancel; parse failures get their own label and never run; the runtime child-process tripwire (N0c) is the independent backstop and is required before the flip (D62) |
+| `process_spawn` relaxed to a delta (N0) | Whole-file parse of base and new; refuses new spawn statements, new uses of spawn-bound names and calls into base findings; keyed on the enclosing function so swaps do not cancel; parse failures get their own label and never run; the runtime child-process tripwire (N0c: the launcher's `child_cpu` and stray drain, never a process-group count) is the independent backstop and is required before the flip (D62) |
 | Recorded lane and reviewer replies (fixtures) | Parsed through the live schemas; test data only (as the existing row says); E1's recorded replies are OSS-library text, committed under `tests/fixtures/idea_eval/` after the same validators |
 | Playbook in matched mode | Unchanged: `research_system`'s stable token (`research/playbook.py:216-252`), refused by both fences; technique names enter `<already_on_the_table>` as data |
 
@@ -1615,7 +1689,7 @@ behaviour, the retention flag's harness guard).
 | --- | --- | --- | --- | --- | --- | --- |
 | N0 | Spawn delta and the `unparsable_source` label (D62): `_spawn_problem(new, base)`, the one-level call check, `check_capture(base_of=)`, the editor's one sentence | `optimization/anticheat.py`, `execution/trial_runner.py` (call site), `execution/editor.py` (one line); `tests/optimization/test_spawn_delta.py`, `tests/execution/test_trial_runner_unparsable.py` | ~180 / ~400 | N1a (the enum value) | Opus 5.5, high | security (the rule's trade-off); correctness |
 | N0b (optional, Lead decides) | Fix retry on an `unparsable_source` refusal: the parser's file, line and message fed back as D14 feedback, one re-edit within the run's retry, nothing unscanned run | `execution/trial_runner.py` + tests | ~120 / ~250 | N0 | Opus 5.5, high | security (D13's bit budget); correctness |
-| N0c | `child_processes` tripwire: `RUSAGE_CHILDREN` time or process-group count after a measured run becomes a violation (hook **unverified**, `execution/procrun.py`) | `execution/procrun.py` or `execution/measure.py` + tests | ~100 / ~200 | - (required before the flip, not before E2) | Opus 5.5, high | security |
+| N0c | `child_processes` tripwire (D62): the launcher's WNOWAIT `/proc/<pid>/stat` read and stray drain, the two `LaunchReport` keys, strict parsing, `child_cpu` and `strays` per run in `Measurement.hardware`, the N0c-2 rule as a `Violation(child_processes)`, the enum value (with its exhaustive-set test, applied together) | `execution/launcher.py`, `execution/protocols.py` (`LaunchReport`), `execution/procrun.py` (`parse_report`'s key set, `RunSample`), `execution/measure.py`, `execution/trial_runner.py` (the rule), `common/models.py` + `tests/common/test_models.py` (the enum patch); `tests/execution/test_launcher.py` (about 12 exact `fake.names()` sequences change), `tests/execution/test_child_tripwire.py` (new: fork, subprocess, multiprocessing, clean, live and exited strays, both Linux modes, darwin null) | ~150 / ~350 | Lead-sequenced after the rest of batch 4 (shares `trial_runner.py` and `test_launcher.py`); N0c-1 to N0c-3 decided first (required before the flip, not before E2) | Opus 5.5, high | security |
 | N1a | Contracts: settings and roles, retention guard, `Hypothesis.tags`, `ViolationRule.unparsable_source`, the Protocol's five keywords, `GenerateResult` events and stats, `NodeContext.portfolio_rounds`, `idea_types.py`, `common/repo_read.py` (moved reader rules), the harness's Fable settings flag | `common/config.py`, `common/models.py`, `common/repo_read.py` (new), `optimization/sources.py`, `optimization/hypothesis_source.py` (ignore the keywords), `orchestrator/understand.py` (re-export only), `nodes.py` (`NodeContext` field and knob check only), `optimization/idea_types.py` (new); `tests/orchestrator/test_discovery_contracts.py` (`_Generator` signature), `tests/orchestrator/test_factory_roles.py` (STEP2 exclusion and `new` dict), the one `tests/live` helper that builds Fable settings (**unverified** which; `discovery.py:128` names the model), `tests/common/test_idea_contracts.py`, `tests/common/test_repo_read.py` | ~260 / ~450 | - | Opus 5.5, high | correctness; security (retention guard, Protocol) |
 | N1b | Code context (S0): reader, caps, exclusions, escaping, secret shapes, spans, callers, spawn findings, anchor, Amdahl ceiling, `render_data_block` | `optimization/idea_context.py` (new); `tests/optimization/test_idea_context.py` | ~320 / ~600 | N1a | Opus 5.5, high | security (read path, escaping, exclusions); correctness |
 | N2 | Lane prompts, schema, requests, grounding: `IDEAS_SCHEMA`, system prompt, six lenses, leap text, example bank and rotation, `structured_request(prefix=)`, `on_the_table`, `read_lane_reply` | `optimization/idea_prompts.py` (new), `optimization/idea_lanes.py` (new), `clients/structured.py` (`prefix`); `tests/optimization/test_idea_prompts.py`, `test_idea_lanes.py` | ~400 / ~650 | N1b | Opus 5.5, Ultracode (prompt text also read by a Fable 5.1 Reviewer against `claude_prompting.md`) | spec (prompt guidance); security (fences, grounding, validation) |
@@ -1653,7 +1727,9 @@ its decision before dispatch, D24):
 3. **Batch 3:** **N2**, **N3a**, **N3b** in parallel (after N1b; disjoint new
    modules plus `structured.py` for N2 only), **N0b** (optional, after N0),
    **L4** (`sweep-record` on today's generator, independent of N).
-4. **Batch 4:** **N4a** (after N2, N3a, N3b), **N0c** (independent files).
+4. **Batch 4:** **N4a** (after N2, N3a, N3b), then **N0c**, sequenced by
+   the Lead (it shares `trial_runner.py` and `tests/execution/test_launcher.py`
+   with other rows; N0c-1 to N0c-3 in D62 decided first).
 5. **Batch 5:** **N4b** (after N4a), then **N5**, **V4 amended**, **V7** and
    **V8** (after N4b; V7 and V8 after V4 amended for the shared `ci.yml` and
    `discovery_ab.py`), the `STATUS.md` pre-registration (D61) and the Wave 2

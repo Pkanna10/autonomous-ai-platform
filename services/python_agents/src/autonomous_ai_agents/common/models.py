@@ -228,6 +228,9 @@ class ViolationRule(StrEnum):
     quality_data_reference = "quality_data_reference"
     # Step 3 Wave 2 (D62): a new blob the engine's parser cannot read.
     unparsable_source = "unparsable_source"
+    # Step 3 Wave 2 (D62, N0c): a measured trial run started child processes
+    # (the runtime backstop to process_spawn).
+    child_processes = "child_processes"
 
 
 class DeliveryKind(StrEnum):
@@ -822,7 +825,9 @@ class Trial(EngineModel):
     ``commit`` is the measured trial commit (``None`` until committed).
     ``violations`` are capture-time problems only the runner can see in the
     git diff (modes, binaries, git metadata, unrecorded writes, the D37
-    tripwire); a trial with any is ``failed`` and never executed. The judges
+    tripwire); a trial with any is ``failed`` and never executed. The one
+    runtime rule, ``child_processes`` (D62, N0c), fails a measured trial and
+    keeps its rows. The judges
     node also adds a measured paired trial's incomplete base rows here with a
     "paired base: " prefix, which rejects it.
 

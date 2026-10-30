@@ -478,6 +478,13 @@ Postgres at 100 % under CPython 3.13 and 3.11, prettier):
   N0's: flag children or strays the base does not show, or child CPU above
   max(2x the base's, the base's + 0.05 s). D3: darwin checks strays only for
   now.
+- **N0c known gap (security review, 2026-10-30):** a workload that ignores
+  SIGCHLD before it spawns hides its children from both tripwire signals (the
+  kernel auto-reaps them). Recorded in the launcher docstring and D62, pinned by
+  a test; N0's static rule is the defence. N0c-4 (a third signal: `ns_last_pid`
+  counts threads too, seccomp user-notify is exact): the Lead accepts the gap
+  for now (option c); before the `IDEA_PIPELINE` flip the Lead recommends the
+  seccomp user-notify signal (option b), decided with the owner at the flip.
 - **Next:** N4a's gate (re-run alone: its first run failed one small-fix timing
   guard under the load of concurrent Builders; eight quiet re-measurements gave
   13-18 % against the 5 % bar), batch 5 and the live order (E0b next).

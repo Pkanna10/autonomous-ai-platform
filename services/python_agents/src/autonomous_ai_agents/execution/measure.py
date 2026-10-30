@@ -19,7 +19,10 @@ equals the raw one without it. The agreed output bytes (the output file, else
 complete stdout, of the first timed run, kept when the canonical
 fingerprints agree) travel in ``Measured.outputs`` for the quality scorer only,
 never in a row, a note or a repr. Two sides alternate ABBA on one counter
-across warm-ups and timed runs (D41).
+across warm-ups and timed runs (D41). Each workload row's hardware carries
+the worst launch's ``child_cpu_s`` and ``strays`` (D62, N0c; warm-ups
+included, ``None`` once a launch did not report them); the suite's rows
+carry neither.
 
 ``tests_passed`` needs the runner's own summary, never the exit code alone:
 unittest's last ``Ran N tests`` line followed by ``OK`` (the suite keeps a
@@ -47,7 +50,7 @@ import xml.etree.ElementTree as ElementTree  # nosec B405
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePath
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 from autonomous_ai_agents.common.config import IsolationMode, settings
 from autonomous_ai_agents.common.models import (
@@ -96,6 +99,9 @@ _SKIPPED = re.compile(r"(?:^|, )skipped=(\d+)")
 _DTD = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)", re.IGNORECASE)
 _FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
 _CHUNK, _TEXT_CAP = 64 * 1024, 200
+CHILD_CPU_KEY, STRAYS_KEY = "child_cpu_s", "strays"
+_N = TypeVar("_N", int, float)
+"""The ``Measurement.hardware`` keys of the child-process tripwire (D62, N0c)."""
 
 
 class RunOnce(Protocol):
@@ -224,6 +230,19 @@ class _Series:
     data: bytes | None = field(default=None, repr=False)
     fs: int = 0
     net: int = 0
+    child: list[float | None] = field(default_factory=list)
+    strays: list[int | None] = field(default_factory=list)
+
+    def launched(self, sample: RunSample) -> RunSample:
+        self.child.append(sample.child_cpu_s)
+        self.strays.append(sample.strays)
+        return sample
+
+
+def _worst(values: Sequence[_N | None]) -> _N | None:
+    """The largest per-launch value, ``None`` unless every launch reported one."""
+    known = [value for value in values if value is not None]
+    return max(known) if known and len(known) == len(values) else None
 
 
 def output_fingerprint(
@@ -366,7 +385,7 @@ def _timed(
     notes: list[str],
 ) -> None:
     """One timed run; ``where`` is (this run, the series) for the notes."""
-    sample = _run(phase, workload, where[0], notes)
+    sample = into.launched(_run(phase, workload, where[0], notes))
     output: RunOutput | None = None
     try:
         output = _output(phase, workload, sample)
@@ -443,6 +462,8 @@ def _rows(
     """Wall, CPU and peak RSS; each fingerprint only when every run agreed."""
     fingerprint, raw = _agreed(series.prints), _agreed(series.raws)
     hardware = _host(phase.policy, len(series.wall), series.fs, series.net)
+    hardware[CHILD_CPU_KEY] = _worst(series.child)
+    hardware[STRAYS_KEY] = _worst(series.strays)
     return tuple(
         _row(workload, trial_id, metric, unit, values, hardware, fingerprint, raw)
         for metric, unit, values in (
@@ -470,7 +491,7 @@ def _interleave(
         for (side, phase), into in pairs[::-1] if index % 2 else pairs:
             if index < warmups:
                 where = f"{name}{side} warm-up {index + 1}/{warmups}"
-                _run(phase, workload, where, notes)
+                into.launched(_run(phase, workload, where, notes))
             else:
                 where = f"{name}{side} run {index - warmups + 1}/{runs}"
                 _timed(phase, workload, into, (where, f"{name}{side}"), notes)

@@ -31,9 +31,14 @@ launcher's error) with control characters replaced; it may still carry words a
 workload picked, so consumers treat it as data. ``RunFailure.notes`` keeps the
 leftover-group and open-pipe facts of a failed run.
 
-Known limitation: with ``network=off`` on Linux there is no PID namespace, so
-a ``setsid`` grandchild escapes ``killpg`` and may hold the output pipes open
-(a note). Under the other Linux modes it dies with the launcher, PID 1 there.
+The child-process tripwire (D62, N0c): a Linux report must carry the
+launcher's ``child_cpu`` and ``strays`` (else ``RunFailure``); a process
+group still populated after the wrapper's reap (a process that outlived the
+launcher, darwin's only stray signal) counts one stray more.
+
+Known limitation: on darwin (no PID namespace, no subreaper) a ``setsid``
+grandchild escapes ``killpg`` and may hold the output pipes open (a note). On
+Linux the launcher, the child subreaper, kills it before it reports.
 """
 
 from __future__ import annotations
@@ -105,6 +110,14 @@ _FIELDS: dict[str, tuple[Callable[[object], bool], str]] = {
     "fs_isolated": (_is_flag, "a boolean"),
     "net_isolated": (_is_flag, "a boolean"),
     "error": (lambda value: value is None or type(value) is str, "a string or null"),
+    "child_cpu": (
+        lambda value: value is None or _is_seconds(value),
+        "a finite, non-negative float or null",
+    ),
+    "strays": (
+        lambda value: value is None or _is_count(value),
+        "a non-negative integer or null",
+    ),
 }
 REPORT_KEYS = frozenset(_FIELDS)
 
@@ -159,7 +172,9 @@ class OutputCaps:
 @dataclass(frozen=True)
 class RunSample:
     """One trusted run: the launcher's numbers (maxrss in bytes, exit negative
-    for a signal), the isolation flags, the captured output and the notes."""
+    for a signal), the isolation flags, the captured output, the notes and
+    the child-process signals (D62, N0c: ``None`` from a fake run; on darwin
+    ``child_cpu_s`` stays ``None``)."""
 
     wall_ns: int
     utime: float
@@ -173,6 +188,8 @@ class RunSample:
     stdout_bytes: int
     stderr_tail: bytes
     notes: tuple[str, ...] = ()
+    child_cpu_s: float | None = None
+    strays: int | None = None
 
 
 @dataclass(frozen=True)
@@ -202,6 +219,7 @@ class RunOutcome:
     stdout_head: bytes
     stdout_bytes: int
     stderr_tail: bytes
+    group_leftover: bool = False
 
 
 def maxrss_scale(platform: str) -> int:
@@ -297,6 +315,8 @@ def _judge(outcome: RunOutcome, policy: SandboxPolicy, notes: list[str]) -> RunS
     check_report(report, outcome.outer, policy)
     if (error := report["error"]) is not None:
         raise RunFailure(f"launcher: {_quote(error)}")
+    if policy.platform == "linux" and None in (report["child_cpu"], report["strays"]):
+        raise RunFailure("the launcher could not account for the child processes")
     for part, mode, isolated in (
         ("fs", policy.fs, report["fs_isolated"]),
         ("network", policy.network, report["net_isolated"]),
@@ -319,6 +339,8 @@ def _judge(outcome: RunOutcome, policy: SandboxPolicy, notes: list[str]) -> RunS
         stdout_bytes=outcome.stdout_bytes,
         stderr_tail=outcome.stderr_tail,
         notes=tuple(notes),
+        child_cpu_s=report["child_cpu"],
+        strays=(report["strays"] or 0) + outcome.group_leftover,
     )
 
 
@@ -660,7 +682,8 @@ def _supervise(
         proc.returncode = (
             -signal.SIGKILL if status is None else os.waitstatus_to_exitcode(status)
         )
-        drained = drain_group(pgid)
+        leftover = kill_group(pgid)  # a member outlived the launcher: a stray
+        drained = not leftover or drain_group(pgid)
         pump.finish(IO_GRACE_S)
         for thread in threads:
             thread.join(IO_GRACE_S + 1.0)
@@ -679,4 +702,5 @@ def _supervise(
         stdout_head=bytes(pump.head),
         stdout_bytes=pump.stdout_bytes,
         stderr_tail=bytes(pump.tail),
+        group_leftover=leftover,
     )
