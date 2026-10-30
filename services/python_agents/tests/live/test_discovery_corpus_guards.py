@@ -195,6 +195,12 @@ def _gain(base: Timed, other: Timed) -> float:
     return 1 - other.cpu / base.cpu
 
 
+def _decoy_bound(base: Timed, twin: Timed) -> float:
+    """What a decoy's tempting idea may measure: DECOY_MAX_GAIN, or twice the
+    A/A gap between the base and its unchanged twin when contention is wider."""
+    return max(DECOY_MAX_GAIN, 2 * abs(_gain(base, twin)))
+
+
 def test_runs_measure_the_compared_copies_in_turn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -211,6 +217,16 @@ def test_runs_measure_the_compared_copies_in_turn(
     assert order == ["base", "fixed"] * 2
     assert base == Timed("same\n", 6.0, 1.0) and fixed == Timed("same\n", 5.0, 0.4)
     assert _gain(base, fixed) == pytest.approx(0.6)
+
+
+def test_a_decoy_bound_widens_only_by_the_measured_noise() -> None:
+    """The engine's own rule (a gain must clear twice the A/A gap): on a quiet
+    machine the bound is DECOY_MAX_GAIN, under contention twice the gap the
+    base's twin measured in the same interleaved runs, whichever way it went."""
+    base = Timed("same\n", 1.0, 1.0)
+    assert _decoy_bound(base, Timed("same\n", 1.0, 0.99)) == DECOY_MAX_GAIN
+    assert _decoy_bound(base, Timed("same\n", 1.0, 0.96)) == pytest.approx(0.08)
+    assert _decoy_bound(base, Timed("same\n", 1.0, 1.04)) == pytest.approx(0.08)
 
 
 @pytest.mark.parametrize("repo", DECOYS[:1], ids=_ids(DECOYS[:1]))
@@ -624,14 +640,16 @@ def test_a_decoy_tempting_idea_gains_nothing(
     repo: DiscoveryRepo, tmp_path: Path
 ) -> None:
     base = _copy(repo, tmp_path / "base")
+    twin = _copy(repo, tmp_path / "twin")  # the A/A noise of these same runs
     tempting = _copy(repo, tmp_path / "tempting")
     _apply(tempting, _textbook(repo))
     _suite_passes(tempting)
-    before, after = _runs([base, tempting], repo, QUIET_RUNS)
+    before, again, after = _runs([base, twin, tempting], repo, QUIET_RUNS)
     assert before.wall >= BASELINE_FLOOR_S, f"{repo.name}: {before.wall:.2f}s"
     assert after.output == before.output, f"{repo.name}: the output changed"
     gain = _gain(before, after)  # a slower tempting idea gains nothing either
-    assert gain <= DECOY_MAX_GAIN, (repo.name, before.cpu, after.cpu)
+    bound = _decoy_bound(before, again)
+    assert gain <= bound, (repo.name, before.cpu, again.cpu, after.cpu)
 
 
 # ---------------------------------------------------------------------------
