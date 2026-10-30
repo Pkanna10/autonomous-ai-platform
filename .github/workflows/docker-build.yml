@@ -269,7 +269,7 @@ jobs:
 
       # QEMU for multi-platform builds
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
           platforms: linux/amd64,linux/arm64
 
@@ -354,7 +354,7 @@ jobs:
 
       # Upload scan results as artifact
       - name: Upload Trivy Results
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: trivy-python-scan-${{ github.run_number }}
