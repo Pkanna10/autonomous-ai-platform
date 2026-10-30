@@ -1069,6 +1069,7 @@ SUITES = (
     "upstream-verify",
     "upstream",
     "agent-probes",
+    "heal-agent",  # P1 (A1): the heal agent vs single shot
 )
 DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_sweep_live.py",
@@ -1097,6 +1098,7 @@ EXPERIMENT_MINUTES = {
     "papers": 60,
     "web": 90,
     "upstream-verify": 150,  # upstream_verify.VERIFY_JOB_MINUTES, a batch of 10
+    "heal-agent": 120,  # 28 bugs, arm B up to 12 turns each
 }  # batch wait; 5 papers; 18 web runs
 SWEEP_FABLE_ENV = {  # Fable 5.1 beside the one arm whose run phase 1 shares
     "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
@@ -1771,6 +1773,7 @@ def _suite_needs() -> dict[str, float]:
     agents = importlib.import_module(
         f"{__package__}.experiments.test_agent_probes_live"
     )
+    heal_agent = importlib.import_module(f"{__package__}.experiments.heal_agent")
     upstream = importlib.import_module(f"{__package__}.upstream")
     upstream_verify = importlib.import_module(f"{__package__}.upstream_verify")
     one_library = {oss_ab.REPOS_ENV: OSS_AB_DISPATCH_REPO}
@@ -1786,6 +1789,7 @@ def _suite_needs() -> dict[str, float]:
         "upstream-verify": upstream_verify.verify_need(),
         "upstream": upstream.live_need(),
         "agent-probes": agents.a0_need(),
+        "heal-agent": heal_agent.agent_need(),
         "sweep": sweep.sweep_need(sweep.sweep_plan({})),
         "sweep-fable": sweep.sweep_need(sweep.sweep_plan(SWEEP_FABLE_ENV)),
         "sweep-record": sweep.sweep_need(sweep.sweep_plan(SWEEP_RECORD_ENV)),

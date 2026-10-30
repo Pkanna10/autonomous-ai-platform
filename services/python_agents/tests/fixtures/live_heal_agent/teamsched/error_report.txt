@@ -1,0 +1,14 @@
+The scheduler crashes since the sort in assign() was changed to plan the
+shifts in week order. Ana works Monday to Friday and is trained for the bar,
+so she can obviously take the Friday bar shift; the old sort never had this
+problem. I think the new sort key in assign() drops her.
+
+    team = [worker("ana", "mon-fri", "bar,floor"), worker("ben", "sat,sun", "bar")]
+    assign(team, [Shift("fri", "bar"), Shift("sat", "bar")])
+
+Traceback (most recent call last):
+  File "/srv/rota/weekly.py", line 14, in plan_week
+    plan = assign(team, shifts)
+  File "/srv/rota/vendor/teamsched/teamsched/scheduler.py", line 20, in assign
+    raise NoEligibleWorkerError(f"no one can work {shift.skill!r} on {shift.day!r}")
+teamsched.scheduler.NoEligibleWorkerError: no one can work 'bar' on 'fri'

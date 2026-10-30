@@ -1,0 +1,5 @@
+Splitting a 10.00 bill between three friends fails: settle raises SplitError
+("shares add up to 999, not 1000"). Each should pay 3.34, 3.33 and 3.33 (the
+first friend in the list pays the extra cent).
+
+    Bill(["10.00"]).settle(["ana", "ben", "cy"])

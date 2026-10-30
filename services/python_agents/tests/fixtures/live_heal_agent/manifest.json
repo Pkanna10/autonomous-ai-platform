@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "repos": [
+    {
+      "name": "invoicer",
+      "package": "invoicer",
+      "kind": "layered",
+      "report": "traceback",
+      "exception": "invoicer.tax.TaxRateError",
+      "frame": "invoicer.tax.rate_for",
+      "message": "no rate for"
+    },
+    {
+      "name": "routeplan",
+      "package": "routeplan",
+      "kind": "layered",
+      "report": "symptom",
+      "exception": "routeplan.graph.RouteError",
+      "frame": "routeplan.paths.shortest",
+      "message": "no route from"
+    },
+    {
+      "name": "csvstats",
+      "package": "csvstats",
+      "kind": "layered",
+      "report": "traceback",
+      "exception": "csvstats.reader.RowLengthError",
+      "frame": "csvstats.reader.read_rows",
+      "message": "fields, expected"
+    },
+    {
+      "name": "bookings",
+      "package": "bookings",
+      "kind": "multi_file",
+      "report": "traceback",
+      "exception": "bookings.rooms.OverbookedError",
+      "frame": "bookings.rooms.Room.reserve",
+      "message": "is already booked on"
+    },
+    {
+      "name": "quotas",
+      "package": "quotas",
+      "kind": "multi_file",
+      "report": "symptom",
+      "exception": "quotas.limiter.QuotaExceededError",
+      "frame": "quotas.limiter.Limiter.acquire",
+      "message": "requests in the last"
+    },
+    {
+      "name": "ledgerpost",
+      "package": "ledgerpost",
+      "kind": "multi_file",
+      "report": "traceback",
+      "exception": "ledgerpost.journal.UnbalancedEntryError",
+      "frame": "ledgerpost.journal.check_balanced",
+      "message": "!= credits"
+    },
+    {
+      "name": "teamsched",
+      "package": "teamsched",
+      "kind": "misleading_report",
+      "report": "traceback",
+      "exception": "teamsched.scheduler.NoEligibleWorkerError",
+      "frame": "teamsched.scheduler.assign",
+      "message": "no one can work"
+    },
+    {
+      "name": "pricing",
+      "package": "pricing",
+      "kind": "misleading_report",
+      "report": "symptom",
+      "exception": "pricing.cart.PaymentError",
+      "frame": "pricing.cart.Cart.checkout",
+      "message": "but the total is"
+    },
+    {
+      "name": "retryplan",
+      "package": "retryplan",
+      "kind": "seed_dependent",
+      "report": "symptom",
+      "exception": "retryplan.schedule.DeadlineError",
+      "frame": "retryplan.schedule.plan",
+      "message": "more than the"
+    },
+    {
+      "name": "confload",
+      "package": "confload",
+      "kind": "order_dependent",
+      "report": "symptom",
+      "exception": "confload.loader.TableError",
+      "frame": "confload.loader.load_table",
+      "message": "field(s), expected"
+    },
+    {
+      "name": "wraptext",
+      "package": "wraptext",
+      "kind": "shallow_trap",
+      "report": "traceback",
+      "exception": "wraptext.wrap.WrapError",
+      "frame": "wraptext.wrap.wrap",
+      "message": "is longer than the width"
+    },
+    {
+      "name": "splitbill",
+      "package": "splitbill",
+      "kind": "shallow_trap",
+      "report": "symptom",
+      "exception": "splitbill.split.SplitError",
+      "frame": "splitbill.split.split_evenly",
+      "message": "shares add up to"
+    }
+  ]
+}

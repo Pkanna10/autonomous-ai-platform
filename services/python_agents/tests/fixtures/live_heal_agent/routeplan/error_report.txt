@@ -1,0 +1,11 @@
+route_length gives up on our delivery network: asking for the route from the
+depot to the mill raises RouteError ("no route from 'depot' to 'mill'"), yet
+the mill is connected and every road can be driven both ways. The network:
+
+    depot-farm:1
+    depot-bridge:4
+    farm-bridge:1
+    mill-bridge:1
+
+The shortest route from the depot to the mill is depot, farm, bridge, mill:
+3 km.

@@ -1,0 +1,15 @@
+Posting a till sale of 100.5 (the till exports amounts without the trailing
+zero) is refused as unbalanced, although the debit and the credit are the
+same amount:
+
+    post(ledger, Entry("2026-04-02", "till", (("cash", "debit", "100.5"),
+                                              ("sales", "credit", "100.50"))))
+
+Traceback (most recent call last):
+  File "/srv/books/import_till.py", line 40, in import_day
+    post(ledger, entry)
+  File "/srv/books/vendor/ledgerpost/ledgerpost/journal.py", line 35, in post
+    check_balanced(entry.lines)
+  File "/srv/books/vendor/ledgerpost/ledgerpost/journal.py", line 25, in check_balanced
+    raise UnbalancedEntryError(
+ledgerpost.journal.UnbalancedEntryError: debits 100.05 != credits 100.50
