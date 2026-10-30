@@ -470,9 +470,17 @@ Postgres at 100 % under CPython 3.13 and 3.11, prettier):
   Claude through the API only.
 - **Merged from master:** `eb1566d` (pymupdf 2.0, PR #28, and the Dependabot
   Actions pins).
-- **Live:** L3 0.07 USD (a smoke test under O19; L3b re-tests the grader).
-- **Next:** batch 4 (N4a, the pipeline; N0c, the child-process tripwire), then
-  batch 5 and the live order in the amendment's section 7 (L4 first).
+- **Live:** L3 0.07 USD (a smoke test under O19; L3b re-tests the grader); L4
+  1.67 USD (v2 hit@1 8/10; only `uncommon` stays hard, 0/2).
+- **N0c re-scoped (Lead, 2026-10-30):** the first attempt found procrun cannot
+  see children; the launcher (the workload's parent) can. D1: accept the 10 ms
+  CPU tick (detection; N0's static rule is primary). D2: a delta rule, like
+  N0's: flag children or strays the base does not show, or child CPU above
+  max(2x the base's, the base's + 0.05 s). D3: darwin checks strays only for
+  now.
+- **Next:** N4a's gate (re-run alone: its first run failed one small-fix timing
+  guard under the load of concurrent Builders; eight quiet re-measurements gave
+  13-18 % against the 5 % bar), batch 5 and the live order (E0b next).
 - **Owner's plan, for the record (2026-10-30):** after Wave 2's idea experiments
   (E1/E2) report, an "Improvement Wave 3" pilot: a multi-model developer team
   that studies, proposes and proves engine improvements. The owner sends its
@@ -1673,8 +1681,8 @@ register below says which questions are already answered.
 
 **Spent so far in Window 1: 18.22 USD by Step 3** (L0 0.00, L1a 2.21 with its
 guards crashed in the harness, the L1a re-run 2.11, L1b 2.42, L2a 5.94 over two
-repetitions, L2b 5.46; Wave 1's live runs are done; Wave 2: L3 0.07). The two
-Window 1 rows in the ledger (2026-10-23, 0.00 each) predate Step 3.
+repetitions, L2b 5.46; Wave 1's live runs are done; Wave 2: L3 0.07, L4 1.67).
+The two Window 1 rows in the ledger (2026-10-23, 0.00 each) predate Step 3.
 
 | Stage                          | When               | Live work                                                                                                                                                                                   | Est. per run    | Runs  | Est. total  |
 | ------------------------------ | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | ----- | ----------- |
@@ -1826,6 +1834,7 @@ builds it.
 | 2026-10-26 | 1      | [40248472894](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40248472894), [40248475374](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40248475374)                                                                                             | L2a   | 5.94       | OSS corpus, `wired`, Step 3 noise rule, Opus 5.5 engine, Sonnet 5.5 medium generator, Sonnet 5.5 low editor, 2 repetitions in parallel, 36 and 40 min (OSS timeout 300). Delivered 8/20 (rep 1 2/10 at 3.25 USD, rep 2 6/10 at 2.69 USD), below W5's 10/20, so the editor default stays Opus and L2b runs. `tabulate` and `idna` delivered in both repetitions (41.0 and 12.0 %; 9.1 and 13.1 %); `mistune` 9.4, `sqlparse` 10.1, `markdown` 5.6, `pycparser` 2.9 % once; `more_itertools`, `sortedcontainers`, `pyparsing`, `tomli` never (best trials 1.3-6.7 %). `process_spawn` refused trials on `more_itertools` and `tomli` (both repetitions) and `mistune` (rep 1); every guard held. Window 0's aimed Opus run delivered 6/10 under the old rule. Tokens 378,868 in / 192,392 out / 2,081,012 cache read / 827,525 cache write. |
 | 2026-10-26 | 1      | [40252104199](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40252104199)                                                                                                                                                                                         | L2b   | 5.46       | OSS corpus, `wired`, Step 3 noise rule, Opus 5.5 engine and editor, Sonnet 5.5 medium generator, 42 min: delivered 7/10 (`tabulate` 47.2, `pycparser` 27.7, `idna` 15.5, `markdown` 9.5, `sqlparse` 8.8, `mistune` 6.1, `sortedcontainers` 2.6 %); `more_itertools`, `pyparsing`, `tomli` not (best trials 1.8-3.8 %); every guard held; $0.55 a run, $0.78 a win. Same rule as L2a (Q16): Opus editor 7/10 against Sonnet low 2/10 and 6/10. Tokens 189,379 in / 121,388 out / 1,529,350 cache read / 450,599 cache write.                                                                                                                                                                                                                                                                                                               |
 | 2026-10-26 | 1      | [40366128171](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40366128171)                                                                                                                                                                                         | L3    | 0.07       | Grader agreement (V5's 12 hand labels: 6 hits incl. multi-part ones, 6 near misses), Opus 4.8 grader, one request, 21 s: 12/12 agree, 0 near misses graded as hits (gate at least 9/10 and none: pass), so L4's hit@k counts. Tokens 9,803 in / 1,035 out. Under O19 (same day) this is a smoke test only: the labels' setter held the answer key; L3b re-tests the grader on real, independently labelled ideas.                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 2026-10-30 | 1      | [41122348574](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/41122348574)                                                                                                                                                                                         | L4    | 1.67       | `sweep-record`, Sonnet 5.5 medium, recorded, on 37 repositories (v1, hard, v2; 32 slowdowns, 5 controls), 38/38 passed in 15.6 min: hit@1 28/32, hit@5 31/32, 0/5 control big-gain claims; corpus v2 hit@1 8/10, hit@5 9/10, every v2 category 2/2 except `uncommon` (0/2 at 1, 1/2 at 5: ratecheck's fix ranked 2nd, parcelindex's never proposed). v2 mostly saturates for today's generator; `uncommon` is where the idea pipeline must show. Grades are provisional until L3b (O19). Recorded replies are V6's fixture (artifact live-results-41122348574-1).                                                                                                                                                                                                                                                                         |
 
 ### 2026-10-24 (Window 0 final experiments: what they decide)
 
