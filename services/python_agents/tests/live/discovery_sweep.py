@@ -1,8 +1,10 @@
 """E3, the blind hypothesis sweep: which model and effort find the root cause?
 
-For every repository of the benchmark corpus (12 slowdowns, 3 controls)
-and the hard corpus (10), phase 1 (``discovery.phase_one``) runs once and
-its facts are shared by every arm, so the arms differ only in generation.
+For every repository of the benchmark corpus (12 slowdowns, 3 controls),
+the hard corpus (10) and hard corpus v2 (``discovery_corpus``: 10 slowdowns,
+2 decoys, which are controls), 37 in all, phase 1 (``discovery.phase_one``)
+runs once and its facts are shared by every arm, so the arms differ only in
+generation.
 Each arm (``ARMS``, or ``$LIVE_SWEEP_ARMS``) calls ``generate_hypotheses``
 (n = 5, no techniques: blind) through a transport whose chain is the arm's
 model alone; Fable 5.1 at medium joins on the 12 benchmark slowdowns when
@@ -23,10 +25,11 @@ reported apart), the root causes its hypotheses target, the number of
 hypotheses, the generation
 and grader cost, tokens (input, output, thinking, cache reads), wall
 seconds; for a control, whether any hypothesis claims a gain of at least
-``BIG_GAIN``. The cache probe (``cache_probe``) generates twice with the
-shipped playbook on one model and effort and records the second call's
-``cache_read_input_tokens`` (expected > 0: the playbook rides in the cached
-system block, ``research.playbook.research_system``).
+``BIG_GAIN``. The summary rates each arm overall, per category and on corpus
+v2 pooled (``V2_SET``, L4's v2 pre-check). The cache probe (``cache_probe``)
+generates twice with the shipped playbook on one model and effort and records
+the second call's ``cache_read_input_tokens`` (expected > 0: the playbook
+rides in the cached system block, ``research.playbook.research_system``).
 
 The recorded sweep (``$LIVE_SWEEP_RECORD=1``) keeps, per (repository, arm),
 what a grader check against hand labels and an offline discovery eval need,
@@ -115,6 +118,7 @@ from .discovery import (
     run_arm,
     worst_usd,
 )
+from .discovery_corpus import DISCOVERY_CORPUS, GROUPS
 from .discovery_grader import (
     GRADE_WORST_USD,
     Grade,
@@ -161,8 +165,9 @@ FABLE_RUN_CAP_USD: Final = ceil_usd(arm_worst_usd(FABLE_ARM) + GRADE_WORST_USD)
 CACHE_PROBE_CAP_USD: Final = ceil_usd(
     2 * worst_usd(PROBE_PROMPT_BOUND, GENERATE_MAX_TOKENS, PROBE_ARM.model)
 )
-SWEEP_REPOS: Final = (*CORPUS, *HARD_CORPUS)
+SWEEP_REPOS: Final = (*CORPUS, *HARD_CORPUS, *DISCOVERY_CORPUS)
 FABLE_REPOS: Final = tuple(r for r in CORPUS if r.kind == "slowdown")
+V2_SET: Final = "corpus v2"  # the summary's pooled line over v2's six groups
 BIG_GAIN: Final = MIN_FIX_GAIN  # a control's "big gain" claim: the 30 % fix bar
 
 
@@ -680,6 +685,21 @@ def _arm_line(label: str, rows: Sequence[SweepRow]) -> list[object]:
     ]
 
 
+def _set_lines(label: str, rows: Sequence[SweepRow]) -> list[str]:
+    """The arm's line per category, then corpus v2 pooled (when it ran)."""
+    sets = {
+        c: [r for r in rows if r.category == c]
+        for c in dict.fromkeys(r.category for r in rows)
+    }
+    v2 = [r for r in rows if r.category in GROUPS]
+    if v2:
+        sets[V2_SET] = v2
+    return [
+        cells([label, name, *_arm_line(label, group)[1:]])
+        for name, group in sets.items()
+    ]
+
+
 def _causes(row: SweepRow) -> str:
     if not row.root_causes:
         return "-"
@@ -727,8 +747,20 @@ def render_sweep(rows: Sequence[SweepRow], probes: Sequence[Probe]) -> str:
             "| ungraded slowdowns |",
             "| --- | --- | --- | ---: | ---: | --- | ---: |",
         ]
-        for label in dict.fromkeys(r.arm for r in rows):
-            lines.append(cells(_arm_line(label, [r for r in rows if r.arm == label])))
+        arms = {
+            a: [r for r in rows if r.arm == a]
+            for a in dict.fromkeys(r.arm for r in rows)
+        }
+        for label, mine in arms.items():
+            lines.append(cells(_arm_line(label, mine)))
+        lines += [
+            "",
+            "| arm | set | hit at 1 rate | hit at 5 rate | cost per repo USD "
+            "| cost per hit USD | control big-gain claims | ungraded slowdowns |",
+            "| --- | --- | --- | --- | ---: | ---: | --- | ---: |",
+        ]
+        for label, mine in arms.items():
+            lines += _set_lines(label, mine)
     else:
         lines.append("No sweep repository finished.")
     for probe in probes:

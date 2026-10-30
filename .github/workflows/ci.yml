@@ -67,7 +67,7 @@ on:
         options: [default, claude-sonnet-5-5]
         default: default
       suite_cap_usd:
-        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75, hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 77, sweep-fable 33, sweep-record 17, ab 140, escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, heal-hard 8, build 27, grader 2, upstream-verify 0 (no request, but the cap must be above 0), upstream 50, agent-probes 1, heal-agent 8, research-agent 8, watch 2, watch-cleanup 2'
+        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75, hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 112, sweep-fable 41, sweep-record 24, ab 140, escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, heal-hard 8, build 27, grader 2, upstream-verify 0 (no request, but the cap must be above 0), upstream 50, agent-probes 1, heal-agent 8, research-agent 8, watch 2, watch-cleanup 2'
         type: string
         default: '12'
       oss_repo:
@@ -702,8 +702,10 @@ jobs:
           # (Stage A 8.55, corpus 15 x 5, attack 3 x 4, hard 10 x 5, oss at most
           # 10 x 5; the Window 0 experiments under tests/live/experiments: probes
           # 0.46, triage 1.25, papers 3 x 1.25 + 2 x 2.75 + 0.75, web 18 caps 51.08, prescreen 2 x 1.11; the discovery
-          # suites: sweep 76.15, sweep-fable 33 (one Sonnet arm and Fable 5.1 on
-          # the 12 slowdowns), sweep-record 16.2 (one Sonnet arm, recorded), ab 2
+          # suites, the sweeps on 37 repositories (v1, hard and v2: 32 slowdowns,
+          # 5 controls): sweep 111.75, sweep-fable 40.3 (one Sonnet arm and
+          # Fable 5.1 on the 12 v1 slowdowns), sweep-record 23.5 (one Sonnet
+          # arm, recorded), ab 2
           # reps 140, escalation 42.9; acquire 0.60 (Part B; Part A is free);
           # noise 0 (no request); heal 8 x 0.75; oss-ab one library 102.6 (2
           # reps x (1.30 generation + 2 arms x 10 trials x 2.50)); evolve 3
@@ -734,9 +736,9 @@ jobs:
             papers) paths=(tests/live/experiments/test_extraction_live.py); need=10 ;;
             web) paths=(tests/live/experiments/test_web_live.py); need=52 ;;
             prescreen) paths=(tests/live/experiments/test_prescreen_live.py); need=3 ;;
-            sweep) paths=(tests/live/test_sweep_live.py); need=77 ;;
-            sweep-fable) paths=(tests/live/test_sweep_live.py); need=33 ;;
-            sweep-record) paths=(tests/live/test_sweep_live.py); need=17 ;;
+            sweep) paths=(tests/live/test_sweep_live.py); need=112 ;;
+            sweep-fable) paths=(tests/live/test_sweep_live.py); need=41 ;;
+            sweep-record) paths=(tests/live/test_sweep_live.py); need=24 ;;
             ab) paths=(tests/live/test_ab_live.py); need=140 ;;
             escalation) paths=(tests/live/test_escalation_live.py); need=43 ;;
             acquire) paths=(tests/live/experiments/test_acquire_live.py); need=1 ;;

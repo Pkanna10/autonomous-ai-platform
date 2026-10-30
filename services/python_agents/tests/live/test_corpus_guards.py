@@ -1087,6 +1087,9 @@ DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_upstream_live.py",
 )
 EXPERIMENT_MINUTES = {
+    # the sweeps on 37 repositories (v1 + hard + v2), from the Window 0 jobs on
+    # 25: sweep 39 min, sweep-fable 16, sweep-record 10, so about 58, 24 and 15
+    # at 37, each under half its timeout
     "sweep": 240,
     "sweep-fable": 180,
     "sweep-record": 150,
@@ -1944,7 +1947,7 @@ def _dispatch(
         ("papers", "9.99"),
         ("web", "51.99"),
         ("prescreen", "2.99"),
-        ("sweep", "76.99"),
+        ("sweep", "111.99"),  # v1 + hard + v2: 37 repositories
         ("ab", "139.99"),
         ("escalation", "42.99"),
     ],

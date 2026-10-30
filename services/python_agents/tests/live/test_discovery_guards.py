@@ -105,8 +105,10 @@ from .discovery import (
     run_engine,
     start_phase_one,
 )
+from .discovery_corpus import DISCOVERY_CORPUS
 from .discovery_io import (
     ResultsSink,
+    cells,
     env_flag,
     json_line,
 )
@@ -115,16 +117,20 @@ LIVE_DIR = TESTS_DIR / "live"
 CAP_CEILING_USD = 150  # live-smoke's suite_cap_usd ceiling
 # The suite needs at the default knobs (the sum of the caps the tests ask the
 # ledger for); the Lead copies them into ci.yml.
-SWEEP_NEED = 76.15  # 22 slowdowns x 3.15 + 3 controls x 2.05 + probe 0.70
-SWEEP_FABLE_NEED = 92.95  # + 12 Fable runs x 1.40
+# The sweep covers v1, the hard corpus and corpus v2 (37 repositories: 32
+# slowdowns, 5 controls, the 2 v2 decoys among them).
+SWEEP_NEED = 111.75  # 32 slowdowns x 3.15 + 5 controls x 2.05 + probe 0.70
+SWEEP_FABLE_NEED = 128.55  # + 12 Fable runs x 1.40
 # The recorded sweep on one arm (LIVE_SWEEP_ARMS=sonnet-5-5-medium,
-# LIVE_SWEEP_RECORD=1, Fable off): 22 slowdowns x 0.65 + 3 controls x 0.40
+# LIVE_SWEEP_RECORD=1, Fable off): 32 slowdowns x 0.65 + 5 controls x 0.40
 # + probe 0.70. Recording sends no request, so it is the plain one-arm need.
-SWEEP_RECORD_NEED = 16.2
+SWEEP_RECORD_NEED = 23.5
 AB_NEED = 140.0  # 2 reps x 25 repos x (0.80 + 2 x 1.00)
 ESC_NEED = 42.9  # 15 first passes x 0.70 + 12 escalations x 2.70
 SLOWDOWNS = tuple(r for r in CORPUS if r.kind == "slowdown")
 CONTROLS = tuple(r for r in CORPUS if r.kind == "control")
+V2_SLOWDOWNS = tuple(r for r in DISCOVERY_CORPUS if r.kind == "slowdown")
+DECOYS = tuple(r for r in DISCOVERY_CORPUS if r.category == "decoy")
 REQUIRED = Isolation("required", None)
 Json = dict[str, Any]
 
@@ -1123,8 +1129,126 @@ def test_a_recorded_trace_keeps_each_idea_its_grade_and_the_redacted_reply(
     assert trace.reply_chunks == ("not json [redacted]",) and trace.hypotheses == ()
 
 
+def _grade(*hits: bool) -> grader.Grade:
+    return grader.Grade(
+        hits=hits,
+        cost_usd=0.01,
+        answered=True,
+        error=None,
+        causes=tuple(1 if h else None for h in hits),
+        parts=1,
+        reply='{"grades": []}',
+    )
+
+
+def test_corpus_v2_is_graded_on_its_reference_fix_and_a_decoy_is_a_control(
+    dry: Path,
+) -> None:
+    """L4 sweeps v1 + v2: a v2 slowdown is graded against its own reference
+    fix (never the textbook idea beside it), a decoy is a control (no grade,
+    a control's cap, its big-gain claim recorded), and both record and
+    replay as the v1 rows do."""
+    assert len(V2_SLOWDOWNS) == 10 and len(DECOYS) == 2
+    one = sweep.sweep_plan(ONE_ARM)
+    for repo in V2_SLOWDOWNS:
+        patches = grader.reference_patches(repo)
+        assert [p.name for p in patches] == [f"{repo.name}.patch"], repo.name
+        assert patches[0].text == repo.solution.read_text(encoding="utf-8")
+        assert one.cap_for(repo) == one.cap_for(SLOWDOWNS[0]), repo.name
+    for repo in DECOYS:
+        assert (repo.kind, repo.expected) == ("control", "none")
+        assert grader.reference_patches(repo) == ()
+        assert one.cap_for(repo) == one.cap_for(CONTROLS[0]), repo.name
+    produced = _generated(dry, ["a", "b"])  # each claims a 50 % gain
+    decoy = sweep.sweep_row(DECOYS[0], produced, None, 0.03)
+    assert (decoy.kind, decoy.category, decoy.big_gain_claim) == (
+        "control",
+        "decoy",
+        True,
+    )
+    assert (decoy.hit_at_1, decoy.hit_at_5, decoy.root_causes) == (None, None, 0)
+    slow = sweep.sweep_row(V2_SLOWDOWNS[0], produced, _grade(False, True), 0.03)
+    assert (slow.category, slow.hit_at_1, slow.hit_at_5) == (
+        V2_SLOWDOWNS[0].category,
+        False,
+        True,
+    )
+    # the recorded lines replay: a decoy as a control, a v2 slowdown by its grade
+    facts = _facts(dry)
+    made = _recorded(facts, json.dumps({"hypotheses": [_item("a")]}))
+    trace = sweep.sweep_trace(DECOYS[0], made, None, (), facts.hotspots)
+    assert {h.grader for h in trace.hypotheses} == {"control"}
+    assert sweep.reference_notes(DECOYS[0].name, trace.reference_parts) == [
+        f"SWEEP {DECOYS[0].name} ref: none (a control, not graded)"
+    ]
+    row = sweep.sweep_row(DECOYS[0], made.result, None, 0.0)
+    case = sweep.eval_case(json.loads(json_line({**row.record(), **trace.record()})))
+    assert (case.repo, case.kind, case.labels, case.grader_reply) == (
+        DECOYS[0].name,
+        "control",
+        {},
+        None,
+    )
+    repo = V2_SLOWDOWNS[0]
+    patches = grader.reference_patches(repo)
+    graded = _grade(True)
+    trace = sweep.sweep_trace(repo, made, graded, patches, facts.hotspots)
+    (part,) = trace.reference_parts
+    assert part.name == f"{repo.name}.patch" and part.files and part.symbols
+    row = sweep.sweep_row(repo, made.result, graded, 0.0)
+    case = sweep.eval_case(json.loads(json_line({**row.record(), **trace.record()})))
+    assert case.kind == "slowdown" and case.grader_reply == graded.reply
+    assert [(k, v.hit, v.part) for k, v in case.labels.items()] == [("a", True, 1)]
+
+
+def test_the_sweep_summary_reports_each_category_and_corpus_v2_pooled(
+    dry: Path,
+) -> None:
+    """L4's v2 pre-check is blind hit@1 on corpus v2: the summary gives each
+    arm a line per category and one for v2's slowdowns and decoys pooled."""
+    produced = _generated(dry, ["a"])
+    deep = next(r for r in V2_SLOWDOWNS if r.category == "deep")
+    small = next(r for r in V2_SLOWDOWNS if r.category == "small")
+    rows = [
+        sweep.sweep_row(SLOWDOWNS[0], produced, _grade(True), 0.0),
+        sweep.sweep_row(HARD_CORPUS[0], produced, _grade(True), 0.0),
+        sweep.sweep_row(deep, produced, _grade(True), 0.0),
+        sweep.sweep_row(small, produced, _grade(False), 0.0),
+        sweep.sweep_row(DECOYS[0], produced, None, 0.0),
+    ]
+    other = sweep.sweep_row(deep, replace(produced, arm=sweep.ARMS[1]), None, 0.0)
+    text = sweep.render_sweep([*rows, other], [])
+    lines = text.splitlines()
+    head = lines.index(
+        "| arm | set | hit at 1 rate | hit at 5 rate | cost per repo USD "
+        "| cost per hit USD | control big-gain claims | ungraded slowdowns |"
+    )
+    arm, cost = sweep.ARMS[0].label, f"{produced.cost_usd:.4f}"
+    twice = f"{2 * produced.cost_usd:.4f}"  # two graded v2 slowdowns, one hit
+    one = "1/1 (100.0%)"
+    assert lines[head + 2 : head + 9] == [
+        cells([arm, "single", one, one, cost, cost, "0/0 (n/a)", 0]),
+        cells([arm, HARD_CORPUS[0].category, one, one, cost, cost, "0/0 (n/a)", 0]),
+        cells([arm, "deep", one, one, cost, cost, "0/0 (n/a)", 0]),
+        cells([arm, "small", "0/1 (0.0%)", "0/1 (0.0%)", cost, "n/a", "0/0 (n/a)", 0]),
+        cells([arm, "decoy", "0/0 (n/a)", "0/0 (n/a)", cost, "n/a", one, 0]),
+        cells([arm, "corpus v2", "1/2 (50.0%)", "1/2 (50.0%)", cost, twice, one, 0]),
+        cells(
+            [sweep.ARMS[1].label, "deep", "0/0 (n/a)", "0/0 (n/a)", cost, "n/a"]
+            + ["0/0 (n/a)", 1]
+        ),
+    ]
+    assert lines[head + 9] == cells(
+        [sweep.ARMS[1].label, "corpus v2", "0/0 (n/a)", "0/0 (n/a)", cost, "n/a"]
+        + ["0/0 (n/a)", 1]
+    )
+    # v1 alone (no v2 row): the categories, no pooled v2 line
+    alone = sweep.render_sweep(rows[:2], [])
+    assert "corpus v2" not in alone and f"| {arm} | single |" in alone
+
+
 def test_reference_parts_summarise_every_part_the_grader_numbers() -> None:
-    for repo in (*SLOWDOWNS, *HARD_CORPUS):
+    for repo in (r for r in sweep.SWEEP_REPOS if r.kind != "control"):
         patches = grader.reference_patches(repo)
         parts = sweep.reference_parts(patches)
         assert [p.part for p in parts] == list(range(1, len(patches) + 1))
@@ -1465,7 +1589,9 @@ def test_each_suite_needs_the_sum_of_its_caps() -> None:
     }
     assert _live_args("test_ab_live") == {"AB_GEN_CAP_USD", "ab.plan.run_cap"}
     assert _live_args("test_escalation_live") == {"cap"}
-    assert len(sweep.SWEEP_REPOS) == len(CORPUS) + len(HARD_CORPUS) == 25
+    assert sweep.SWEEP_REPOS == (*CORPUS, *HARD_CORPUS, *DISCOVERY_CORPUS)
+    assert len({r.name for r in sweep.SWEEP_REPOS}) == len(sweep.SWEEP_REPOS) == 37
+    assert sweep.FABLE_REPOS == SLOWDOWNS  # Fable stays on the 12 v1 slowdowns
     plan = sweep.sweep_plan({})
     need = sum(plan.cap_for(r) for r in sweep.SWEEP_REPOS) + sweep.CACHE_PROBE_CAP_USD
     assert sweep.sweep_need(plan) == pytest.approx(need) == pytest.approx(SWEEP_NEED)
@@ -1478,11 +1604,13 @@ def test_each_suite_needs_the_sum_of_its_caps() -> None:
     first = len(CORPUS) * esc.FIRST_CAP_USD
     worst = first + len(SLOWDOWNS) * esc.ESCALATED_CAP_USD
     assert esc.escalation_need() == pytest.approx(worst) == pytest.approx(ESC_NEED)
-    for need_usd in (SWEEP_FABLE_NEED, AB_NEED, ESC_NEED):
+    for need_usd in (SWEEP_NEED, SWEEP_FABLE_NEED, AB_NEED, ESC_NEED):
         assert need_usd <= CAP_CEILING_USD
 
 
-@pytest.mark.parametrize("repo", (*CORPUS, *HARD_CORPUS), ids=lambda r: r.name)
+@pytest.mark.parametrize(
+    "repo", (*CORPUS, *HARD_CORPUS, *DISCOVERY_CORPUS), ids=lambda r: r.name
+)
 def test_each_prompt_bound_holds_on_every_corpus_repository(
     repo: CorpusRepo, tmp_path: Path
 ) -> None:
