@@ -517,6 +517,7 @@ def check_capture(
     reserved_modules: AbstractSet[str] = RESERVED_MODULES,
     module_roots: AbstractSet[str] = DEFAULT_MODULE_ROOTS,
     existing_dirs: AbstractSet[str] | None = None,
+    base_of: Callable[[str], bytes | None] | None = None,
 ) -> tuple[Violation, ...]:
     """Return the capture-rule violations of a trial's diff, one per (rule, path).
 
@@ -524,7 +525,13 @@ def check_capture(
     editor's report and ``blobs`` maps every added or modified regular file to
     its new content; a missing blob fails closed. Paths are compared as text.
     ``process_spawn`` applies only when a ``PROCESS_SPAWN_METRICS`` metric is
-    among ``judged_metrics``.
+    among ``judged_metrics``: it refuses only the spawning code a modified
+    file adds to its base (``_spawn_problem``, D62). ``base_of`` gives that
+    base (``check_quality_references``' reader); it is asked only for a
+    modified Python file while the rule applies, and an added file, a
+    missing reader or a ``None`` base compares with nothing, so every
+    finding counts. A file the rule cannot parse is ``unparsable_source``
+    and is never run.
 
     ``module_shadow`` refuses an added path that newly creates a module or
     package named in ``reserved_modules`` directly under one of
@@ -552,6 +559,7 @@ def check_capture(
             for name in _members(reserved_modules, "reserved_modules")
         ),
         roots=tuple(roots),
+        base_of=base_of,
         known_dirs=_diff_dirs(changes, max(map(len, roots), default=-1) + 1)
         | {_dir_parts(directory) for directory in listed},
     )
@@ -570,6 +578,7 @@ class _Scope:
     reserved: frozenset[str]  # case-folded first components
     roots: tuple[tuple[str, ...], ...]  # case-folded parts, () is the repo root
     known_dirs: frozenset[tuple[str, ...]]  # the base's directories, case-folded
+    base_of: Callable[[str], bytes | None] | None
 
 
 def _members(values: Iterable[str], keyword: str) -> Iterable[str]:
@@ -649,7 +658,13 @@ def _change_violations(
         )
         yield _violation(ViolationRule.forbidden_file, path, text)
     elif scope.scan_spawn and _is_python(path, blob):
-        problem = _spawn_problem(blob)
+        tree = _parse(blob)
+        if isinstance(tree, str):
+            text = f"{path!r} cannot be checked for process spawning: {tree}; nothing in it was scanned or run"  # fmt: skip
+            yield _violation(ViolationRule.unparsable_source, path, text)
+            return
+        read = scope.base_of if change.status == "M" else None
+        problem = _spawn_message(_delta(tree, None if read is None else read(path)))
         if problem is not None:
             text = f"{path!r} {problem} while cpu_time_s or peak_rss_bytes is judged"
             yield _violation(ViolationRule.process_spawn, path, text)
@@ -735,33 +750,127 @@ def _is_python(path: str, blob: bytes) -> bool:
     return first_line.startswith(b"#!") and b"python" in first_line.lower()
 
 
-def _spawn_problem(source: bytes) -> str | None:
-    """Describe the process-spawning code in ``source``, or return ``None``.
+def _spawn_problem(new: bytes, base: bytes = b"") -> str | None:
+    """Describe the process-spawning code ``new`` adds to ``base``, or ``None``.
 
-    An AST scan, so comments and strings never match. It guards against
-    honest mistakes, not against code set on hiding a spawn (``getattr``,
-    ``exec``, ``sys.modules``, libc's ``fork`` through ``ctypes``). Source this interpreter cannot parse fails
-    closed: the workload's Python may be newer (PEP 695 or 701 syntax on a
-    3.11 engine) or allow deeper nesting, and still run it. Warnings are
-    ignored while parsing, so the caller's filters cannot turn one into a
-    ``SyntaxError`` and user code never warns on the engine's stderr.
+    The spawn delta (D62): an AST scan, so comments and strings never match,
+    of both files whole. A spawn-bearing statement the base already holds in
+    the same function, in the same shape, under the same enclosing headers
+    (signature, guard, block), is kept; a new, changed or moved one, a new
+    use of a name a spawn statement bound, and an added or changed statement
+    that refers to a function or class whose base body holds a finding,
+    called or not (the one-level call check), are reported. An empty or
+    unparsable base keeps nothing, so every finding counts. It guards
+    against honest mistakes, not against code set on hiding a spawn
+    (``getattr``, ``exec``, ``sys.modules``, libc's ``fork`` through
+    ``ctypes``), a kept spawn two or more references away from an edit (a
+    base alias of a holder included), or a reference from another file.
+    ``new`` that does not parse is described as unscanned; ``check_capture``
+    refuses it as ``unparsable_source``.
     """
+    tree = _parse(new)
+    if isinstance(tree, str):
+        return f"could not be scanned for process spawning ({tree})"
+    return _spawn_message(_delta(tree, base))
+
+
+def _parse(source: bytes) -> ast.Module | str:
+    """``source`` parsed by this interpreter, or why it cannot be: the line and
+    the parser's message, escaped to ASCII and capped. The workload's Python
+    may be newer (PEP 695 or 701 syntax on a 3.11 engine) and still run it,
+    so this fails closed. Warnings are ignored while parsing, so the caller's
+    filters cannot turn one into a ``SyntaxError`` and user code never warns
+    on the engine's stderr.
+    """
+    version = f"Python {sys.version_info.major}.{sys.version_info.minor}"
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            tree = ast.parse(source)
-    except (SyntaxError, ValueError):  # ValueError: NUL bytes on older patch releases
-        version = f"Python {sys.version_info.major}.{sys.version_info.minor}"
-        return f"could not be scanned for process spawning ({version} cannot parse it)"
+            return ast.parse(source)
+    # ValueError: NUL bytes on older patch releases (a SyntaxError without a line)
+    except (SyntaxError, ValueError) as exc:
+        found = exc.lineno if isinstance(exc, SyntaxError) else None
+        line = found or source.count(b"\n", 0, max(source.find(b"\0"), 0)) + 1
+        text = (exc.msg if isinstance(exc, SyntaxError) else None) or str(exc)
+        detail = f"line {line}: {text}".encode("ascii", "backslashreplace").decode()
+        return f"{version} cannot parse it ({detail[:_MAX_PARSE_MESSAGE]})"
     except (RecursionError, MemoryError):
-        return "could not be scanned for process spawning (too complex to parse)"
-    findings = sorted(set(_spawn_findings(tree)))
-    if not findings:
-        return None
+        return "it is too deeply nested or too large to parse"
+
+
+def _spawn_message(found: Iterable[tuple[int, str]]) -> str | None:
     listed = "; ".join(
-        f"line {line}: {what}" for line, what in findings[:_MAX_LISTED_FINDINGS]
+        f"line {line}: {what}" for line, what in sorted(found)[:_MAX_LISTED_FINDINGS]
     )
-    return f"may start processes ({listed})"
+    return f"may start processes ({listed})" if listed else None
+
+
+_Key = tuple[str, str, str]  # (finding, enclosing qualified name, statement place)
+_Unit = tuple[str, str, tuple[ast.AST, ...]]  # (qualified name, place, header nodes)
+
+
+@dataclass(frozen=True)
+class _SpawnScan:
+    """One file's spawn findings, keyed for the delta, and its statements."""
+
+    findings: Counter[_Key]
+    lines: Mapping[_Key, Sequence[int]]
+    units: tuple[_Unit, ...]
+    holders: frozenset[str]  # qualified names of the defs and classes holding one
+    star: bool  # a star import of a spawn module: its names are unknown
+
+    @classmethod
+    def of(cls, tree: ast.Module) -> _SpawnScan:
+        statements = list(_statements(tree))
+        units = tuple((q, place, _header(u)) for q, place, u in statements)
+        modules = _tracked_bindings(n for _, _, nodes in units for n in nodes)
+        classes = {
+            _inner(q, u) for q, _, u in statements if isinstance(u, ast.ClassDef)
+        }
+        names, attrs, star = _spawn_bound(units, modules, classes)
+        findings: Counter[_Key] = Counter()
+        lines: dict[_Key, list[int]] = {}
+        holders: set[str] = set()
+        for (scope, place, nodes), (*_, unit) in zip(units, statements, strict=True):
+            whats = [
+                *(f for n in nodes for f in _node_findings(n, modules)),
+                *(f for n in nodes for f in _bound_uses(n, scope, names, attrs)),
+            ]
+            for line, what in whats:
+                findings[(what, scope, place)] += 1
+                lines.setdefault((what, scope, place), []).append(line)
+            if whats:
+                parts = list(filter(None, _inner(scope, unit).split(".")))
+                holders.update(
+                    ".".join(parts[: n + 1])
+                    for n, part in enumerate(parts)
+                    if not _dunder(part)
+                )
+        return cls(findings, lines, units, frozenset(holders), star)
+
+
+def _delta(tree: ast.Module, base: bytes | None) -> set[tuple[int, str]]:
+    """(line, finding) for what ``tree`` adds to ``base`` (see ``_spawn_problem``)."""
+    new = _SpawnScan.of(tree)
+    old_tree = _parse(base) if base else None  # unparsable: nothing is kept
+    keep = isinstance(old_tree, ast.Module) and not new.star
+    old = _SpawnScan.of(
+        old_tree if isinstance(old_tree, ast.Module) and keep else _EMPTY
+    )
+    found = {
+        (line, key[0])
+        for key, count in (new.findings - old.findings).items()
+        for line in new.lines[key][-count:]
+    }
+    added = Counter(u[:2] for u in new.units) - Counter(u[:2] for u in old.units)
+    methods = {holder.rsplit(".", 1)[-1] for holder in old.holders}
+    for scope, place, nodes in new.units:
+        if added[(scope, place)] < 1:
+            continue
+        added[(scope, place)] -= 1
+        for line, name in _references(nodes, scope, old.holders, methods):
+            found.add((line, f"references {name}, which holds a process spawn"))
+    return found
 
 
 def _is_spawn_module(name: str) -> bool:
@@ -827,27 +936,272 @@ def _owner(node: ast.expr, modules: Mapping[str, str]) -> tuple[str, str | None]
 def _spawn_findings(tree: ast.AST) -> Iterator[tuple[int, str]]:
     """(line, finding) for every spawning import, os call or dynamic import."""
     nodes = list(ast.walk(tree))
-    # A bare top-level name counts even when the file never imports it.
+    modules = _tracked_bindings(nodes)
+    for node in nodes:
+        yield from _node_findings(node, modules)
+
+
+def _tracked_bindings(nodes: Iterable[ast.AST]) -> dict[str, str]:
+    """Local name -> tracked module; a bare top-level name counts even when
+    the file never imports it."""
     modules = {name: name for name in _TRACKED_MODULES if "." not in name}
     for node in nodes:
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if _is_spawn_module(alias.name):
-                    yield node.lineno, f"imports {alias.name}"
-                elif alias.asname is not None and alias.name in _TRACKED_MODULES:
+                if alias.asname is not None and alias.name in _TRACKED_MODULES:
                     modules[alias.asname] = alias.name
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             for alias in node.names:
-                finding = _from_import_finding(node.module, alias.name)
                 full = f"{node.module}.{alias.name}"
-                if finding is not None:
-                    yield node.lineno, finding
-                elif full in _TRACKED_MODULES:  # from concurrent import futures
+                if full in _TRACKED_MODULES:  # from concurrent import futures
                     modules[alias.asname or alias.name] = full
-    for node in nodes:
-        if isinstance(node, ast.Attribute):
-            finding = _attribute_finding(node, modules)
+    return modules
+
+
+def _node_findings(
+    node: ast.AST, modules: Mapping[str, str]
+) -> Iterator[tuple[int, str]]:
+    """(line, finding) for one node: an import, an os call or a dynamic import."""
+    if isinstance(node, ast.Import):
+        for alias in node.names:
+            if _is_spawn_module(alias.name):
+                yield node.lineno, f"imports {alias.name}"
+    elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+        for alias in node.names:
+            finding = _from_import_finding(node.module, alias.name)
             if finding is not None:
                 yield node.lineno, finding
-        elif isinstance(node, ast.Name) and node.id in _SPAWN_NAMES:
-            yield node.lineno, f"uses {node.id}"
+    elif isinstance(node, ast.Attribute):
+        finding = _attribute_finding(node, modules)
+        if finding is not None:
+            yield node.lineno, finding
+    elif isinstance(node, ast.Name) and node.id in _SPAWN_NAMES:
+        yield node.lineno, f"uses {node.id}"
+
+
+# The spawn delta's statements, keys and bound names (D62) --------------------
+
+_BLOCKS = frozenset({"body", "orelse", "handlers", "finalbody", "cases"})
+_UNITS = (ast.stmt, ast.excepthandler, ast.match_case)
+_DEFS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+_EMPTY = ast.Module(body=[], type_ignores=[])
+_END_NODE, _END_LIST = object(), object()
+_MAX_PARSE_MESSAGE = 160
+
+
+def _statements(tree: ast.Module) -> Iterator[tuple[str, str, ast.AST]]:
+    """Every statement, handler and match case, with the qualified name of the
+    def or class it sits in ("" at module level) and its place: a digest of
+    its shape and of every enclosing unit's, so an edit of a signature, a
+    guard or the block a statement sits in changes the place; iterative."""
+    todo: list[tuple[str, str, ast.AST]] = [("", "", u) for u in reversed(tree.body)]
+    while todo:
+        scope, context, unit = todo.pop()
+        place = hashlib.sha256(f"{context}/{_shape(unit)}".encode()).hexdigest()
+        yield scope, place, unit
+        children = [
+            child
+            for name in sorted(_BLOCKS)
+            for child in _as_list(getattr(unit, name, None))
+            if isinstance(child, _UNITS)
+        ]
+        todo.extend((_inner(scope, unit), place, c) for c in reversed(children))
+
+
+def _inner(scope: str, unit: ast.AST) -> str:
+    """The qualified name of the scope ``unit``'s own body runs in."""
+    return f"{scope}.{unit.name}".lstrip(".") if isinstance(unit, _DEFS) else scope
+
+
+def _as_list(value: object) -> list[object]:
+    return value if isinstance(value, list) else [value]
+
+
+def _header(unit: ast.AST) -> tuple[ast.AST, ...]:
+    """The unit and every node of its own fields; nested blocks are units of their own."""
+    nodes: list[ast.AST] = [unit]
+    for name, value in ast.iter_fields(unit):
+        if name not in _BLOCKS:
+            for item in _as_list(value):
+                if isinstance(item, ast.AST):
+                    nodes.extend(ast.walk(item))
+    return tuple(nodes)
+
+
+def _shape(unit: ast.AST) -> str:
+    """A digest of the unit's own fields, without line numbers or nested blocks.
+
+    Iterative, unlike ``ast.dump``, so a long expression parses and keys; an
+    ``int`` is written in hex, which has no digit limit.
+    """
+    parts: list[str] = [type(unit).__name__]
+    todo: list[object] = [
+        value
+        for name, value in reversed(list(ast.iter_fields(unit)))
+        if name not in _BLOCKS
+    ]
+    while todo:
+        item = todo.pop()
+        if isinstance(item, ast.AST):
+            parts.append(type(item).__name__)
+            todo.append(_END_NODE)
+            todo.extend(value for _, value in reversed(list(ast.iter_fields(item))))
+        elif isinstance(item, list):
+            parts.append("[")
+            todo.append(_END_LIST)
+            todo.extend(reversed(item))
+        elif item is _END_NODE or item is _END_LIST:
+            parts.append(")" if item is _END_NODE else "]")
+        else:
+            text = hex(item) if type(item) is int else repr(item)
+            parts.append(f"{type(item).__name__}:{text}")
+    return hashlib.sha256("\0".join(parts).encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def _spawn_bound(
+    units: Sequence[_Unit], modules: Mapping[str, str], classes: AbstractSet[str]
+) -> tuple[set[tuple[str, str]], set[str], bool]:
+    """The names a spawn statement binds, as (scope, name) pairs and attribute
+    names, and whether a spawn module is star-imported.
+
+    A spawn import binds its names; an assignment, ``for``, ``with``, walrus
+    or comprehension target is bound when its source holds a finding or a
+    bound name, to a fixpoint. A ``global`` or ``nonlocal`` name binds at
+    module level. Attributes are bound file-wide (``self._module``), and so
+    is a name bound in a class body (``classes``), which is read as one.
+    """
+    names: set[tuple[str, str]] = set()
+    attrs: set[str] = set()
+    lifted: set[tuple[str, str]] = set()
+    seeds: list[tuple[str, str]] = []
+    binders: list[tuple[str, ast.AST, ast.AST]] = []
+    star = False
+    for scope, _, nodes in units:
+        for node in nodes:
+            if isinstance(node, ast.Import):
+                seeds += [(scope, a.asname or a.name.split(".")[0]) for a in node.names if _is_spawn_module(a.name)]  # fmt: skip
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                for alias in node.names:
+                    if _from_import_finding(node.module, alias.name) is not None:
+                        star = star or alias.name == "*"
+                        seeds.append((scope, alias.asname or alias.name))
+            elif isinstance(node, (ast.Global, ast.Nonlocal)):
+                lifted.update((scope, name) for name in node.names)
+            else:
+                binders += [(scope, source, target) for source, target in _binds(node)]
+    waiting: dict[str, list[int]] = {}
+    for index, (_, source, _) in enumerate(binders):
+        for node in ast.walk(source):
+            key = node.id if isinstance(node, ast.Name) else node.attr if isinstance(node, ast.Attribute) else None  # fmt: skip
+            if key is not None:
+                waiting.setdefault(key, []).append(index)
+
+    def bind(scope: str, is_attr: bool, key: str) -> Sequence[int]:
+        """Bind ``key``; the binders to look at again (none when known)."""
+        pair = ("", key) if (scope, key) in lifted else (scope, key)
+        as_attr = is_attr or scope in classes
+        if (key in attrs or not as_attr) and (pair in names or is_attr):
+            return ()
+        if as_attr:
+            attrs.add(key)
+        if not is_attr:
+            names.add(pair)
+        return waiting.get(key, ())
+
+    todo = [i for scope, key in seeds for i in bind(scope, False, key)]
+    todo += range(len(binders))
+    fired: set[int] = set()
+    while todo:
+        index = todo.pop()
+        scope, source, target = binders[index]
+        if index not in fired and _flagged(source, scope, modules, names, attrs):
+            fired.add(index)
+            todo += [i for is_attr, key in _targets(target) for i in bind(scope, is_attr, key)]  # fmt: skip
+    return names, attrs, star
+
+
+def _flagged(
+    source: ast.AST,
+    scope: str,
+    modules: Mapping[str, str],
+    names: AbstractSet[tuple[str, str]],
+    attrs: AbstractSet[str],
+) -> bool:
+    """Whether ``source`` holds a finding or reads a spawn-bound name."""
+    return any(
+        next(_node_findings(n, modules), None)
+        or next(_bound_uses(n, scope, names, attrs), None)
+        for n in ast.walk(source)
+    )
+
+
+def _binds(node: ast.AST) -> Iterator[tuple[ast.AST, ast.AST]]:
+    """(source, target) pairs ``node`` binds."""
+    if isinstance(node, ast.Assign):
+        yield from ((node.value, target) for target in node.targets)
+    elif isinstance(node, (ast.AugAssign, ast.AnnAssign, ast.NamedExpr)):
+        if node.value is not None:
+            yield node.value, node.target
+    elif isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
+        yield node.iter, node.target
+    elif isinstance(node, (ast.With, ast.AsyncWith)):
+        for item in node.items:
+            if item.optional_vars is not None:
+                yield item.context_expr, item.optional_vars
+
+
+def _targets(target: ast.AST) -> Iterator[tuple[bool, str]]:
+    """(is an attribute, name) for every name an assignment target binds."""
+    todo = [target]
+    while todo:
+        node = todo.pop()
+        if isinstance(node, ast.Name):
+            yield False, node.id
+        elif isinstance(node, ast.Attribute):
+            yield True, node.attr
+        elif isinstance(node, (ast.Subscript, ast.Starred)):
+            todo.append(node.value)
+        elif isinstance(node, (ast.Tuple, ast.List)):
+            todo.extend(node.elts)
+
+
+def _bound_uses(
+    node: ast.AST,
+    scope: str,
+    names: AbstractSet[tuple[str, str]],
+    attrs: AbstractSet[str],
+) -> Iterator[tuple[int, str]]:
+    """(line, finding) when ``node`` reads a name a spawn statement bound."""
+    if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+        parts = scope.split(".") if scope else []
+        if any((".".join(parts[:n]), node.id) in names for n in range(len(parts) + 1)):
+            yield node.lineno, f"uses spawn-bound {node.id}"
+    elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
+        if node.attr in attrs:
+            yield node.lineno, f"uses spawn-bound .{node.attr}"
+
+
+def _references(
+    nodes: Iterable[ast.AST],
+    scope: str,
+    holders: AbstractSet[str],
+    methods: AbstractSet[str],
+) -> Iterator[tuple[int, str]]:
+    """(line, name) for every read in ``nodes`` that may reach a def or class
+    holding a finding, called or not (an alias, ``map``, a default, a
+    decorator, a base class): a bare name one of its scope chain, an
+    attribute any holder of its name (``methods``)."""
+    parts = scope.split(".") if scope else []
+    prefixes = [".".join(parts[:n]) for n in range(len(parts) + 1)]
+    for node in nodes:
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            if any(f"{p}.{node.id}".lstrip(".") in holders for p in prefixes):
+                yield node.lineno, node.id
+        elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
+            if node.attr in methods:
+                yield node.lineno, node.attr
+
+
+def _dunder(name: str) -> bool:
+    """A dunder method runs through its class or a protocol, not by its name."""
+    return name.startswith("__") and name.endswith("__")

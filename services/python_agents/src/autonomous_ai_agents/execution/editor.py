@@ -114,6 +114,13 @@ secret files are off limits; a change that touches them is rejected however \
 fast it is.
 - New top-level modules named like the standard library or the test runner \
 are refused.
+- While CPU time or peak memory is judged, a change that adds or edits code \
+using multiprocessing or its forks (multiprocess, billiard, joblib, loky), \
+subprocess, concurrent.futures.process (ProcessPoolExecutor), os.fork, \
+os.spawn*, os.exec*, os.system, os.popen, pty, importlib.import_module or \
+__import__, or that refers to a function or class already using them or \
+edits the signature, guard or block around such code, is refused, and so is \
+a file Python cannot parse.
 - Each trial has a fixed number of turns, tool calls, files and bytes; the \
 first message states them.
 

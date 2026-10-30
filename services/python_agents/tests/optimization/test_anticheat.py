@@ -1188,8 +1188,9 @@ def test_process_spawn_fails_closed_on_python_the_engine_cannot_parse(
     """
     GIVEN a changed .py file with a syntax error, invalid UTF-8 or a late NUL
     WHEN the capture rules run with peak RSS judged
-    THEN it is a process_spawn violation naming the engine's Python: a file the
-        engine cannot parse may still run under a newer workload interpreter
+    THEN it is an unparsable_source violation naming the engine's Python, never
+        process_spawn (D62): a file the engine cannot parse may still run under
+        a newer workload interpreter, so it is refused unscanned
 
     Rewritten in review (was: no violation, "left to the tests"). That premise
     fails when the workload's Python is newer than the engine's.
@@ -1198,8 +1199,8 @@ def test_process_spawn_fails_closed_on_python_the_engine_cannot_parse(
 
     found = _capture((change,), blobs={change.path: source}, judged=RSS_JUDGED)
 
-    message = _only(found, ViolationRule.process_spawn, change.path).message
-    assert "could not be scanned" in message
+    message = _only(found, ViolationRule.unparsable_source, change.path).message
+    assert "cannot be checked for process spawning" in message
     assert f"Python {sys.version_info.major}.{sys.version_info.minor}" in message
 
 
@@ -1218,14 +1219,16 @@ def test_process_spawn_catches_newer_syntax_on_any_engine_python(
     GIVEN a spawn next to PEP 695 or PEP 701 syntax (valid on 3.12+, a
         SyntaxError on the 3.11 engine floor)
     WHEN the capture rules run with peak RSS judged
-    THEN it is a process_spawn violation on every engine Python: found by the
-        scan on 3.12+, refused as unscannable on 3.11
+    THEN it is refused on every engine Python: process_spawn found by the scan
+        on 3.12+, unparsable_source on 3.11 (D62)
     """
     change = _modified("dedupe/core.py")
 
     found = _capture((change,), blobs={change.path: source}, judged=RSS_JUDGED)
 
-    _only(found, ViolationRule.process_spawn, change.path)
+    newer = sys.version_info >= (3, 12)
+    rule = ViolationRule.process_spawn if newer else ViolationRule.unparsable_source
+    _only(found, rule, change.path)
 
 
 @pytest.mark.parametrize("source", UNPARSEABLE_SOURCES)
@@ -1341,14 +1344,14 @@ def test_process_spawn_fails_closed_on_python_too_deep_to_scan(source: bytes) ->
     GIVEN a changed .py file that exhausts the parser's recursion or stack
         (it may still compile under the workload's own interpreter)
     WHEN the capture rules run with peak RSS judged
-    THEN it is a process_spawn violation: unscanned code is refused
+    THEN it is an unparsable_source violation: unscanned code is refused (D62)
     """
     change = _modified("dedupe/core.py")
 
     found = _capture((change,), blobs={change.path: source}, judged=RSS_JUDGED)
 
-    violation = _only(found, ViolationRule.process_spawn, change.path)
-    assert "could not be scanned" in violation.message
+    violation = _only(found, ViolationRule.unparsable_source, change.path)
+    assert "too deeply nested or too large to parse" in violation.message
 
 
 def test_process_spawn_message_lists_findings_in_line_order() -> None:

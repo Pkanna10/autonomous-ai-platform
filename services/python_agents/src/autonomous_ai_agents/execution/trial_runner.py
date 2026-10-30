@@ -963,15 +963,15 @@ class GitTrialRunner(_PhaseOwner):
             base_of = functools.partial(_base_of, self._git, job.base, modified)
             patch = functools.partial(_stream_added, self._git, job.handle, job.base)
             references = check_quality_references(blobs, base_of, frozen, patch)
+            violations = self._violations(  # base_of: the spawn delta's base (D62)
+                changes, result, blobs, job.baseline, job.scope, job.tracked,
+                job.patterns, base_of,
+            ) + references  # fmt: skip
         except GitError as error:  # RepoTamperedError is no GitError: it propagates
             text = f"the change could not be captured: {error}"
             return _Tried(_failed(trial, text), result)
         touched = tuple(c.path for c in changes)
         trial = trial.model_copy(update={"diff": diff, "touched_paths": touched})
-        violations = self._violations(
-            changes, result, blobs, job.baseline, job.scope, job.tracked,
-            job.patterns,
-        ) + references  # fmt: skip
         if violations:
             text = "; ".join(v.message for v in violations[:3])
             reason = f"the change breaks {len(violations)} anti-cheat rule(s): {text}"
@@ -1125,6 +1125,7 @@ class GitTrialRunner(_PhaseOwner):
         scope: RunScope,
         tracked: Collection[str],
         protected: Sequence[str],
+        base_of: Callable[[str], bytes | None],
     ) -> tuple[Violation, ...]:
         judged = {o.metric for o in baseline.objectives}
         judged |= {g.metric for g in baseline.guardrails if g.metric is not None}
@@ -1136,6 +1137,7 @@ class GitTrialRunner(_PhaseOwner):
             reserved_modules=scope.reserved_modules,
             module_roots=scope.module_roots,
             existing_dirs=_base_dirs(tracked),
+            base_of=base_of,
         )
         return (*captured, *check_diff_all((c.path for c in changes), protected))
 
