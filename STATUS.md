@@ -446,16 +446,33 @@ Postgres at 100 % under CPython 3.13 and 3.11, prettier):
   A2 `1bb075f` (P2, `research-agent`), A3 `d8c0699` (P3, `watch` and
   `watch-cleanup`). None has run live yet; P3 creates Managed Agents objects on
   the owner's account and its cleanup must be verified after each dispatch.
-- **Timing-guard fixes found by the gate:** `7b970bf` (ledgerclose resized for
-  3x margin over CI's floor), `71940d0` (the decoy guard bounded by its own
-  measured A/A gap, the engine's noise-floor rule), `a724611` (the reference-fix
-  guard alternates the base and fixed copies and compares best runs).
+- **Batch 3:** N2 `a1ad5f2` (lane prompts, schema, grounding; about 940 source
+  lines against a 400 row, mostly prompt text and the 18-example bank), N3a
+  `a490001` (reviewer), N3b `99c0bfc` (portfolio), N0b `6482cd1` (one fix retry
+  on `unparsable_source`), L4p `53abcc9` (the sweep covers corpus v1 + v2, 37
+  repositories; `sweep-record` needs 24 USD).
+- **Test fixtures changed, and why** (each measured several times first; no bar
+  was loosened for a quiet machine):
+  - `7b970bf` ledgerclose resized: CI measured its baseline at 0.27 s against a
+    0.3 s floor.
+  - `71940d0` decoy guard: the tempting idea's true gain is about 0 (four runs
+    each: -2.5 to +4.2 %), so noise alone reached the 5 % bound; the bound is
+    now max(5 %, twice the A/A gap measured in the same runs).
+  - `a724611` reference-fix guard: three base runs then three fixed runs let one
+    burst of load decide (tokenparse 22.8 % once, 34-66 % quietly); the copies
+    now alternate and the best runs are compared, bar unchanged.
+  - `2dd55cc` parcelindex: the full fix gains 40-47 %, the textbook idea -2 to
+    +17 % (once 20.04 %) against a 0.20 bar; the bar is now 0.30. The other
+    seven v2 repositories keep at least 0.18 of margin on both sides.
+- **Assumptions:** Opus 5.5, Sonnet 5.5 and Fable 5.1 share a June 2026 training
+  cutoff (platform.claude.com models overview, read 2026-10-26); V9's
+  contamination tiers and O21 rest on it. The engine trains nothing: it calls
+  Claude through the API only.
 - **Merged from master:** `eb1566d` (pymupdf 2.0, PR #28, and the Dependabot
   Actions pins).
 - **Live:** L3 0.07 USD (a smoke test under O19; L3b re-tests the grader).
-- **Next:** batch 3 (N2, N3a, N3b, N0b, and L4p, which adds corpus v2 to the
-  sweep so L4 records v1 + v2, 37 repositories), then batches 4-5 and the live
-  order in the amendment's section 7.
+- **Next:** batch 4 (N4a, the pipeline; N0c, the child-process tripwire), then
+  batch 5 and the live order in the amendment's section 7 (L4 first).
 - **Owner's plan, for the record (2026-10-30):** after Wave 2's idea experiments
   (E1/E2) report, an "Improvement Wave 3" pilot: a multi-model developer team
   that studies, proposes and proves engine improvements. The owner sends its
@@ -2151,6 +2168,19 @@ own commit, so they are not counted as rework.
 
 ## Lessons (retro per step)
 
+### Step 3 Wave 2 (so far)
+
+- **A timing bar must sit well clear of what it separates, measured several
+  times first.** Four guards (ledgerclose, the decoy, the reference fix,
+  parcelindex) were set from one or two runs and failed the Lead's gate on noise
+  alone. **Change:** a new corpus bar is set only after at least three runs per
+  side under CPython 3.11 and 3.13, with about ten points (or 2x) of margin from
+  each side, and compared copies are timed in turn.
+- **A usage limit can stop workflows mid-edit.** Every finished agent result
+  came back from the cache on resume. **Change:** each resumed fix agent first
+  inspects its files for half-applied edits; the gate script starts Postgres and
+  holds a lock so two gates never share the checkout.
+
 ### Step 3 Wave 1 (2026-10-24 to 2026-10-25)
 
 Each lesson ends with what it changes: in `CLAUDE.md` ("Builders in a shared
@@ -2356,6 +2386,12 @@ worktree", 4.4.0) or in the builder rules every brief carries.
 
 ## Technical Debt
 
+- Wave 2 batch 3 reviewers' open nits: N2's line-by-line fallback (a hot
+  function that no longer tokenizes) can let a docstring-only quote ground an
+  idea, against D50 (b); N0b's re-edit reuses the D14 notice that says the
+  change "failed when run", though it only failed to parse; N3b leaves `novel`
+  candidates outside the quotas with no cap (decided in N4a, which owns the
+  totals).
 - `[tool.hatchling.build.targets.wheel]` in `pyproject.toml` is a dead key
   (hatch reads `[tool.hatch...]`); `playbook.json` ships anyway.
 - `test_the_blind_hypothesis_states_an_intent_never_a_fix[runtime]` is flaky
