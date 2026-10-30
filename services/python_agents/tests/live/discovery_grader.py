@@ -10,7 +10,8 @@ against the others. It sees:
   (``reference_patches``): a ``multi`` repository of the hard corpus has one
   ``<name>.part<k>.patch`` per hot spot, each a separate root cause; any
   other repository its ``<name>.patch``. A trap's ``<name>.naive.patch`` is
-  the wrong fix and is never shown;
+  the wrong fix, and a v2 ``<name>.textbook.patch`` the first idea; neither
+  is ever shown;
 - the arm's hypotheses (title and rationale only) shuffled with a fixed
   seed per repository (``shuffled``), named ``H1``..``Hn`` and scrubbed of
   model names (``scrub``), so nothing in the request names the arm.
@@ -70,6 +71,7 @@ from autonomous_ai_agents.common.models import Hypothesis
 from .conftest import LiveRun
 from .corpus import HARD_SOLUTIONS_DIR, SOLUTIONS_DIR, CorpusRepo
 from .discovery import ARM_ERRORS, UsageTap, worst_usd
+from .discovery_corpus import DISCOVERY_SOLUTIONS_DIR
 
 GRADER_MODEL: Final = "claude-opus-4-8"
 GRADER_EFFORT: Final[Effort] = "low"
@@ -77,7 +79,7 @@ GRADER_MAX_TOKENS: Final = 4000
 GRADER_PROMPT_BOUND: Final = 18_000  # the widest patches and 5 widest ideas
 GRADER_SEED: Final = 20261023
 MAX_PATCH_BYTES: Final = 64 * 1024
-SOLUTION_DIRS: Final = (SOLUTIONS_DIR, HARD_SOLUTIONS_DIR)
+SOLUTION_DIRS: Final = (SOLUTIONS_DIR, HARD_SOLUTIONS_DIR, DISCOVERY_SOLUTIONS_DIR)
 _MODEL_NAMES: Final = re.compile(
     r"claude|opus|sonnet|fable|haiku|mythos", re.IGNORECASE
 )

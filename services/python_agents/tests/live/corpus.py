@@ -113,7 +113,22 @@ Mode = Literal["aimed", "blind", "decoy", "wired"]
 names no fix; decoy: the neutral (or wrong) candidate alone; wired (Step 3):
 none, the engine's generator on (``role_wiring``)."""
 Goal = Literal["runtime", "peak_memory"]
-Category = Literal["single", "multi", "large", "trap", "memory"]
+Category = Literal[
+    "single",
+    "multi",
+    "large",
+    "trap",
+    "memory",
+    "deep",
+    "spread",
+    "misleading",
+    "uncommon",
+    "small",
+    "decoy",
+]
+"""v1 repositories are ``single``; the hard corpus is ``multi``, ``large``,
+``trap`` or ``memory``; hard corpus v2 (``discovery_corpus``) is one of its six
+groups, ``deep`` to ``decoy``, so every recorder carries the group per row."""
 MODES: Final[tuple[Mode, ...]] = ("aimed", "blind", "decoy")
 """The modes that hand the run candidates."""
 ALL_MODES: Final[tuple[Mode, ...]] = (*MODES, "wired")
