@@ -35,6 +35,18 @@ block is set) with its blocks, all from the settings (D4); with
 runners, the combiner and the profiler, which mask its frozen files, and the
 judges print its drops in its unit (D37, D38); without one nothing changes.
 
+Step 3 Wave 2 (N4b; D43, D54, C11). With ``IDEA_PIPELINE`` on the
+generator is ``IdeaPipelineGenerator`` on the ``lane``, ``leap`` and
+``reviewer`` transports, resolved as every role's is; all three must
+resolve or the build is refused naming the missing role (never today's
+generator, never no generator, in silence). Today's generator, when it has a
+transport, is the pipeline's fallback for a call with no code context; the
+pipeline reads code through ``repo_reader`` (a ``GitWorkspace`` on the
+project's checkout, at the base commit it is given). The discovery share is
+``IDEAS_DISCOVERY_MAX_SHARE`` with the pipeline on, else
+``DISCOVERY_MAX_SHARE``; ``portfolio_rounds`` is ``PORTFOLIO_ROUNDS`` either
+way. With the pipeline off no pipeline transport is resolved or built.
+
 Everything that launches repository code (preflight's probe, the profiler,
 both runners, the combiner, the quality scorer) is passed the context's
 isolation modes and one launcher (``run``, ``procrun.run_once`` unless a
@@ -101,6 +113,7 @@ from autonomous_ai_agents.common.models import (
     Trial,
     Workload,
 )
+from autonomous_ai_agents.common.repo_read import RepoReader
 from autonomous_ai_agents.execution.combine import GitBranchPublisher, GitCombiner
 from autonomous_ai_agents.execution.editor import ClaudeEditor
 from autonomous_ai_agents.execution.git import GitWorkspace
@@ -126,7 +139,9 @@ from autonomous_ai_agents.optimization.hypothesis_source import (
     ClaudeHypothesisGenerator,
     ClaudeTechniqueMatcher,
 )
+from autonomous_ai_agents.optimization.idea_pipeline import IdeaPipelineGenerator
 from autonomous_ai_agents.optimization.judges import Judge, default_judges
+from autonomous_ai_agents.optimization.sources import HypothesisGenerator
 from autonomous_ai_agents.orchestrator.events import emit, make_event
 from autonomous_ai_agents.orchestrator.nodes import NodeContext, NoiseCalibrator
 from autonomous_ai_agents.orchestrator.understand import ClaudeUnderstander
@@ -142,7 +157,13 @@ TransportFactory = Callable[[Settings], LLMTransport]
 _Runners = tuple[BaselineRunner, TrialRunner]
 
 SDK_LOGGER = "anthropic"
-_ROLE_TRANSPORTS: Final[tuple[Role, ...]] = ("editor", "generator", "matcher")
+PIPELINE_ROLES: Final[tuple[Role, ...]] = ("lane", "leap", "reviewer")
+_ROLE_TRANSPORTS: Final[tuple[Role, ...]] = (
+    "editor",
+    "generator",
+    "matcher",
+    *PIPELINE_ROLES,
+)
 _LOG = structlog.get_logger("autonomous_ai_agents.engine")
 
 
@@ -189,6 +210,40 @@ def role_transport(
             f"not the {role} chain {list(expected)}"
         )
     return found
+
+
+def repo_reader(project: Project) -> RepoReader:
+    """The idea pipeline's reader: the project's git objects, never its
+    working tree (D44), as the understander reads them."""
+    return GitWorkspace(
+        Path(project.root_path),
+        executable=settings.GIT_EXECUTABLE,
+        timeout_s=settings.GIT_TIMEOUT_S,
+    )
+
+
+def idea_pipeline(
+    role: Callable[[Role], LLMTransport | None],
+    fallback: HypothesisGenerator | None,
+    *,
+    sleep: Callable[[float], None],
+) -> IdeaPipelineGenerator:
+    """The pipeline on every one of its roles' transports, or ``ValueError``
+    naming the first role with none (C11): a captured run never gains an
+    uncaptured transport, and a missing role never quietly means today's
+    generator or none."""
+    transports: dict[Role, LLMTransport] = {}
+    for name in PIPELINE_ROLES:
+        found = role(name)
+        if found is None:
+            raise ValueError(
+                f"IDEA_PIPELINE is on and the idea pipeline needs a {name} transport:"
+                f" give role_transports[{name!r}] or set ANTHROPIC_API_KEY"
+            )
+        transports[name] = found
+    return IdeaPipelineGenerator(
+        transports, reader=repo_reader, config=settings, sleep=sleep, fallback=fallback
+    )
 
 
 def claude_editor_factory(
@@ -454,11 +509,14 @@ def build_context(
         editor = claude_editor_factory(editing, sleep=sleep)
     trial_editor = editor
     generating = role("generator")
-    generator = (
+    generator: HypothesisGenerator | None = (
         None
         if generating is None
         else ClaudeHypothesisGenerator(generating, config=settings, sleep=sleep)
     )
+    pipeline = settings.IDEA_PIPELINE
+    if pipeline:
+        generator = idea_pipeline(role, generator, sleep=sleep)
     matched = settings.RESEARCH_RETRIEVAL == "matched"
     matching = role("matcher") if matched else None
     matcher = (
@@ -555,7 +613,11 @@ def build_context(
         generator_n=settings.GENERATOR_N,
         generator_max_calls=settings.GENERATOR_MAX_CALLS,
         matcher_k=settings.MATCHER_K,
-        discovery_max_share=settings.DISCOVERY_MAX_SHARE,
+        discovery_max_share=(
+            settings.IDEAS_DISCOVERY_MAX_SHARE
+            if pipeline
+            else settings.DISCOVERY_MAX_SHARE
+        ),
         fix_retries_per_run=settings.EDITOR_FIX_RETRIES_PER_RUN,
         playbook=load_playbook() if matched else (),
         quality=quality,
@@ -563,4 +625,5 @@ def build_context(
         calibrator=baseline_runner if settings.NOISE_CALIBRATION_BLOCKS else None,
         calibration_blocks=settings.NOISE_CALIBRATION_BLOCKS,
         confirm_winners=settings.CONFIRM_WINNERS,
+        portfolio_rounds=settings.PORTFOLIO_ROUNDS,
     )

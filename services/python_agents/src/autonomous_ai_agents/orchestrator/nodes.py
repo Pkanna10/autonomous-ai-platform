@@ -1003,6 +1003,11 @@ def _generate(
             avoid_titles=[h.title for h in (*state["hypotheses"], *state["parked"])],
             n=ctx.generator_n,
             budget=budget,
+            commit=state["base_commit"],
+            run_id=state["run_id"],
+            call_index=state["generator_calls"],
+            protected=(*ctx.protected_patterns, *state["extra_protected"]),
+            read_deny=() if ctx.quality is None else ctx.quality.frozen_paths,
         )
     except BudgetExceeded as exc:  # the reserve or the share refused it (D7)
         spend = _discovery_spend(state, budget, called=budget.spent_usd > cost)
@@ -1021,6 +1026,11 @@ def _generate(
     counts: ScalarDict = {"kept": len(kept), "parked": len(parked)}
     summary = f"{len(kept)} hypothesis(es) kept, {len(parked)} parked"
     events = [_note(state, phase, "generated", summary, data=counts)]
+    for found in result.events:  # the pipeline's own codes and levels (D65)
+        level, data = found.level, found.data
+        events.append(
+            _note(state, phase, found.code, found.message, level=level, data=data)
+        )
     for note in (*result.notes, *notes):
         events.append(_note(state, phase, "generate_note", note))
     return _Generated(kept, delta, events)
@@ -3340,7 +3350,8 @@ def make_router(ctx: NodeContext) -> RouterFn:
             return "approval_gate"
         if state["budget_exhausted"]:
             return "combine"
-        if any(v.outcome is VerdictOutcome.keep for v in state["verdicts"]):
+        kept = any(v.outcome is VerdictOutcome.keep for v in state["verdicts"])
+        if kept and state["round"] >= ctx.portfolio_rounds:  # D54: after the rounds
             return "combine"
         if state["round"] >= state["max_rounds"]:
             return "combine"
