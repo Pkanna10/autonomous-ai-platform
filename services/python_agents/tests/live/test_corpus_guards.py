@@ -191,10 +191,40 @@ def _stdout(root: Path, repo: CorpusRepo) -> tuple[str, float]:
     return proc.stdout, seconds
 
 
+def _in_turn(
+    base: Path, fixed: Path, repo: CorpusRepo, count: int
+) -> tuple[list[tuple[str, float]], list[tuple[str, float]]]:
+    """``count`` runs of each copy, alternating, so contention hits both alike."""
+    before: list[tuple[str, float]] = []
+    after: list[tuple[str, float]] = []
+    for _ in range(count):
+        before.append(_stdout(base, repo))
+        after.append(_stdout(fixed, repo))
+    return before, after
+
+
 def _suite_passes(root: Path) -> None:
     proc, _ = _run(root, TEST_COMMAND)
     assert proc.returncode == 0, proc.stderr
     assert re.search(r"^Ran [1-9]\d* tests?", proc.stderr, re.MULTILINE), proc.stderr
+
+
+def test_the_two_copies_are_timed_in_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Base, fixed, base, fixed ...: a burst of contention lands on both
+    copies alike instead of on one block of runs."""
+    order: list[str] = []
+
+    def fake(root: Path, repo: CorpusRepo) -> tuple[str, float]:
+        order.append(root.name)
+        return "same\n", float(len(order))
+
+    monkeypatch.setattr(sys.modules[__name__], "_stdout", fake)
+    base, fixed = _in_turn(tmp_path / "base", tmp_path / "fixed", CORPUS[0], 3)
+    assert order == ["base", "fixed"] * 3
+    assert [s for _, s in base] == [1.0, 3.0, 5.0]
+    assert [s for _, s in fixed] == [2.0, 4.0, 6.0]
 
 
 # ---------------------------------------------------------------------------
@@ -337,13 +367,12 @@ def test_reference_fix_keeps_output_and_tests_and_is_faster(
     )
     assert proc.returncode == 0, proc.stderr
     assert _files(fixed) == [fixed / p.relative_to(base) for p in _files(base)]
-    before = [_stdout(base, repo) for _ in range(3)]
-    after = [_stdout(fixed, repo) for _ in range(3)]
+    before, after = _in_turn(base, fixed, repo, 3)
     outputs = {out for out, _ in before + after}
     assert len(outputs) == 1, "the output changed between runs or with the fix"
     _suite_passes(fixed)
-    slow = statistics.median(seconds for _, seconds in before)
-    quick = statistics.median(seconds for _, seconds in after)
+    slow = min(seconds for _, seconds in before)  # best of each: noise only adds
+    quick = min(seconds for _, seconds in after)
     assert slow >= BASELINE_FLOOR_S, f"{repo.name}: baseline {slow:.2f}s"
     gain = 1 - quick / slow
     assert gain >= MIN_FIX_GAIN, f"{repo.name}: {slow:.2f}s -> {quick:.2f}s"
