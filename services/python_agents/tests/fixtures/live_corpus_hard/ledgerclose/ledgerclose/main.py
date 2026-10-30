@@ -7,7 +7,7 @@ from ledgerclose.settle import settle
 
 
 def main() -> None:
-    balances, held = settle(transfers(60000, 1000))
+    balances, held = settle(transfers(130000, 2000))
     for account in list(balances)[::40]:
         print(f"{account}\t{money(balances[account])}")
     print(f"accounts\t{len(balances)}")
