@@ -31,7 +31,7 @@ interpreter outside the candidate's ``requires_python`` included) or a
 guard breach is an ``error`` row, then raised. Results: one JSON line per
 candidate to ``$LIVE_RESULTS_PATH``, the table to the job summary, a note
 per candidate in the cost table; each row and the table name the
-candidate's pool (``upstream.pool``: who set the key, what the before-tree
+candidate's pool (``upstream.report_pool``: who set the key, what the before-tree
 hints). The Lead copies each verified row (the CI run id, ``gain``,
 ``floor`` as ``noise_floor``, ``threshold``, ``workload_sha256``) into the
 manifest's ``verified`` record (``upstream.Verified``): only such a
@@ -90,8 +90,8 @@ from .oss import PRODUCTION, CloneRefusedError, GitPolicy, _Git, _scratch_git
 from .upstream import (
     UpstreamCase,
     licence_problem,
-    pool,
     prepare_repo,
+    report_pool,
 )
 from .upstream import (
     threshold as threshold,
@@ -231,14 +231,14 @@ class KeyResult:
     stopped: str | None
     wall_s: float
     licence: str | None = None  # a licence problem
-    pool: str = "-"  # upstream.pool: who set the key, what the tree hints
+    pool: str = "-"  # upstream.report_pool: the setter and hint, or O21's row
     workload_sha256: str = ""  # the benchmark measured (Verified binds it)
 
     @classmethod
     def stopped_at(cls, case: UpstreamCase, reason: str, wall_s: float) -> KeyResult:
         return cls(
             case.id, case.lib, case.contamination_risk, None, None, None, (),
-            None, None, False, reason, wall_s, None, pool(case),
+            None, None, False, reason, wall_s, None, report_pool(case),
             case.workload_sha256,
         )  # fmt: skip
 
@@ -323,7 +323,7 @@ def summarize(
         threshold(calibration.floor), _gain(a, b) if a and b else None, gains,
         _passed(tests_base), _passed(tests_fixed),
         len(prints) == 1 and None not in prints, None, wall_s, licence,
-        pool(case), case.workload_sha256,
+        report_pool(case), case.workload_sha256,
     )  # fmt: skip
 
 

@@ -1170,6 +1170,41 @@ def _outcome(case_id: str, delivered: bool, guard: str = "ok") -> CorpusOutcome:
     )  # fmt: skip
 
 
+def test_the_owner_excludes_two_keys_and_keeps_mpmath_as_a_control() -> None:
+    """O21: two medium keys whose fix was in release notes before the cutoff
+    are reported apart, never scored; ``mpmath-bin-to-radix-pow2`` cannot
+    clear the floor on the pure-Python backend (no ``gmpy2``), so it is a
+    control where a claimed win is a warning. The pool, the setter and the
+    hint are unchanged; only the report row moves."""
+    ids = {case.id: case for case in UPSTREAM_CORPUS}
+    assert set(upstream.EXCLUDED) == {
+        "packaging-simple-version-fastpath", "wcwidth-wcswidth-ascii",
+    }  # fmt: skip
+    assert set(upstream.CONTROLS) == {"mpmath-bin-to-radix-pow2"}
+    assert not set(upstream.EXCLUDED) & set(upstream.CONTROLS)
+    for case_id in (*upstream.EXCLUDED, *upstream.CONTROLS):
+        assert case_id in ids, case_id
+        assert len(upstream.EXCLUDED.get(case_id) or upstream.CONTROLS[case_id]) > 20
+    for case_id in upstream.EXCLUDED:
+        assert ids[case_id].contamination_risk == "medium", case_id
+    assert "gmpy2" not in {r for c in UPSTREAM_CORPUS for r in c.requires}
+    mpmath = ids["mpmath-bin-to-radix-pow2"]
+    assert upstream.pool(mpmath) == "human, direct hint"  # unchanged
+    assert upstream.report_pool(mpmath) == upstream.CONTROL_POOL
+    for case_id in upstream.EXCLUDED:
+        assert upstream.report_pool(ids[case_id]) == upstream.EXCLUDED_POOL
+        assert upstream.pool(ids[case_id]) == upstream.SCORED_POOL  # would count
+    for case in UPSTREAM_CORPUS:
+        if case.id not in {*upstream.EXCLUDED, *upstream.CONTROLS}:
+            assert upstream.report_pool(case) == upstream.pool(case), case.id
+    assert upstream.REPORT_POOLS == (
+        *upstream.POOLS, upstream.EXCLUDED_POOL, upstream.CONTROL_POOL,
+    )  # fmt: skip
+    scored = [c.id for c in UPSTREAM_CORPUS if upstream.scored(c)]
+    assert len(scored) == 15 and not set(scored) & {*upstream.EXCLUDED}  # 17 - 2
+    assert all(upstream.report_pool(ids[i]) == upstream.SCORED_POOL for i in scored)
+
+
 def test_the_live_summary_reports_each_pool_apart(tmp_path: Path) -> None:
     """Human keys with no hint are the scored pool; Claude-written keys and
     hinted exams are counted beside them, never pooled with them (O19)."""
@@ -1182,19 +1217,25 @@ def test_the_live_summary_reports_each_pool_apart(tmp_path: Path) -> None:
         _outcome("pypdf-clone-direct-objects", True),
         _outcome("sqlparse-group-comments", True),
         _outcome("mistune-footnote-membership", False),
+        _outcome("wcwidth-wcswidth-ascii", True),
     ]
     text = upstream.pools_markdown(UPSTREAM_CORPUS, outcomes)
     lines = text.splitlines()
     assert "| pool | runs | delivered | rate | ids |" in lines
     rows = [line for line in lines if line.startswith("| ") and "runs" not in line]
     assert [row.split(" | ")[0] for row in rows[1:]] == [
-        "| human, no hint", "| human, class hint", "| human, direct hint",
-        "| ai, class hint", "| claude, no hint", "| claude, class hint",
+        "| human, no hint", "| human, class hint", "| ai, class hint",
+        "| claude, no hint", "| claude, class hint", "| excluded by the owner",
+        "| control, no win expected",
     ]  # fmt: skip
     assert rows[1].startswith("| human, no hint | 3 | 1 | 33% | ")
     assert "| human, class hint | 1 | 0 | 0% | markdown_it-inline-pending |" in lines
-    assert "| human, direct hint | 1 | 1 | 100% | mpmath-bin-to-radix-pow2 |" in lines
     assert "| claude, no hint | 1 | 1 | 100% | pypdf-clone-direct-objects |" in lines
+    assert "| excluded by the owner | 1 | 1 | 100% | wcwidth-wcswidth-ascii |" in lines
+    assert (
+        "| control, no win expected | 1 | 1 | 100% | mpmath-bin-to-radix-pow2 |"
+        in lines
+    )
     assert any(line.startswith("Scored: human, no hint") for line in lines)
     with pytest.raises(ValueError, match="not an upstream candidate"):
         upstream.pools_markdown(UPSTREAM_CORPUS, [_outcome("pkg-unique-set", True)])
@@ -1204,7 +1245,9 @@ def test_the_live_summary_reports_each_pool_apart(tmp_path: Path) -> None:
     assert printed == [] and not summary.exists()  # no run, no table
     upstream.write_pools(UPSTREAM_CORPUS, outcomes, {"GITHUB_STEP_SUMMARY": str(summary)}, printed.append)  # fmt: skip
     assert summary.read_text(encoding="utf-8") == text + "\n"
-    assert "| human, direct hint | 1 | 1 | 100% | mpmath-bin-to-radix-pow2 |" in printed
+    assert (
+        "| excluded by the owner | 1 | 1 | 100% | wcwidth-wcswidth-ascii |" in printed
+    )
 
 
 def test_batches_of_ten_and_the_need_of_one_batch() -> None:
@@ -1310,6 +1353,15 @@ def test_the_verify_rows_and_table_name_each_pool() -> None:
     found = summarize(pypdf, CAL, (_block(1.0, 0.7),), _suite(True), _suite(True), 1.0)
     row = found.row()
     assert row.get("pool") == "claude, no hint", "apply the V9-lead verify patch"
+    ids = {case.id: case for case in UPSTREAM_CORPUS}
+    for case_id, label in (
+        ("mpmath-bin-to-radix-pow2", upstream.CONTROL_POOL),
+        ("wcwidth-wcswidth-ascii", upstream.EXCLUDED_POOL),
+    ):  # O21's rows, in the verifier's table as in the live summary
+        stop = KeyResult.stopped_at(ids[case_id], "x", 1.0).row()
+        assert stop["pool"] == label, case_id
+        made = summarize(ids[case_id], CAL, (_block(1.0, 0.9),), _suite(True), _suite(True), 1.0)  # fmt: skip
+        assert made.row()["pool"] == label, case_id
     assert row["workload_sha256"] == pypdf.workload_sha256
     stopped = KeyResult.stopped_at(pypdf, "the key does not apply", 1.0).row()
     assert (stopped["pool"], stopped["workload_sha256"]) == (

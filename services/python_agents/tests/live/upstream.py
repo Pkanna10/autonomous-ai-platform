@@ -139,6 +139,23 @@ POOLS: Final = tuple(
     f"{setter}, {tier} hint" for setter in SETTERS for tier in ("no", "class", "direct")
 )
 SCORED_POOL: Final = POOLS[0]
+EXCLUDED: Final[Mapping[str, str]] = {  # O21: reported apart, never scored
+    "packaging-simple-version-fastpath": (
+        "medium: the fix was in packaging 26.1's release notes before the cutoff"
+    ),
+    "wcwidth-wcswidth-ascii": (
+        "medium: the fix was in wcwidth 0.3.0's release notes before the cutoff"
+    ),
+}
+CONTROLS: Final[Mapping[str, str]] = {  # O21: a claimed win here is a warning
+    "mpmath-bin-to-radix-pow2": (
+        "without gmpy2 the radix change is about 2 % of each conversion, so no"
+        " fix of it can clear the floor"
+    ),
+}
+EXCLUDED_POOL: Final = "excluded by the owner"
+CONTROL_POOL: Final = "control, no win expected"
+REPORT_POOLS: Final = (*POOLS, EXCLUDED_POOL, CONTROL_POOL)
 CLAUDE: Final = re.compile(r"claude", re.IGNORECASE)
 AI_NOTE: Final = re.compile(r"[ -~]{1,200}")
 EVIDENCE: Final = re.compile(
@@ -292,6 +309,21 @@ def pool(case: UpstreamCase) -> str:
     hint = case.hint_in_before
     tier = "no" if hint is None else HINT_KINDS[hint.kind]
     return f"{setter(case)}, {tier} hint"
+
+
+def report_pool(case: UpstreamCase) -> str:
+    """The row a result is reported in: ``pool``, unless the owner moved the
+    candidate out of it (O21: ``EXCLUDED``, ``CONTROLS``)."""
+    if case.id in CONTROLS:
+        return CONTROL_POOL
+    if case.id in EXCLUDED:
+        return EXCLUDED_POOL
+    return pool(case)
+
+
+def scored(case: UpstreamCase) -> bool:
+    """Whether a result counts toward the score: the scored pool, after O21."""
+    return report_pool(case) == SCORED_POOL
 
 
 def python_problem(case: UpstreamCase, version: str) -> str | None:
@@ -556,14 +588,14 @@ def pools_markdown(
         case = by_id.get(outcome.repo)
         if case is None:
             raise ValueError(f"{outcome.repo!r} is not an upstream candidate")
-        found.setdefault(pool(case), []).append(outcome)
+        found.setdefault(report_pool(case), []).append(outcome)
     lines = [
         "## Upstream corpus by pool (who set the key, what the before-tree hints)",
         "",
         "| pool | runs | delivered | rate | ids |",
         "| --- | ---: | ---: | ---: | --- |",
     ]
-    for name in (p for p in POOLS if p in found):
+    for name in (p for p in REPORT_POOLS if p in found):
         runs = found[name]
         hits = sum(o.delivered and o.guard == "ok" for o in runs)
         ids = ", ".join(o.repo for o in runs)
@@ -571,7 +603,8 @@ def pools_markdown(
     scored = (
         f"Scored: {SCORED_POOL} (maintainers' keys, no hint in the before-tree);"
         " a Claude-written key shares the attempter's family and a hint"
-        " discounts a hit, so those pools are reported beside it, not in it."
+        " discounts a hit, so those pools are reported beside it, not in it;"
+        " the owner's exclusions and controls (O21) are never scored."
     )
     return "\n".join([*lines, "", scored])
 

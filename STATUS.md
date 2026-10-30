@@ -435,12 +435,9 @@ Postgres at 100 % under CPython 3.13 and 3.11, prettier):
   decoys; 12 v2 repositories in all).
 - **V9** `27e5e53` (O20): the upstream maintainer-fixes corpus, 30 sealed keys
   from 18 libraries, the CI-only `upstream-verify` marker and the `upstream`
-  suite on CPython 3.12. Owner decisions still open, both needed only before the
-  first `upstream` live run: `packaging-simple-version-fastpath` and
-  `wcwidth-wcswidth-ascii` stay medium or move to high (the default is to
-  exclude them from the scored pool); `mpmath-bin-to-radix-pow2` is reported as
-  an expected no-win control unless `gmpy2` is pinned (the default: no new
-  dependency).
+  suite on CPython 3.12. The owner took both recommended defaults (O21): two
+  medium keys are excluded from the scored pool and `mpmath-bin-to-radix-pow2`
+  is an expected no-win control.
 - **Agent pilots (O18):** A0 `80a1b8b` (P0, `agent-probes`: per-message effort,
   prompt-cache reuse, mid-conversation system messages, free token counting, an
   edited thinking block refused against a control turn, and a Managed Agents
@@ -488,6 +485,24 @@ Postgres at 100 % under CPython 3.13 and 3.11, prettier):
 ---
 
 ## Decisions
+
+### 2026-10-30 (owner: V9's two medium keys and the mpmath control)
+
+- **O21.** The owner took the Lead's recommended defaults for V9.
+  `packaging-simple-version-fastpath` and `wcwidth-wcswidth-ascii` are excluded
+  from the scored pool: both fixes were committed before the shared June 2026
+  training cutoff and announced in their projects' release notes, so a hit may
+  be recall, not discovery. They still run and are reported in their own row,
+  "excluded by the owner". `mpmath-bin-to-radix-pow2` is a control, "no win
+  expected": without `gmpy2` the radix change its fix speeds up is about 2 % of
+  each conversion, so no fix of it can clear the 10 % floor, and a claimed win
+  there is a warning that the measurement is fooled. No dependency is added.
+  **Why:** a score should count only exams the attempter cannot have read the
+  answer to, and a known-unwinnable exam is more useful as a false-win check
+  than as a question. The scored pool is now 15 maintainer-set keys with no hint
+  in the before-tree (`upstream.EXCLUDED`, `upstream.CONTROLS`,
+  `upstream.report_pool`; the verify table and the live summary use the same
+  rows).
 
 ### 2026-10-26 (owner: the idea pipeline joins Wave 2)
 

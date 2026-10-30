@@ -117,11 +117,13 @@ Exceptions, pinned in `../requirements.txt` (exact versions, hashes, wheels):
 - `mpmath-*`: the checkout has no `mpmath/_version.py` (setuptools-scm writes it
   at build time), so `import mpmath` from a bare checkout fails until the job
   provides that file (the manifest's `setup_files` commits a one-line stand-in).
-- `mpmath-bin-to-radix-pow2` is a **control unless the job installs `gmpy2`**:
-  with the pure-Python backend the digit conversion, not the radix change the
-  candidate's fix is about, takes nearly all of each base-2/8/16 conversion
-  (measured on the before-tree: about 2 % against 98 % at 20,000 hex digits), so
-  no fix of that function can clear the floor. With `gmpy2` the digits come from
-  GMP and the radix change becomes a real share. The Lead decides: pin `gmpy2`
-  in `requirements.txt` and `requires` (and confirm the backend in the
-  workload), or report the item as an expected no-win control.
+- `mpmath-bin-to-radix-pow2` is a **control** (owner decision O21): with the
+  pure-Python backend the digit conversion, not the radix change the candidate's
+  fix is about, takes nearly all of each base-2/8/16 conversion (measured on the
+  before-tree: about 2 % against 98 % at 20,000 hex digits), so no fix of that
+  function can clear the floor. `gmpy2` is not installed; the item is reported
+  as "control, no win expected" (`upstream.CONTROLS`), where a claimed win is a
+  warning.
+- `packaging-simple-version-fastpath` and `wcwidth-wcswidth-ascii` run but are
+  never scored (O21, `upstream.EXCLUDED`): their fixes were in release notes
+  before the training cutoff.
