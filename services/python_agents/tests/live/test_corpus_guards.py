@@ -1039,6 +1039,7 @@ SUITES = (
     "grader",
     "upstream-verify",
     "upstream",
+    "agent-probes",
 )
 DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_sweep_live.py",
@@ -1738,6 +1739,9 @@ def _suite_needs() -> dict[str, float]:
     evolve = importlib.import_module(f"{__package__}.evolution")
     build = importlib.import_module(f"{__package__}.build_improve")
     grader = importlib.import_module(f"{__package__}.test_grader_agreement_live")
+    agents = importlib.import_module(
+        f"{__package__}.experiments.test_agent_probes_live"
+    )
     upstream = importlib.import_module(f"{__package__}.upstream")
     upstream_verify = importlib.import_module(f"{__package__}.upstream_verify")
     one_library = {oss_ab.REPOS_ENV: OSS_AB_DISPATCH_REPO}
@@ -1752,6 +1756,7 @@ def _suite_needs() -> dict[str, float]:
         "grader": grader.agreement_cap(grader.load_groups()),
         "upstream-verify": upstream_verify.verify_need(),
         "upstream": upstream.live_need(),
+        "agent-probes": agents.a0_need(),
         "sweep": sweep.sweep_need(sweep.sweep_plan({})),
         "sweep-fable": sweep.sweep_need(sweep.sweep_plan(SWEEP_FABLE_ENV)),
         "sweep-record": sweep.sweep_need(sweep.sweep_plan(SWEEP_RECORD_ENV)),

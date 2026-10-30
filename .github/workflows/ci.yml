@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: 'Live suite: stage-a, corpus, attack, hard, oss, or an experiment (probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, heal-hard, build, grader, upstream-verify, upstream) (one at a time: together they need more than the 150 USD ceiling)'
+        description: 'Live suite: stage-a, corpus, attack, hard, oss, or an experiment (probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, heal-hard, build, grader, upstream-verify, upstream, agent-probes) (one at a time: together they need more than the 150 USD ceiling)'
         type: choice
         options:
           [
@@ -44,6 +44,7 @@ on:
             grader,
             upstream-verify,
             upstream,
+            agent-probes,
           ]
         default: stage-a
       mode:
@@ -62,7 +63,7 @@ on:
         options: [default, claude-sonnet-5-5]
         default: default
       suite_cap_usd:
-        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75, hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 77, sweep-fable 33, sweep-record 17, ab 140, escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, heal-hard 8, build 27, grader 2, upstream-verify 0 (no request, but the cap must be above 0), upstream 50'
+        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75, hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 77, sweep-fable 33, sweep-record 17, ab 140, escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, heal-hard 8, build 27, grader 2, upstream-verify 0 (no request, but the cap must be above 0), upstream 50, agent-probes 1'
         type: string
         default: '12'
       oss_repo:
@@ -706,7 +707,8 @@ jobs:
           # libraries, 138; heal-hard 10 x 0.75; build 3 specs x (0.80 build +
           # 0.60 generation + 7.50 loop)); grader 6 repositories x 0.22725
           # (L3, one grader request each); upstream-verify 0 (no request);
-          # upstream a batch of 10 verified candidates x 5 (one wired loop each),
+          # upstream a batch of 10 verified candidates x 5 (one wired loop each);
+          # agent-probes 0.97 (A0: five probes at 0, 0, 0.47, 0.30 and 0.20),
           # rounded up; a smaller cap would refuse, and fail, the later
           # tests of the suite.
           case "${INPUT_SUITE}" in
@@ -736,8 +738,9 @@ jobs:
             grader) paths=(tests/live/test_grader_agreement_live.py); need=2 ;;
             upstream-verify) paths=(tests/live/test_upstream_verify_live.py); need=0 ;;
             upstream) paths=(tests/live/test_upstream_live.py); need=50 ;;
+            agent-probes) paths=(tests/live/experiments/test_agent_probes_live.py); need=1 ;;
             *)
-              echo "::error::unknown suite input (stage-a, corpus, attack, hard, oss, probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, heal-hard, build, grader, upstream-verify or upstream)"
+              echo "::error::unknown suite input (stage-a, corpus, attack, hard, oss, probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, heal-hard, build, grader, upstream-verify, upstream or agent-probes)"
               exit 1
               ;;
           esac
@@ -821,7 +824,7 @@ jobs:
             noise | corpus | hard | oss | upstream-verify | upstream) noise_rule=step3 ;;
             stage-a | attack | probes | triage | papers | web | prescreen) noise_rule=step2 ;;
             sweep | sweep-fable | sweep-record | ab | escalation | acquire) noise_rule=step2 ;;
-            heal | oss-ab | evolve | evolve-more | heal-hard | build | grader) noise_rule=step2 ;;
+            heal | oss-ab | evolve | evolve-more | heal-hard | build | grader | agent-probes) noise_rule=step2 ;;
             *)
               echo "::error::no noise rule for suite ${INPUT_SUITE}"
               exit 1
