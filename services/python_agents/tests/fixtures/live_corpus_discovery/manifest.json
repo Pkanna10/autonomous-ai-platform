@@ -130,7 +130,7 @@
       "name": "parcelindex",
       "package": "parcelindex",
       "category": "uncommon",
-      "fix_gain": 0.2,
+      "fix_gain": 0.3,
       "hypotheses": [
         {
           "title": "no-collections-while-loading",
