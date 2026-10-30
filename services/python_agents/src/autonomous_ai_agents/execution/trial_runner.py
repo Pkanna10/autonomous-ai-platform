@@ -40,6 +40,18 @@ the second commit's parent is the base, so the trial stays one child of it.
 Anything else keeps the first failure and its commit, with a ``retry_notes``
 line (the notes, never the prompt, name what was withheld).
 
+Re-edit (N0b, D62): a first edit whose only refusals are ``unparsable_source``
+(a file the engine cannot parse, so nothing was scanned or run) spends the
+same fix retry under the same caps: the editor gets one fresh request whose
+feedback is those violations' engine messages (the file, the line and the
+parser's message). No reset: nothing ran and nothing was committed, so the
+worktree is the first edit as written. The re-edit is captured and checked
+again against the base before anything runs. The feedback is a function of
+the captured blobs only, which hold the editor's writes and tracked base text
+it may read (a path the editor may not read gets no re-edit), so it carries
+nothing from the user's machine and adds nothing to D13's residual. A re-edit
+that does not hold keeps the refusal, its own ref put back.
+
 Paired trials (D41 a, ``paired``): every attempt, a retry's too, is measured
 ABBA (``measure_abab``) against a fresh twin worktree at the base,
 ``twin-trial-<hyp>`` (a prefix no trial phase has); the twin's rows are
@@ -106,6 +118,7 @@ from autonomous_ai_agents.common.models import (
     Trial,
     TrialStatus,
     Violation,
+    ViolationRule,
     Workload,
     utc_now,
 )
@@ -203,6 +216,7 @@ _EDIT_DONE = "end_turn"
 _REGULAR = frozenset({"100644", "100755"})
 _SUBJECT_CHARS = 72
 _KEPT = "first failure kept"
+_UNPARSABLE = ViolationRule.unparsable_source.value
 _TYPE_CHARS = 64
 _NO_CLOSURE = ClosureIndex(frozenset(), {}, complete=False)
 """Classifies fixability without reading any source (type only, nothing sent)."""
@@ -909,7 +923,7 @@ class GitTrialRunner(_PhaseOwner):
         task = EditTask(hypothesis, job.brief, secrets.token_hex(8))
         first = self._try(job, trial, task, progress, earlier=None)
         if first.crash is None:
-            return first.trial
+            return self._reparse(job, trial, first, progress)
         return self._retry(job, trial, first, first.crash, progress)
 
     def _try(
@@ -1040,15 +1054,10 @@ class GitTrialRunner(_PhaseOwner):
         fixable = self._feedback(job, first.trial, crash, _NO_CLOSURE)
         if fixable is None or first.trial.attempts > self._fix_retries:
             return first.trial
-        kind, budget = fixable.exc_type, progress.budget
-        if first.trial.attempts - 1 >= job.brief.fix_retries_left:
-            return _noted(first.trial, f"{kind}; not retried: the run's fix retry is spent")  # fmt: skip
-        if budget.remaining < self._retry_floor:
-            return _noted(
-                first.trial,
-                f"{kind}; not retried: {budget.remaining:.6f} USD left, below"
-                f" the retry floor of {self._retry_floor:.6f} USD",
-            )
+        kind = fixable.exc_type
+        refused = self._not_allowed(job, first.trial, kind, progress.budget)
+        if refused is not None:
+            return refused
         closure = self._closure(job, first.trial)
         feedback = self._feedback(job, first.trial, crash, closure) or fixable
         why = feedback.withheld
@@ -1061,19 +1070,58 @@ class GitTrialRunner(_PhaseOwner):
         second = self._try(job, retried, task, progress, earlier=first.result)
         if second.trial.status is TrialStatus.measured:
             return _noted(second.trial, f"{kind}; retried{withheld}")
-        what = second.trial.error  # engine text: a stop, a rule, a limit
-        if second.crash is not None:  # the raw reason stays in ``error`` only
-            again = parse_traceback(second.crash.exit_tail)
-            what = "crashed again" if again is None else again.exc_type[:_TYPE_CHARS]
         self._point(job, str(first.trial.commit), progress)
-        kept = first.trial.model_copy(
-            update={
-                "attempts": retried.attempts,
-                "cost_usd": second.trial.cost_usd,
-                "tokens_used": second.trial.tokens_used,
-            }
+        return _kept(first.trial, second, f"{kind}{withheld}")
+
+    def _reparse(
+        self, job: _Job, draft: Trial, first: _Tried, progress: _Progress
+    ) -> Trial:
+        """At most one re-edit of a first edit refused only as unparsable
+        (N0b, module docstring), under the fix retry's caps; anything else
+        returns ``first``'s trial as it is."""
+        feedback = _parse_feedback(first.trial, job.brief.read_deny)
+        if feedback is None or first.trial.attempts > self._fix_retries:
+            return first.trial
+        refused = self._not_allowed(job, first.trial, _UNPARSABLE, progress.budget)
+        if refused is not None:
+            return refused
+        task = EditTask(
+            job.hypothesis, job.brief, secrets.token_hex(8), feedback=feedback
         )
-        return _noted(kept, f"{kind}{withheld}; retry: {what}, {_KEPT}")
+        retried = draft.model_copy(update={"attempts": first.trial.attempts + 1})
+        second = self._try(job, retried, task, progress, earlier=first.result)
+        if second.trial.status is TrialStatus.measured:
+            return _noted(second.trial, f"{_UNPARSABLE}; retried")
+        self._unpoint(job, progress)
+        return _kept(first.trial, second, _UNPARSABLE)
+
+    def _not_allowed(
+        self, job: _Job, trial: Trial, kind: str, budget: Budget
+    ) -> Trial | None:
+        """``trial`` noted when the run's fix retry is spent or the budget is
+        below the retry floor; ``None`` when a retry may run."""
+        if trial.attempts - 1 >= job.brief.fix_retries_left:
+            return _noted(trial, f"{kind}; not retried: the run's fix retry is spent")
+        if budget.remaining < self._retry_floor:
+            return _noted(
+                trial,
+                f"{kind}; not retried: {budget.remaining:.6f} USD left, below"
+                f" the retry floor of {self._retry_floor:.6f} USD",
+            )
+        return None
+
+    def _unpoint(self, job: _Job, progress: _Progress) -> None:
+        """Put the own ref back where the trial found it (a kept refusal has no
+        commit); ``run`` then drops a prior ref as for any trial without one."""
+        moved = progress.moved
+        if moved is None:
+            return
+        self._refuse_checked_out(job.own_ref)
+        if job.prior is None:
+            self._git.delete_ref(job.own_ref, moved, prefix=self._prefix)
+        else:
+            self._git.update_ref(job.own_ref, job.prior, moved, prefix=self._prefix)
+        progress.moved = None
 
     def _feedback(
         self, job: _Job, trial: Trial, crash: RunFailure, closure: ClosureIndex
@@ -1179,6 +1227,44 @@ def _printable(text: str) -> str:
 
 def _noted(trial: Trial, note: str) -> Trial:
     return trial.model_copy(update={"retry_notes": (*trial.retry_notes, note)})
+
+
+def _kept(first: Trial, second: _Tried, kind: str) -> Trial:
+    """``first`` kept after a retry that did not hold, with both attempts'
+    spend and a note naming what the retry did (engine text, or the type of
+    its crash: the raw reason stays in ``error`` only)."""
+    what = second.trial.error  # engine text: a stop, a rule, a limit
+    if second.crash is not None:
+        again = parse_traceback(second.crash.exit_tail)
+        what = "crashed again" if again is None else again.exc_type[:_TYPE_CHARS]
+    kept = first.model_copy(
+        update={
+            "attempts": second.trial.attempts,
+            "cost_usd": second.trial.cost_usd,
+            "tokens_used": second.trial.tokens_used,
+        }
+    )
+    return _noted(kept, f"{kind}; retry: {what}, {_KEPT}")
+
+
+def _parse_feedback(trial: Trial, read_deny: Collection[str]) -> str | None:
+    """N0b's feedback: the engine message of each of ``trial``'s violations,
+    one a line, ASCII-escaped, when every one is ``unparsable_source`` on a
+    path the editor may read (neither deny-listed nor in ``read_deny``);
+    else ``None``. The message names the file, the line and the parser's
+    message, escaped and capped by ``anticheat._parse``."""
+    found = trial.violations
+    if not found or any(
+        v.rule is not ViolationRule.unparsable_source
+        or v.path is None
+        or _read_denied(v.path)
+        or v.path in read_deny
+        for v in found
+    ):
+        return None
+    return "\n".join(
+        v.message.encode("ascii", "backslashreplace").decode() for v in found
+    )
 
 
 def _read_denied(path: str) -> bool:
