@@ -96,7 +96,7 @@ package-manager = [
 # Phase 1, Week 7-8: Research Engine (arXiv monitoring)
 # ============================================
 research = [
-    "pymupdf>=1.25.0,<2.0.0",           # PDF parsing for research papers
+    "pymupdf>=1.25.0,<3.0.0",           # PDF parsing for research papers
     "arxiv>=2.1.0",                     # arXiv API client
     "sentence-transformers>=2.2.0",     # Embeddings for semantic search
 ]
