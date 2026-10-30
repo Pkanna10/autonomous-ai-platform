@@ -422,6 +422,48 @@ false-keep rate on the paired path (L0, 0 of 130); wired wins on the hard and
 benchmark corpora (L1a, L1b) with every guard, including a real `GitCombiner`'s
 confirmations and final combine in one run.
 
+### Step 3 Wave 2 progress (2026-10-26 to 2026-10-30, building)
+
+Built and committed one unit per commit, each after its Fable 5.1 review round
+and the Lead's gate on a clean copy (ruff, format, mypy, bandit, pytest with
+Postgres at 100 % under CPython 3.13 and 3.11, prettier):
+
+- **Batch 1:** N1a `cc2d416` (contracts), V1 `6214f60` (corpus v2 part 1), V3
+  `3068400`, V5 `d7ba9a7`.
+- **Batch 2:** N1b `988430f` (code context S0), N0 `801f22c` (spawn delta, the
+  `unparsable_source` label), V2 `4c6a050` (corpus v2 part 2: uncommon, small,
+  decoys; 12 v2 repositories in all).
+- **V9** `27e5e53` (O20): the upstream maintainer-fixes corpus, 30 sealed keys
+  from 18 libraries, the CI-only `upstream-verify` marker and the `upstream`
+  suite on CPython 3.12. Owner decisions still open, both needed only before the
+  first `upstream` live run: `packaging-simple-version-fastpath` and
+  `wcwidth-wcswidth-ascii` stay medium or move to high (the default is to
+  exclude them from the scored pool); `mpmath-bin-to-radix-pow2` is reported as
+  an expected no-win control unless `gmpy2` is pinned (the default: no new
+  dependency).
+- **Agent pilots (O18):** A0 `80a1b8b` (P0, `agent-probes`: per-message effort,
+  prompt-cache reuse, mid-conversation system messages, free token counting, an
+  edited thinking block refused against a control turn, and a Managed Agents
+  environment created and deleted with the 404 checked; the commit message's
+  list of probes is wrong, this one is right), A1 `de65965` (P1, `heal-agent`),
+  A2 `1bb075f` (P2, `research-agent`), A3 `d8c0699` (P3, `watch` and
+  `watch-cleanup`). None has run live yet; P3 creates Managed Agents objects on
+  the owner's account and its cleanup must be verified after each dispatch.
+- **Timing-guard fixes found by the gate:** `7b970bf` (ledgerclose resized for
+  3x margin over CI's floor), `71940d0` (the decoy guard bounded by its own
+  measured A/A gap, the engine's noise-floor rule), `a724611` (the reference-fix
+  guard alternates the base and fixed copies and compares best runs).
+- **Merged from master:** `eb1566d` (pymupdf 2.0, PR #28, and the Dependabot
+  Actions pins).
+- **Live:** L3 0.07 USD (a smoke test under O19; L3b re-tests the grader).
+- **Next:** batch 3 (N2, N3a, N3b, N0b, and L4p, which adds corpus v2 to the
+  sweep so L4 records v1 + v2, 37 repositories), then batches 4-5 and the live
+  order in the amendment's section 7.
+- **Owner's plan, for the record (2026-10-30):** after Wave 2's idea experiments
+  (E1/E2) report, an "Improvement Wave 3" pilot: a multi-model developer team
+  that studies, proposes and proves engine improvements. The owner sends its
+  brief then; nothing is built for it before.
+
 ---
 
 ## What Exists Today
