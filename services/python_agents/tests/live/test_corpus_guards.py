@@ -1037,6 +1037,8 @@ SUITES = (
     "heal-hard",
     "build",
     "grader",
+    "upstream-verify",
+    "upstream",
 )
 DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_sweep_live.py",
@@ -1047,6 +1049,8 @@ DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_evolution_live.py",
     "tests/live/test_build_live.py",
     "tests/live/test_grader_agreement_live.py",  # L3 (V5): the grader suite
+    "tests/live/test_upstream_verify_live.py",  # V9c: the upstream corpus
+    "tests/live/test_upstream_live.py",
 )
 EXPERIMENT_MINUTES = {
     "sweep": 240,
@@ -1062,6 +1066,7 @@ EXPERIMENT_MINUTES = {
     "triage": 90,
     "papers": 60,
     "web": 90,
+    "upstream-verify": 150,  # upstream_verify.VERIFY_JOB_MINUTES, a batch of 10
 }  # batch wait; 5 papers; 18 web runs
 SWEEP_FABLE_ENV = {  # Fable 5.1 beside the one arm whose run phase 1 shares
     "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
@@ -1079,6 +1084,7 @@ CAP_CEILING_USD = 150  # the most suite_cap_usd may be
 OSS_LIVE = "tests/live/test_oss_live.py"  # U24's suite, built in parallel
 OSS_MAX_REPOS = 10  # U24: at most 10 repositories ...
 OSS_RUN_CAP_USD = 5.0  # ... at 5 USD each
+UPSTREAM_BATCH = 10  # upstream.BATCH_SIZE: wired loops an upstream dispatch runs
 
 
 def _choice_options(block: str) -> tuple[str, ...]:
@@ -1732,6 +1738,8 @@ def _suite_needs() -> dict[str, float]:
     evolve = importlib.import_module(f"{__package__}.evolution")
     build = importlib.import_module(f"{__package__}.build_improve")
     grader = importlib.import_module(f"{__package__}.test_grader_agreement_live")
+    upstream = importlib.import_module(f"{__package__}.upstream")
+    upstream_verify = importlib.import_module(f"{__package__}.upstream_verify")
     one_library = {oss_ab.REPOS_ENV: OSS_AB_DISPATCH_REPO}
     return {
         "noise": noise.noise_need(noise.noise_plan({})),
@@ -1742,6 +1750,8 @@ def _suite_needs() -> dict[str, float]:
         "heal-hard": heal.heal_need(heal.heal_plan(HEAL_HARD_ENV)),
         "build": build.build_need(build.build_plan({})),
         "grader": grader.agreement_cap(grader.load_groups()),
+        "upstream-verify": upstream_verify.verify_need(),
+        "upstream": upstream.live_need(),
         "sweep": sweep.sweep_need(sweep.sweep_plan({})),
         "sweep-fable": sweep.sweep_need(sweep.sweep_plan(SWEEP_FABLE_ENV)),
         "sweep-record": sweep.sweep_need(sweep.sweep_plan(SWEEP_RECORD_ENV)),
@@ -1805,6 +1815,7 @@ def test_the_job_timeout_fits_every_suite() -> None:
         "attack": len(ATTACK_CORPUS),
         "hard": hard,
         "oss": oss,
+        "upstream": UPSTREAM_BATCH,  # one batch of verified candidates
     }
     # stage-a, probes and prescreen take the fallback; the other experiments
     # are no loops but have their own timeouts
@@ -1824,6 +1835,7 @@ def _dispatch(
     mode: str = "aimed",
     oss_repo: str = "",
     editor_model: str = "default",
+    upstream_batch: str = "1",
 ) -> tuple[int, str, str]:
     """The run step under bash -e with a fake ``uv`` that records its call
     (and, in ``rule.txt``, the noise rule, the editor and the noise path)."""
@@ -1839,7 +1851,8 @@ def _dispatch(
         f'printf "%s " "${{PAIRED_TRIALS-unset}}" "${{CONFIRM_WINNERS-unset}}" '
         f'"${{NOISE_CALIBRATION_BLOCKS-unset}}" "${{EDITOR_MODEL-unset}}" '
         f'"${{EDITOR_EFFORT-unset}}" "${{LIVE_NOISE_PATH-unset}}" '
-        f'> "{tmp_path / "rule.txt"}"\n',
+        f'> "{tmp_path / "rule.txt"}"\n'
+        f'printf "%s" "${{LIVE_UPSTREAM_BATCH-unset}}" > "{tmp_path / "batch.txt"}"\n',
         encoding="utf-8",
     )
     fake.chmod(0o755)
@@ -1855,6 +1868,7 @@ def _dispatch(
         "INPUT_MODE": mode,
         "INPUT_OSS_REPO": oss_repo,
         "INPUT_EDITOR_MODEL": editor_model,
+        "INPUT_UPSTREAM_BATCH": upstream_batch,
         "LIVE_RESULTS_PATH": str(tmp_path / "results.jsonl"),
     }
     proc = subprocess.run(
@@ -2237,3 +2251,41 @@ def test_security_audits_the_unchanged_lock_every_week() -> None:
     assert "--disable-pip --require-hashes -r" in locked
     for audit in (step, locked):
         assert "\n        if:" not in audit  # never skipped
+
+
+def test_the_upstream_suites_take_a_batch_and_upstream_runs_wired_only(
+    tmp_path: Path,
+) -> None:
+    """V9c: both upstream suites export ``LIVE_UPSTREAM_BATCH`` (1-3) and
+    install the hash-pinned wheels; ``upstream`` refuses any mode but
+    ``wired``; every other suite leaves the batch unset."""
+    for suite, cap, mode in (
+        ("upstream-verify", "1", "aimed"),
+        ("upstream", "50", "wired"),
+    ):
+        code, output, calls = _dispatch(
+            tmp_path, suite, "claude-opus-5-5", cap, mode, upstream_batch="2"
+        )
+        assert code == 0, output
+        path = f"tests/live/test_{suite.replace('-', '_')}_live.py"
+        assert calls.splitlines()[0] == f"run pytest {path} -m live --no-cov -n 0 -rA"
+        assert (tmp_path / "batch.txt").read_text(encoding="utf-8") == "2"
+    for bad in ("", "0", "4", "1;id"):
+        (tmp_path / "called.txt").unlink(missing_ok=True)
+        code, output, calls = _dispatch(
+            tmp_path, "upstream-verify", "claude-opus-5-5", "1", upstream_batch=bad
+        )
+        assert (code, calls) == (1, ""), (bad, output)
+        assert "::error::upstream_batch must be 1, 2 or 3" in output
+    (tmp_path / "called.txt").unlink(missing_ok=True)
+    code, output, calls = _dispatch(tmp_path, "upstream", "claude-opus-5-5", "50")
+    assert (code, calls) == (1, "") and "runs wired only" in output
+    (tmp_path / "batch.txt").unlink()
+    code, output, calls = _dispatch(tmp_path, "heal", "claude-sonnet-5-5", "6")
+    assert code == 0 and calls, output
+    assert (tmp_path / "batch.txt").read_text(encoding="utf-8") == "unset"
+    step = _ci_block("      - name: Run live tests", "      - name: Upload live corpus")
+    assert (
+        "uv pip install --no-deps --require-hashes --only-binary :all: -r"
+        " tests/fixtures/upstream_corpus/requirements.txt" in step
+    )

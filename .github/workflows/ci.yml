@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: 'Live suite: stage-a, corpus, attack, hard, oss, or an experiment (probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, heal-hard, build, grader) (one at a time: together they need more than the 150 USD ceiling)'
+        description: 'Live suite: stage-a, corpus, attack, hard, oss, or an experiment (probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, heal-hard, build, grader, upstream-verify, upstream) (one at a time: together they need more than the 150 USD ceiling)'
         type: choice
         options:
           [
@@ -42,6 +42,8 @@ on:
             heal-hard,
             build,
             grader,
+            upstream-verify,
+            upstream,
           ]
         default: stage-a
       mode:
@@ -60,13 +62,18 @@ on:
         options: [default, claude-sonnet-5-5]
         default: default
       suite_cap_usd:
-        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75, hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 77, sweep-fable 33, sweep-record 17, ab 140, escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, heal-hard 8, build 27, grader 2'
+        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75, hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 77, sweep-fable 33, sweep-record 17, ab 140, escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, heal-hard 8, build 27, grader 2, upstream-verify 0 (no request, but the cap must be above 0), upstream 50'
         type: string
         default: '12'
       oss_repo:
         description: 'oss-ab only, and required there: the one OSS library this dispatch runs (LIVE_OSS_AB_REPOS), from the first or second set, e.g. tabulate or toml'
         type: string
         default: ''
+      upstream_batch:
+        description: 'upstream-verify and upstream only: the batch of ten upstream corpus candidates this dispatch runs (LIVE_UPSTREAM_BATCH; upstream: of the verified ones)'
+        type: choice
+        options: ['1', '2', '3']
+        default: '1'
 
 # Least privilege by default; a job that needs more says so itself.
 permissions:
@@ -575,12 +582,15 @@ jobs:
     # measured hard 28-29 and corpus 34 minutes (2.3-2.9 a loop, 2026-10-25),
     # so both sit at the 8-minutes-a-loop floor: hard 90, corpus 120. oss
     # keeps 300 (D41's 2.6x estimate) until L2a measures it.
-    timeout-minutes: ${{ inputs.suite == 'sweep' && 240 || inputs.suite == 'sweep-fable' && 180 || inputs.suite == 'sweep-record' && 150 || inputs.suite == 'ab' && 360 || inputs.suite == 'noise' && 90 || inputs.suite == 'oss-ab' && 120 || inputs.suite == 'evolve' && 300 || inputs.suite == 'evolve-more' && 300 || inputs.suite == 'build' && 120 || inputs.suite == 'escalation' && 90 || inputs.suite == 'triage' && 90 || inputs.suite == 'papers' && 60 || inputs.suite == 'web' && 90 || inputs.suite == 'corpus' && 120 || inputs.suite == 'oss' && 300 || inputs.suite == 'hard' && 90 || inputs.suite == 'attack' && 45 || 30 }}
+    timeout-minutes: ${{ inputs.suite == 'sweep' && 240 || inputs.suite == 'sweep-fable' && 180 || inputs.suite == 'sweep-record' && 150 || inputs.suite == 'ab' && 360 || inputs.suite == 'noise' && 90 || inputs.suite == 'oss-ab' && 120 || inputs.suite == 'evolve' && 300 || inputs.suite == 'evolve-more' && 300 || inputs.suite == 'build' && 120 || inputs.suite == 'upstream-verify' && 150 || inputs.suite == 'upstream' && 300 || inputs.suite == 'escalation' && 90 || inputs.suite == 'triage' && 90 || inputs.suite == 'papers' && 60 || inputs.suite == 'web' && 90 || inputs.suite == 'corpus' && 120 || inputs.suite == 'oss' && 300 || inputs.suite == 'hard' && 90 || inputs.suite == 'attack' && 45 || 30 }}
     defaults:
       run:
         working-directory: ./services/python_agents
     env:
-      UV_PYTHON: '3.11'
+      # CPython 3.11 as the python job, except the upstream corpus suites: the
+      # networkx before-trees need 3.12, which every candidate admits
+      # (upstream.UPSTREAM_PYTHON; prepare_repo refuses one outside its range).
+      UV_PYTHON: ${{ (inputs.suite == 'upstream' || inputs.suite == 'upstream-verify') && '3.12' || '3.11' }}
       # The live E2E and attack runs must be sandboxed: a runner that cannot
       # isolate fails instead of running Claude-edited code unconfined.
       REQUIRE_NETWORK_SANDBOX: '1'
@@ -595,7 +605,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.11'
+          python-version: ${{ env.UV_PYTHON }}
 
       - name: Setup uv (fast Python package installer)
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
@@ -675,13 +685,14 @@ jobs:
           INPUT_EDITOR_MODEL: ${{ inputs.editor_model }}
           INPUT_SUITE_CAP_USD: ${{ inputs.suite_cap_usd }}
           INPUT_OSS_REPO: ${{ inputs.oss_repo }}
+          INPUT_UPSTREAM_BATCH: ${{ inputs.upstream_batch }}
           LIVE_RESULTS_PATH: ${{ runner.temp }}/live-results.jsonl
         run: |
           if [ -z "${ANTHROPIC_API_KEY}" ]; then
             echo "::error::the ANTHROPIC_API_KEY secret of environment 'live' is not set"
             exit 1
           fi
-          corpus=(--ignore=tests/live/test_corpus_live.py --ignore=tests/live/test_attack_corpus_live.py --ignore=tests/live/test_hard_corpus_live.py --ignore=tests/live/test_oss_live.py --ignore=tests/live/experiments --ignore=tests/live/test_sweep_live.py --ignore=tests/live/test_ab_live.py --ignore=tests/live/test_escalation_live.py --ignore=tests/live/test_noise_live.py --ignore=tests/live/test_oss_ab_live.py --ignore=tests/live/test_evolution_live.py --ignore=tests/live/test_build_live.py --ignore=tests/live/test_grader_agreement_live.py)
+          corpus=(--ignore=tests/live/test_corpus_live.py --ignore=tests/live/test_attack_corpus_live.py --ignore=tests/live/test_hard_corpus_live.py --ignore=tests/live/test_oss_live.py --ignore=tests/live/experiments --ignore=tests/live/test_sweep_live.py --ignore=tests/live/test_ab_live.py --ignore=tests/live/test_escalation_live.py --ignore=tests/live/test_noise_live.py --ignore=tests/live/test_oss_ab_live.py --ignore=tests/live/test_evolution_live.py --ignore=tests/live/test_build_live.py --ignore=tests/live/test_grader_agreement_live.py --ignore=tests/live/test_upstream_verify_live.py --ignore=tests/live/test_upstream_live.py)
           # need: the sum of the caps the suite's live tests ask the ledger for
           # (Stage A 8.55, corpus 15 x 5, attack 3 x 4, hard 10 x 5, oss at most
           # 10 x 5; the Window 0 experiments under tests/live/experiments: probes
@@ -694,7 +705,8 @@ jobs:
           # repos x 10 rounds x (0.45 + 3); evolve-more the same on 4 more
           # libraries, 138; heal-hard 10 x 0.75; build 3 specs x (0.80 build +
           # 0.60 generation + 7.50 loop)); grader 6 repositories x 0.22725
-          # (L3, one grader request each),
+          # (L3, one grader request each); upstream-verify 0 (no request);
+          # upstream a batch of 10 verified candidates x 5 (one wired loop each),
           # rounded up; a smaller cap would refuse, and fail, the later
           # tests of the suite.
           case "${INPUT_SUITE}" in
@@ -722,8 +734,10 @@ jobs:
             heal-hard) paths=(tests/live/experiments/test_heal_live.py); need=8 ;;
             build) paths=(tests/live/test_build_live.py); need=27 ;;
             grader) paths=(tests/live/test_grader_agreement_live.py); need=2 ;;
+            upstream-verify) paths=(tests/live/test_upstream_verify_live.py); need=0 ;;
+            upstream) paths=(tests/live/test_upstream_live.py); need=50 ;;
             *)
-              echo "::error::unknown suite input (stage-a, corpus, attack, hard, oss, probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, heal-hard, build or grader)"
+              echo "::error::unknown suite input (stage-a, corpus, attack, hard, oss, probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, heal-hard, build, grader, upstream-verify or upstream)"
               exit 1
               ;;
           esac
@@ -755,6 +769,22 @@ jobs:
           elif [ -n "${INPUT_OSS_REPO}" ]; then
             echo "::error::oss_repo is only for the oss-ab suite"
             exit 1
+          fi
+          if [ "${INPUT_SUITE}" = upstream ] || [ "${INPUT_SUITE}" = upstream-verify ]; then
+            # ten candidates a dispatch; the packages some need beyond their
+            # checkout: exact versions, wheels only, hash-pinned, no deps
+            case "${INPUT_UPSTREAM_BATCH}" in
+              1 | 2 | 3) export LIVE_UPSTREAM_BATCH="${INPUT_UPSTREAM_BATCH}" ;;
+              *)
+                echo "::error::upstream_batch must be 1, 2 or 3"
+                exit 1
+                ;;
+            esac
+            if [ "${INPUT_SUITE}" = upstream ] && [ "${INPUT_MODE}" != wired ]; then
+              echo "::error::the upstream suite runs wired only (mode wired)"
+              exit 1
+            fi
+            uv pip install --no-deps --require-hashes --only-binary :all: -r tests/fixtures/upstream_corpus/requirements.txt
           fi
           case "${INPUT_MODE}" in
             aimed) ;;
@@ -788,7 +818,7 @@ jobs:
           # suites (their timeouts and Window 0 comparisons; an A/A floor of a
           # millisecond workload can pass 100 % and stop the run).
           case "${INPUT_SUITE}" in
-            noise | corpus | hard | oss) noise_rule=step3 ;;
+            noise | corpus | hard | oss | upstream-verify | upstream) noise_rule=step3 ;;
             stage-a | attack | probes | triage | papers | web | prescreen) noise_rule=step2 ;;
             sweep | sweep-fable | sweep-record | ab | escalation | acquire) noise_rule=step2 ;;
             heal | oss-ab | evolve | evolve-more | heal-hard | build | grader) noise_rule=step2 ;;

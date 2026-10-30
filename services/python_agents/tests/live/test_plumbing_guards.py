@@ -54,7 +54,9 @@ from .test_corpus_guards import (
 
 SONNET = "claude-sonnet-5-5"
 REQUIRED = Isolation("required", None)
-STEP3_SUITES = frozenset({"noise", "corpus", "hard", "oss"})  # L0, L1a/b, L2a/b
+STEP3_SUITES = frozenset(  # L0, L1a/b, L2a/b; V9's upstream verify and live
+    {"noise", "corpus", "hard", "oss", "upstream-verify", "upstream"}
+)
 RULES = {  # PAIRED_TRIALS, CONFIRM_WINNERS, NOISE_CALIBRATION_BLOCKS
     "step3": ("true", "true", "3"),
     "step2": ("false", "false", "0"),
@@ -275,8 +277,9 @@ def test_every_suite_sets_its_noise_rule_explicitly(
     assert {s for s, r in named.items() if r == "step3"} == STEP3_SUITES
     assert '*)\n    echo "::error::no noise rule' in block
     repo = "tabulate" if suite == "oss-ab" else ""
+    mode = "wired" if suite == "upstream" else "aimed"  # upstream: wired only
     code, output, _ = _dispatch(
-        tmp_path, suite, "claude-opus-5-5", "150", oss_repo=repo
+        tmp_path, suite, "claude-opus-5-5", "150", mode=mode, oss_repo=repo
     )
     assert code == 0, output
     found = _rule(tmp_path)

@@ -485,7 +485,19 @@ design workflow and reviewed before any build.
   the before-code and the touched paths, never the fix or the message; and a CI
   verification job with no API calls that keeps only candidates whose maintainer
   fix measurably speeds up the benchmark. The engine's copy of a repository
-  holds no later history.
+  holds no later history. _Correction (V9 review, 2026-10-30):_ the benchmark
+  writer also saw the miner's ids (`idna-uts46-ascii-fastpath`), which name each
+  fix's idea, so V9b was blind to the diff, not to the idea; its first
+  docstrings also named the touched private functions and files, which the clone
+  would have carried to the attempter. The docstrings were rewritten to name the
+  library, the public calls and the input shape only (a guard fails on any
+  touched file or private function name in a copied workload), the coverage
+  notes moved to `tests/fixtures/upstream_corpus/_notes/workloads.md` beside the
+  keys, the workloads whose input never reached the shape the key speeds up were
+  resized against the before-trees, and the workloads' README lists the
+  candidates whose id names the idea so that their live hits are reported
+  separately. `mpmath-bin-to-radix-pow2` is a control unless the job installs
+  `gmpy2` (README).
 
 ### 2026-10-26 (owner: the setter, attempter and marker are kept apart)
 
