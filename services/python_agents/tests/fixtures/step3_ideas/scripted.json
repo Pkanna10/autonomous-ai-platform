@@ -1,0 +1,350 @@
+{
+  "description": "Hand-written scripted replies for the idea-pipeline E2E (Step 3 Wave 2, N5) on the step3_ideas/repo fixture: obvious is S1's reply, lanes the six lens replies and the leap's, review the reviewer's reply for E3-J (ids as the pipeline numbers them for run e3-j), edits the editor's str_replace turns per hypothesis title (an empty list: the editor changes nothing). Per idea: Track seen values in a set (O1) keeps; Accumulate the totals (O2, initial=0) fails the suite; Return the sorted distinct values and Count the buckets over the distinct values change the output; Build the distinct values with dict.fromkeys keeps; Look values up in a bitmap quotes nothing in the file; Import the abstract types lazily quotes the module header; Memoise the bucket bounds anchors in bucket_bounds, under 1 % of the profile; the reviewer removes Index the result with a dict (duplicate_of obvious-01) and Skip the scan when the input has no repeats (precondition_false).",
+  "obvious": [
+    {
+      "title": "Track seen values in a set",
+      "technique_slug": null,
+      "hotspots": [
+        {
+          "file_path": "dedupe/core.py",
+          "symbol": "unique_in_order"
+        }
+      ],
+      "change_summary": "Keep a set of the values already emitted beside the result list and test membership against the set instead of scanning the list.",
+      "justification_summary": "unique_in_order scans the result list through contains once per item, so the loop is quadratic in the input size.",
+      "depends_on_path": "dedupe/core.py",
+      "depends_on_quote": "if not contains(result, item):\n            result.append(item)",
+      "precondition": "the items are hashable integers",
+      "equivalence_summary": "the result list is built in the same order from the same first occurrences",
+      "mechanism": "data_structure",
+      "morph_cells": ["representation:indexed"],
+      "tier": "combinational",
+      "typicality": "common",
+      "change_class": "efficiency",
+      "expected_gain": 0.8,
+      "provability": 0.9,
+      "risk": 0.1
+    },
+    {
+      "title": "Accumulate the totals with itertools.accumulate",
+      "technique_slug": null,
+      "hotspots": [
+        {
+          "file_path": "dedupe/core.py",
+          "symbol": "running_totals"
+        }
+      ],
+      "change_summary": "Replace the loop in running_totals with itertools.accumulate over the values.",
+      "justification_summary": "running_totals adds the values in a Python loop; accumulate does it in C.",
+      "depends_on_path": "dedupe/core.py",
+      "depends_on_quote": "running += value\n        totals.append(running)",
+      "precondition": "the values are integers, so the sums are exact",
+      "equivalence_summary": "accumulate yields the same prefix sums in the same order",
+      "mechanism": "algorithm",
+      "morph_cells": ["algorithm:lower_complexity"],
+      "tier": "combinational",
+      "typicality": "common",
+      "change_class": "efficiency",
+      "expected_gain": 0.5,
+      "provability": 0.8,
+      "risk": 0.1
+    }
+  ],
+  "lanes": {
+    "eliminate": [
+      {
+        "title": "Build the distinct values with dict.fromkeys",
+        "technique_slug": null,
+        "hotspots": [
+          {
+            "file_path": "dedupe/core.py",
+            "symbol": "summarise"
+          }
+        ],
+        "change_summary": "In summarise take the distinct values from dict.fromkeys(items) instead of calling unique_in_order.",
+        "justification_summary": "A dict keeps the first occurrence of each key in insertion order, so one hashed pass replaces the per-item scan of the result list.",
+        "depends_on_path": "dedupe/core.py",
+        "depends_on_quote": "unique = unique_in_order(items)\n    bounds = bucket_bounds(len(items), buckets)",
+        "precondition": "the items are hashable integers",
+        "equivalence_summary": "dict keys keep insertion order, so the same values come out in the same order",
+        "mechanism": "data_structure",
+        "morph_cells": ["representation:indexed", "work:reuse"],
+        "tier": "exploratory",
+        "typicality": "uncommon",
+        "change_class": "efficiency",
+        "expected_gain": 0.4,
+        "provability": 0.8,
+        "risk": 0.1
+      }
+    ],
+    "assume_less": [
+      {
+        "title": "Memoise the bucket bounds",
+        "technique_slug": null,
+        "hotspots": [
+          {
+            "file_path": "dedupe/core.py",
+            "symbol": "bucket_bounds"
+          }
+        ],
+        "change_summary": "Cache bucket_bounds' list per (limit, buckets) pair.",
+        "justification_summary": "bucket_bounds rebuilds the same bounds on every run.",
+        "depends_on_path": "dedupe/core.py",
+        "depends_on_quote": "bounds.append(limit * bucket // buckets)",
+        "precondition": "the limit and the bucket count repeat across calls",
+        "equivalence_summary": "the same bounds are returned",
+        "mechanism": "precompute_or_cache",
+        "morph_cells": ["memory:cache_across_calls"],
+        "tier": "combinational",
+        "typicality": "uncommon",
+        "change_class": "efficiency",
+        "expected_gain": 0.01,
+        "provability": 0.8,
+        "risk": 0.1
+      },
+      {
+        "title": "Look values up in a bitmap",
+        "technique_slug": null,
+        "hotspots": [
+          {
+            "file_path": "dedupe/core.py",
+            "symbol": "unique_in_order"
+          }
+        ],
+        "change_summary": "Mark emitted values in a bytearray indexed by value.",
+        "justification_summary": "A bitmap probe is cheaper than a hash probe for small integers.",
+        "depends_on_path": "dedupe/core.py",
+        "depends_on_quote": "if seen_bits[item]:\n            continue",
+        "precondition": "the values are small non-negative integers",
+        "equivalence_summary": "the same values are emitted in the same order",
+        "mechanism": "representation",
+        "morph_cells": ["representation:compact"],
+        "tier": "combinational",
+        "typicality": "rare",
+        "change_class": "efficiency",
+        "expected_gain": 0.4,
+        "provability": 0.8,
+        "risk": 0.1
+      }
+    ],
+    "name_the_problem": [
+      {
+        "title": "Return the sorted distinct values",
+        "technique_slug": null,
+        "hotspots": [
+          {
+            "file_path": "dedupe/core.py",
+            "symbol": "unique_in_order"
+          }
+        ],
+        "change_summary": "Build the distinct values with set() and return them sorted, dropping the scan.",
+        "justification_summary": "A set build and one sort are O(n log n) where the scan is quadratic.",
+        "depends_on_path": "dedupe/core.py",
+        "depends_on_quote": "for item in items:\n        if not contains(result, item):",
+        "precondition": "callers only need each value once",
+        "equivalence_summary": "the same distinct values are returned",
+        "mechanism": "algorithm",
+        "morph_cells": ["algorithm:better_constant"],
+        "tier": "combinational",
+        "typicality": "common",
+        "change_class": "efficiency",
+        "expected_gain": 0.7,
+        "provability": 0.8,
+        "risk": 0.1
+      }
+    ],
+    "recombine": [
+      {
+        "title": "Count the buckets over the distinct values",
+        "technique_slug": null,
+        "hotspots": [
+          {
+            "file_path": "dedupe/core.py",
+            "symbol": "summarise"
+          }
+        ],
+        "change_summary": "Sort and count the distinct values instead of every item.",
+        "justification_summary": "summarise sorts and counts all 12,000 items when 7,578 distinct values cover the same range.",
+        "depends_on_path": "dedupe/core.py",
+        "depends_on_quote": "for item in sorted(items):\n        while item >= bounds[bucket + 1]:",
+        "precondition": "repeated values do not change which buckets are filled",
+        "equivalence_summary": "every bucket that holds a value still holds one",
+        "mechanism": "remove_work",
+        "morph_cells": ["work:eliminate"],
+        "tier": "combinational",
+        "typicality": "uncommon",
+        "change_class": "efficiency",
+        "expected_gain": 0.04,
+        "provability": 0.8,
+        "risk": 0.1
+      }
+    ],
+    "resolve_tradeoff": [
+      {
+        "title": "Import the abstract types lazily",
+        "technique_slug": null,
+        "hotspots": [
+          {
+            "file_path": "dedupe/core.py",
+            "symbol": "unique_in_order"
+          }
+        ],
+        "change_summary": "Move the collections.abc import under TYPE_CHECKING.",
+        "justification_summary": "The module imports its annotation types on every run.",
+        "depends_on_path": "dedupe/core.py",
+        "depends_on_quote": "from collections.abc import Iterable, Sequence",
+        "precondition": "the types are only used in annotations",
+        "equivalence_summary": "the functions run the same code",
+        "mechanism": "other",
+        "morph_cells": ["timing:lazy"],
+        "tier": "combinational",
+        "typicality": "rare",
+        "change_class": "efficiency",
+        "expected_gain": 0.4,
+        "provability": 0.8,
+        "risk": 0.1
+      }
+    ],
+    "far": [
+      {
+        "title": "Index the result with a dict",
+        "technique_slug": null,
+        "hotspots": [
+          {
+            "file_path": "dedupe/core.py",
+            "symbol": "unique_in_order"
+          }
+        ],
+        "change_summary": "Keep the emitted values as keys of a dict and return its keys as a list.",
+        "justification_summary": "A dict lookup replaces the scan of the result list in contains.",
+        "depends_on_path": "dedupe/core.py",
+        "depends_on_quote": "if not contains(result, item):\n            result.append(item)",
+        "precondition": "the items are hashable",
+        "equivalence_summary": "dict keys keep insertion order, so the order is the same",
+        "mechanism": "representation",
+        "morph_cells": ["representation:indexed", "work:eliminate"],
+        "tier": "combinational",
+        "typicality": "common",
+        "change_class": "efficiency",
+        "expected_gain": 0.4,
+        "provability": 0.8,
+        "risk": 0.1
+      }
+    ],
+    "leap": [
+      {
+        "title": "Skip the scan when the input has no repeats",
+        "technique_slug": null,
+        "hotspots": [
+          {
+            "file_path": "dedupe/core.py",
+            "symbol": "unique_in_order"
+          }
+        ],
+        "change_summary": "Check len(set(items)) == len(items) first and return the items as a list when they hold no repeats.",
+        "justification_summary": "Inputs without repeats need no membership tests at all.",
+        "depends_on_path": "dedupe/core.py",
+        "depends_on_quote": "for item in items:\n        if not contains(result, item):",
+        "precondition": "the workload's input usually holds no repeated values",
+        "equivalence_summary": "an input without repeats is its own de-duplication",
+        "mechanism": "specialised_fast_path",
+        "morph_cells": ["work:eliminate"],
+        "tier": "transformational",
+        "typicality": "rare",
+        "change_class": "efficiency",
+        "expected_gain": 0.4,
+        "provability": 0.8,
+        "risk": 0.1
+      }
+    ]
+  },
+  "review": [
+    {
+      "idea": "obvious-01",
+      "verdict": "feasible",
+      "reason": "none",
+      "duplicate_of": null,
+      "change_plan": "In unique_in_order keep a set of emitted values and test it instead of calling contains."
+    },
+    {
+      "idea": "obvious-02",
+      "verdict": "feasible",
+      "reason": "none",
+      "duplicate_of": null,
+      "change_plan": "In running_totals return the accumulated sums of the values."
+    },
+    {
+      "idea": "name_the_problem-01",
+      "verdict": "unknown",
+      "reason": "none",
+      "duplicate_of": null,
+      "change_plan": "In unique_in_order return the sorted set of the items."
+    },
+    {
+      "idea": "recombine-01",
+      "verdict": "unknown",
+      "reason": "none",
+      "duplicate_of": null,
+      "change_plan": "In summarise sort and count the distinct values."
+    },
+    {
+      "idea": "far-01",
+      "verdict": "infeasible",
+      "reason": "duplicate_of",
+      "duplicate_of": "obvious-01",
+      "change_plan": ""
+    },
+    {
+      "idea": "leap-01",
+      "verdict": "infeasible",
+      "reason": "precondition_false",
+      "duplicate_of": null,
+      "change_plan": ""
+    },
+    {
+      "idea": "eliminate-01",
+      "verdict": "feasible",
+      "reason": "none",
+      "duplicate_of": null,
+      "change_plan": "In summarise build unique as list(dict.fromkeys(items))."
+    }
+  ],
+  "edits": {
+    "Track seen values in a set": [
+      [
+        "dedupe/core.py",
+        "    result: list[int] = []\n    for item in items:\n        if not contains(result, item):\n            result.append(item)\n    return result\n",
+        "    seen: set[int] = set()\n    result: list[int] = []\n    for item in items:\n        if item not in seen:\n            seen.add(item)\n            result.append(item)\n    return result\n"
+      ]
+    ],
+    "Accumulate the totals with itertools.accumulate": [
+      [
+        "dedupe/core.py",
+        "    totals: list[int] = []\n    running = 0\n    for value in values:\n        running += value\n        totals.append(running)\n    return totals\n",
+        "    from itertools import accumulate\n\n    return list(accumulate(values, initial=0))\n"
+      ]
+    ],
+    "Return the sorted distinct values": [
+      [
+        "dedupe/core.py",
+        "    result: list[int] = []\n    for item in items:\n        if not contains(result, item):\n            result.append(item)\n    return result\n",
+        "    return sorted(set(items))\n"
+      ]
+    ],
+    "Count the buckets over the distinct values": [
+      [
+        "dedupe/core.py",
+        "    for item in sorted(items):\n",
+        "    for item in sorted(unique):\n"
+      ]
+    ],
+    "Index the result with a dict": [],
+    "Build the distinct values with dict.fromkeys": [
+      [
+        "dedupe/core.py",
+        "    unique = unique_in_order(items)\n",
+        "    unique = list(dict.fromkeys(items))\n"
+      ]
+    ]
+  }
+}
