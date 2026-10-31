@@ -507,7 +507,13 @@ Postgres at 100 % under CPython 3.13 and 3.11, prettier):
   loses its remaining facts. The minutes estimate is re-pinned from E0b's
   recorded seconds. Arm A's cap is 0.27, not 0.18 (the measured 41,000-token OSS
   prompt); E0b needs 8, not 5 (it still runs phase 1).
-- **Next:** V8, then the live order (E0b first).
+- **V8 (arm P in `ab-v2-p` and `evolve-p`):** arm P withholds exactly what the
+  engine's generate call withholds (phase 1's `extra_protected` included). Two
+  open items, settled before their runs: E3's 40 USD row cap is below its plan
+  (2 reps × 6 repositories = 57; one rep fits 28.5 but has no CI input), and
+  L5a/L5b's `ab-v2` suite (arm A, and A vs B, on v2) was never built; a small
+  unit adds it before L5a. E4 fits its row (54.3 a library).
+- **Next:** the live order (E0b first).
 - **Owner's plan, for the record (2026-10-30):** after Wave 2's idea experiments
   (E1/E2) report, an "Improvement Wave 3" pilot: a multi-model developer team
   that studies, proposes and proves engine improvements. The owner sends its

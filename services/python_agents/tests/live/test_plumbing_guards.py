@@ -300,7 +300,7 @@ def test_every_suite_sets_its_noise_rule_explicitly(
     assert set(named) == set(SUITES)
     assert {s for s, r in named.items() if r == "step3"} == STEP3_SUITES
     assert '*)\n    echo "::error::no noise rule' in block
-    repo = "tabulate" if suite == "oss-ab" else ""
+    repo = "tabulate" if suite in {"oss-ab", "evolve-p"} else ""  # one library
     mode = "wired" if suite == "upstream" else "aimed"  # upstream: wired only
     code, output, _ = _dispatch(
         tmp_path, suite, "claude-opus-5-5", "150", mode=mode, oss_repo=repo

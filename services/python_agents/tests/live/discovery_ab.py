@@ -38,6 +38,18 @@ pipeline is deprioritised behind the playbook, lessons and evolution. B's
 cards are the playbook's, so a win shows that retrieval helps, not that
 paper-derived cards do; a loss is the stronger signal, since paper cards
 would reach the generator the same way and are noisier.
+
+**Arm P** (V8, E3; ``$LIVE_AB_SET=v2-p``, the ``ab-v2-p`` suite): on corpus
+v2's ``deep``, ``misleading`` and ``uncommon`` slowdowns, where textbook
+fixes fall short, arm P replaces B: the engine's ``IdeaPipelineGenerator``
+on phase 1's facts and the hot code at phase 1's base commit (read through
+the factory's ``repo_reader`` with the run's protected patterns), on the
+lane, leap and reviewer transports ``corpus.role_wiring`` captures on the
+shared run, the role models and limits of the global settings, no fallback
+(no code context: no request, and the guard fails the arm). The shared run's
+cap adds the pipeline's every request at D55's prompt bounds
+(``AB_P_GEN_CAP_USD``); P's ideas then run one engine loop, as A's do. The
+summary pairs A with P; E3 is informational (no decision rides on it).
 """
 
 from __future__ import annotations
@@ -45,7 +57,7 @@ from __future__ import annotations
 import argparse
 import math
 from collections.abc import Callable, Collection, Mapping, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from fractions import Fraction
 from pathlib import Path
 from typing import Final, Literal
@@ -53,10 +65,18 @@ from typing import Final, Literal
 from autonomous_ai_agents.clients.budget import Budget
 from autonomous_ai_agents.clients.structured import strict_json
 from autonomous_ai_agents.clients.transport import LLMTransport
-from autonomous_ai_agents.common.config import Settings, settings
+from autonomous_ai_agents.common.config import (
+    PIPELINE_ROLES,
+    Settings,
+    role_chain,
+    settings,
+)
 from autonomous_ai_agents.common.models import Hypothesis, Technique
 from autonomous_ai_agents.optimization.generate import generate_hypotheses
+from autonomous_ai_agents.optimization.idea_pipeline import IdeaPipelineGenerator
+from autonomous_ai_agents.orchestrator.factory import repo_reader
 from autonomous_ai_agents.orchestrator.main import EngineRunResult
+from autonomous_ai_agents.orchestrator.nodes import NodeContext
 from autonomous_ai_agents.research.playbook import (
     MATCH_MAX_TOKENS,
     TechniqueMatch,
@@ -64,7 +84,7 @@ from autonomous_ai_agents.research.playbook import (
 )
 
 from .conftest import TESTS_DIR, LiveRun
-from .corpus import CORPUS, HARD_CORPUS, CorpusOutcome, CorpusRepo
+from .corpus import CORPUS, HARD_CORPUS, CorpusOutcome, CorpusRepo, role_wiring
 from .discovery import (
     BLIND_PROMPT_BOUND,
     CARDS_PROMPT_BOUND,
@@ -74,14 +94,19 @@ from .discovery import (
     Arm,
     ArmResult,
     RepoFacts,
+    Usage,
+    UsageTap,
     budget_flags,
     carry,
     ceil_usd,
+    chain_worst_usd,
+    check_calls,
     generate_arm,
     model_settings,
     run_arm,
     worst_usd,
 )
+from .discovery_corpus import of_group
 from .discovery_io import (
     ResultsSink,
     cells,
@@ -94,6 +119,8 @@ from .discovery_io import (
 )
 
 REPS_ENV: Final = "LIVE_AB_REPS"
+SET_ENV: Final = "LIVE_AB_SET"
+P_SET: Final = "v2-p"  # E3: arms A and P on E3_GROUPS (unset: E5, arms A and B)
 RUN_CAP_ENV: Final = "LIVE_AB_RUN_CAP_USD"
 AB_REPS: Final = 2
 AB_MAX_REPS: Final = 2
@@ -117,26 +144,82 @@ AB_REPOS: Final = (*CORPUS, *HARD_CORPUS)
 DISTRACTORS_PATH: Final = TESTS_DIR / "research" / "distractors.json"
 MIN_DISCORDANT_LEAD: Final = 3
 E2C_GENERATOR_N: Final = 10  # E2c's arm A: today's generator at GENERATOR_N=10
+E3_GROUPS: Final = ("deep", "misleading", "uncommon")
+AB_V2_P_REPOS: Final = tuple(r for group in E3_GROUPS for r in of_group(group))
+P_ARM: Final = Arm("idea-pipeline", AB_ARM.model, AB_ARM.effort)
+"""Arm P's label; its run settings are A's, its role models the pipeline's."""
+IDEAS_LANE_PROMPT_BOUND: Final = 34_000  # D55: S1, a lens or the leap
+IDEAS_REVIEW_PROMPT_BOUND: Final = 40_000  # D55: the reviewer with 16 ideas
+"""D55's bounds, unverified until E0b counts them: a larger count is refused
+before it is sent (S1 recorded as the arm's error, S2 skipped whole)."""
+
+
+def pipeline_settings(base: Settings) -> Settings:
+    """Arm P's copy: A's (Sonnet 5.5 alone) with ``IDEA_PIPELINE`` on."""
+    return model_settings(base, AB_ARM.model, IDEA_PIPELINE=True)
+
+
+def pipeline_worst_usd(cfg: Settings) -> float:
+    """One pipeline call at every request's worst: S1 and each lens on the
+    lane role, the leap (``IDEAS_LEAP_N``) and the reviewer (``IDEAS_REVIEW``)."""
+    bound = IDEAS_LANE_PROMPT_BOUND
+    lane = chain_worst_usd(bound, cfg.IDEAS_LANE_MAX_TOKENS, role_chain(cfg, "lane"))
+    leap = chain_worst_usd(bound, cfg.IDEAS_LEAP_MAX_TOKENS, role_chain(cfg, "leap"))
+    review = chain_worst_usd(
+        IDEAS_REVIEW_PROMPT_BOUND,
+        cfg.IDEAS_REVIEWER_MAX_TOKENS,
+        role_chain(cfg, "reviewer"),
+    )
+    return (
+        (1 + len(cfg.IDEAS_LENSES)) * lane
+        + (leap if cfg.IDEAS_LEAP_N else 0.0)
+        + (review if cfg.IDEAS_REVIEW else 0.0)
+    )
+
+
+AB_P_GEN_CAP_USD: Final = ceil_usd(
+    PHASE_ONE_WORST_USD
+    + worst_usd(BLIND_PROMPT_BOUND, AB_GENERATE_MAX_TOKENS, AB_ARM.model)
+    + pipeline_worst_usd(pipeline_settings(settings))
+)
+"""Phase 1, A's generation and arm P's pipeline at their worst."""
 
 
 @dataclass(frozen=True)
 class AbPlan:
     reps: int
     run_cap: float
+    pipeline: bool = False  # E3: arm P replaces B on AB_V2_P_REPOS
+
+    @property
+    def arms(self) -> tuple[str, str]:
+        return ("A", "P") if self.pipeline else ("A", "B")
+
+    @property
+    def repos(self) -> tuple[CorpusRepo, ...]:
+        return AB_V2_P_REPOS if self.pipeline else AB_REPOS
+
+    @property
+    def gen_cap(self) -> float:
+        return AB_P_GEN_CAP_USD if self.pipeline else AB_GEN_CAP_USD
 
 
 def ab_plan(environ: Mapping[str, str]) -> AbPlan:
     """Every knob, validated strictly (in the module fixture, before any spend)."""
+    chosen = environ.get(SET_ENV, "")
+    if SET_ENV in environ and chosen != P_SET:
+        raise ValueError(f"{SET_ENV} must be {P_SET!r} or unset, got {chosen!r}")
     return AbPlan(
         reps=env_whole(environ, REPS_ENV, AB_REPS, low=1, high=AB_MAX_REPS),
         run_cap=env_number(environ, RUN_CAP_ENV, AB_RUN_CAP_USD, high=MAX_RUN_CAP_USD),
+        pipeline=chosen == P_SET,
     )
 
 
 def ab_need(plan: AbPlan) -> float:
     """The sum of the caps the suite asks the ledger for: per task the shared
     generation run plus both engine runs."""
-    return plan.reps * len(AB_REPOS) * (AB_GEN_CAP_USD + 2 * plan.run_cap)
+    return plan.reps * len(plan.repos) * (plan.gen_cap + 2 * plan.run_cap)
 
 
 def ab_settings(base: Settings) -> Settings:
@@ -211,6 +294,72 @@ def retrieval_arm(
     return run_arm(AB_ARM, run, base, work)
 
 
+def withheld(
+    context: NodeContext, extra_protected: Sequence[str]
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """What the engine's own generate call never shows (nodes.py):
+    ``protected`` (the context's patterns plus the run's ``extra_protected``,
+    the resolved workload and benchmark files and define's frozen ones) and
+    ``read_deny`` (the quality check's frozen paths)."""
+    protected = (*context.protected_patterns, *extra_protected)
+    quality = context.quality
+    return protected, (() if quality is None else quality.frozen_paths)
+
+
+def pipeline_arm(
+    run: LiveRun,
+    budget: Budget,
+    facts: RepoFacts,
+    *,
+    commit: str,
+    protected: Sequence[str],
+    read_deny: Sequence[str] = (),
+    n: int = AB_N,
+    base: Settings = settings,
+) -> ArmResult:
+    """Arm P: one ``IdeaPipelineGenerator`` call on ``facts`` and the code at
+    ``commit`` (``protected`` and ``read_deny`` unread, from ``withheld``),
+    ``n`` obvious ideas plus its portfolio, every role on its transport from
+    ``role_wiring``, billed on ``run``."""
+    usages: list[Usage] = []
+
+    def work(
+        _transport: LLMTransport, cfg: Settings, notes: list[str]
+    ) -> tuple[tuple[Hypothesis, ...], tuple[TechniqueMatch, ...]]:
+        on = pipeline_settings(cfg)
+        wired = role_wiring(run, "wired", editor=False, cfg=on)
+        taps = {role: UsageTap(wired[role]) for role in PIPELINE_ROLES}
+        try:
+            found = IdeaPipelineGenerator(taps, reader=repo_reader, config=on).generate(
+                project=facts.project, understanding=facts.understanding,
+                hotspots=facts.hotspots, objective=facts.objective, techniques=(),
+                lessons=(), avoid_titles=(), n=n, budget=budget, commit=commit,
+                protected=protected, read_deny=read_deny,
+            )  # fmt: skip
+        finally:
+            usages.extend(u for tap in taps.values() for u in tap.usages)
+        notes.extend(found.notes)
+        return found.hypotheses, ()
+
+    produced = run_arm(P_ARM, run, base, work, project=facts.project)
+    return replace(produced, usages=tuple(usages))
+
+
+def check_arm_calls(
+    run: LiveRun, budget: Budget, arms: Mapping[str, ArmResult]
+) -> None:
+    """``check_calls`` over the arms, arm P answered on its roles' models."""
+    pipeline = arms.get("P")
+    if pipeline is not None:
+        label = pipeline.arm.label
+        assert pipeline.answered, f"{label} got no answer: {pipeline.error}"
+        cfg = pipeline_settings(settings)
+        roles = {model for role in PIPELINE_ROLES for model in role_chain(cfg, role)}
+        assert set(pipeline.models) <= roles, (label, pipeline.models)
+    plain = [result for label, result in arms.items() if label != "P"]
+    check_calls(run, budget, plain, answered=pipeline is not None)
+
+
 @dataclass(frozen=True)
 class AbRow:
     """One arm of one (repository, repetition) (recorded, never asserted)."""
@@ -219,7 +368,7 @@ class AbRow:
     kind: str
     category: str
     rep: int
-    arm: str  # "A" blind, "B" retrieval
+    arm: str  # "A" blind, "B" retrieval, "P" the idea pipeline
     status: str  # the engine status, "error", or "no_hypotheses"
     win: bool
     kept: tuple[str, ...]
@@ -303,13 +452,13 @@ def _first_rows(rows: Sequence[AbRow]) -> dict[tuple[str, int, str], AbRow]:
     return seen
 
 
-def discordant(rows: Sequence[AbRow]) -> tuple[Pairs, int, int]:
-    """Paired (A win, B win) per slowdown task whose two rows (the first per
-    arm) both held every guard; b and c."""
+def discordant(rows: Sequence[AbRow], versus: str = "B") -> tuple[Pairs, int, int]:
+    """Paired (A win, ``versus`` win) per slowdown task whose two rows (the
+    first per arm) both held every guard; b and c."""
     seen = _first_rows(rows)
     pairs: Pairs = {}
     for (repo, rep, arm), row in seen.items():
-        other = seen.get((repo, rep, "B"))
+        other = seen.get((repo, rep, versus))
         if arm == "A" and other is not None and row.guard == other.guard == "ok":
             pairs[(repo, rep)] = (row.win, other.win)
     b = sum(a and not w for a, w in pairs.values())
@@ -317,10 +466,10 @@ def discordant(rows: Sequence[AbRow]) -> tuple[Pairs, int, int]:
     return pairs, b, c
 
 
-def excluded_tasks(rows: Sequence[AbRow]) -> int:
+def excluded_tasks(rows: Sequence[AbRow], versus: str = "B") -> int:
     """Slowdown tasks with a row that ``discordant`` could not pair."""
     tasks = {(repo, rep) for repo, rep, _ in _first_rows(rows)}
-    return len(tasks) - len(discordant(rows)[0])
+    return len(tasks) - len(discordant(rows, versus)[0])
 
 
 def _arm_line(arm: str, rows: Sequence[AbRow]) -> list[object]:
@@ -346,7 +495,10 @@ def _cap_hit(row: AbRow) -> str:
 
 
 def render_ab(rows: Sequence[AbRow]) -> str:
-    lines = ["## Retrieval A/B (E5)", ""]
+    """E5's summary, or E3's when arm P ran (A paired with P, no decision)."""
+    other = "P" if any(r.arm == "P" for r in rows) else "B"
+    title = "Idea pipeline A/B (E3)" if other == "P" else "Retrieval A/B (E5)"
+    lines = [f"## {title}", ""]
     if not rows:
         return "\n".join([*lines, "No A/B task finished."])
     lines += [
@@ -382,12 +534,16 @@ def render_ab(rows: Sequence[AbRow]) -> str:
         "| distractor-match rate |",
         "| --- | --- | --- | ---: | --- |",
     ]
-    for arm in ("A", "B"):
+    for arm in ("A", other):
         group = [r for r in rows if r.arm == arm]
         if group:
             lines.append(cells(_arm_line(arm, group)))
-    pairs, b, c = discordant(rows)
-    lines += ["", "| repo | paired outcomes (rep: A win, B win) |", "| --- | --- |"]
+    pairs, b, c = discordant(rows, other)
+    lines += [
+        "",
+        f"| repo | paired outcomes (rep: A win, {other} win) |",
+        "| --- | --- |",
+    ]
     for repo in dict.fromkeys(name for name, _ in pairs):
         found = [
             f"{rep}: {flag(a)}, {flag(w)}"
@@ -401,9 +557,23 @@ def render_ab(rows: Sequence[AbRow]) -> str:
             sum(r.win for r in controls if r.arm == arm),
             sum(r.arm == arm for r in controls),
         )
-        for arm in ("A", "B")
+        for arm in ("A", other)
     }
     lead = c - b
+    paired = (
+        f"Paired slowdown tasks: {len(pairs)} (excluded "
+        f"{excluded_tasks(rows, other)} slowdown task(s): a guard breach, or an "
+        f"arm that never ran); discordant b = {b}, c = {c}; exact two-sided "
+        f"McNemar p = {mcnemar_exact(b, c):.4f}."
+    )
+    if other == "P":
+        return "\n".join([
+            *lines, "", paired,
+            f"c - b = {lead}: P against A on v2's {', '.join(E3_GROUPS)} groups, "
+            "where textbook fixes fall short (E3, informational: no decision "
+            "rides on it).",
+            f"Control false-win rate: A {false_wins['A']}, P {false_wins['P']}.",
+        ])  # fmt: skip
     verdict = (
         f"c - b = {lead}: B beats A by at least {MIN_DISCORDANT_LEAD}: "
         "retrieved playbook cards help; paper-derived cards are untested"
@@ -415,10 +585,7 @@ def render_ab(rows: Sequence[AbRow]) -> str:
     )
     lines += [
         "",
-        f"Paired slowdown tasks: {len(pairs)} (excluded {excluded_tasks(rows)} "
-        "slowdown task(s): a guard breach, or an arm that never ran); "
-        f"discordant b = {b}, c = {c}; exact two-sided McNemar p = "
-        f"{mcnemar_exact(b, c):.4f}.",
+        paired,
         f"Decision rule: B must beat A by at least {MIN_DISCORDANT_LEAD} "
         f"discordant tasks. {verdict}.",
         f"Control false-win rate: A {false_wins['A']}, B {false_wins['B']}.",

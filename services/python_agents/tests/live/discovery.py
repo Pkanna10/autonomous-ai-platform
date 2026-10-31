@@ -420,11 +420,14 @@ def check_calls(
 
 @dataclass(frozen=True)
 class PhaseOne:
-    """A baseline run without any trial: its loop, its facts, its cost."""
+    """A baseline run without any trial: its loop, its facts, its cost, and
+    the run's ``extra_protected`` (the resolved workload and benchmark files,
+    define's frozen ones) that arm P must withhold as the engine does."""
 
     loop: Loop
     facts: RepoFacts
     cost_usd: float
+    extra_protected: tuple[str, ...] = ()
 
 
 def start_phase_one(
@@ -446,7 +449,7 @@ def read_phase_one(loop: Loop, run: LiveRun, result: EngineRunResult) -> PhaseOn
         hotspots=tuple(state["hotspots"]),
         objective=state["objectives"][0],
     )
-    return PhaseOne(loop, facts, run.spent_usd)
+    return PhaseOne(loop, facts, run.spent_usd, tuple(state["extra_protected"]))
 
 
 def phase_one(

@@ -60,6 +60,7 @@ from autonomous_ai_agents.clients.transport import ScriptedTransport
 from autonomous_ai_agents.common.config import EFFORT_LEVELS, settings
 from autonomous_ai_agents.common.models import (
     METRIC_WALL_TIME_S,
+    BuiltinMeasure,
     CandidateModule,
     ChangeClass,
     Combination,
@@ -76,6 +77,7 @@ from autonomous_ai_agents.common.models import (
     ObjectiveKind,
     Project,
     ProjectUnderstanding,
+    QualityCheck,
     RunStats,
     Trial,
     TrialStatus,
@@ -98,7 +100,7 @@ from autonomous_ai_agents.orchestrator.state import initial_state
 
 from . import evolution as evo
 from .conftest import TESTS_DIR, LiveRun, RequestRecord, guardrails, restore_host_key
-from .corpus import outcome_of, settings_trial_budget
+from .corpus import Loop, outcome_of, settings_trial_budget
 from .discovery import (
     PHASE_ONE_CAP_USD,
     PHASE_ONE_WORST_USD,
@@ -107,7 +109,12 @@ from .discovery import (
     RepoFacts,
     worst_usd,
 )
-from .discovery_ab import AB_ARM
+from .discovery_ab import (
+    AB_ARM,
+    P_ARM,
+    pipeline_settings,
+    pipeline_worst_usd,
+)
 from .discovery_io import ResultsSink
 from .oss import (
     OSS_CORPUS,
@@ -121,6 +128,10 @@ from .oss import (
 LIVE_DIR = TESTS_DIR / "live"
 CAP_CEILING_USD = 150  # live-smoke's suite_cap_usd ceiling
 EVOLVE_NEED = 103.5  # 3 repos x 10 rounds x (0.45 + 3.00); the Lead copies it
+# E4 (V8): one library x 6 rounds x (blind 0.45 + 3.00 + P 2.60 + 3.00)
+EVOLVE_P_NEED = 54.3
+E4_ENV = {"LIVE_EVOLVE_REPOS": "sqlparse", "LIVE_EVOLVE_ARMS": "blind,P"}
+E4_ENV["LIVE_EVOLVE_ROUNDS"] = "6"
 LOCAL = GitPolicy(allow=re.compile(r"file:///[^\s?#]+\.git"), protocols="file")
 """Local bare repositories over file://: injected by these tests only."""
 REQUIRED = Isolation("required", None)
@@ -1931,7 +1942,13 @@ def test_the_live_module_is_marked_parses_its_plan_first_and_asks_for_its_caps()
         and isinstance(node.func, ast.Name)
         and node.func.id == "live"
     }
-    assert asked == {"EVOLVE_GEN_CAP_USD", "evolve.plan.run_cap"}
+    assert asked == {"evolve_gen_cap(arm)", "evolve.plan.run_cap"}
+    # V8 (the Lead applies V8-lead/test_evolution_live.py.patch): the arms are
+    # read at collection like the repositories, and each runs as its own row
+    assert "EVOLVE_ARMS = evolve_arms(os.environ)" in source
+    assert "if plan.arms != EVOLVE_ARMS:" in source
+    assert "evolve_name(repo.name, arm)" in source
+    assert "pipeline=arm == 'P'" in source
     tests = [
         node
         for node in tree.body
@@ -1942,3 +1959,182 @@ def test_the_live_module_is_marked_parses_its_plan_first_and_asks_for_its_caps()
     assert "live" in [a.arg for a in test.args.args]
     decorators = [ast.unparse(d) for d in test.decorator_list]
     assert any("EVOLVE_REPOS" in d for d in decorators), decorators
+    assert any("EVOLVE_ARMS" in d for d in decorators), decorators
+
+
+# ---------------------------------------------------------------------------
+# Arm P (V8, E4): the idea pipeline in place of the blind generation
+# ---------------------------------------------------------------------------
+
+
+def test_the_arms_parse_strictly_and_default_to_blind_alone() -> None:
+    assert evo.evolve_plan({}).arms == ("blind",) == evo.evolve_arms({})
+    assert evo.EVOLVE_ARMS == ("blind", "P")
+    assert evo.evolve_arms({evo.ARMS_ENV: "blind,P"}) == ("blind", "P")
+    assert evo.evolve_arms({evo.ARMS_ENV: "P,blind"}) == ("P", "blind")
+    assert evo.evolve_plan({evo.ARMS_ENV: "P"}).arms == ("P",)
+    for value in ("", "p", "P,P", "blind,", " P", "A", "blind;P"):
+        with pytest.raises(ValueError, match=evo.ARMS_ENV):
+            evo.evolve_plan({evo.ARMS_ENV: value})
+    assert evo.evolve_name("sqlparse", "blind") == "sqlparse"
+    assert evo.evolve_name("sqlparse", "P") == "sqlparse/P"
+
+
+def test_arm_ps_generation_run_holds_phase_one_and_the_whole_pipeline() -> None:
+    """Phase 1 and the pipeline's every request (S1, six lenses, leap,
+    reviewer) at their worst, rounded up to 0.05 USD; blind keeps 0.45."""
+    total = PHASE_ONE_WORST_USD + pipeline_worst_usd(
+        pipeline_settings(evo.evolve_settings(settings))
+    )
+    assert total <= evo.EVOLVE_P_GEN_CAP_USD < total + 0.05 + 1e-9
+    assert evo.EVOLVE_P_GEN_CAP_USD == 2.6
+    assert evo.evolve_gen_cap("blind") == evo.EVOLVE_GEN_CAP_USD == 0.45
+    assert evo.evolve_gen_cap("P") == evo.EVOLVE_P_GEN_CAP_USD
+
+
+def test_the_e4_plan_needs_both_arms_every_round_inside_its_row() -> None:
+    """E4 dispatches one library: blind and P, up to 6 rounds each, at most
+    its row's 60 USD (2 arms x 6 rounds x 5); the default plan is unchanged."""
+    plan = evo.evolve_plan(E4_ENV)
+    assert (plan.arms, plan.rounds, [r.name for r in plan.repos]) == (
+        ("blind", "P"),
+        6,
+        ["sqlparse"],
+    )
+    per_round = (evo.EVOLVE_GEN_CAP_USD + 3.0) + (evo.EVOLVE_P_GEN_CAP_USD + 3.0)
+    assert evo.evolve_need(plan) == pytest.approx(6 * per_round)
+    assert evo.evolve_need(plan) == pytest.approx(EVOLVE_P_NEED)
+    assert evo.evolve_need(plan) <= 60  # E4's row: 2 arms x 6 rounds x 5 USD
+    assert evo.evolve_need(evo.evolve_plan({})) == pytest.approx(EVOLVE_NEED)
+    with pytest.raises(ValueError, match=r"x 2 arm\(s\).*54.30 USD"):
+        evo.check_suite_cap(plan, {"LIVE_SUITE_CAP_USD": "54.29"})
+    evo.check_suite_cap(plan, {"LIVE_SUITE_CAP_USD": "55"})
+
+
+def test_blind_rounds_still_send_the_one_generation_request(dry: Path) -> None:
+    wire = Wire()
+    run = LiveRun("dry", evo.EVOLVE_GEN_CAP_USD, wire=httpx2.MockTransport(wire))
+    budget = Budget(run.cap_usd)
+    steps = evo.LiveSteps(OSS_CORPUS[0], REQUIRED, evo.evolve_settings(settings))
+    assert steps.pipeline is False
+    produced = steps.produce(run, budget, _facts(dry), commit="c" * 40, protected=())
+    (body,) = wire.bodies
+    assert body["model"] == SONNET and produced.arm == evo.EVOLVE_ARM
+    assert len(produced.hypotheses) == evo.EVOLVE_N
+
+
+def test_arm_p_rounds_run_the_pipeline_on_the_round_and_its_history(
+    dry: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With ``pipeline`` on, the round's facts (history included), its base
+    commit and the loop's protected patterns go to ``pipeline_arm`` (five
+    obvious ideas, as blind's n), and the arm's own guard checks it."""
+    calls: list[dict[str, object]] = []
+    checked: list[dict[str, ArmResult]] = []
+    produced = ArmResult(P_ARM, (), 0.0, (), (), 0.0, None)
+
+    def spy(run: LiveRun, budget: Budget, facts: RepoFacts, **kw: object) -> ArmResult:
+        calls.append({"run": run, "budget": budget, "facts": facts, **kw})
+        return produced
+
+    def check(run: LiveRun, budget: Budget, arms: dict[str, ArmResult]) -> None:
+        checked.append(arms)
+
+    monkeypatch.setattr(evo, "pipeline_arm", spy)
+    monkeypatch.setattr(evo, "check_arm_calls", check)
+    cfg = evo.evolve_settings(settings)
+    steps = evo.LiveSteps(OSS_CORPUS[0], REQUIRED, cfg, pipeline=True)
+    run = LiveRun("dry", evo.EVOLVE_P_GEN_CAP_USD)
+    budget = Budget(run.cap_usd)
+    history = (evo.RoundHistory(1, ("cache the widths",), ("inline it",), 9.5),)
+    facts = evo.with_history(_facts(dry), history)
+    got = steps.produce(
+        run, budget, facts, commit="d" * 40, protected=("**/.env",),
+        read_deny=("data/labels.txt",),
+    )  # fmt: skip
+    assert got is produced and checked == [{"P": produced}]
+    (call,) = calls
+    assert call == {
+        "run": run,
+        "budget": budget,
+        "facts": facts,
+        "commit": "d" * 40,
+        "protected": ("**/.env",),
+        "read_deny": ("data/labels.txt",),
+        "n": evo.EVOLVE_N,
+        "base": cfg,
+    }
+    assert evo.HISTORY_LEAD in facts.objective.description
+
+
+QUALITY = QualityCheck(
+    name="acc", measure=BuiltinMeasure.accuracy, labels="data/labels.txt",
+    frozen_paths=("data/labels.txt",),
+)  # fmt: skip
+
+
+def test_an_arm_p_round_withholds_the_runs_real_protected_set_at_its_base(
+    dry: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``generate`` with ``pipeline`` on (phase 1 scripted): arm P reads the
+    advanced clone's code at its own base, never the original commit or
+    phase 1's recorded one, and withholds what the engine's generate call
+    withholds: the context's protected patterns plus phase 1's
+    ``extra_protected`` (the resolver's workload driver, define's frozen
+    files), and the quality check's frozen paths unread."""
+    repo, first = _local_user(dry)
+    user = evo.advance_clone(
+        first, _deliver(first, {"pkg/__init__.py": "VALUE = 2\n"}), policy=LOCAL
+    )
+    assert user.base != first.base
+    cfg = evo.evolve_settings(settings)
+    seen: list[Loop] = []
+    real_start = evo.start_round_loop
+
+    def start(*args: Any, **kwargs: Any) -> Loop:
+        loop = real_start(*args, **kwargs)
+        loop = replace(loop, context=replace(loop.context, quality=QUALITY))
+        seen.append(loop)
+        return loop
+
+    phase = _result(repo.project(user.path), base="b" * 40)
+    phase.state["objectives"] = [_facts(dry).objective]
+    phase.state["extra_protected"] = ["pkg/main.py", "data/labels.txt"]
+    calls: list[dict[str, object]] = []
+    produced = ArmResult(P_ARM, (), 0.0, (), (), 0.0, None)
+
+    def spy(run: LiveRun, budget: Budget, facts: RepoFacts, **kw: object) -> ArmResult:
+        calls.append({"facts": facts, **kw})
+        return produced
+
+    monkeypatch.setattr(evo, "start_round_loop", start)
+    monkeypatch.setattr(Loop, "run", lambda _self: phase)
+    monkeypatch.setattr(evo, "check_loop_guards", lambda *_args: None)
+    monkeypatch.setattr(evo, "pipeline_arm", spy)
+    monkeypatch.setattr(evo, "check_arm_calls", lambda *_args: None)
+    steps = evo.LiveSteps(repo, REQUIRED, cfg, pipeline=True)
+    run = LiveRun("dry", evo.EVOLVE_P_GEN_CAP_USD, wire=httpx2.MockTransport(_no_wire))
+    history = (evo.RoundHistory(1, ("cache the widths",), (), 9.5),)
+    got = steps.generate(run, 2, user, history)
+    assert got.produced is produced and got.phase_cost_usd == 0
+    ((loop,), (call,)) = (seen, calls)
+    assert call["commit"] == user.base  # neither first.base nor "b" * 40
+    assert call["protected"] == (
+        *loop.context.protected_patterns, "pkg/main.py", "data/labels.txt"
+    )  # fmt: skip
+    assert call["read_deny"] == ("data/labels.txt",)
+    assert (call["n"], call["base"]) == (evo.EVOLVE_N, cfg)
+    facts = call["facts"]
+    assert isinstance(facts, RepoFacts)
+    assert evo.HISTORY_LEAD in facts.objective.description
+
+
+def test_arm_p_rows_carry_their_arm_in_the_name_and_the_summary_says_so() -> None:
+    rows = (_row("sqlparse", 1, 5.0, 5.0, 4.0), _row("sqlparse/P", 1, 9.0, 9.0, 5.0))
+    summary = evo.summarise(rows, rounds=1)
+    assert summary.repos == 2  # each arm is its own evolution
+    text = evo.render_evolve(rows, rounds=1)
+    assert "| sqlparse/P | 1 |" in text
+    assert "rows named <repo>/P generate with the idea pipeline (arm P)" in text
+    plain = evo.render_evolve(rows[:1], rounds=1)
+    assert "arm P" not in plain

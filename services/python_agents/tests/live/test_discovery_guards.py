@@ -29,6 +29,7 @@ from autonomous_ai_agents.clients.transport import ScriptedTransport
 from autonomous_ai_agents.common.config import EFFORT_LEVELS, Settings, settings
 from autonomous_ai_agents.common.models import (
     METRIC_WALL_TIME_S,
+    BuiltinMeasure,
     CandidateModule,
     ChangeClass,
     Direction,
@@ -37,7 +38,9 @@ from autonomous_ai_agents.common.models import (
     HypothesisSource,
     Objective,
     ObjectiveKind,
+    Project,
     ProjectUnderstanding,
+    QualityCheck,
     Technique,
     Trial,
     TrialStatus,
@@ -1587,7 +1590,7 @@ def test_each_suite_needs_the_sum_of_its_caps() -> None:
         "FABLE_RUN_CAP_USD",
         "CACHE_PROBE_CAP_USD",
     }
-    assert _live_args("test_ab_live") == {"AB_GEN_CAP_USD", "ab.plan.run_cap"}
+    assert _live_args("test_ab_live") == {"ab.plan.gen_cap", "ab.plan.run_cap"}
     assert _live_args("test_escalation_live") == {"cap"}
     assert sweep.SWEEP_REPOS == (*CORPUS, *HARD_CORPUS, *DISCOVERY_CORPUS)
     assert len({r.name for r in sweep.SWEEP_REPOS}) == len(sweep.SWEEP_REPOS) == 37
@@ -2226,3 +2229,229 @@ def test_from_results_command_line_prints_the_pairing(tmp_path: Path) -> None:
     missing = ["--from-results", "--arm-a", str(tmp_path / "x"), "--arm-p", "y"]
     assert ab.from_results_main(missing, echoed.append) == 2
     assert echoed[-1].startswith("error: ")
+
+
+# ---------------------------------------------------------------------------
+# Arm P in ab-v2 (V8, E3): the idea pipeline beside arm A on corpus v2
+# ---------------------------------------------------------------------------
+
+STEP3_IDEAS = TESTS_DIR / "fixtures" / "step3_ideas"
+IDEAS_SCRIPT: Json = json.loads((STEP3_IDEAS / "scripted.json").read_text("utf-8"))
+AB_V2_P_NEED = 57.0  # 2 reps x 6 repos x (2.75 + 2 x 1.00); E3's row says 40
+
+
+def test_the_ab_set_selects_arm_p_on_the_three_textbook_groups() -> None:
+    """``LIVE_AB_SET`` unset is E5 (arms A and B on v1 and the hard corpus,
+    unchanged); ``v2-p`` is E3: arms A and P on v2's deep, misleading and
+    uncommon slowdowns. Anything else is refused before any spend."""
+    e5 = ab.ab_plan({})
+    assert (e5.pipeline, e5.arms, e5.repos) == (False, ("A", "B"), ab.AB_REPOS)
+    assert e5.gen_cap == ab.AB_GEN_CAP_USD
+    e3 = ab.ab_plan({ab.SET_ENV: ab.P_SET})
+    assert (e3.pipeline, e3.arms, e3.reps, e3.run_cap) == (True, ("A", "P"), 2, 1.0)
+    assert e3.repos == ab.AB_V2_P_REPOS and e3.gen_cap == ab.AB_P_GEN_CAP_USD
+    assert ab.E3_GROUPS == ("deep", "misleading", "uncommon")
+    assert [r.category for r in e3.repos] == [g for g in ab.E3_GROUPS for _ in "ab"]
+    assert all(r in DISCOVERY_CORPUS and r.kind == "slowdown" for r in e3.repos)
+    for value in ("", "v2", "V2-P", " v2-p", "v2-p,", "p"):
+        with pytest.raises(ValueError, match=ab.SET_ENV):
+            ab.ab_plan({ab.SET_ENV: value})
+
+
+def test_arm_ps_generation_run_holds_phase_one_arm_a_and_the_whole_pipeline() -> None:
+    """The shared run (phase 1, arm A's request, then arm P's S1, six lenses,
+    leap and reviewer) at every request's worst case, D55's prompt bounds,
+    rounded up to 0.05 USD; the pipeline's sum follows its settings."""
+    cfg = ab.pipeline_settings(settings)
+    assert cfg.IDEA_PIPELINE and not settings.IDEA_PIPELINE
+    assert (ab.IDEAS_LANE_PROMPT_BOUND, ab.IDEAS_REVIEW_PROMPT_BOUND) == (
+        34_000,
+        40_000,
+    )
+    lane = _worst(34_000, cfg.IDEAS_LANE_MAX_TOKENS, (cfg.IDEAS_LANE_MODEL,))
+    leap = _worst(34_000, cfg.IDEAS_LEAP_MAX_TOKENS, (cfg.IDEAS_LEAP_MODEL,))
+    review = _worst(40_000, cfg.IDEAS_REVIEWER_MAX_TOKENS, (cfg.IDEAS_REVIEWER_MODEL,))
+    pipeline = (1 + len(cfg.IDEAS_LENSES)) * lane + leap + review
+    assert len(cfg.IDEAS_LENSES) == 6 and cfg.IDEAS_LEAP_N and cfg.IDEAS_REVIEW
+    assert ab.pipeline_worst_usd(cfg) == pytest.approx(pipeline)
+    assert 2.365 < pipeline < 2.5  # D55's 2.365, plus the margin and allowance
+    phase = _worst(UNDERSTAND_PROMPT_BOUND, settings.UNDERSTAND_MAX_TOKENS, (SONNET,))
+    blind = _worst(BLIND_PROMPT_BOUND, ab.AB_GENERATE_MAX_TOKENS, (SONNET,))
+    _rounded(phase + blind + pipeline, ab.AB_P_GEN_CAP_USD)
+    lean = cfg.model_copy(update={"IDEAS_REVIEW": False, "IDEAS_LEAP_N": 0})
+    assert ab.pipeline_worst_usd(lean) == pytest.approx(7 * lane)
+    one = cfg.model_copy(update={"IDEAS_LENSES": cfg.IDEAS_LENSES[:1]})
+    assert ab.pipeline_worst_usd(one) == pytest.approx(2 * lane + leap + review)
+
+
+def test_the_ab_v2_p_suite_needs_the_sum_of_its_caps() -> None:
+    """2 reps x 6 repositories x (the shared run + both engine runs). E3's
+    row (40 USD, ``12 x (0.8 + 2.4)``) leaves the two engine runs out."""
+    plan = ab.ab_plan({ab.SET_ENV: ab.P_SET})
+    need = plan.reps * len(plan.repos) * (ab.AB_P_GEN_CAP_USD + 2 * plan.run_cap)
+    assert ab.ab_need(plan) == pytest.approx(need) == pytest.approx(AB_V2_P_NEED)
+    assert ab.ab_need(plan) <= CAP_CEILING_USD
+    one = ab.ab_plan({ab.SET_ENV: ab.P_SET, ab.REPS_ENV: "1"})
+    assert ab.ab_need(one) == pytest.approx(AB_V2_P_NEED / 2)
+    assert ab.ab_need(one) <= 40  # one repetition fits E3's cap
+    assert ab.ab_need(ab.ab_plan({})) == pytest.approx(AB_NEED)  # E5 unchanged
+
+
+def _ideas_user(root: Path) -> tuple[RepoFacts, str]:
+    """The Step 3 ideas fixture committed on main, with phase-1-like facts."""
+    user = make_repo(STEP3_IDEAS / "repo", root / "ideas")
+    project = Project(name="dedupe", root_path=str(user.path))
+    spots = tuple(
+        Hotspot(
+            project_id=project.id,
+            workload_id="w1",
+            file_path="dedupe/core.py",
+            symbol=symbol,
+            self_time_s=share,
+            total_time_s=share,
+            share=share,
+        )
+        for symbol, share in (("unique_in_order", 0.8), ("running_totals", 0.1))
+    )
+    objective = _facts(root).objective.model_copy(update={"project_id": project.id})
+    return RepoFacts(project, None, spots, objective), user.base
+
+
+def _pipeline_answer(body: Json) -> str:
+    if "reviews" in _schema_keys(body):
+        return json.dumps({"reviews": IDEAS_SCRIPT["review"][:2]})
+    return json.dumps({"hypotheses": IDEAS_SCRIPT["obvious"]})
+
+
+def test_arm_p_runs_the_pipeline_on_the_code_at_the_base_commit(dry: Path) -> None:
+    """Arm P is the engine's ``IdeaPipelineGenerator`` on the lane, leap and
+    reviewer transports ``corpus.role_wiring`` captures on the shared run:
+    S1, six lenses and the leap read the hot code at the commit, the reviewer
+    filters, and every request bills its role's model alone."""
+    facts, commit = _ideas_user(dry)
+    wire = Wire(_pipeline_answer)
+    run = wire.run(cap=ab.AB_P_GEN_CAP_USD)
+    budget = Budget(run.cap_usd)
+    produced = ab.pipeline_arm(
+        run, budget, facts, commit=commit, protected=("**/.env",)
+    )
+    assert produced.error is None, produced.error
+    cfg = ab.pipeline_settings(settings)
+    models = [b["model"] for b in wire.bodies]
+    assert models.count(cfg.IDEAS_LANE_MODEL) == 1 + len(cfg.IDEAS_LENSES)
+    assert models.count(cfg.IDEAS_REVIEWER_MODEL) == 2  # the leap and the reviewer
+    assert len(wire.bodies) == 9 and all("fallbacks" not in b for b in wire.bodies)
+    lanes = [b for b in wire.bodies if "hypotheses" in _schema_keys(b)]
+    assert all("def unique_in_order" in json.dumps(b) for b in lanes)
+    titles = [h.title for h in produced.hypotheses]
+    assert IDEAS_SCRIPT["obvious"][0]["title"] in titles
+    assert produced.arm == ab.P_ARM and len(produced.usages) == 9
+    assert set(produced.models) == {cfg.IDEAS_LANE_MODEL, cfg.IDEAS_REVIEWER_MODEL}
+    assert produced.cost_usd == pytest.approx(run.spent_usd)
+    ab.check_arm_calls(run, budget, {"P": produced})
+    with pytest.raises(AssertionError, match="idea-pipeline"):
+        ab.check_arm_calls(run, budget, {"P": replace(produced, models=(FABLE,))})
+
+
+def test_arm_p_reads_no_protected_file_and_an_empty_arm_fails_the_guard(
+    dry: Path,
+) -> None:
+    """The run's protected patterns reach the reader: with the hot file
+    protected there is no code context, nothing is sent (no fallback to
+    today's generator), and the guard refuses the arm that never answered."""
+    facts, commit = _ideas_user(dry)
+    wire = Wire(_pipeline_answer)
+    run = wire.run(cap=ab.AB_P_GEN_CAP_USD)
+    budget = Budget(run.cap_usd)
+    produced = ab.pipeline_arm(
+        run, budget, facts, commit=commit, protected=("dedupe/core.py",)
+    )
+    assert wire.bodies == [] and produced.hypotheses == () and not produced.answered
+    assert any("no code context" in note for note in produced.notes)
+    with pytest.raises(AssertionError, match="idea-pipeline got no answer"):
+        ab.check_arm_calls(run, budget, {"P": produced})
+    short = Wire(_pipeline_answer).run(cap=0.05)  # S1 alone does not fit
+    refused = ab.pipeline_arm(
+        short, Budget(short.cap_usd), facts, commit=commit, protected=()
+    )
+    assert refused.error is not None and "BudgetExceeded" in refused.error
+    frozen = Wire(_pipeline_answer)  # a quality check's frozen file, unread
+    run = frozen.run(cap=ab.AB_P_GEN_CAP_USD)
+    denied = ab.pipeline_arm(
+        run, Budget(run.cap_usd), facts, commit=commit, protected=(),
+        read_deny=("dedupe/core.py",),
+    )  # fmt: skip
+    assert frozen.bodies == [] and not denied.answered
+
+
+def test_arm_p_withholds_what_the_engines_generate_call_withholds(dry: Path) -> None:
+    """``withheld`` is nodes.py's generate call: the context's protected
+    patterns plus the run's ``extra_protected`` (for corpus v2 the
+    ``<package>/main.py`` driver no default pattern matches), and the
+    quality check's frozen paths as ``read_deny``; phase 1 carries the run's
+    ``extra_protected`` for it (``V8-lead/discovery.py.patch``)."""
+    run = LiveRun("dry", 0.6, wire=httpx2.MockTransport(_no_wire))
+    loop = start_phase_one(
+        CORPUS[0], run, dry / "phase", REQUIRED, model_settings(settings, SONNET)
+    )
+    ctx = loop.context
+    assert ab.withheld(ctx, ["pkg/main.py"]) == (
+        (*ctx.protected_patterns, "pkg/main.py"), (),
+    )  # fmt: skip
+    quality = QualityCheck(
+        name="acc", measure=BuiltinMeasure.accuracy, labels="data/labels.txt",
+        frozen_paths=("data/labels.txt",),
+    )  # fmt: skip
+    assert ab.withheld(replace(ctx, quality=quality), ()) == (
+        tuple(ctx.protected_patterns), ("data/labels.txt",),
+    )  # fmt: skip
+    state = initial_state(loop.project, [loop.workload], [], guardrails(loop.project))
+    state["objectives"] = [_facts(dry).objective]
+    state["extra_protected"] = ["pkg/main.py"]
+    phase = read_phase_one(loop, run, EngineRunResult("r", "done", state, None))
+    assert getattr(phase, "extra_protected", None) == ("pkg/main.py",)
+
+
+def test_arm_a_beside_arm_p_keeps_its_own_guard(dry: Path) -> None:
+    run = Wire(_answer).run()
+    budget = Budget(run.cap_usd)
+    blind = ab.blind_arm(run, budget, _facts(dry))
+    ab.check_arm_calls(run, budget, {"A": blind})
+    with pytest.raises(AssertionError, match=ab.AB_ARM.label):
+        ab.check_arm_calls(run, budget, {"A": replace(blind, models=(OPUS,))})
+
+
+def test_the_e3_summary_pairs_arm_p_against_arm_a_and_decides_nothing(
+    dry: Path,
+) -> None:
+    produced = _generated(dry, ["a"])
+    rows = [
+        ab.ab_row(repo, 1, label, produced, _outcome(repo, label == "P"), ())
+        for repo in ab.AB_V2_P_REPOS[:4]
+        for label in ("A", "P")
+    ]
+    rows.append(ab.ab_row(ab.AB_V2_P_REPOS[4], 1, "A", produced, None, ()))
+    assert ab.discordant(rows, "P")[1:] == (0, 4)
+    assert ab.discordant(rows)[1:] == (0, 0)  # E5's pairing finds no B
+    assert ab.excluded_tasks(rows, "P") == 1
+    text = ab.render_ab(rows)
+    assert text.startswith("## Idea pipeline A/B (E3)")
+    assert "| P | 4/4 (100.0%) |" in text and "(rep: A win, P win)" in text
+    assert "b = 0, c = 4" in text and "excluded 1 slowdown task(s)" in text
+    assert "informational" in text and "no decision rides on it" in text
+    assert "retriev" not in text and "playbook" not in text and "| B |" not in text
+
+
+def test_the_live_ab_module_runs_arm_p_when_its_set_asks() -> None:
+    """The Lead applies ``V8-lead/test_ab_live.py.patch``: the repositories
+    are the plan's, read at collection, and arm P replaces B in its set."""
+    source = ast.unparse(_tree("test_ab_live"))
+    assert "AB_PLAN_REPOS = ab_plan(os.environ).repos" in source
+    assert "if ab.plan.pipeline:" in source
+    assert "check_arm_calls(gen, budget, arms)" in source
+    assert "commit=phase.loop.user.base" in source
+    assert (
+        "protected, read_deny = withheld(phase.loop.context, phase.extra_protected)"
+        in source
+    )
+    assert "protected=protected, read_deny=read_deny" in source

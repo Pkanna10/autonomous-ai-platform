@@ -1056,6 +1056,7 @@ SUITES = (
     "sweep-fable",
     "sweep-record",
     "ab",
+    "ab-v2-p",  # V8 (E3): arm P beside arm A on corpus v2
     "escalation",
     "acquire",
     "noise",
@@ -1063,6 +1064,7 @@ SUITES = (
     "oss-ab",
     "evolve",
     "evolve-more",
+    "evolve-p",  # V8 (E4): arm P beside blind, one library a dispatch
     "heal-hard",
     "build",
     "grader",
@@ -1100,6 +1102,8 @@ EXPERIMENT_MINUTES = {
     "oss-ab": 120,  # one library, 2 reps x 2 arms x 10 trials
     "evolve": 300,
     "evolve-more": 300,
+    "ab-v2-p": 300,  # 24 loops (2 reps x 6 repos x 2 arms) and 12 pipelines
+    "evolve-p": 300,  # one library, 2 arms x up to 6 rounds (evolve: 30)
     "build": 120,
     "escalation": 90,
     "triage": 90,
@@ -1117,6 +1121,9 @@ SWEEP_FABLE_ENV = {  # Fable 5.1 beside the one arm whose run phase 1 shares
 }
 HEAL_HARD_ENV = {"LIVE_HEAL_SET": "hard"}
 EVOLVE_MORE_ENV = {"LIVE_EVOLVE_REPOS": "idna,mistune,sqlparse,pycparser"}
+EVOLVE_P_ARMS_ENV = {"LIVE_EVOLVE_ARMS": "blind,P", "LIVE_EVOLVE_ROUNDS": "6"}
+EVOLVE_P_REPO = "sqlparse"  # evolve-p runs one library a dispatch (E4: 3)
+AB_V2_P_ENV = {"LIVE_AB_SET": "v2-p"}
 OSS_AB_DISPATCH_REPO = "tabulate"  # oss-ab runs one library a dispatch
 IDEAS_E1_DISPATCH = {"LIVE_IDEAS_REPOS": "pyparsing,tomli"}  # E1: two a dispatch
 SWEEP_RECORD_ENV = {  # one arm, recorded for hand labels and offline replay
@@ -1798,6 +1805,10 @@ def _suite_needs() -> dict[str, float]:
         "oss-ab": oss_ab.oss_ab_need(oss_ab.oss_ab_plan(one_library)),
         "evolve": evolve.evolve_need(evolve.evolve_plan({})),
         "evolve-more": evolve.evolve_need(evolve.evolve_plan(EVOLVE_MORE_ENV)),
+        "evolve-p": evolve.evolve_need(
+            evolve.evolve_plan({**EVOLVE_P_ARMS_ENV, evolve.REPOS_ENV: EVOLVE_P_REPO})
+        ),
+        "ab-v2-p": ab.ab_need(ab.ab_plan(AB_V2_P_ENV)),
         "heal-hard": heal.heal_need(heal.heal_plan(HEAL_HARD_ENV)),
         "build": build.build_need(build.build_plan({})),
         "grader": grader.agreement_cap(grader.load_groups()),
@@ -2174,7 +2185,7 @@ def test_oss_ab_runs_exactly_the_one_library_its_input_names(tmp_path: Path) -> 
     code, output, calls = _dispatch(
         tmp_path, "heal", "claude-sonnet-5-5", "6", oss_repo="tabulate"
     )
-    assert (code, calls) == (1, "") and "only for the oss-ab suite" in output
+    assert (code, calls) == (1, "") and "only for the oss-ab and evolve-p" in output
     (tmp_path / "repos.txt").unlink()
     code, output, calls = _dispatch(tmp_path, "heal", "claude-sonnet-5-5", "6")
     assert code == 0 and calls, output
@@ -2200,6 +2211,48 @@ def test_evolve_more_exports_its_four_libraries_only_for_its_own_suite() -> None
     ((name, value),) = EVOLVE_MORE_ENV.items()
     guarded = re.search(
         r'if \[ "\$\{INPUT_SUITE\}" = evolve-more \]; then\n'
+        rf"(?:  #.*\n)*  export {re.escape(name)}={re.escape(value)}\nfi\n",
+        script,
+    )
+    assert guarded is not None, script
+    assert script.count(name) == 2  # evolve-p exports its one library too
+
+
+def test_evolve_p_runs_both_arms_on_the_one_library_its_input_names(
+    tmp_path: Path,
+) -> None:
+    """``evolve-p`` (V8, E4) needs ``oss_repo`` and exports it with both arms
+    and 6 rounds; no other suite sets ``LIVE_EVOLVE_ARMS``."""
+    exports = {"LIVE_EVOLVE_REPOS": "${INPUT_OSS_REPO}", **EVOLVE_P_ARMS_ENV}
+    line = " ".join(
+        f'{k}="{v}"' if "$" in v else f"{k}={v}" for k, v in exports.items()
+    )
+    script = _run_script()
+    assert f"export {line}\n" in script and script.count("LIVE_EVOLVE_ARMS") == 1
+    code, output, calls = _dispatch(
+        tmp_path, "evolve-p", "claude-sonnet-5-5", "55", oss_repo=EVOLVE_P_REPO
+    )
+    assert code == 0 and calls, output
+    for bad in ("", "sqlparse,tomli", "Sqlparse", "a;id"):
+        (tmp_path / "called.txt").unlink(missing_ok=True)
+        code, output, calls = _dispatch(
+            tmp_path, "evolve-p", "claude-sonnet-5-5", "55", oss_repo=bad
+        )
+        assert (code, calls) == (1, ""), (bad, output)
+        assert "::error::evolve-p needs oss_repo" in output
+    (tmp_path / "called.txt").unlink(missing_ok=True)
+    code, output, calls = _dispatch(
+        tmp_path, "evolve-p", "claude-sonnet-5-5", "54", oss_repo=EVOLVE_P_REPO
+    )
+    assert (code, calls) == (1, "") and "below the 55 USD suite evolve-p" in output
+
+
+def test_ab_v2_p_exports_its_set_only_for_its_own_suite() -> None:
+    """``ab-v2-p`` (V8, E3) is the A/B module with arm P on corpus v2."""
+    script = _run_script()
+    ((name, value),) = AB_V2_P_ENV.items()
+    guarded = re.search(
+        r'if \[ "\$\{INPUT_SUITE\}" = ab-v2-p \]; then\n'
         rf"(?:  #.*\n)*  export {re.escape(name)}={re.escape(value)}\nfi\n",
         script,
     )
