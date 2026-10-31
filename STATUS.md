@@ -513,7 +513,18 @@ Postgres at 100 % under CPython 3.13 and 3.11, prettier):
   (2 reps × 6 repositories = 57; one rep fits 28.5 but has no CI input), and
   L5a/L5b's `ab-v2` suite (arm A, and A vs B, on v2) was never built; a small
   unit adds it before L5a. E4 fits its row (54.3 a library).
-- **Next:** the live order (E0b first).
+- **E0b (2026-10-31, 1.46 USD): D55's lane bound was too low.** Counted lane
+  prompts reached 35,686 tokens (mistune; sqlparse and pycparser also over
+  34,000), so the probe refused their lens request, and in E1 the pipeline would
+  have dropped every lens there. Caching works: wherever the lens was sent it
+  read exactly the data block S1 wrote. The reviewer with 16 ideas stayed under
+  40,000 (max 39,463). As pre-registered, the bounds are re-derived before E1
+  (V7b): lane 38,000, reviewer 44,000, auditor 58,000 (about 400 tokens an
+  idea). Requests took 9-18 s, so the minutes estimate falls too: E1 runs four
+  libraries a dispatch in a 240-minute job, not two. The three libraries' lens
+  cache read is measured again with V7b (about 0.3 USD). The engine itself was
+  never limited: it budgets each request from its own count.
+- **Next:** V7b, the three-library E0b re-run, then E1.
 - **Owner's plan, for the record (2026-10-30):** after Wave 2's idea experiments
   (E1/E2) report, the **Improvement pilot** (label I; renamed by the owner on
   2026-10-31 from "Improvement Wave 3", which clashed with Step 3's Wave 3,
@@ -1799,10 +1810,11 @@ days before it expires. The table below is the 2026-10-23 plan with stage C
 replaced by Step 3's own live plan (spec section 6, D24's spend rule); the
 register below says which questions are already answered.
 
-**Spent so far in Window 1: 18.22 USD by Step 3** (L0 0.00, L1a 2.21 with its
+**Spent so far in Window 1: 19.68 USD by Step 3** (L0 0.00, L1a 2.21 with its
 guards crashed in the harness, the L1a re-run 2.11, L1b 2.42, L2a 5.94 over two
-repetitions, L2b 5.46; Wave 1's live runs are done; Wave 2: L3 0.07, L4 1.67).
-The two Window 1 rows in the ledger (2026-10-23, 0.00 each) predate Step 3.
+repetitions, L2b 5.46; Wave 1's live runs are done; Wave 2: L3 0.07, L4 1.67,
+E0b 1.46). The two Window 1 rows in the ledger (2026-10-23, 0.00 each) predate
+Step 3.
 
 | Stage                          | When               | Live work                                                                                                                                                                                   | Est. per run    | Runs  | Est. total  |
 | ------------------------------ | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | ----- | ----------- |
@@ -1955,6 +1967,7 @@ builds it.
 | 2026-10-26 | 1      | [40252104199](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40252104199)                                                                                                                                                                                         | L2b   | 5.46       | OSS corpus, `wired`, Step 3 noise rule, Opus 5.5 engine and editor, Sonnet 5.5 medium generator, 42 min: delivered 7/10 (`tabulate` 47.2, `pycparser` 27.7, `idna` 15.5, `markdown` 9.5, `sqlparse` 8.8, `mistune` 6.1, `sortedcontainers` 2.6 %); `more_itertools`, `pyparsing`, `tomli` not (best trials 1.8-3.8 %); every guard held; $0.55 a run, $0.78 a win. Same rule as L2a (Q16): Opus editor 7/10 against Sonnet low 2/10 and 6/10. Tokens 189,379 in / 121,388 out / 1,529,350 cache read / 450,599 cache write.                                                                                                                                                                                                                                                                                                               |
 | 2026-10-26 | 1      | [40366128171](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/40366128171)                                                                                                                                                                                         | L3    | 0.07       | Grader agreement (V5's 12 hand labels: 6 hits incl. multi-part ones, 6 near misses), Opus 4.8 grader, one request, 21 s: 12/12 agree, 0 near misses graded as hits (gate at least 9/10 and none: pass), so L4's hit@k counts. Tokens 9,803 in / 1,035 out. Under O19 (same day) this is a smoke test only: the labels' setter held the answer key; L3b re-tests the grader on real, independently labelled ideas.                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | 2026-10-30 | 1      | [41122348574](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/41122348574)                                                                                                                                                                                         | L4    | 1.67       | `sweep-record`, Sonnet 5.5 medium, recorded, on 37 repositories (v1, hard, v2; 32 slowdowns, 5 controls), 38/38 passed in 15.6 min: hit@1 28/32, hit@5 31/32, 0/5 control big-gain claims; corpus v2 hit@1 8/10, hit@5 9/10, every v2 category 2/2 except `uncommon` (0/2 at 1, 1/2 at 5: ratecheck's fix ranked 2nd, parcelindex's never proposed). v2 mostly saturates for today's generator; `uncommon` is where the idea pipeline must show. Grades are provisional until L3b (O19). Recorded replies are V6's fixture (artifact live-results-41122348574-1).                                                                                                                                                                                                                                                                         |
+| 2026-10-31 | 1      | [41179537835](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/41179537835)                                                                                                                                                                                         | E0b   | 1.46       | `ideas-probe`, count mode, Sonnet 5.5 lanes, 10 OSS libraries, 10/10 passed in 7.9 min (cap 8). Counted lane prompts 15,984-35,686 tokens: mistune 35,686, sqlparse 35,141, pycparser 34,633 over D55's 34,000, so the probe's per-send cap refused their lens request; reviewer with 16 ideas 19,748-39,463 (under 40,000); on the 7 libraries where the lens was sent it read exactly S1's cached data block (12,831-30,414 tokens). Sends 8.8-18.4 s, about 47 s a library. Rule result: the bounds are re-derived before E1 (V7b). Artifact live-results-41179537835-1.                                                                                                                                                                                                                                                               |
 
 ### 2026-10-24 (Window 0 final experiments: what they decide)
 
