@@ -67,7 +67,7 @@ on:
         options: [default, claude-sonnet-5-5]
         default: default
       suite_cap_usd:
-        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75, hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 112, sweep-fable 41, sweep-record 24, ab 140, escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, heal-hard 8, build 27, grader 2, upstream-verify 0 (no request, but the cap must be above 0), upstream 50, agent-probes 1, heal-agent 8, research-agent 8, watch 2, watch-cleanup 2'
+        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75 (corpus_select controls 15), hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 112, sweep-fable 41, sweep-record 24, ab 140, escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, heal-hard 8, build 27, grader 2, upstream-verify 0 (no request, but the cap must be above 0), upstream 50, agent-probes 1, heal-agent 8, research-agent 8, watch 2, watch-cleanup 2'
         type: string
         default: '12'
       oss_repo:
@@ -79,6 +79,21 @@ on:
         type: choice
         options: ['1', '2', '3']
         default: '1'
+      idea_pipeline:
+        description: 'oss and corpus only: IDEA_PIPELINE (off: arm A, the current generator; on: arm P, the idea pipeline on its own lane, leap and reviewer transports; on runs wired only)'
+        type: choice
+        options: ['off', 'on']
+        default: 'off'
+      portfolio_rounds:
+        description: 'oss and corpus only: PORTFOLIO_ROUNDS, the trial rounds after the first a portfolio may take (0 keeps the current router; E2 sets 2 on both arms)'
+        type: choice
+        options: ['0', '1', '2', '3']
+        default: '0'
+      corpus_select:
+        description: 'corpus only: all (its 15 repositories, need 75) or controls (its three controls alone, need 15: the E2 control dispatches)'
+        type: choice
+        options: [all, controls]
+        default: all
 
 # Least privilege by default; a job that needs more says so itself.
 permissions:
@@ -586,7 +601,9 @@ jobs:
     # (paired trials, confirmation, calibration) and wired ideas, L1a and L1b
     # measured hard 28-29 and corpus 34 minutes (2.3-2.9 a loop, 2026-10-25),
     # so both sit at the 8-minutes-a-loop floor: hard 90, corpus 120. oss
-    # keeps 300 (D41's 2.6x estimate) until L2a measures it.
+    # keeps 300: L2a measured 36-40 minutes for its 10 loops, and arm P or A
+    # at portfolio_rounds 2 (E2) at most doubles the trials (re-pinned from
+    # E2's first dispatch).
     timeout-minutes: ${{ inputs.suite == 'sweep' && 240 || inputs.suite == 'sweep-fable' && 180 || inputs.suite == 'sweep-record' && 150 || inputs.suite == 'ab' && 360 || inputs.suite == 'noise' && 90 || inputs.suite == 'oss-ab' && 120 || inputs.suite == 'evolve' && 300 || inputs.suite == 'evolve-more' && 300 || inputs.suite == 'build' && 120 || inputs.suite == 'upstream-verify' && 150 || inputs.suite == 'upstream' && 300 || inputs.suite == 'heal-agent' && 120 || inputs.suite == 'research-agent' && 45 || inputs.suite == 'watch' && 90 || inputs.suite == 'escalation' && 90 || inputs.suite == 'triage' && 90 || inputs.suite == 'papers' && 60 || inputs.suite == 'web' && 90 || inputs.suite == 'corpus' && 120 || inputs.suite == 'oss' && 300 || inputs.suite == 'hard' && 90 || inputs.suite == 'attack' && 45 || 30 }}
     defaults:
       run:
@@ -691,6 +708,9 @@ jobs:
           INPUT_SUITE_CAP_USD: ${{ inputs.suite_cap_usd }}
           INPUT_OSS_REPO: ${{ inputs.oss_repo }}
           INPUT_UPSTREAM_BATCH: ${{ inputs.upstream_batch }}
+          INPUT_IDEA_PIPELINE: ${{ inputs.idea_pipeline }}
+          INPUT_PORTFOLIO_ROUNDS: ${{ inputs.portfolio_rounds }}
+          INPUT_CORPUS_SELECT: ${{ inputs.corpus_select }}
           LIVE_RESULTS_PATH: ${{ runner.temp }}/live-results.jsonl
         run: |
           if [ -z "${ANTHROPIC_API_KEY}" ]; then
@@ -759,6 +779,53 @@ jobs:
             watch-cleanup) paths=(tests/live/experiments/test_watch_managed_live.py); need=2 ;;
             *)
               echo "::error::unknown suite input (stage-a, corpus, attack, hard, oss, probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, heal-hard, build, grader, upstream-verify, upstream, agent-probes, heal-agent, research-agent, watch or watch-cleanup)"
+              exit 1
+              ;;
+          esac
+          # The arm of an oss or corpus run (V4 amended, E2): IDEA_PIPELINE
+          # (arm P, wired only: the factory then needs the lane, leap and
+          # reviewer transports corpus.role_wiring captures) and
+          # PORTFOLIO_ROUNDS, both exported explicitly for those two suites
+          # and refused for every other; corpus_select=controls runs the
+          # corpus suite's three controls alone (3 x 5 USD). An unset input
+          # (an older caller) reads as its default, an empty one is refused.
+          case "${INPUT_IDEA_PIPELINE-off}" in
+            off) idea_pipeline=false ;;
+            on) idea_pipeline=true ;;
+            *)
+              echo "::error::unknown idea_pipeline input (off or on)"
+              exit 1
+              ;;
+          esac
+          case "${INPUT_PORTFOLIO_ROUNDS-0}" in
+            0 | 1 | 2 | 3) portfolio_rounds="${INPUT_PORTFOLIO_ROUNDS-0}" ;;
+            *)
+              echo "::error::unknown portfolio_rounds input (0, 1, 2 or 3)"
+              exit 1
+              ;;
+          esac
+          if [ "${INPUT_SUITE}" = oss ] || [ "${INPUT_SUITE}" = corpus ]; then
+            if [ "${idea_pipeline}" = true ] && [ "${INPUT_MODE}" != wired ]; then
+              echo "::error::idea_pipeline on runs wired only (mode wired)"
+              exit 1
+            fi
+            export IDEA_PIPELINE="${idea_pipeline}" PORTFOLIO_ROUNDS="${portfolio_rounds}"
+          elif [ "${idea_pipeline}" = true ] || [ "${portfolio_rounds}" != 0 ]; then
+            echo "::error::idea_pipeline and portfolio_rounds are only for the oss and corpus suites"
+            exit 1
+          fi
+          case "${INPUT_CORPUS_SELECT-all}" in
+            all) ;;
+            controls)
+              if [ "${INPUT_SUITE}" != corpus ]; then
+                echo "::error::corpus_select controls is only for the corpus suite"
+                exit 1
+              fi
+              paths=("tests/live/test_corpus_live.py::test_corpus_whole_loop[blockhash]" "tests/live/test_corpus_live.py::test_corpus_whole_loop[sortstats]" "tests/live/test_corpus_live.py::test_corpus_whole_loop[lettertally]")
+              need=15
+              ;;
+            *)
+              echo "::error::unknown corpus_select input (all or controls)"
               exit 1
               ;;
           esac
@@ -875,7 +942,7 @@ jobs:
           export LIVE_SUITE_CAP_USD="${INPUT_SUITE_CAP_USD}"
           export LIVE_CORPUS_MODE="${INPUT_MODE}"
           : > "${LIVE_RESULTS_PATH}"
-          echo "suite ${INPUT_SUITE}, mode ${LIVE_CORPUS_MODE}, ENGINE_MODEL ${ENGINE_MODEL}, EDITOR_MODEL ${EDITOR_MODEL:-default}, noise rule ${noise_rule}, LIVE_SUITE_CAP_USD ${LIVE_SUITE_CAP_USD}"
+          echo "suite ${INPUT_SUITE}, mode ${LIVE_CORPUS_MODE}, ENGINE_MODEL ${ENGINE_MODEL}, EDITOR_MODEL ${EDITOR_MODEL:-default}, noise rule ${noise_rule}, LIVE_SUITE_CAP_USD ${LIVE_SUITE_CAP_USD}, idea pipeline ${INPUT_IDEA_PIPELINE-off}, portfolio rounds ${portfolio_rounds}, corpus select ${INPUT_CORPUS_SELECT-all}"
           uv run pytest "${paths[@]}" -m live --no-cov -n 0 -rA
 
       # One JSON line per corpus run (CorpusOutcome), kept for the STATUS

@@ -43,6 +43,7 @@ from e2e.test_step2 import _check_repo_untouched
 from autonomous_ai_agents.clients.cost import preflight_estimate
 from autonomous_ai_agents.clients.transport import LLMTransport
 from autonomous_ai_agents.common.config import (
+    PIPELINE_ROLES,
     Role,
     Settings,
     role_chain,
@@ -71,6 +72,7 @@ from autonomous_ai_agents.optimization.judges import primary_metric
 from autonomous_ai_agents.orchestrator.factory import build_context
 from autonomous_ai_agents.orchestrator.main import EngineRunResult, Orchestrator
 from autonomous_ai_agents.orchestrator.nodes import NodeContext
+from autonomous_ai_agents.orchestrator.nodes import _project_floor as project_floor
 
 from .conftest import (
     TEST_COMMAND,
@@ -526,11 +528,16 @@ def role_wiring(
     """The captured role transports a live loop passes ``build_context``
     (which builds none beside an injected engine transport): the editor's
     when ``EDITOR_MODEL`` moves it off the engine chain (``editor``: no
-    ``editor=`` factory given); in ``wired`` mode the generator's, and the
-    matcher's under matched retrieval. Each bills its role's chain, read
-    from ``cfg`` (a run's settings copy) or else the global settings; the
-    factory refuses one off its own role chain."""
+    ``editor=`` factory given); in ``wired`` mode the generator's, the
+    matcher's under matched retrieval, and with ``IDEA_PIPELINE`` on the
+    lane's, leap's and reviewer's (arm P; the generator stays the pipeline's
+    fallback). Each bills its role's chain, read from ``cfg`` (a run's
+    settings copy) or else the global settings; the factory refuses one off
+    its own role chain. The pipeline in any other mode is refused here,
+    before anything is sent: such a run wires no generator to replace."""
     base = settings if cfg is None else cfg
+    if base.IDEA_PIPELINE and mode != "wired":
+        raise ValueError(f"IDEA_PIPELINE is on: arm P runs wired only, not {mode!r}")
     roles: list[Role] = []
     if editor and role_chain(base, "editor") != role_chain(base, "engine"):
         roles.append("editor")
@@ -538,6 +545,8 @@ def role_wiring(
         roles.append("generator")
         if base.RESEARCH_RETRIEVAL == "matched":
             roles.append("matcher")
+        if base.IDEA_PIPELINE:
+            roles.extend(PIPELINE_ROLES)
     return {role: run.transport(role_settings(base, role)) for role in roles}
 
 
@@ -731,11 +740,22 @@ class CorpusOutcome:
     fix_gain_pct: float = round(100 * MIN_FIX_GAIN, 6)  # the reference fix reaches it
     reached_fix: bool = False  # delivered with gain_pct >= fix_gain_pct
     known_fix: bool = False  # aimed: aimed_kept; blind: reached_fix; decoy: no
+    # The arm (V4 amended): what ``oss-ab --from-results`` pairs and checks
+    idea_pipeline: bool = False  # IDEA_PIPELINE: arm P on, arm A off
+    portfolio_rounds: int = 0  # PORTFOLIO_ROUNDS (E2: 2 on both arms)
+    generator_n: int = 5  # GENERATOR_N (E2c: 10)
+    floor_pct: float | None = None  # the combination's noise floor (shown only)
+    # The project floor, E2's call: the primary objective's raised
+    # ``min_relative_gain`` on the baseline (D41 c, D42), the calibrated
+    # floor on wall time; ``None`` when no baseline was measured
+    project_floor_pct: float | None = None
 
     def to_json(self) -> str:
         data = asdict(self)
         data["gain_pct"] = _finite(self.gain_pct)
         data["best_trial_gain_pct"] = _finite(self.best_trial_gain_pct)
+        data["floor_pct"] = _finite(self.floor_pct)
+        data["project_floor_pct"] = _finite(self.project_floor_pct)
         for key, value in data.items():
             if isinstance(value, str):
                 data[key] = value[:JSON_TEXT_MAX]
@@ -758,6 +778,8 @@ def outcome_of(
     kept: tuple[str, ...] = ()
     gain: float | None = None
     best: float | None = None
+    floor: float | None = None
+    judged_floor: float | None = None
     violations: tuple[str, ...] = ()
     if result is not None:
         state = result.state
@@ -775,11 +797,15 @@ def outcome_of(
         best = 100 * max(gains) if gains else None
         delivery, combined = state["delivery"], state["combination"]
         delivered = delivery is not None and delivery.kind is DeliveryKind.branch
-        if delivered and combined is not None:
+        judged = [] if combined is None else combined.judge_results
+        floors = [j.noise_floor for j in judged if j.metric == metric]
+        floor = next((100 * f for f in floors if f is not None), None)
+        baseline = state["baseline"]
+        if baseline is not None:  # the floor the primary metric was judged with
+            judged_floor = 100 * project_floor(baseline)
+        if delivered:
             measured = [
-                j.gain
-                for j in combined.judge_results
-                if j.metric == metric and j.gain is not None
+                j.gain for j in judged if j.metric == metric and j.gain is not None
             ]
             gain = 100 * measured[0] if measured else None
         aimed = {spec.title for spec in repo.hypotheses if spec.aimed}
@@ -814,6 +840,11 @@ def outcome_of(
         fix_gain_pct=fix_pct,
         reached_fix=reached,
         known_fix=known,
+        idea_pipeline=settings.IDEA_PIPELINE,
+        portfolio_rounds=settings.PORTFOLIO_ROUNDS,
+        generator_n=settings.GENERATOR_N,
+        floor_pct=floor,
+        project_floor_pct=judged_floor,
     )
 
 

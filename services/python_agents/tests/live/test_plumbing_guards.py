@@ -9,13 +9,21 @@ each suite before a dollar is spent:
   prices the editor's chain;
 - the ``editor_model`` input, parsed by the real ``Settings``;
 - the noise rule of every suite, explicit (no suite relies on a default);
-- the timeouts (hard 180, OSS 300, noise 90) and the L-table's caps.
+- the timeouts (hard 180, OSS 300, noise 90) and the L-table's caps;
+- E2's arms (Wave 2 amendment, V4 amended): ``idea_pipeline`` on puts the
+  lane, leap and reviewer on their own captured transports (wired only),
+  ``portfolio_rounds`` reaches the run, both only for oss and corpus, and
+  ``corpus_select=controls`` runs the corpus suite's three controls; the
+  outcome records the arm and the combination's floor for the pairing.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +32,23 @@ import pytest
 from e2e.conftest import Isolation, UserRepo
 
 from autonomous_ai_agents.clients.cost import chain
-from autonomous_ai_agents.common.config import Settings, role_chain, settings
+from autonomous_ai_agents.common.config import (
+    PIPELINE_ROLES,
+    PORTFOLIO_ROUNDS_MAX,
+    Settings,
+    role_chain,
+    settings,
+)
+from autonomous_ai_agents.common.models import (
+    METRIC_PEAK_RSS_BYTES,
+    METRIC_WALL_TIME_S,
+    Baseline,
+    Direction,
+    NoiseCalibration,
+    Objective,
+    ObjectiveKind,
+)
+from autonomous_ai_agents.optimization.idea_pipeline import IdeaPipelineGenerator
 from autonomous_ai_agents.orchestrator.factory import build_context, min_trial_budget
 
 from . import corpus, noise, oss
@@ -351,3 +375,365 @@ def test_the_l_table_caps_are_the_suite_needs_and_cover_the_estimates() -> None:
         assert float(table[suite]) == runs * cap, suite  # tight: no slack
         assert SPEC_EXPECTED_USD[suite] <= runs * cap <= 150, suite
     assert 2 * float(table["oss"]) == 100  # L2a's two repetitions
+
+
+# ---------------------------------------------------------------------------
+# V4 amended (Wave 2 amendment, section 3.6): arm P, portfolio rounds and the
+# corpus controls of E2
+# ---------------------------------------------------------------------------
+
+PIPELINE = PIPELINE_ROLES  # lane, leap, reviewer
+CONTROL_NODES = tuple(  # the corpus suite's three controls, by node id
+    f"tests/live/test_corpus_live.py::test_corpus_whole_loop[{r.name}]"
+    for r in CORPUS
+    if r.kind == "control"
+)
+
+
+def test_the_pipeline_puts_its_three_roles_on_their_own_captured_chains(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without the three transports the factory refuses an injected-transport
+    build by name (C11); with them every one bills its own role chain on the
+    run's one ledger, and today's generator stays wired as the fallback."""
+    assert PIPELINE == ("lane", "leap", "reviewer")
+    root, run = _dry(tmp_path, monkeypatch)
+    monkeypatch.setattr(settings, "IDEA_PIPELINE", True)
+    seen = _spy(monkeypatch, corpus)
+    loop = start_loop(CORPUS[0], run, root, REQUIRED, mode="wired")
+    roles = seen["role_transports"]
+    assert set(roles) == {"generator", *PIPELINE}
+    for role in PIPELINE:
+        assert roles[role].chain == role_chain(settings, role), role
+        assert roles[role].records is run.records
+    assert isinstance(loop.context.generator, IdeaPipelineGenerator)
+    assert loop.context.portfolio_rounds == settings.PORTFOLIO_ROUNDS
+    seen = _spy(monkeypatch, oss)
+
+    def clone(repo: oss.OssRepo, dest: Path, **_: object) -> UserRepo:
+        return make_repo(CORPUS[0].path, dest)
+
+    monkeypatch.setattr(oss, "prepare_repo", clone)
+    start_oss_loop(OSS_CORPUS[0], run, root / "oss", REQUIRED, mode="wired")
+    assert set(seen["role_transports"]) == {"generator", *PIPELINE}
+    assert run.capture.exchanges == []
+
+
+def test_the_pipeline_roles_follow_a_settings_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, run = _dry(tmp_path, monkeypatch)
+    cfg = settings.model_copy(update={"IDEA_PIPELINE": True})
+    assert set(corpus.role_wiring(run, "wired", cfg=cfg)) == {"generator", *PIPELINE}
+    assert set(corpus.role_wiring(run, "wired")) == {"generator"}  # global: off
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_the_pipeline_refuses_every_mode_but_wired_before_any_wire(
+    mode: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mode that hands candidates wires no generator, so arm P would be no
+    arm: refused by name, before anything is sent."""
+    _, run = _dry(tmp_path, monkeypatch)
+    cfg = settings.model_copy(update={"IDEA_PIPELINE": True})
+    with pytest.raises(ValueError, match="IDEA_PIPELINE.*wired"):
+        corpus.role_wiring(run, mode, cfg=cfg)  # type: ignore[arg-type]
+    assert run.capture.exchanges == [] and run.records == []
+
+
+def test_an_outcome_records_its_arm_and_both_floors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What ``--from-results`` pairs on: the arm's settings, the noise floor
+    of the delivered combination on the primary metric (shown) and the
+    project floor (E2's call)."""
+    run = LiveRun("t", 5.0, wire=httpx2.MockTransport(_no_wire))
+    repo, result = _mode_result(tmp_path / "a", "wired", 0.12)
+    combination = result.state["combination"]
+    assert combination is not None
+    first, speed = combination.judge_results
+    result.state["combination"] = combination.model_copy(
+        update={
+            "judge_results": (first, speed.model_copy(update={"noise_floor": 0.043}))
+        }
+    )
+    assert result.state["baseline"] is None  # no baseline, no project floor
+    uncalibrated = outcome_of(repo, run, result, guard="ok", mode="wired")
+    assert uncalibrated.project_floor_pct is None
+    calibration = NoiseCalibration(blocks=3, gaps={"bench": 0.012}, floor=0.031)
+    raised = Objective(  # wall time under the baseline node's raise (D41 c)
+        project_id=result.state["project"].id,
+        kind=ObjectiveKind.runtime,
+        metric=METRIC_WALL_TIME_S,
+        direction=Direction.minimize,
+        min_relative_gain=calibration.floor,
+        description="minimize wall time",
+    )
+    result.state["baseline"] = Baseline(objectives=(raised,), calibration=calibration)
+    plain = outcome_of(repo, run, result, guard="ok", mode="wired")
+    assert (plain.idea_pipeline, plain.portfolio_rounds) == (False, 0)
+    assert plain.generator_n == settings.GENERATOR_N
+    assert plain.floor_pct == pytest.approx(4.3)
+    assert plain.project_floor_pct == pytest.approx(3.1)  # D41 c, E2's floor
+    monkeypatch.setattr(settings, "IDEA_PIPELINE", True)
+    monkeypatch.setattr(settings, "PORTFOLIO_ROUNDS", 2)
+    arm_p = outcome_of(repo, run, result, guard="ok", mode="wired")
+    loaded = json.loads(arm_p.to_json())
+    assert (loaded["idea_pipeline"], loaded["portfolio_rounds"]) == (True, 2)
+    assert loaded["floor_pct"] == pytest.approx(4.3)
+    assert loaded["project_floor_pct"] == pytest.approx(3.1)
+    failed = outcome_of(repo, run, None, guard="breach: x", mode="wired")
+    assert failed.floor_pct is None and failed.idea_pipeline
+    assert failed.project_floor_pct is None
+
+
+def test_the_project_floor_is_the_one_the_primary_metric_was_judged_with(
+    tmp_path: Path,
+) -> None:
+    """E2's "project floor" is the floor every judge, confirmation and
+    combine applied to the primary metric: its objective's
+    ``min_relative_gain`` on the baseline, which the baseline node raised to
+    the calibration (D41 c; ``_project_floor``, D42's margin). A wall-time
+    run reads the calibrated floor, or a larger user value; a peak-memory run
+    its own floor (calibration raises wall time only); an uncalibrated run
+    the 2 % minimum."""
+    run = LiveRun("t", 5.0, wire=httpx2.MockTransport(_no_wire))
+    repo, result = _mode_result(tmp_path, "wired", 0.12)
+    project_id = result.state["project"].id
+
+    def objective(kind: ObjectiveKind, floor: float, weight: float) -> Objective:
+        metric = {
+            ObjectiveKind.runtime: METRIC_WALL_TIME_S,
+            ObjectiveKind.peak_memory: METRIC_PEAK_RSS_BYTES,
+        }[kind]
+        return Objective(
+            project_id=project_id,
+            kind=kind,
+            metric=metric,
+            direction=Direction.minimize,
+            min_relative_gain=floor,
+            weight=weight,
+            description="minimize",
+        )
+
+    calibration = NoiseCalibration(blocks=3, gaps={"bench": 0.012}, floor=0.031)
+    runtime = ObjectiveKind.runtime
+    cases = [
+        ((objective(runtime, 0.031, 1.0),), calibration, 3.1),
+        ((objective(runtime, 0.06, 1.0),), calibration, 6.0),  # the user's stays
+        (
+            (
+                objective(ObjectiveKind.peak_memory, 0.05, 2.0),
+                objective(runtime, 0.031, 1.0),
+            ),
+            calibration,
+            5.0,
+        ),
+        ((objective(runtime, 0.02, 1.0),), None, 2.0),  # not calibrated
+        ((), None, 2.0),  # no objective: the engine's 2 % minimum
+    ]
+    for objectives, calibrated, want in cases:
+        result.state["baseline"] = Baseline(
+            objectives=objectives, calibration=calibrated
+        )
+        found = outcome_of(repo, run, result, guard="ok", mode="wired")
+        assert found.project_floor_pct == pytest.approx(want), (objectives, want)
+
+
+def _arm_dispatch(
+    tmp_path: Path,
+    suite: str,
+    cap: str,
+    *,
+    mode: str = "wired",
+    idea: str = "off",
+    rounds: str = "0",
+    select: str = "all",
+) -> tuple[int, str, list[str]]:
+    """The run step under bash -e with a fake ``uv`` recording the pytest
+    arguments and the arm's exports (``unset`` when not exported)."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    called = tmp_path / "called.txt"
+    fake = bin_dir / "uv"
+    fake.write_text(
+        "#!/bin/sh\n"
+        f'printf "%s\\n" "${{IDEA_PIPELINE-unset}}" "${{PORTFOLIO_ROUNDS-unset}}" '
+        f'"$@" > "{called}"\n',
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    script = tmp_path / "step.sh"
+    script.write_text(_run_script(), encoding="utf-8")
+    env = {
+        "PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin",
+        "HOME": str(tmp_path),
+        "ANTHROPIC_API_KEY": "placeholder-not-a-key",
+        "INPUT_SUITE": suite,
+        "INPUT_ENGINE_MODEL": "claude-opus-5-5",
+        "INPUT_SUITE_CAP_USD": cap,
+        "INPUT_MODE": mode,
+        "INPUT_OSS_REPO": "",
+        "INPUT_EDITOR_MODEL": "default",
+        "INPUT_UPSTREAM_BATCH": "1",
+        "INPUT_IDEA_PIPELINE": idea,
+        "INPUT_PORTFOLIO_ROUNDS": rounds,
+        "INPUT_CORPUS_SELECT": select,
+        "LIVE_RESULTS_PATH": str(tmp_path / "results.jsonl"),
+    }
+    proc = subprocess.run(
+        ["bash", "-e", str(script)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    calls = called.read_text(encoding="utf-8").splitlines() if called.exists() else []
+    return proc.returncode, proc.stdout + proc.stderr, calls
+
+
+def _quoted_options(block: str) -> list[str]:
+    found = re.search(r"options: \[(.*)\]", block)
+    assert found is not None, block
+    return [item.strip().strip("'") for item in found.group(1).split(",")]
+
+
+def test_the_arm_inputs_are_strict_choices_reaching_the_run_via_env() -> None:
+    """``off``/``on`` quoted (YAML 1.1 reads them as booleans), rounds 0 to
+    ``PORTFOLIO_ROUNDS_MAX``, and every one through ``env`` only."""
+    idea = _ci_block("      idea_pipeline:", "      portfolio_rounds:")
+    assert "options: ['off', 'on']" in idea and "default: 'off'" in idea
+    rounds = _ci_block("      portfolio_rounds:", "      corpus_select:")
+    assert _quoted_options(rounds) == [str(n) for n in range(PORTFOLIO_ROUNDS_MAX + 1)]
+    assert "default: '0'" in rounds
+    select = _ci_block("      corpus_select:", "\n\n")
+    assert _quoted_options(select) == ["all", "controls"] and "default: all" in select
+    step = _ci_block("      - name: Run live tests", "      - name: Upload live corpus")
+    for name in ("idea_pipeline", "portfolio_rounds", "corpus_select"):
+        assert f"INPUT_{name.upper()}: ${{{{ inputs.{name} }}}}" in step, name
+
+
+@pytest.mark.parametrize("suite", ["oss", "corpus"])
+def test_arm_p_reaches_the_run_and_parses_to_the_pipeline(
+    suite: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E2's arm P and arm A: what the step exports, parsed by the real
+    Settings; the suite's need is unchanged (oss 50, corpus 75)."""
+    need = {"oss": "50", "corpus": "75"}[suite]
+    code, output, calls = _arm_dispatch(tmp_path, suite, need, idea="on", rounds="2")
+    assert code == 0, output
+    assert calls[:2] == ["true", "2"] and "idea pipeline on" in output
+    monkeypatch.setenv("IDEA_PIPELINE", calls[0])
+    monkeypatch.setenv("PORTFOLIO_ROUNDS", calls[1])
+    cfg = Settings()
+    assert cfg.IDEA_PIPELINE and cfg.PORTFOLIO_ROUNDS == 2
+    for role in PIPELINE:
+        assert all(name in cfg.MODEL_PRICING for name in role_chain(cfg, role))
+    fresh = tmp_path / "arm-a"
+    fresh.mkdir()
+    code, output, calls = _arm_dispatch(fresh, suite, need, rounds="2")
+    assert code == 0 and calls[:2] == ["false", "2"], output
+    below = tmp_path / "below"
+    below.mkdir()
+    code, output, calls = _arm_dispatch(below, suite, f"{int(need) - 1}.99", idea="on")
+    assert code == 1 and calls == [] and "is below the" in output
+
+
+def test_other_suites_take_no_arm_and_export_nothing(tmp_path: Path) -> None:
+    code, output, calls = _arm_dispatch(tmp_path, "hard", "50")
+    assert code == 0 and calls[:2] == ["unset", "unset"], output
+    for index, (suite, idea, rounds) in enumerate(
+        (("hard", "on", "0"), ("hard", "off", "2"), ("oss-ab", "on", "0"))
+    ):
+        fresh = tmp_path / f"refused-{index}"
+        fresh.mkdir()
+        code, output, calls = _arm_dispatch(
+            fresh, suite, "150", idea=idea, rounds=rounds
+        )
+        assert code == 1 and calls == [], (suite, output)
+        assert "only for the oss and corpus suites" in output, output
+
+
+def test_the_arm_inputs_refuse_bad_values_and_the_pipeline_off_wired(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        ({"idea": value}, "unknown idea_pipeline")
+        for value in ("", "On", "true", "1", "on;id")
+    ]
+    cases += [
+        ({"rounds": value}, "unknown portfolio_rounds")
+        for value in ("", "4", "-1", "02", "2 ")
+    ]
+    cases += [
+        ({"select": value}, "unknown corpus_select") for value in ("", "Controls", "x")
+    ]
+    cases += [({"idea": "on", "mode": "aimed"}, "idea_pipeline on runs wired only")]
+    for index, (knobs, message) in enumerate(cases):
+        fresh = tmp_path / f"bad-{index}"
+        fresh.mkdir()
+        code, output, calls = _arm_dispatch(fresh, "oss", "50", **knobs)
+        assert (code, calls) == (1, []) and message in output, (knobs, output)
+
+
+def test_corpus_select_controls_runs_exactly_the_three_controls(
+    tmp_path: Path,
+) -> None:
+    """E2's control dispatches: the three controls by node id at 3 x 5 USD;
+    ``all`` keeps the whole suite; any other suite refuses it."""
+    assert len(CONTROL_NODES) == 3
+    code, output, calls = _arm_dispatch(tmp_path, "corpus", "15", select="controls")
+    assert code == 0, output
+    assert calls[2:] == ["run", "pytest", *CONTROL_NODES, "-m", "live", "--no-cov",
+                         "-n", "0", "-rA"]  # fmt: skip
+    assert "corpus select controls" in output
+    whole = tmp_path / "all"
+    whole.mkdir()
+    code, output, calls = _arm_dispatch(whole, "corpus", "75")
+    assert code == 0 and calls[4] == "tests/live/test_corpus_live.py", output
+    for index, (suite, cap) in enumerate((("corpus", "14.99"), ("oss", "50"))):
+        fresh = tmp_path / f"refused-{index}"
+        fresh.mkdir()
+        code, output, calls = _arm_dispatch(fresh, suite, cap, select="controls")
+        assert code == 1 and calls == [], output
+    assert "corpus_select controls is only for the corpus suite" in output
+
+
+def test_the_control_node_ids_collect_exactly_the_three_control_cases() -> None:
+    """The node ids are the live module's own parametrize ids (collection
+    only: nothing runs, nothing spends)."""
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "-o",
+            "addopts=",
+            "-p",
+            "no:cacheprovider",
+            "-m",
+            "live",
+            *CONTROL_NODES,
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    collected = [line for line in proc.stdout.splitlines() if "::" in line]
+    assert collected == list(CONTROL_NODES)
+
+
+def test_the_oss_suite_keeps_ten_loops_need_fifty_and_three_hundred_minutes() -> None:
+    """Arm P at ``PORTFOLIO_ROUNDS=2`` at most doubles the trials; L2a
+    measured 36-40 minutes for 10 loops, so 300 holds (re-pinned from E2's
+    first dispatch)."""
+    table = dict(re.findall(r"(\S+)\) paths=\(.*\); need=([0-9.]+) ;;", _run_script()))
+    assert (len(OSS_CORPUS), table["oss"], TIMEOUTS["oss"]) == (10, "50", 300)
+    block = _ci_block("  live-smoke:", "    defaults:")
+    assert "inputs.suite == 'oss' && 300" in block

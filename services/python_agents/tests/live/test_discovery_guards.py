@@ -1905,3 +1905,324 @@ def test_a_cap_bound_loss_is_told_apart_from_a_real_loss(
     none = esc.pass_record("first", outcome, None)
     assert (none["budget_exhausted"], none["trial_budget_error"]) == (None, False)
     assert "cap hit" in ab.render_ab([row])
+
+
+# ---------------------------------------------------------------------------
+# E2's pairing from two oss results artifacts (V4 amended, oss-ab
+# --from-results): ab_decision by (library, repetition)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("counts", "met"),
+    [
+        ((1, 4, 0, 0), True),  # c - b = 3
+        ((2, 4, 0, 0), False),  # c - b = 2
+        ((1, 4, 0, 1), False),  # B has more control false wins than A
+        ((1, 4, 1, 1), True),
+        ((0, 9, 2, 0), True),
+    ],
+)
+def test_ab_decision_needs_the_lead_and_no_more_b_control_wins(
+    counts: tuple[int, int, int, int], met: bool
+) -> None:
+    assert ab.ab_decision(*counts) is met
+
+
+def test_ab_decision_refuses_negative_counts() -> None:
+    for counts in ((-1, 0, 0, 0), (0, 0, 0, -1)):
+        with pytest.raises(ValueError, match=">= 0"):
+            ab.ab_decision(*counts)
+
+
+def _arm_row(
+    name: str,
+    *,
+    pipeline: bool,
+    delivered: bool = False,
+    gain: float | None = None,
+    project: float | None = 4.0,
+    floor: float | None = 4.0,
+    kind: str = "slowdown",
+    **more: Any,
+) -> CorpusOutcome:
+    """One wired run of an arm; ``project`` is the project floor
+    (E2's call), ``floor`` the combination's (shown, never called on)."""
+    return replace(
+        _outcome(CORPUS[0], delivered),
+        repo=name,
+        kind=kind,
+        mode="wired",
+        gain_pct=gain,
+        project_floor_pct=project,
+        floor_pct=floor,
+        idea_pipeline=pipeline,
+        portfolio_rounds=2,
+        **more,
+    )
+
+
+def _artifact(path: Path, rows: Sequence[CorpusOutcome]) -> Path:
+    path.write_text("".join(r.to_json() + "\n" for r in rows), encoding="utf-8")
+    return path
+
+
+def _e2_files(root: Path, *, a_n: int = 5) -> dict[str, list[Path]]:
+    """Two reps per arm: rep 1 c, c, c, b, a tie inside the project floor,
+    excluded (a breach); rep 2 c (P's gain above A's by more than the larger
+    project floor), and a library only arm A ran. Arm A runs at
+    ``GENERATOR_N=a_n`` (E2: 5 like P; E2c: 10)."""
+
+    def a_row(name: str, **more: Any) -> CorpusOutcome:
+        return _arm_row(name, pipeline=False, generator_n=a_n, **more)
+
+    a1 = [
+        a_row("tabulate"),
+        a_row("idna"),
+        a_row("pycparser"),
+        a_row("mistune", delivered=True, gain=8.0),
+        a_row("sqlparse", delivered=True, gain=10.0),
+        a_row("markdown"),
+    ]
+    p1 = [
+        _arm_row("tabulate", pipeline=True, delivered=True, gain=6.0),
+        _arm_row("idna", pipeline=True, delivered=True, gain=3.0, project=None),
+        _arm_row("pycparser", pipeline=True, delivered=True, gain=2.0),
+        _arm_row("mistune", pipeline=True),
+        _arm_row("sqlparse", pipeline=True, delivered=True, gain=13.5, project=3.0),
+        _arm_row(
+            "markdown", pipeline=True, delivered=True, gain=9.0, guard="breach: x"
+        ),
+    ]
+    a2 = [
+        a_row("tabulate", delivered=True, gain=5.0, project=2.0),
+        a_row("pyparsing"),
+    ]
+    p2 = [_arm_row("tabulate", pipeline=True, delivered=True, gain=10.0, project=4.5)]
+    controls_a = [a_row(r.name, kind="control") for r in CONTROLS]
+    controls_p = [_arm_row(r.name, pipeline=True, kind="control") for r in CONTROLS]
+    return {
+        "a": [_artifact(root / "a1.jsonl", a1), _artifact(root / "a2.jsonl", a2)],
+        "p": [_artifact(root / "p1.jsonl", p1), _artifact(root / "p2.jsonl", p2)],
+        "ca": [_artifact(root / "ca.jsonl", controls_a)],
+        "cp": [_artifact(root / "cp.jsonl", controls_p)],
+    }
+
+
+def test_from_results_pairs_by_library_and_repetition(tmp_path: Path) -> None:
+    files = _e2_files(tmp_path)
+    found = ab.pair_results(
+        files["a"], files["p"], controls_a=files["ca"], controls_p=files["cp"]
+    )
+    calls = {(t.repo, t.rep): t.call for t in found.tasks}
+    assert calls == {
+        ("tabulate", 1): "c",  # P delivered, A did not
+        ("idna", 1): "c",
+        ("pycparser", 1): "c",
+        ("mistune", 1): "b",  # the reverse
+        ("sqlparse", 1): "tie",  # 3.5 points, not above the larger project floor
+        ("markdown", 1): "excluded",  # P's run breached a guard
+        ("tabulate", 2): "c",  # 5.0 points above A's, floor max(2.0, 4.5)
+        ("pyparsing", 2): "excluded",  # arm P never ran it
+    }
+    assert (found.b, found.c) == (1, 4)
+    assert (found.false_wins_a, found.false_wins_p) == (0, 0)
+    assert found.met is True
+    text = ab.render_from_results(found)
+    assert "Paired tasks: 6 (excluded 2" in text and "b = 1, c = 4" in text
+    assert "c - b = 3" in text
+    assert "E2's rule is met" in text and "IDEA_PIPELINE" in text
+    assert "Control false wins: A 0/3, P 0/3" in text
+    assert "GENERATOR_N: A 5, P 5" in text
+
+
+def test_the_call_is_against_the_project_floor_not_the_combinations(
+    tmp_path: Path,
+) -> None:
+    """E2's pre-registered floor is the project floor (D41 c, D42): a
+    5-point lead over a 3 % project floor is P's task even when each
+    combination's own floor (its stdevs) is 8 %, and a 2-point lead under a
+    3 % project floor is no task even when the combinations' floors are 1 %."""
+    rows = {
+        "a": [
+            _arm_row(
+                "tabulate",
+                pipeline=False,
+                delivered=True,
+                gain=5.0,
+                project=3.0,
+                floor=8.0,
+            ),
+            _arm_row(
+                "idna", pipeline=False, delivered=True, gain=5.0, project=3.0, floor=1.0
+            ),
+        ],
+        "p": [
+            _arm_row(
+                "tabulate",
+                pipeline=True,
+                delivered=True,
+                gain=10.0,
+                project=3.0,
+                floor=8.0,
+            ),
+            _arm_row(
+                "idna", pipeline=True, delivered=True, gain=7.0, project=3.0, floor=1.0
+            ),
+        ],
+    }
+    a = _artifact(tmp_path / "a.jsonl", rows["a"])
+    p = _artifact(tmp_path / "p.jsonl", rows["p"])
+    found = ab.pair_results([a], [p])
+    assert {t.repo: t.call for t in found.tasks} == {"tabulate": "c", "idna": "tie"}
+    text = ab.render_from_results(found)
+    assert "| tabulate | 1 | yes | 5.0 | yes | 10.0 | 3.0 | 8.0 | c |" in text
+
+
+def test_a_tie_in_gains_without_a_floor_is_no_discordant_task(tmp_path: Path) -> None:
+    a = _artifact(
+        tmp_path / "a.jsonl",
+        [_arm_row("tabulate", pipeline=False, delivered=True, gain=1.0, project=None)],
+    )
+    p = _artifact(
+        tmp_path / "p.jsonl",
+        [_arm_row("tabulate", pipeline=True, delivered=True, gain=30.0, project=None)],
+    )
+    found = ab.pair_results([a], [p])
+    (task,) = found.tasks
+    assert task.call == "tie"  # no project floor recorded: no claim either way
+    assert (found.b, found.c) == (0, 0)
+
+
+def test_a_p_control_false_win_fails_e2_whatever_the_lead(tmp_path: Path) -> None:
+    files = _e2_files(tmp_path)
+    won = [
+        _arm_row(CONTROLS[0].name, pipeline=True, kind="control", delivered=True),
+        *(_arm_row(r.name, pipeline=True, kind="control") for r in CONTROLS[1:]),
+    ]
+    files["cp"] = [_artifact(tmp_path / "cp-won.jsonl", won)]
+    found = ab.pair_results(
+        files["a"], files["p"], controls_a=files["ca"], controls_p=files["cp"]
+    )
+    assert (found.c - found.b, found.false_wins_p, found.met) == (3, 1, False)
+    text = ab.render_from_results(found)
+    assert "Control false wins: A 0/3, P 1/3" in text and "not met" in text
+    undecided = ab.pair_results(files["a"], files["p"], controls_a=files["ca"])
+    assert undecided.met is None and undecided.false_wins_p is None
+    assert "undecided" in ab.render_from_results(undecided)
+
+
+def test_e2c_reads_the_lead_as_trial_count_or_ideas(tmp_path: Path) -> None:
+    """E2c: P's rep 1 against today's generator at ``GENERATOR_N=10``; no
+    controls; ``c' - b' <= 1`` attributes E2 to trial count."""
+    files = _e2_files(tmp_path, a_n=ab.E2C_GENERATOR_N)
+    e2c = ab.pair_results(files["a"][:1], files["p"][:1], rule="e2c")
+    assert (e2c.b, e2c.c, e2c.met) == (1, 3, None)
+    text = ab.render_from_results(e2c)
+    assert "c' - b' = 2" in text and "attributed to the ideas" in text
+    assert "GENERATOR_N: A 10, P 5" in text
+    one = ab.pair_results(files["a"][1:], files["p"][1:], rule="e2c")
+    text = ab.render_from_results(one)
+    assert "c' - b' = 1" in text and "attributed to trial count" in text
+    with pytest.raises(ValueError, match="e2c takes no controls"):
+        ab.pair_results(files["a"], files["p"], controls_p=files["cp"], rule="e2c")
+
+
+def test_e2c_refuses_arm_a_off_generator_n_10_and_a_mixed_arm_p(
+    tmp_path: Path,
+) -> None:
+    """E2's own arm-A artifacts (``GENERATOR_N=5``) are not E2c's arm A:
+    refused by file and library, as is an arm P of two GENERATOR_N values."""
+    assert ab.E2C_GENERATOR_N == 10
+    files = _e2_files(tmp_path)
+    with pytest.raises(ValueError, match="GENERATOR_N") as refused:
+        ab.pair_results(files["a"][:1], files["p"][:1], rule="e2c")
+    assert "a1.jsonl" in str(refused.value) and "tabulate" in str(refused.value)
+    files = _e2_files(tmp_path, a_n=ab.E2C_GENERATOR_N)
+    mixed = [
+        _arm_row("tabulate", pipeline=True),
+        _arm_row("idna", pipeline=True, generator_n=7),
+    ]
+    p = _artifact(tmp_path / "p-mixed.jsonl", mixed)
+    with pytest.raises(ValueError, match="GENERATOR_N") as refused:
+        ab.pair_results(files["a"][:1], [p], rule="e2c")
+    assert "p-mixed.jsonl" in str(refused.value) and "idna" in str(refused.value)
+
+
+@pytest.mark.parametrize(
+    ("side", "row", "message"),
+    [
+        ("p", {"idea_pipeline": False}, "arm P must run with IDEA_PIPELINE on"),
+        ("a", {"idea_pipeline": True}, "arm A must run with IDEA_PIPELINE off"),
+        ("p", {"portfolio_rounds": 1}, "PORTFOLIO_ROUNDS"),
+        ("a", {"mode": "aimed"}, "wired"),
+        ("p", {"engine_model": "claude-opus-5-5"}, "ENGINE_MODEL"),
+        ("a", {"generator_n": 10}, "GENERATOR_N"),
+        ("p", {"generator_n": 10}, "GENERATOR_N"),
+    ],
+)
+def test_from_results_refuses_artifacts_of_the_wrong_arm(
+    side: str, row: dict[str, Any], message: str, tmp_path: Path
+) -> None:
+    files = _e2_files(tmp_path)
+    pipeline = side == "p"
+    bad = replace(_arm_row("tabulate", pipeline=pipeline), **row)
+    files[side][0] = _artifact(tmp_path / "bad.jsonl", [bad])
+    with pytest.raises(ValueError, match=message) as refused:
+        ab.pair_results(files["a"], files["p"])
+    assert "bad.jsonl" in str(refused.value)
+
+
+def test_from_results_reads_each_line_strictly(tmp_path: Path) -> None:
+    good = json.loads(_arm_row("tabulate", pipeline=False).to_json())
+    bad_lines = {
+        "not-json": "{",
+        "not-an-object": "[1]",
+        "missing": json.dumps({k: v for k, v in good.items() if k != "floor_pct"}),
+        "no-project-floor": json.dumps(
+            {k: v for k, v in good.items() if k != "project_floor_pct"}
+        ),
+        "a-string-gain": json.dumps({**good, "gain_pct": "9"}),
+        "a-bool-rounds": json.dumps({**good, "portfolio_rounds": True}),
+        "a-number-flag": json.dumps({**good, "delivered": 1}),
+        "nan": json.dumps({**good, "gain_pct": None}).replace("null", "NaN", 1),
+        "a-duplicate": "\n".join([json.dumps(good)] * 2),
+        "empty": "",
+    }
+    for name, text in bad_lines.items():
+        path = tmp_path / f"{name}.jsonl"
+        path.write_text(text + "\n", encoding="utf-8")
+        with pytest.raises(ValueError, match=re.escape(str(path))):
+            ab.read_results(path)
+    blank = tmp_path / "blank-lines.jsonl"
+    blank.write_text("\n" + json.dumps(good) + "\n\n", encoding="utf-8")
+    (row,) = ab.read_results(blank)
+    assert (row.repo, row.idea_pipeline, row.floor_pct) == ("tabulate", False, 4.0)
+    assert row.project_floor_pct == 4.0
+
+
+def test_from_results_command_line_prints_the_pairing(tmp_path: Path) -> None:
+    files = _e2_files(tmp_path)
+    echoed: list[str] = []
+    argv = [
+        "--from-results",
+        "--arm-a",
+        *map(str, files["a"]),
+        "--arm-p",
+        *map(str, files["p"]),
+        "--controls-a",
+        str(files["ca"][0]),
+        "--controls-p",
+        str(files["cp"][0]),
+    ]
+    assert ab.from_results_main(argv, echoed.append) == 0
+    text = "\n".join(echoed)
+    assert text.startswith("## E2 pairing from results")
+    assert "| tabulate | 2 |" in text and "E2's rule is met" in text
+    for broken in (argv[1:], argv[:3], [*argv, "--rule", "e3"]):
+        with pytest.raises(SystemExit) as refused:
+            ab.from_results_main(broken, echoed.append)
+        assert refused.value.code == 2
+    missing = ["--from-results", "--arm-a", str(tmp_path / "x"), "--arm-p", "y"]
+    assert ab.from_results_main(missing, echoed.append) == 2
+    assert echoed[-1].startswith("error: ")

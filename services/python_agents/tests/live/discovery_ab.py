@@ -42,12 +42,13 @@ would reach the generator the same way and are noisier.
 
 from __future__ import annotations
 
+import argparse
 import math
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from fractions import Fraction
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 from autonomous_ai_agents.clients.budget import Budget
 from autonomous_ai_agents.clients.structured import strict_json
@@ -115,6 +116,7 @@ AB_GEN_CAP_USD: Final = ceil_usd(
 AB_REPOS: Final = (*CORPUS, *HARD_CORPUS)
 DISTRACTORS_PATH: Final = TESTS_DIR / "research" / "distractors.json"
 MIN_DISCORDANT_LEAD: Final = 3
+E2C_GENERATOR_N: Final = 10  # E2c's arm A: today's generator at GENERATOR_N=10
 
 
 @dataclass(frozen=True)
@@ -456,3 +458,360 @@ class AbRecorder:
             write_markdown(
                 "Retrieval A/B", render_ab(self.rows), self.sink.environ, echo
             )
+
+
+def ab_decision(b: int, c: int, controls_a: int, controls_b: int) -> bool:
+    """The A/B rule, pooled: B beats A by at least ``MIN_DISCORDANT_LEAD``
+    discordant tasks (``c - b``) and has no more control false wins than A."""
+    if min(b, c, controls_a, controls_b) < 0:
+        raise ValueError(f"counts must be >= 0, got {(b, c, controls_a, controls_b)}")
+    return c - b >= MIN_DISCORDANT_LEAD and controls_b <= controls_a
+
+
+# ---------------------------------------------------------------------------
+# oss-ab --from-results (V4 amended): E2 and E2c from the oss suite's results
+# artifacts, offline. Run from services/python_agents/tests:
+#   uv run python -m live.discovery_ab --from-results --arm-a A1 A2 \
+#     --arm-p P1 P2 --controls-a CA --controls-p CP [--rule e2|e2c]
+# Each --arm file is one dispatch's live-results.jsonl (one arm, one
+# repetition, in order); the controls files are the corpus suite's
+# corpus_select=controls dispatches. Nothing is sent. A task's call uses
+# the project floor (``project_floor_pct``: the floor the engine judged the
+# primary metric with, calibrated on wall time, D41 c and D42), E2's
+# pre-registered floor; each combination's own noise floor is shown only.
+# ---------------------------------------------------------------------------
+
+Rule = Literal["e2", "e2c"]
+Call = Literal["b", "c", "tie", "excluded"]
+
+
+@dataclass(frozen=True)
+class ResultRow:
+    """One run of a results artifact, as the pairing reads it."""
+
+    repo: str
+    kind: str
+    guard: str
+    mode: str
+    engine_model: str
+    delivered: bool
+    idea_pipeline: bool
+    portfolio_rounds: int
+    generator_n: int
+    gain_pct: float | None
+    floor_pct: float | None  # the combination's noise floor (shown only)
+    project_floor_pct: float | None  # the project floor (the call)
+
+
+def _text(data: Mapping[str, object], key: str, where: str) -> str:
+    value = data.get(key)
+    if not isinstance(value, str):
+        raise ValueError(f"{where}: {key} must be a string")
+    return value
+
+
+def _flag(data: Mapping[str, object], key: str, where: str) -> bool:
+    value = data.get(key)
+    if not isinstance(value, bool):
+        raise ValueError(f"{where}: {key} must be true or false")
+    return value
+
+
+def _whole(data: Mapping[str, object], key: str, where: str) -> int:
+    value = data.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{where}: {key} must be a whole number")
+    return value
+
+
+def _number(data: Mapping[str, object], key: str, where: str) -> float | None:
+    if key not in data:
+        raise ValueError(f"{where}: {key} is missing (an older harness)")
+    value = data[key]
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(f"{where}: {key} must be a number or null")
+    return float(value)
+
+
+def _result_row(data: Mapping[str, object], where: str) -> ResultRow:
+    return ResultRow(
+        repo=_text(data, "repo", where),
+        kind=_text(data, "kind", where),
+        guard=_text(data, "guard", where),
+        mode=_text(data, "mode", where),
+        engine_model=_text(data, "engine_model", where),
+        delivered=_flag(data, "delivered", where),
+        idea_pipeline=_flag(data, "idea_pipeline", where),
+        portfolio_rounds=_whole(data, "portfolio_rounds", where),
+        generator_n=_whole(data, "generator_n", where),
+        gain_pct=_number(data, "gain_pct", where),
+        floor_pct=_number(data, "floor_pct", where),
+        project_floor_pct=_number(data, "project_floor_pct", where),
+    )
+
+
+def read_results(path: Path) -> tuple[ResultRow, ...]:
+    """``path``'s rows, strictly (the harness's own fields, one per library)."""
+    rows: list[ResultRow] = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        where = f"{path}:{number}"
+        if not line.strip():
+            continue
+        try:
+            data = strict_json(line)
+        except ValueError as error:
+            raise ValueError(f"{where}: {error}") from None
+        if not isinstance(data, dict):
+            raise ValueError(f"{where}: expected a JSON object")
+        rows.append(_result_row(data, where))
+    names = [row.repo for row in rows]
+    if not rows or len(set(names)) != len(names):
+        raise ValueError(f"{path}: expected one row per library, got {names}")
+    return tuple(rows)
+
+
+Files = list[tuple[Path, tuple[ResultRow, ...]]]
+
+
+def _arm(paths: Sequence[Path], label: str) -> Files:
+    """Each artifact's rows, refused unless wired with the arm's pipeline."""
+    want = label == "P"
+    found = [(path, read_results(path)) for path in paths]
+    for path, rows in found:
+        for row in rows:
+            if row.idea_pipeline is not want:
+                state = "on" if want else "off"
+                raise ValueError(
+                    f"{path}: {row.repo}: arm {label} must run with IDEA_PIPELINE {state}"
+                )
+            if row.mode != "wired":
+                raise ValueError(f"{path}: {row.repo}: runs wired, not {row.mode!r}")
+    return found
+
+
+def _same(files: Files, key: str, want: object = None) -> None:
+    """One value of ``key`` (``want`` when given, else the first run's) over
+    every run of ``files``; a refusal names both sources."""
+    first, (head, *_) = files[0]
+    value, source = (
+        (getattr(head, key), f"{first}: {head.repo}")
+        if want is None
+        else (want, "the rule")
+    )
+    for path, rows in files:
+        for row in rows:
+            if getattr(row, key) != value:
+                raise ValueError(
+                    f"{path}: {row.repo}: {key.upper()} {getattr(row, key)!r} "
+                    f"differs from {value!r} ({source})"
+                )
+
+
+def paired_call(a: ResultRow, p: ResultRow) -> Call:
+    """E2's form: P delivered and A did not, or both did and P's confirmed
+    gain exceeds A's by more than the project floor (``c``); ``b`` the
+    reverse. The project floor is the one each run judged its primary metric
+    with (D41 c, D42), the larger of the two runs' (one library, two
+    calibrations); with neither run's recorded (no baseline) no
+    claim is made (``tie``). A breach on either side excludes the task."""
+    if a.guard != "ok" or p.guard != "ok":
+        return "excluded"
+    if a.delivered != p.delivered:
+        return "c" if p.delivered else "b"
+    floors = [f for f in (a.project_floor_pct, p.project_floor_pct) if f is not None]
+    if not a.delivered or a.gain_pct is None or p.gain_pct is None or not floors:
+        return "tie"
+    if p.gain_pct - a.gain_pct > max(floors):
+        return "c"
+    return "b" if a.gain_pct - p.gain_pct > max(floors) else "tie"
+
+
+@dataclass(frozen=True)
+class PairedTask:
+    repo: str
+    rep: int
+    a: ResultRow | None
+    p: ResultRow | None
+    call: Call
+
+
+@dataclass(frozen=True)
+class FromResults:
+    rule: Rule
+    tasks: tuple[PairedTask, ...]
+    false_wins_a: int | None  # None: no control results given for the arm
+    false_wins_p: int | None
+    control_runs: tuple[int, int]
+    generator_n: tuple[int, int]  # GENERATOR_N of arm A and of arm P
+
+    @property
+    def b(self) -> int:
+        return sum(t.call == "b" for t in self.tasks)
+
+    @property
+    def c(self) -> int:
+        return sum(t.call == "c" for t in self.tasks)
+
+    @property
+    def met(self) -> bool | None:
+        """E2's rule (``ab_decision`` and no P control false win); ``None``
+        for E2c, or when either arm's controls are missing."""
+        if self.rule == "e2c" or self.false_wins_a is None or self.false_wins_p is None:
+            return None
+        fair = ab_decision(self.b, self.c, self.false_wins_a, self.false_wins_p)
+        return fair and self.false_wins_p == 0
+
+
+def _false_wins(files: Files, given: bool) -> tuple[int | None, int]:
+    """Delivered control runs (``None``: the arm's controls were not given)
+    and the number of control runs."""
+    controls = [r for _, rows in files for r in rows if r.kind == "control"]
+    return (sum(r.delivered for r in controls) if given else None), len(controls)
+
+
+def pair_results(
+    arm_a: Sequence[Path],
+    arm_p: Sequence[Path],
+    *,
+    controls_a: Sequence[Path] = (),
+    controls_p: Sequence[Path] = (),
+    rule: Rule = "e2",
+) -> FromResults:
+    """Arm A's and arm P's artifacts (one per repetition, in order) paired by
+    (library, repetition), refused unless every run is wired with the arm's
+    ``IDEA_PIPELINE``, one ``PORTFOLIO_ROUNDS``, one ``ENGINE_MODEL`` and
+    one ``GENERATOR_N`` (E2c: arm A at ``E2C_GENERATOR_N``, arm P at one)."""
+    if not arm_a or not arm_p:
+        raise ValueError("pairing needs at least one artifact per arm")
+    if rule == "e2c" and (controls_a or controls_p):
+        raise ValueError("e2c takes no controls: its rule is c' - b' alone")
+    a_files, p_files = _arm(arm_a, "A"), _arm(arm_p, "P")
+    a_controls, p_controls = _arm(controls_a, "A"), _arm(controls_p, "P")
+    every = [*a_files, *p_files, *a_controls, *p_controls]
+    _same(every, "portfolio_rounds")
+    _same(every, "engine_model")
+    if rule == "e2":
+        _same(every, "generator_n")
+    else:
+        _same(a_files, "generator_n", E2C_GENERATOR_N)
+        _same(p_files, "generator_n")
+    n_a, n_p = (files[0][1][0].generator_n for files in (a_files, p_files))
+    tasks: list[PairedTask] = []
+    for rep in range(1, max(len(a_files), len(p_files)) + 1):
+        a = {r.repo: r for r in a_files[rep - 1][1]} if rep <= len(a_files) else {}
+        p = {r.repo: r for r in p_files[rep - 1][1]} if rep <= len(p_files) else {}
+        for repo in dict.fromkeys([*a, *p]):
+            left, right = a.get(repo), p.get(repo)
+            call: Call = "excluded"
+            if left is not None and right is not None:
+                call = paired_call(left, right)
+            tasks.append(PairedTask(repo, rep, left, right, call))
+    wins_a, runs_a = _false_wins([*a_files, *a_controls], bool(controls_a))
+    wins_p, runs_p = _false_wins([*p_files, *p_controls], bool(controls_p))
+    return FromResults(rule, tuple(tasks), wins_a, wins_p, (runs_a, runs_p), (n_a, n_p))
+
+
+def _side(row: ResultRow | None) -> list[object]:
+    if row is None:
+        return ["-", "-"]
+    return [flag(row.delivered), "-" if row.gain_pct is None else f"{row.gain_pct:.1f}"]
+
+
+def _floor(task: PairedTask, key: str) -> str:
+    floors = [getattr(r, key) for r in (task.a, task.p) if r is not None]
+    found = [f for f in floors if f is not None]
+    return f"{max(found):.1f}" if found else "-"
+
+
+def _wins(wins: int | None, runs: int) -> str:
+    return "not given" if wins is None else f"{wins}/{runs}"
+
+
+def _verdict(found: FromResults) -> str:
+    lead = found.c - found.b
+    if found.rule == "e2c":
+        reading = (
+            "attributed to trial count: GENERATOR_N=10 and PORTFOLIO_ROUNDS=2 "
+            "change for today's generator, the pipeline stays opt-in"
+            if lead <= 1
+            else "attributed to the ideas"
+        )
+        return f"E2c (P against the --arm-a runs): c' - b' = {lead}: {reading}."
+    if found.met is None:
+        return (
+            f"c - b = {lead}; undecided: E2 needs both arms' control results "
+            "(--controls-a, --controls-p)."
+        )
+    if found.met:
+        return (
+            f"c - b = {lead} and no P control false win: E2's rule is met "
+            "(IDEA_PIPELINE=True, PORTFOLIO_ROUNDS=2 once N0c is in)."
+        )
+    return (
+        f"c - b = {lead} (at least {MIN_DISCORDANT_LEAD} needed) with "
+        f"{found.false_wins_p} P control false win(s) (none allowed): E2's rule "
+        "is not met; the pipeline stays opt-in."
+    )
+
+
+def render_from_results(found: FromResults) -> str:
+    """The paired tasks and the rule's reading, every cell sanitised."""
+    lines = [
+        "## E2 pairing from results",
+        "",
+        "| repo | rep | A delivered | A gain % | P delivered | P gain % "
+        "| project floor % | combination floor % | call |",
+        "| --- | ---: | --- | ---: | --- | ---: | ---: | ---: | --- |",
+    ]
+    for t in found.tasks:
+        floors = [_floor(t, "project_floor_pct"), _floor(t, "floor_pct")]
+        lines.append(cells([t.repo, t.rep, *_side(t.a), *_side(t.p), *floors, t.call]))
+    paired = sum(t.call != "excluded" for t in found.tasks)
+    runs_a, runs_p = found.control_runs
+    lines += [
+        "",
+        f"Paired tasks: {paired} (excluded {len(found.tasks) - paired}: a guard "
+        f"breach, or a library one arm never ran); discordant b = {found.b}, "
+        f"c = {found.c}; exact two-sided McNemar p = "
+        f"{mcnemar_exact(found.b, found.c):.4f}.",
+        f"Control false wins: A {_wins(found.false_wins_a, runs_a)}, "
+        f"P {_wins(found.false_wins_p, runs_p)}. GENERATOR_N: "
+        f"A {found.generator_n[0]}, P {found.generator_n[1]}.",
+        _verdict(found),
+    ]
+    return "\n".join(lines)
+
+
+def from_results_main(
+    argv: Sequence[str] | None = None, echo: Callable[[str], None] = print
+) -> int:
+    """``--from-results``: pair the artifacts and print the reading; 2 on an
+    unreadable or refused artifact (argparse exits 2 on bad arguments)."""
+    parser = argparse.ArgumentParser(prog="discovery_ab")
+    parser.add_argument("--from-results", action="store_true", required=True)
+    parser.add_argument("--arm-a", nargs="+", type=Path, required=True)
+    parser.add_argument("--arm-p", nargs="+", type=Path, required=True)
+    parser.add_argument("--controls-a", nargs="+", type=Path, default=[])
+    parser.add_argument("--controls-p", nargs="+", type=Path, default=[])
+    parser.add_argument("--rule", choices=("e2", "e2c"), default="e2")
+    args = parser.parse_args(argv)
+    try:
+        found = pair_results(
+            args.arm_a,
+            args.arm_p,
+            controls_a=args.controls_a,
+            controls_p=args.controls_p,
+            rule=args.rule,
+        )
+    except (OSError, ValueError) as error:
+        echo(f"error: {error}")
+        return 2
+    for line in render_from_results(found).splitlines():
+        echo(line)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(from_results_main())
