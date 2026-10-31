@@ -10,10 +10,11 @@ from __future__ import annotations
 import ast
 import contextlib
 import json
+import math
 import os
 import re
 from collections import deque
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -2253,7 +2254,7 @@ def test_the_ab_set_selects_arm_p_on_the_three_textbook_groups() -> None:
     assert ab.E3_GROUPS == ("deep", "misleading", "uncommon")
     assert [r.category for r in e3.repos] == [g for g in ab.E3_GROUPS for _ in "ab"]
     assert all(r in DISCOVERY_CORPUS and r.kind == "slowdown" for r in e3.repos)
-    for value in ("", "v2", "V2-P", " v2-p", "v2-p,", "p"):
+    for value in ("", "V2", "V2-P", " v2-p", "v2-p,", "p"):  # "v2": V10's L5
         with pytest.raises(ValueError, match=ab.SET_ENV):
             ab.ab_plan({ab.SET_ENV: value})
 
@@ -2457,3 +2458,247 @@ def test_the_live_ab_module_runs_arm_p_when_its_set_asks() -> None:
         in source
     )
     assert "protected=protected, read_deny=read_deny" in source
+
+
+# ---------------------------------------------------------------------------
+# ab-v2 (V10, L5a and L5b): the retrieval re-test on all of corpus v2
+# ---------------------------------------------------------------------------
+
+AB_V2_NEED = 67.2  # L5b: 2 reps x 12 repos x (0.80 + 2 x 1.00); spec 67.2, need 68
+AB_V2_BLIND_NEED = 16.2  # L5a: 1 rep x 12 x (0.35 + 1.00); spec 21.6 (B's 0.45 too)
+
+
+def test_the_ab_set_v2_runs_arms_a_and_b_on_all_twelve_v2_repositories() -> None:
+    """``LIVE_AB_SET=v2`` is L5b: arms A and B on every corpus v2 repository
+    (its ten slowdowns and two decoy controls), E5's shared run cap."""
+    plan = ab.ab_plan({ab.SET_ENV: ab.V2_SET})
+    assert ab.V2_SET == "v2" and ab.AB_V2_REPOS == DISCOVERY_CORPUS
+    assert (plan.pipeline, plan.v2, plan.arms, plan.reps, plan.run_cap) == (
+        False, True, ("A", "B"), 2, 1.0,
+    )  # fmt: skip
+    assert plan.repos == DISCOVERY_CORPUS and len(plan.repos) == 12
+    kinds = [r.kind for r in plan.repos]
+    assert (kinds.count("slowdown"), kinds.count("control")) == (10, 2)
+    assert {r.category for r in plan.repos if r.kind == "control"} == {"decoy"}
+    assert plan.gen_cap == ab.AB_GEN_CAP_USD
+    both = ab.ab_plan({ab.SET_ENV: ab.V2_SET, ab.ARMS_ENV: "A,B"})
+    assert both == plan
+    assert not ab.ab_plan({}).v2 and not ab.ab_plan({ab.SET_ENV: ab.P_SET}).v2
+
+
+def test_the_arms_knob_runs_arm_a_alone_and_only_on_v2() -> None:
+    """``LIVE_AB_ARMS`` is strict: ``A`` (L5a) or ``A,B``, with set v2 only;
+    arm A alone shares a run capped for phase 1 and A's request alone."""
+    blind = ab.ab_plan({ab.SET_ENV: ab.V2_SET, ab.ARMS_ENV: "A", ab.REPS_ENV: "1"})
+    assert (blind.arms, blind.reps, blind.repos) == (("A",), 1, DISCOVERY_CORPUS)
+    assert blind.blind_only and blind.gen_cap == ab.AB_A_GEN_CAP_USD
+    for value in ("", "B", "A,B,", "a", " A", "B,A", "A,P", "A,A", "P"):
+        with pytest.raises(ValueError, match=ab.ARMS_ENV):
+            ab.ab_plan({ab.SET_ENV: ab.V2_SET, ab.ARMS_ENV: value})
+    for other in ({}, {ab.SET_ENV: ab.P_SET}):
+        for value in ("A", "A,B"):
+            with pytest.raises(ValueError, match=f"{ab.ARMS_ENV}.*{ab.SET_ENV}"):
+                ab.ab_plan({**other, ab.ARMS_ENV: value})
+
+
+def test_arm_a_alones_shared_run_holds_phase_one_and_as_request() -> None:
+    """Phase 1 and A's generation at their worst, rounded up to 0.05 USD:
+    the cap E5's shared run would have without B's matcher and generation."""
+    phase = _worst(UNDERSTAND_PROMPT_BOUND, settings.UNDERSTAND_MAX_TOKENS, (SONNET,))
+    blind = _worst(BLIND_PROMPT_BOUND, ab.AB_GENERATE_MAX_TOKENS, (SONNET,))
+    _rounded(phase + blind, ab.AB_A_GEN_CAP_USD)
+    assert ab.AB_A_GEN_CAP_USD == 0.35 < ab.AB_GEN_CAP_USD == 0.8
+
+
+def test_the_ab_v2_needs_are_the_sum_of_their_caps() -> None:
+    """Per task the shared run plus one engine run per arm: L5b 67.2 (the
+    spec's 24 x (0.8 + 2), need 68), L5a 16.2 (the spec's 12 x (0.8 + 1) =
+    21.6 priced B's matcher and generation, which L5a never sends)."""
+    plan = ab.ab_plan({ab.SET_ENV: ab.V2_SET})
+    need = plan.reps * len(plan.repos) * (ab.AB_GEN_CAP_USD + 2 * plan.run_cap)
+    assert ab.ab_need(plan) == pytest.approx(need) == pytest.approx(AB_V2_NEED)
+    assert math.ceil(ab.ab_need(plan)) == 68
+    blind = ab.ab_plan({ab.SET_ENV: ab.V2_SET, ab.ARMS_ENV: "A", ab.REPS_ENV: "1"})
+    single = len(blind.repos) * (ab.AB_A_GEN_CAP_USD + blind.run_cap)
+    assert ab.ab_need(blind) == pytest.approx(single) == pytest.approx(AB_V2_BLIND_NEED)
+    assert math.ceil(ab.ab_need(blind)) == 17 <= 22  # under the spec's figure
+    assert ab.ab_need(ab.ab_plan({})) == pytest.approx(AB_NEED)  # E5 unchanged
+    assert ab.ab_need(ab.ab_plan({ab.SET_ENV: ab.P_SET})) == pytest.approx(
+        AB_V2_P_NEED
+    )  # E3 unchanged
+    assert ab.ab_need(plan) <= CAP_CEILING_USD
+
+
+def test_the_ab_v2_job_minutes_come_from_e5s_measured_pace() -> None:
+    """E5 (run 40063812021) took 122 minutes for 50 tasks x 2 arms; L5b's 48
+    task-arms at that pace need about 59, and the timeout is at least three
+    times it (300: v2's loops may be slower than v1's)."""
+    assert ab.AB_MINUTES_PER_TASK_ARM == pytest.approx(122 / 100)
+    plan = ab.ab_plan({ab.SET_ENV: ab.V2_SET})
+    assert ab.ab_minutes(plan) == pytest.approx(48 * 1.22)
+    blind = ab.ab_plan({ab.SET_ENV: ab.V2_SET, ab.ARMS_ENV: "A", ab.REPS_ENV: "1"})
+    assert ab.ab_minutes(blind) == pytest.approx(12 * 1.22)
+    assert 3 * ab.ab_minutes(plan) <= ab.AB_V2_JOB_MINUTES == 300 <= 360
+
+
+def _v2_rows(
+    dry: Path, wins: Mapping[str, tuple[bool, ...]], rep: int = 1
+) -> list[ab.AbRow]:
+    """One row per arm of each named v2 repository (``wins``: per arm)."""
+    produced = _generated(dry, ["a"])
+    by_name = {r.name: r for r in DISCOVERY_CORPUS}
+    rows = []
+    for name, outcomes in wins.items():
+        repo = by_name[name]
+        for label, won in zip(("A", "B"), outcomes, strict=False):
+            rows.append(ab.ab_row(repo, rep, label, produced, _outcome(repo, won), ()))
+    return rows
+
+
+V2_SLOW_NAMES = tuple(r.name for r in DISCOVERY_CORPUS if r.kind == "slowdown")
+V2_DECOY_NAMES = tuple(r.name for r in DISCOVERY_CORPUS if r.kind == "control")
+
+
+@pytest.mark.parametrize(
+    ("won", "saturated"), [(10, True), (9, True), (8, False), (0, False)]
+)
+def test_the_l5a_summary_states_the_saturation_rate_and_its_call(
+    dry: Path, won: int, saturated: bool
+) -> None:
+    """Arm A alone: blind wins over the v2 slowdowns; 90 % or more is
+    saturation (v2 is revised, B is not paid for), less runs L5b."""
+    wins = {name: (i < won,) for i, name in enumerate(V2_SLOW_NAMES)}
+    wins |= {V2_DECOY_NAMES[0]: (True,), V2_DECOY_NAMES[1]: (False,)}
+    plan = ab.ab_plan({ab.SET_ENV: ab.V2_SET, ab.ARMS_ENV: "A", ab.REPS_ENV: "1"})
+    rows = _v2_rows(dry, wins)
+    assert ab.blind_saturation(rows) == (won, 10)
+    assert ab.saturated(won, 10) is saturated
+    text = ab.render_ab(rows, plan)
+    assert text.startswith("## Blind saturation on corpus v2 (L5a)")
+    assert f"blind (arm A) won {won}/10 ({10 * won:.1f}%) of the v2 slowdown" in text
+    assert "threshold 90 %" in text and "Control false wins: A 1/2." in text
+    if saturated:
+        assert "v2 is saturated" in text and "arm B is not paid for" in text
+        assert "L5b" not in text
+    else:
+        assert "v2 is not saturated" in text and "L5b runs" in text
+    assert "| B |" not in text and "c - b" not in text and "deprioritise" not in text
+
+
+def test_the_l5a_call_needs_every_slowdown_and_counts_a_breach_as_no_win(
+    dry: Path,
+) -> None:
+    plan = ab.ab_plan({ab.SET_ENV: ab.V2_SET, ab.ARMS_ENV: "A", ab.REPS_ENV: "1"})
+    rows = _v2_rows(dry, {name: (True,) for name in V2_SLOW_NAMES[:9]})
+    text = ab.render_ab(rows, plan)
+    assert "Incomplete: 9 of 10 v2 slowdown tasks recorded" in text
+    assert "saturated" not in text.split("Incomplete")[1]
+    assert "Control false wins: A n/a (no control ran)." in text  # not 0/0
+    breach = replace(rows[0], guard="breach: AssertionError: x")
+    full = [breach, *rows[1:], *_v2_rows(dry, {V2_SLOW_NAMES[9]: (True,)})]
+    assert ab.blind_saturation(full) == (9, 10)
+    text = ab.render_ab(full, plan)
+    assert "won 9/10" in text and "1 breached a guard" in text
+    assert ab.saturated(0, 0) is False
+
+
+def test_the_l5b_summary_states_the_pooled_rule_inputs(dry: Path) -> None:
+    """Both arms: b, c, c - b and each arm's control false wins, the inputs
+    of the rule pre-registered before L5a, and its reading on v2 alone."""
+    plan = ab.ab_plan({ab.SET_ENV: ab.V2_SET})
+    a_b = [(False, True)] * 4 + [(True, False)] + [(True, True)] * 5
+    wins = dict(zip(V2_SLOW_NAMES, a_b, strict=True))
+    wins |= {V2_DECOY_NAMES[0]: (True, False), V2_DECOY_NAMES[1]: (False, False)}
+    rows = _v2_rows(dry, wins) + _v2_rows(dry, wins, rep=2)
+    assert ab.discordant(rows)[1:] == (2, 8)
+    assert ab.control_false_wins(rows, "A") == (2, 4)
+    assert ab.control_false_wins(rows, "B") == (0, 4)
+    text = ab.render_ab(rows, plan)
+    assert text.startswith("## Retrieval re-test on corpus v2 (L5b)")
+    assert "Pooled-rule inputs (v2): b = 2, c = 8, c - b = 6" in text
+    assert "control false wins A 2/4, B 0/4" in text
+    assert "On v2 alone the pooled rule is met" in text
+    assert "2026-10-25" in text and "L5c" in text
+    assert "deprioritise" not in text and "B must beat A" not in text
+    assert "| B |" in text and "(rep: A win, B win)" in text
+    worse = [
+        replace(r, win=True) if r.kind == "control" and r.arm == "B" else r
+        for r in rows
+    ]
+    assert ab.control_false_wins(worse, "B") == (4, 4)
+    assert "On v2 alone the pooled rule is not met" in ab.render_ab(worse, plan)
+    assert ab.ab_decision(2, 8, 2, 4) is False
+    assert "## Retrieval re-test on corpus v2 (L5b)" in ab.render_ab([], plan)
+
+
+def test_the_l5b_reading_needs_every_slowdown_and_control_on_both_arms(
+    dry: Path,
+) -> None:
+    """A run killed before the decoys leaves 0/0 control runs on both arms,
+    which ``ab_decision`` would read as met: no reading until every
+    slowdown task has both arms and each arm has every control run."""
+    plan = ab.ab_plan({ab.SET_ENV: ab.V2_SET})
+    wins = {name: (False, True) for name in V2_SLOW_NAMES}
+    wins |= {name: (False, False) for name in V2_DECOY_NAMES}
+    full = _v2_rows(dry, wins) + _v2_rows(dry, wins, rep=2)
+    assert "On v2 alone the pooled rule is met" in ab.render_ab(full, plan)
+    assert "Incomplete" not in ab.render_ab(full, plan)
+    slow_b = next(
+        i for i, r in enumerate(full) if r.kind == "slowdown" and r.arm == "B"
+    )
+    decoy_b = next(
+        i for i, r in enumerate(full) if r.kind == "control" and r.arm == "B"
+    )
+    no_decoys = [r for r in full if r.kind != "control"]
+    cases = {
+        "slowdown": ([r for i, r in enumerate(full) if i != slow_b], 19, 4, 4),
+        "control": ([r for i, r in enumerate(full) if i != decoy_b], 20, 4, 3),
+        "killed": (no_decoys, 20, 0, 0),
+    }
+    for name, (rows, tasks, controls_a, controls_b) in cases.items():
+        text = ab.render_ab(rows, plan)
+        assert (
+            f"Incomplete: {tasks} of 20 slowdown tasks recorded, A {controls_a}/4 "
+            f"and B {controls_b}/4 control runs; no reading (re-run the missing "
+            "tasks)."
+        ) in text, name
+        assert "pooled rule is" not in text, name
+        assert "Pooled-rule inputs (v2)" in text, name
+
+
+def test_the_e5_and_e3_summaries_are_unchanged_by_their_plans(dry: Path) -> None:
+    rows = _ab_rows(dry)
+    assert ab.render_ab(rows, ab.ab_plan({})) == ab.render_ab(rows)
+    p_rows = [replace(r, arm="P") if r.arm == "B" else r for r in rows]
+    e3 = ab.ab_plan({ab.SET_ENV: ab.P_SET})
+    assert ab.render_ab(p_rows, e3) == ab.render_ab(p_rows)
+
+
+def test_the_recorder_writes_the_plans_summary(dry: Path) -> None:
+    summary = dry / "summary.md"
+    environ = {corpus.SUMMARY_ENV: str(summary)}
+    plan = ab.ab_plan({ab.SET_ENV: ab.V2_SET, ab.ARMS_ENV: "A", ab.REPS_ENV: "1"})
+    recorder = ab.AbRecorder(plan, ResultsSink(environ), frozenset())
+    recorder.rows.extend(_v2_rows(dry, {V2_SLOW_NAMES[0]: (True,)}))
+    recorder.finish(lambda _line: None)
+    assert "## Blind saturation on corpus v2 (L5a)" in summary.read_text("utf-8")
+
+
+def test_the_v2_summaries_sanitise_hostile_text(dry: Path) -> None:
+    hostile = _hostile_outcome()
+    row = replace(
+        _v2_rows(dry, {V2_SLOW_NAMES[0]: (True, False)})[0],
+        repo=hostile.repo,
+        guard=hostile.guard,
+    )
+    for env in ({ab.ARMS_ENV: "A"}, {}):
+        _check_inert(ab.render_ab([row], ab.ab_plan({ab.SET_ENV: ab.V2_SET, **env})))
+
+
+def test_the_live_ab_module_runs_arm_b_only_when_the_plan_has_it() -> None:
+    source = ast.unparse(_tree("test_ab_live"))
+    assert "if ab.plan.pipeline:" in source
+    assert "elif 'B' in ab.plan.arms:" in source
+    assert "arms['B'] = retrieval_arm(gen, budget, phase.facts, playbook=playbook)" in (
+        source
+    )

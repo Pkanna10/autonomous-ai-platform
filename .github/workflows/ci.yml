@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: 'Live suite: stage-a, corpus, attack, hard, oss, or an experiment (probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, ab-v2-p, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, evolve-p, heal-hard, build, grader, upstream-verify, upstream, agent-probes, heal-agent, research-agent, watch, watch-cleanup, ideas-probe) (one at a time: together they need more than the 150 USD ceiling)'
+        description: 'Live suite: stage-a, corpus, attack, hard, oss, or an experiment (probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, ab-v2-p, ab-v2, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, evolve-p, heal-hard, build, grader, upstream-verify, upstream, agent-probes, heal-agent, research-agent, watch, watch-cleanup, ideas-probe) (one at a time: together they need more than the 150 USD ceiling)'
         type: choice
         options:
           [
@@ -33,6 +33,7 @@ on:
             sweep-record,
             ab,
             ab-v2-p,
+            ab-v2,
             escalation,
             acquire,
             noise,
@@ -70,7 +71,7 @@ on:
         options: [default, claude-sonnet-5-5]
         default: default
       suite_cap_usd:
-        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75 (corpus_select controls 15), hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 112, sweep-fable 41, sweep-record 24, ab 140, ab-v2-p 59, escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, evolve-p 56, heal-hard 8, build 27, grader 2, upstream-verify 0 (no request, but the cap must be above 0), upstream 50, agent-probes 1, heal-agent 8, research-agent 8, watch 2, watch-cleanup 2, ideas-probe 46 (E1, four libraries of ideas_repos, one 12; ideas_arms count 9, C-low,C-high 20)'
+        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75 (corpus_select controls 15), hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 112, sweep-fable 41, sweep-record 24, ab 140, ab-v2-p 59, ab-v2 68 (L5b; ab_arms A, L5a, 17), escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, evolve-p 56, heal-hard 8, build 27, grader 2, upstream-verify 0 (no request, but the cap must be above 0), upstream 50, agent-probes 1, heal-agent 8, research-agent 8, watch 2, watch-cleanup 2, ideas-probe 46 (E1, four libraries of ideas_repos, one 12; ideas_arms count 9, C-low,C-high 20)'
         type: string
         default: '12'
       oss_repo:
@@ -106,6 +107,11 @@ on:
         description: 'ideas-probe only, and required for E1: LIVE_IDEAS_REPOS, comma-separated OSS library names (E1 at most four a dispatch, e.g. pyparsing,tomli,mistune,idna; empty: the libraries of the arms); the need is the libraries x 11.40 (E1), 0.85 (count) or 4.95 (C-low,C-high), rounded up'
         type: string
         default: ''
+      ab_arms:
+        description: 'ab-v2 only: LIVE_AB_ARMS, the arms on all twelve corpus v2 repositories (A,B: L5b, arms A and B, 2 repetitions, need 68; A: L5a, arm A alone, 1 repetition, need 17)'
+        type: choice
+        options: ['A,B', A]
+        default: 'A,B'
 
 # Least privilege by default; a job that needs more says so itself.
 permissions:
@@ -621,7 +627,7 @@ jobs:
     # E1 56 a library (phase 1, arm A, four pipeline calls of four stages,
     # the auditor), so four libraries a dispatch (ideas_repos, 224 minutes);
     # E0b's ten 8 each, E1b's four 25 each.
-    timeout-minutes: ${{ inputs.suite == 'sweep' && 240 || inputs.suite == 'sweep-fable' && 180 || inputs.suite == 'sweep-record' && 150 || inputs.suite == 'ab' && 360 || inputs.suite == 'noise' && 90 || inputs.suite == 'oss-ab' && 120 || inputs.suite == 'evolve' && 300 || inputs.suite == 'evolve-more' && 300 || inputs.suite == 'evolve-p' && 300 || inputs.suite == 'ab-v2-p' && 300 || inputs.suite == 'build' && 120 || inputs.suite == 'upstream-verify' && 150 || inputs.suite == 'upstream' && 300 || inputs.suite == 'heal-agent' && 120 || inputs.suite == 'research-agent' && 45 || inputs.suite == 'ideas-probe' && 240 || inputs.suite == 'watch' && 90 || inputs.suite == 'escalation' && 90 || inputs.suite == 'triage' && 90 || inputs.suite == 'papers' && 60 || inputs.suite == 'web' && 90 || inputs.suite == 'corpus' && 120 || inputs.suite == 'oss' && 300 || inputs.suite == 'hard' && 90 || inputs.suite == 'attack' && 45 || 30 }}
+    timeout-minutes: ${{ inputs.suite == 'sweep' && 240 || inputs.suite == 'sweep-fable' && 180 || inputs.suite == 'sweep-record' && 150 || inputs.suite == 'ab' && 360 || inputs.suite == 'noise' && 90 || inputs.suite == 'oss-ab' && 120 || inputs.suite == 'evolve' && 300 || inputs.suite == 'evolve-more' && 300 || inputs.suite == 'evolve-p' && 300 || inputs.suite == 'ab-v2-p' && 300 || inputs.suite == 'ab-v2' && 300 || inputs.suite == 'build' && 120 || inputs.suite == 'upstream-verify' && 150 || inputs.suite == 'upstream' && 300 || inputs.suite == 'heal-agent' && 120 || inputs.suite == 'research-agent' && 45 || inputs.suite == 'ideas-probe' && 240 || inputs.suite == 'watch' && 90 || inputs.suite == 'escalation' && 90 || inputs.suite == 'triage' && 90 || inputs.suite == 'papers' && 60 || inputs.suite == 'web' && 90 || inputs.suite == 'corpus' && 120 || inputs.suite == 'oss' && 300 || inputs.suite == 'hard' && 90 || inputs.suite == 'attack' && 45 || 30 }}
     defaults:
       run:
         working-directory: ./services/python_agents
@@ -730,6 +736,7 @@ jobs:
           INPUT_CORPUS_SELECT: ${{ inputs.corpus_select }}
           INPUT_IDEAS_ARMS: ${{ inputs.ideas_arms }}
           INPUT_IDEAS_REPOS: ${{ inputs.ideas_repos }}
+          INPUT_AB_ARMS: ${{ inputs.ab_arms }}
           LIVE_RESULTS_PATH: ${{ runner.temp }}/live-results.jsonl
         run: |
           if [ -z "${ANTHROPIC_API_KEY}" ]; then
@@ -751,7 +758,9 @@ jobs:
           # repos x 10 rounds x (0.45 + 3); evolve-more the same on 4 more
           # libraries, 138; V8's arm P, on D55's bounds as E0b re-derived them
           # (D61): ab-v2-p (E3) 2 reps x 6 v2 repos x (2.90 generation, phase
-          # 1, arm A and the whole idea pipeline, + 2 x 1.00), 58.8; evolve-p
+          # 1, arm A and the whole idea pipeline, + 2 x 1.00), 58.8; V10's
+          # ab-v2 (L5b) 2 reps x 12 v2 repos x (0.80 + 2 x 1.00), 67.2, and
+          # ab_arms A (L5a) 1 rep x 12 x (0.35 + 1.00), 16.2; evolve-p
           # (E4) one library x 6 rounds x (blind 0.45 + 3 + arm P 2.75 + 3),
           # 55.2; heal-hard 10 x 0.75; build 3 specs x (0.80 build +
           # 0.60 generation + 7.50 loop)); grader 6 repositories x 0.22725
@@ -788,6 +797,7 @@ jobs:
             sweep-record) paths=(tests/live/test_sweep_live.py); need=24 ;;
             ab) paths=(tests/live/test_ab_live.py); need=140 ;;
             ab-v2-p) paths=(tests/live/test_ab_live.py); need=59 ;;
+            ab-v2) paths=(tests/live/test_ab_live.py); need=68 ;;
             escalation) paths=(tests/live/test_escalation_live.py); need=43 ;;
             acquire) paths=(tests/live/experiments/test_acquire_live.py); need=1 ;;
             noise) paths=(tests/live/test_noise_live.py); need=0 ;;
@@ -808,7 +818,7 @@ jobs:
             watch-cleanup) paths=(tests/live/experiments/test_watch_managed_live.py); need=2 ;;
             ideas-probe) paths=(tests/live/test_ideas_probe_live.py); need=46 ;;
             *)
-              echo "::error::unknown suite input (stage-a, corpus, attack, hard, oss, probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, ab-v2-p, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, evolve-p, heal-hard, build, grader, upstream-verify, upstream, agent-probes, heal-agent, research-agent, watch, watch-cleanup or ideas-probe)"
+              echo "::error::unknown suite input (stage-a, corpus, attack, hard, oss, probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, ab-v2-p, ab-v2, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, evolve-p, heal-hard, build, grader, upstream-verify, upstream, agent-probes, heal-agent, research-agent, watch, watch-cleanup or ideas-probe)"
               exit 1
               ;;
           esac
@@ -925,6 +935,29 @@ jobs:
             # E3 (V8): arm P beside arm A on v2's deep, misleading, uncommon
             export LIVE_AB_SET=v2-p
           fi
+          # The retrieval re-test (V10, spec D2): ab-v2 runs arms A and B on
+          # all twelve corpus v2 repositories, 2 reps (L5b, need 68); ab_arms A
+          # runs arm A alone, 1 rep (L5a, need 17: phase 1 and A's request
+          # share a 0.35 USD run). An unset input (an older caller) reads as
+          # A,B, an empty one is refused.
+          ab_arms="${INPUT_AB_ARMS-A,B}"
+          if [ "${INPUT_SUITE}" = ab-v2 ]; then
+            case "${ab_arms}" in
+              A,B) ;;
+              A)
+                export LIVE_AB_REPS=1
+                need=17
+                ;;
+              *)
+                echo "::error::unknown ab_arms input (A,B or A)"
+                exit 1
+                ;;
+            esac
+            export LIVE_AB_SET=v2 LIVE_AB_ARMS="${ab_arms}"
+          elif [ "${ab_arms}" != A,B ]; then
+            echo "::error::ab_arms is only for the ab-v2 suite"
+            exit 1
+          fi
           if [ "${INPUT_SUITE}" = oss-ab ] || [ "${INPUT_SUITE}" = evolve-p ]; then
             # one library a dispatch: the whole plan needs more than the ceiling
             if ! [[ "${INPUT_OSS_REPO}" =~ ^[a-z][a-z0-9_]{0,39}$ ]]; then
@@ -991,7 +1024,7 @@ jobs:
           case "${INPUT_SUITE}" in
             noise | corpus | hard | oss | upstream-verify | upstream) noise_rule=step3 ;;
             stage-a | attack | probes | triage | papers | web | prescreen) noise_rule=step2 ;;
-            sweep | sweep-fable | sweep-record | ab | ab-v2-p | escalation | acquire) noise_rule=step2 ;;
+            sweep | sweep-fable | sweep-record | ab | ab-v2-p | ab-v2 | escalation | acquire) noise_rule=step2 ;;
             heal | oss-ab | evolve | evolve-more | evolve-p | heal-hard | build | grader | agent-probes | heal-agent | research-agent) noise_rule=step2 ;;
             watch | watch-cleanup | ideas-probe) noise_rule=step2 ;;
             *)
@@ -1021,7 +1054,7 @@ jobs:
           export LIVE_SUITE_CAP_USD="${INPUT_SUITE_CAP_USD}"
           export LIVE_CORPUS_MODE="${INPUT_MODE}"
           : > "${LIVE_RESULTS_PATH}"
-          echo "suite ${INPUT_SUITE}, mode ${LIVE_CORPUS_MODE}, ENGINE_MODEL ${ENGINE_MODEL}, EDITOR_MODEL ${EDITOR_MODEL:-default}, noise rule ${noise_rule}, LIVE_SUITE_CAP_USD ${LIVE_SUITE_CAP_USD}, idea pipeline ${INPUT_IDEA_PIPELINE-off}, portfolio rounds ${portfolio_rounds}, corpus select ${INPUT_CORPUS_SELECT-all}"
+          echo "suite ${INPUT_SUITE}, mode ${LIVE_CORPUS_MODE}, ENGINE_MODEL ${ENGINE_MODEL}, EDITOR_MODEL ${EDITOR_MODEL:-default}, noise rule ${noise_rule}, LIVE_SUITE_CAP_USD ${LIVE_SUITE_CAP_USD}, idea pipeline ${INPUT_IDEA_PIPELINE-off}, portfolio rounds ${portfolio_rounds}, corpus select ${INPUT_CORPUS_SELECT-all}, ab arms ${ab_arms}"
           uv run pytest "${paths[@]}" -m live --no-cov -n 0 -rA
 
       # One JSON line per corpus run (CorpusOutcome), kept for the STATUS

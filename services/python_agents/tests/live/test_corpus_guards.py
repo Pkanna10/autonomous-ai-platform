@@ -1057,6 +1057,7 @@ SUITES = (
     "sweep-record",
     "ab",
     "ab-v2-p",  # V8 (E3): arm P beside arm A on corpus v2
+    "ab-v2",  # V10 (L5a, L5b): the retrieval re-test on all of corpus v2
     "escalation",
     "acquire",
     "noise",
@@ -1103,6 +1104,7 @@ EXPERIMENT_MINUTES = {
     "evolve": 300,
     "evolve-more": 300,
     "ab-v2-p": 300,  # 24 loops (2 reps x 6 repos x 2 arms) and 12 pipelines
+    "ab-v2": 300,  # discovery_ab.AB_V2_JOB_MINUTES: >= 3 x L5b's 48 at E5's pace
     "evolve-p": 300,  # one library, 2 arms x up to 6 rounds (evolve: 30)
     "build": 120,
     "escalation": 90,
@@ -1124,6 +1126,8 @@ EVOLVE_MORE_ENV = {"LIVE_EVOLVE_REPOS": "idna,mistune,sqlparse,pycparser"}
 EVOLVE_P_ARMS_ENV = {"LIVE_EVOLVE_ARMS": "blind,P", "LIVE_EVOLVE_ROUNDS": "6"}
 EVOLVE_P_REPO = "sqlparse"  # evolve-p runs one library a dispatch (E4: 3)
 AB_V2_P_ENV = {"LIVE_AB_SET": "v2-p"}
+AB_V2_ENV = {"LIVE_AB_SET": "v2", "LIVE_AB_ARMS": "A,B"}  # L5b, ab_arms A,B
+AB_V2_BLIND_ENV = {"LIVE_AB_SET": "v2", "LIVE_AB_ARMS": "A", "LIVE_AB_REPS": "1"}
 OSS_AB_DISPATCH_REPO = "tabulate"  # oss-ab runs one library a dispatch
 # E1: four a dispatch (4 x 56 of ideas_probe.JOB_MINUTES' 240)
 IDEAS_E1_DISPATCH = {"LIVE_IDEAS_REPOS": "pyparsing,tomli,mistune,idna"}
@@ -1810,6 +1814,7 @@ def _suite_needs() -> dict[str, float]:
             evolve.evolve_plan({**EVOLVE_P_ARMS_ENV, evolve.REPOS_ENV: EVOLVE_P_REPO})
         ),
         "ab-v2-p": ab.ab_need(ab.ab_plan(AB_V2_P_ENV)),
+        "ab-v2": ab.ab_need(ab.ab_plan(AB_V2_ENV)),
         "heal-hard": heal.heal_need(heal.heal_plan(HEAL_HARD_ENV)),
         "build": build.build_need(build.build_plan({})),
         "grader": grader.agreement_cap(grader.load_groups()),
@@ -1905,9 +1910,12 @@ def _dispatch(
     oss_repo: str = "",
     editor_model: str = "default",
     upstream_batch: str = "1",
+    ab_arms: str | None = None,
 ) -> tuple[int, str, str]:
     """The run step under bash -e with a fake ``uv`` that records its call
-    (and, in ``rule.txt``, the noise rule, the editor and the noise path)."""
+    (and, in ``rule.txt``, the noise rule, the editor and the noise path; in
+    ``ab.txt`` the A/B set, arms and repetitions). ``ab_arms`` ``None``
+    leaves ``INPUT_AB_ARMS`` unset (an older caller)."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     called = tmp_path / "called.txt"
@@ -1921,7 +1929,9 @@ def _dispatch(
         f'"${{NOISE_CALIBRATION_BLOCKS-unset}}" "${{EDITOR_MODEL-unset}}" '
         f'"${{EDITOR_EFFORT-unset}}" "${{LIVE_NOISE_PATH-unset}}" '
         f'> "{tmp_path / "rule.txt"}"\n'
-        f'printf "%s" "${{LIVE_UPSTREAM_BATCH-unset}}" > "{tmp_path / "batch.txt"}"\n',
+        f'printf "%s" "${{LIVE_UPSTREAM_BATCH-unset}}" > "{tmp_path / "batch.txt"}"\n'
+        f'printf "%s " "${{LIVE_AB_SET-unset}}" "${{LIVE_AB_ARMS-unset}}" '
+        f'"${{LIVE_AB_REPS-unset}}" > "{tmp_path / "ab.txt"}"\n',
         encoding="utf-8",
     )
     fake.chmod(0o755)
@@ -1940,6 +1950,8 @@ def _dispatch(
         "INPUT_UPSTREAM_BATCH": upstream_batch,
         "LIVE_RESULTS_PATH": str(tmp_path / "results.jsonl"),
     }
+    if ab_arms is not None:
+        env["INPUT_AB_ARMS"] = ab_arms
     proc = subprocess.run(
         ["bash", "-e", str(script)],
         env=env,
@@ -1967,6 +1979,7 @@ def _dispatch(
         ("prescreen", "2.99"),
         ("sweep", "111.99"),  # v1 + hard + v2: 37 repositories
         ("ab", "139.99"),
+        ("ab-v2", "67.99"),
         ("escalation", "42.99"),
     ],
 )
@@ -2258,7 +2271,81 @@ def test_ab_v2_p_exports_its_set_only_for_its_own_suite() -> None:
         script,
     )
     assert guarded is not None, script
-    assert script.count(name) == 1
+    # the only other export of the set is ab-v2's (V10), in its own branch
+    assert re.findall(rf"{name}=\S+", script) == [f"{name}={value}", f"{name}=v2"]
+
+
+def _ab_exports(tmp_path: Path) -> dict[str, str]:
+    """What the A/B module reads, as the fake ``uv`` saw it (unset dropped)."""
+    found = (tmp_path / "ab.txt").read_text(encoding="utf-8").split()
+    names = ("LIVE_AB_SET", "LIVE_AB_ARMS", "LIVE_AB_REPS")
+    return {k: v for k, v in zip(names, found, strict=True) if v != "unset"}
+
+
+def test_the_ab_arms_input_is_a_strict_choice_reaching_the_run_via_env() -> None:
+    """``ab_arms`` (V10): ``A,B`` (L5b) or ``A`` (L5a), quoted, through env
+    only; the dispatch form stays under GitHub's 25 inputs."""
+    block = _ci_block("      ab_arms:", "\n\n")
+    assert "type: choice" in block and "default: 'A,B'" in block
+    assert "options: ['A,B', A]" in block
+    assert "ab-v2 only" in block and "need 68" in block and "need 17" in block
+    step = _ci_block("      - name: Run live tests", "      - name: Upload live corpus")
+    assert "INPUT_AB_ARMS: ${{ inputs.ab_arms }}" in step
+    inputs = _ci_block("    inputs:\n", "\n\n")
+    names = re.findall(r"^      (\w+):$", inputs, re.MULTILINE)
+    assert names[-1] == "ab_arms" and len(names) == len(set(names)) == 13 <= 25
+
+
+@pytest.mark.parametrize(
+    ("arms", "cap", "env"),
+    [(None, "68", AB_V2_ENV), ("A,B", "68", AB_V2_ENV), ("A", "17", AB_V2_BLIND_ENV)],
+)
+def test_ab_v2_exports_its_set_and_arms_and_needs_their_caps(
+    tmp_path: Path, arms: str | None, cap: str, env: dict[str, str]
+) -> None:
+    """``ab-v2`` exports ``LIVE_AB_SET=v2`` and the arms; arm A alone is L5a's
+    one repetition, need 17; both arms L5b's two, need 68. The exports parse
+    to the plan whose need the cap covers, and a cent less is refused."""
+    ab = importlib.import_module(f"{__package__}.discovery_ab")
+    code, output, calls = _dispatch(
+        tmp_path, "ab-v2", "claude-sonnet-5-5", cap, ab_arms=arms
+    )
+    assert code == 0 and calls, output
+    assert _ab_exports(tmp_path) == env
+    need = ab.ab_need(ab.ab_plan(env))
+    assert need <= float(cap) < need + 1
+    assert "noise rule step2" in output
+    below = tmp_path / "below"
+    below.mkdir()
+    code, output, calls = _dispatch(
+        below, "ab-v2", "claude-sonnet-5-5", f"{int(cap) - 1}.99", ab_arms=arms
+    )
+    assert (code, calls) == (1, "") and "is below the" in output
+
+
+def test_ab_arms_refuses_bad_values_and_other_suites(tmp_path: Path) -> None:
+    for index, bad in enumerate(("", "B", "A,B,", "a", "A;id", "A,P", "B,A")):
+        fresh = tmp_path / f"bad-{index}"
+        fresh.mkdir()
+        code, output, calls = _dispatch(
+            fresh, "ab-v2", "claude-sonnet-5-5", "68", ab_arms=bad
+        )
+        assert (code, calls) == (1, "") and "unknown ab_arms" in output, bad
+    for index, suite in enumerate(("ab", "ab-v2-p")):
+        fresh = tmp_path / f"other-{index}"
+        fresh.mkdir()
+        code, output, calls = _dispatch(
+            fresh, suite, "claude-sonnet-5-5", "150", ab_arms="A"
+        )
+        assert (code, calls) == (1, "") and "ab_arms is only for" in output, suite
+    for suite, env in (("ab", {}), ("ab-v2-p", AB_V2_P_ENV)):
+        fresh = tmp_path / f"default-{suite}"
+        fresh.mkdir()
+        code, output, calls = _dispatch(
+            fresh, suite, "claude-sonnet-5-5", "150", ab_arms="A,B"
+        )
+        assert code == 0 and calls, output
+        assert _ab_exports(fresh) == env  # E5 and E3 unchanged
 
 
 def test_heal_hard_exports_its_set_only_for_its_own_suite() -> None:

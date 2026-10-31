@@ -18,6 +18,10 @@ E3 (V8, ``$LIVE_AB_SET=v2-p``, the ``ab-v2-p`` suite): the repositories are
 corpus v2's deep, misleading and uncommon slowdowns (read at collection),
 the shared run is capped at ``AB_P_GEN_CAP_USD``, and arm P (the idea
 pipeline on phase 1's facts and the code at its base commit) replaces B.
+
+L5 (V10, ``$LIVE_AB_SET=v2``, the ``ab-v2`` suite): the repositories are all
+twelve of corpus v2; arms A and B (L5b), or with ``$LIVE_AB_ARMS=A`` arm A
+alone on a shared run capped at ``AB_A_GEN_CAP_USD`` (L5a: B never runs).
 """
 
 from __future__ import annotations
@@ -102,7 +106,7 @@ def test_retrieval_ab(
             protected=protected,
             read_deny=read_deny,
         )
-    else:
+    elif "B" in ab.plan.arms:
         arms["B"] = retrieval_arm(gen, budget, phase.facts, playbook=playbook)
     check_arm_calls(gen, budget, arms)
     check_untouched(phase)

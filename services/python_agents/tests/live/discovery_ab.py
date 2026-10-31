@@ -51,6 +51,16 @@ cap adds the pipeline's every request at D55's prompt bounds as E0b
 re-derived them (D61; ``AB_P_GEN_CAP_USD``); P's ideas then run one engine
 loop, as A's do. The summary pairs A with P; E3 is informational (no
 decision rides on it).
+
+**The retrieval re-test** (V10, spec D2; ``$LIVE_AB_SET=v2``, the ``ab-v2``
+suite): arms A and B on all twelve corpus v2 repositories (its ten
+slowdowns and two decoy controls), E5's arms and caps. ``$LIVE_AB_ARMS=A``
+(v2 only) runs arm A alone, on a shared run capped for phase 1 and A's
+request (``AB_A_GEN_CAP_USD``): L5a, whose summary states the saturation
+rate (blind wins over the v2 slowdowns; at least 90 % revises v2 and B is
+not paid for). Both arms, 2 repetitions, are L5b, whose summary states the
+pooled rule's inputs (b, c and each arm's control false wins; STATUS.md,
+2026-10-25, pre-registered before L5a) and the rule's reading on v2 alone.
 """
 
 from __future__ import annotations
@@ -107,7 +117,7 @@ from .discovery import (
     run_arm,
     worst_usd,
 )
-from .discovery_corpus import of_group
+from .discovery_corpus import DISCOVERY_CORPUS, of_group
 from .discovery_io import (
     ResultsSink,
     cells,
@@ -122,6 +132,10 @@ from .discovery_io import (
 REPS_ENV: Final = "LIVE_AB_REPS"
 SET_ENV: Final = "LIVE_AB_SET"
 P_SET: Final = "v2-p"  # E3: arms A and P on E3_GROUPS (unset: E5, arms A and B)
+V2_SET: Final = "v2"  # L5 (V10): arms A and B, or A alone, on all of corpus v2
+ARMS_ENV: Final = "LIVE_AB_ARMS"
+BLIND_ARMS: Final = "A"  # L5a: arm A alone
+BOTH_ARMS: Final = "A,B"  # L5b, and the default
 RUN_CAP_ENV: Final = "LIVE_AB_RUN_CAP_USD"
 AB_REPS: Final = 2
 AB_MAX_REPS: Final = 2
@@ -141,7 +155,24 @@ AB_GEN_CAP_USD: Final = ceil_usd(
     + worst_usd(CARDS_PROMPT_BOUND, AB_GENERATE_MAX_TOKENS, AB_ARM.model)
 )
 """Phase 1, A's generation, B's matcher and B's generation at their worst."""
+AB_A_GEN_CAP_USD: Final = ceil_usd(
+    PHASE_ONE_WORST_USD
+    + worst_usd(BLIND_PROMPT_BOUND, AB_GENERATE_MAX_TOKENS, AB_ARM.model)
+)
+"""Phase 1 and A's generation at their worst: L5a's shared run, which sends
+neither B's matcher nor B's generation."""
 AB_REPOS: Final = (*CORPUS, *HARD_CORPUS)
+AB_V2_REPOS: Final = DISCOVERY_CORPUS  # ten slowdowns, two decoy controls
+SATURATION_SHARE: Final = Fraction(9, 10)
+"""L5a's threshold (spec D2): blind winning at least this share of the v2
+slowdowns saturates v2."""
+AB_MINUTES_PER_TASK_ARM: Final = 122 / 100
+"""E5's measured pace (run 40063812021: 122 minutes for 50 tasks x 2 arms,
+the shared generation runs included), the basis of ab-v2's job timeout."""
+AB_V2_JOB_MINUTES: Final = 300
+"""ab-v2's timeout: over three times L5b's 48 task-arms at E5's pace (about
+59 minutes), since v2's loops may be slower than v1's; L5a's 12 take about
+15."""
 DISTRACTORS_PATH: Final = TESTS_DIR / "research" / "distractors.json"
 MIN_DISCORDANT_LEAD: Final = 3
 E2C_GENERATOR_N: Final = 10  # E2c's arm A: today's generator at GENERATOR_N=10
@@ -193,36 +224,59 @@ class AbPlan:
     reps: int
     run_cap: float
     pipeline: bool = False  # E3: arm P replaces B on AB_V2_P_REPOS
+    v2: bool = False  # L5: AB_V2_REPOS
+    blind_only: bool = False  # L5a: arm A alone (v2 only)
 
     @property
-    def arms(self) -> tuple[str, str]:
-        return ("A", "P") if self.pipeline else ("A", "B")
+    def arms(self) -> tuple[str, ...]:
+        if self.pipeline:
+            return ("A", "P")
+        return ("A",) if self.blind_only else ("A", "B")
 
     @property
     def repos(self) -> tuple[CorpusRepo, ...]:
-        return AB_V2_P_REPOS if self.pipeline else AB_REPOS
+        if self.pipeline:
+            return AB_V2_P_REPOS
+        return AB_V2_REPOS if self.v2 else AB_REPOS
 
     @property
     def gen_cap(self) -> float:
-        return AB_P_GEN_CAP_USD if self.pipeline else AB_GEN_CAP_USD
+        if self.pipeline:
+            return AB_P_GEN_CAP_USD
+        return AB_A_GEN_CAP_USD if self.blind_only else AB_GEN_CAP_USD
 
 
 def ab_plan(environ: Mapping[str, str]) -> AbPlan:
     """Every knob, validated strictly (in the module fixture, before any spend)."""
     chosen = environ.get(SET_ENV, "")
-    if SET_ENV in environ and chosen != P_SET:
-        raise ValueError(f"{SET_ENV} must be {P_SET!r} or unset, got {chosen!r}")
+    if SET_ENV in environ and chosen not in (P_SET, V2_SET):
+        raise ValueError(
+            f"{SET_ENV} must be {P_SET!r}, {V2_SET!r} or unset, got {chosen!r}"
+        )
+    arms = environ.get(ARMS_ENV, BOTH_ARMS)
+    if ARMS_ENV in environ and chosen != V2_SET:
+        raise ValueError(f"{ARMS_ENV} is only for {SET_ENV}={V2_SET!r}")
+    if arms not in (BLIND_ARMS, BOTH_ARMS):
+        raise ValueError(f"{ARMS_ENV} must be {BLIND_ARMS!r} or {BOTH_ARMS!r}")
     return AbPlan(
         reps=env_whole(environ, REPS_ENV, AB_REPS, low=1, high=AB_MAX_REPS),
         run_cap=env_number(environ, RUN_CAP_ENV, AB_RUN_CAP_USD, high=MAX_RUN_CAP_USD),
         pipeline=chosen == P_SET,
+        v2=chosen == V2_SET,
+        blind_only=arms == BLIND_ARMS,
     )
 
 
 def ab_need(plan: AbPlan) -> float:
     """The sum of the caps the suite asks the ledger for: per task the shared
-    generation run plus both engine runs."""
-    return plan.reps * len(plan.repos) * (plan.gen_cap + 2 * plan.run_cap)
+    generation run plus one engine run per arm."""
+    arms = len(plan.arms)
+    return plan.reps * len(plan.repos) * (plan.gen_cap + arms * plan.run_cap)
+
+
+def ab_minutes(plan: AbPlan) -> float:
+    """The plan's minutes at E5's measured pace (``AB_MINUTES_PER_TASK_ARM``)."""
+    return plan.reps * len(plan.repos) * len(plan.arms) * AB_MINUTES_PER_TASK_ARM
 
 
 def ab_settings(base: Settings) -> Settings:
@@ -497,14 +551,9 @@ def _cap_hit(row: AbRow) -> str:
     return flag(row.budget_exhausted or row.trial_budget_error)
 
 
-def render_ab(rows: Sequence[AbRow]) -> str:
-    """E5's summary, or E3's when arm P ran (A paired with P, no decision)."""
-    other = "P" if any(r.arm == "P" for r in rows) else "B"
-    title = "Idea pipeline A/B (E3)" if other == "P" else "Retrieval A/B (E5)"
-    lines = [f"## {title}", ""]
-    if not rows:
-        return "\n".join([*lines, "No A/B task finished."])
-    lines += [
+def _tables(rows: Sequence[AbRow], arms: Sequence[str]) -> list[str]:
+    """The per-run table and the per-arm table, every cell sanitised."""
+    lines = [
         "| repo | rep | arm | status | win | gain % | reached ref gain "
         "| engine USD | generation USD | matched | distractor | cap hit | guards |",
         "| --- | ---: | --- | --- | --- | ---: | --- | ---: | ---: | --- | --- "
@@ -537,12 +586,15 @@ def render_ab(rows: Sequence[AbRow]) -> str:
         "| distractor-match rate |",
         "| --- | --- | --- | ---: | --- |",
     ]
-    for arm in ("A", other):
+    for arm in arms:
         group = [r for r in rows if r.arm == arm]
         if group:
             lines.append(cells(_arm_line(arm, group)))
-    pairs, b, c = discordant(rows, other)
-    lines += [
+    return lines
+
+
+def _pairs_table(pairs: Pairs, other: str) -> list[str]:
+    lines = [
         "",
         f"| repo | paired outcomes (rep: A win, {other} win) |",
         "| --- | --- |",
@@ -554,6 +606,149 @@ def render_ab(rows: Sequence[AbRow]) -> str:
             if n == repo
         ]
         lines.append(cells([repo, "; ".join(found)]))
+    return lines
+
+
+def _paired_line(rows: Sequence[AbRow], other: str) -> str:
+    pairs, b, c = discordant(rows, other)
+    return (
+        f"Paired slowdown tasks: {len(pairs)} (excluded "
+        f"{excluded_tasks(rows, other)} slowdown task(s): a guard breach, or an "
+        f"arm that never ran); discordant b = {b}, c = {c}; exact two-sided "
+        f"McNemar p = {mcnemar_exact(b, c):.4f}."
+    )
+
+
+def control_false_wins(rows: Sequence[AbRow], arm: str) -> tuple[int, int]:
+    """``arm``'s delivered control runs and its control runs (every row)."""
+    controls = [r for r in rows if r.kind == "control" and r.arm == arm]
+    return sum(r.win for r in controls), len(controls)
+
+
+def blind_saturation(rows: Sequence[AbRow]) -> tuple[int, int]:
+    """Arm A's slowdown tasks (the first row per repository and repetition)
+    and how many it won with every guard held (a breach is no win)."""
+    tasks = [row for (_, _, arm), row in _first_rows(rows).items() if arm == "A"]
+    return sum(r.win and r.guard == "ok" for r in tasks), len(tasks)
+
+
+def saturated(wins: int, total: int) -> bool:
+    """L5a's call: blind won at least ``SATURATION_SHARE`` of the slowdowns."""
+    return total > 0 and Fraction(wins, total) >= SATURATION_SHARE
+
+
+def _render_l5a(rows: Sequence[AbRow], plan: AbPlan) -> str:
+    """Arm A alone on v2: the saturation rate and its call."""
+    lines = ["## Blind saturation on corpus v2 (L5a)", ""]
+    if not rows:
+        return "\n".join([*lines, "No A/B task finished."])
+    wins, total = blind_saturation(rows)
+    tasks = [r for (_, _, arm), r in _first_rows(rows).items() if arm == "A"]
+    breached = sum(r.guard != "ok" for r in tasks)
+    expected = plan.reps * sum(r.kind != "control" for r in plan.repos)
+    share = f"{float(100 * SATURATION_SHARE):.0f}"
+    lines += [
+        *_tables(rows, ("A",)),
+        "",
+        f"Saturation: blind (arm A) won {rate(wins, total)} of the v2 slowdown "
+        f"tasks with every guard held ({breached} breached a guard, counted as "
+        f"no win); the threshold {share} % is spec D2's.",
+    ]
+    if total < expected:
+        lines.append(
+            f"Incomplete: {total} of {expected} v2 slowdown tasks recorded; no "
+            "call is made (re-run the missing tasks)."
+        )
+    elif saturated(wins, total):
+        lines.append(
+            f"v2 is saturated (at least {share} %): it is revised and arm B is not "
+            "paid for; L5a re-runs once on the revised v2, and a second "
+            "saturation ends the re-test (STATUS.md, 2026-10-25)."
+        )
+    else:
+        lines.append(
+            f"v2 is not saturated (under {share} %): L5b runs (arms A and B, 2 "
+            "repetitions)."
+        )
+    false_a, runs_a = control_false_wins(rows, "A")
+    found = f"{false_a}/{runs_a}" if runs_a else "n/a (no control ran)"
+    lines.append(f"Control false wins: A {found}.")
+    return "\n".join(lines)
+
+
+def _l5b_missing(rows: Sequence[AbRow], plan: AbPlan) -> str | None:
+    """``None`` when every slowdown task has both arms' rows and each arm
+    every control run, else the line that withholds the reading (a kill
+    before the decoys leaves 0/0 controls, which ``ab_decision`` reads as
+    met)."""
+    seen = {(r.repo, r.rep, r.arm) for r in rows}
+    slow = sum(r.kind != "control" for r in plan.repos)
+    tasks = plan.reps * slow
+    controls = plan.reps * (len(plan.repos) - slow)
+    both = {
+        (repo, rep)
+        for repo, rep, arm in seen
+        if arm == "A" and (repo, rep, "B") in seen
+    }
+    control_names = {r.name for r in plan.repos if r.kind == "control"}
+    slow_tasks = sum(repo not in control_names for repo, _ in both)
+    runs = {
+        arm: sum(repo in control_names and a == arm for repo, _, a in seen)
+        for arm in ("A", "B")
+    }
+    if slow_tasks >= tasks and min(runs.values()) >= controls:
+        return None
+    return (
+        f"Incomplete: {slow_tasks} of {tasks} slowdown tasks recorded, A "
+        f"{runs['A']}/{controls} and B {runs['B']}/{controls} control runs; no "
+        "reading (re-run the missing tasks)."
+    )
+
+
+def _render_l5b(rows: Sequence[AbRow], plan: AbPlan) -> str:
+    """Arms A and B on v2: the pooled rule's inputs and its v2-alone reading,
+    withheld until every task and control run is recorded."""
+    lines = ["## Retrieval re-test on corpus v2 (L5b)", ""]
+    if not rows:
+        return "\n".join([*lines, "No A/B task finished."])
+    pairs, b, c = discordant(rows)
+    false_a, runs_a = control_false_wins(rows, "A")
+    false_b, runs_b = control_false_wins(rows, "B")
+    met = ab_decision(b, c, false_a, false_b)
+    reading = (
+        f"On v2 alone the pooled rule is {'met' if met else 'not met'} (c - b "
+        f">= {MIN_DISCORDANT_LEAD} and B's control false wins no more than A's). "
+        "The decision pools these counts with L5c's OSS slowdowns and controls "
+        "when L5c runs, and stands on v2 alone when L5c is skipped as moot "
+        "(STATUS.md, 2026-10-25, pre-registered before L5a)."
+    )
+    lines += [
+        *_tables(rows, ("A", "B")),
+        *_pairs_table(pairs, "B"),
+        "",
+        _paired_line(rows, "B"),
+        f"Pooled-rule inputs (v2): b = {b}, c = {c}, c - b = {c - b}; control "
+        f"false wins A {false_a}/{runs_a}, B {false_b}/{runs_b}.",
+        _l5b_missing(rows, plan) or reading,
+        "Scope: the matched cards reach only the generator; every editor gets "
+        "the run's top-5 hotspot brief, in both arms.",
+    ]
+    return "\n".join(lines)
+
+
+def render_ab(rows: Sequence[AbRow], plan: AbPlan | None = None) -> str:
+    """E5's summary, or E3's when arm P ran (A paired with P, no decision);
+    with a v2 plan, L5a's (arm A alone) or L5b's (arms A and B)."""
+    if plan is not None and plan.v2:
+        return (_render_l5a if plan.blind_only else _render_l5b)(rows, plan)
+    other = "P" if any(r.arm == "P" for r in rows) else "B"
+    title = "Idea pipeline A/B (E3)" if other == "P" else "Retrieval A/B (E5)"
+    lines = [f"## {title}", ""]
+    if not rows:
+        return "\n".join([*lines, "No A/B task finished."])
+    lines += _tables(rows, ("A", other))
+    pairs, b, c = discordant(rows, other)
+    lines += _pairs_table(pairs, other)
     controls = [r for r in rows if r.kind == "control"]
     false_wins = {
         arm: rate(
@@ -563,12 +758,7 @@ def render_ab(rows: Sequence[AbRow]) -> str:
         for arm in ("A", other)
     }
     lead = c - b
-    paired = (
-        f"Paired slowdown tasks: {len(pairs)} (excluded "
-        f"{excluded_tasks(rows, other)} slowdown task(s): a guard breach, or an "
-        f"arm that never ran); discordant b = {b}, c = {c}; exact two-sided "
-        f"McNemar p = {mcnemar_exact(b, c):.4f}."
-    )
+    paired = _paired_line(rows, other)
     if other == "P":
         return "\n".join([
             *lines, "", paired,
@@ -626,7 +816,10 @@ class AbRecorder:
     def finish(self, echo: Callable[[str], None]) -> None:
         if self.rows:
             write_markdown(
-                "Retrieval A/B", render_ab(self.rows), self.sink.environ, echo
+                "Retrieval A/B",
+                render_ab(self.rows, self.plan),
+                self.sink.environ,
+                echo,
             )
 
 

@@ -538,9 +538,14 @@ Postgres at 100 % under CPython 3.13 and 3.11, prettier):
   off). Why the lanes' 4-9 ideas mostly failed the good definition (grounding,
   the ceiling, the non-obvious check or the auditor) is in the two artifacts,
   not yet read: their storage hosts are blocked here.
-- **Next:** the `ab-v2` unit, then L5a/L5b; the O19 exams and the agent pilots;
-  E1b is skipped unless the owner wants it (it tunes the lanes of a pipeline
-  that stays off).
+- **V10 (`ab-v2`):** the suite L5a and L5b need, planned in Wave 1's V4 row and
+  never built after Wave 2 re-scoped V4: `LIVE_AB_SET=v2` runs arms A and B on
+  the twelve v2 repositories (10 slowdowns, 2 decoy controls); the `ab_arms`
+  input runs arm A alone for L5a. Its summaries give L5a's saturation call and
+  L5b's pooled-rule inputs, and say "Incomplete, no reading" when a task or a
+  control run is missing.
+- **Next:** L5a, then L5b; the O19 exams and the agent pilots; E1b is skipped
+  unless the owner wants it (it tunes the lanes of a pipeline that stays off).
 - **Owner's plan, for the record (2026-10-30):** after Wave 2's idea experiments
   (E1/E2) report, the **Improvement pilot** (label I; renamed by the owner on
   2026-10-31 from "Improvement Wave 3", which clashed with Step 3's Wave 3,
@@ -600,6 +605,22 @@ numbers that decide anything are copied into the ledger).
 ---
 
 ## Decisions
+
+### 2026-10-31 (recorded before L5a: how V10 counts the re-test)
+
+Written before any L5a data, beside the 2026-10-25 pooled rule it serves.
+
+- **L5a's need is 17 USD, not the spec's 22.** Arm A alone pays phase 1 and its
+  own request (0.35 a run); the spec's 0.80 also priced arm B's matcher and
+  generation, which L5a never sends.
+- **Saturation counts a breached blind run as no win** (it stays in the
+  denominator, the breach count is printed). The pre-registration did not say;
+  this choice can only make "not saturated" more likely, that is, make arm B
+  more likely to be paid for, so it cannot hide a saturated corpus.
+- **L5b pairs (repository, repetition), as E5 did:** a task counts only when
+  both arms ran clean; `no_hypotheses` and a refused trial are losses for either
+  arm alike. A run missing a slowdown task or a control run reads "Incomplete",
+  never met or not met.
 
 ### 2026-10-31 (owner: runs are not capped for budget, O22)
 
