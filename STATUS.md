@@ -485,9 +485,21 @@ Postgres at 100 % under CPython 3.13 and 3.11, prettier):
   counts threads too, seccomp user-notify is exact): the Lead accepts the gap
   for now (option c); before the `IDEA_PIPELINE` flip the Lead recommends the
   seccomp user-notify signal (option b), decided with the owner at the flip.
-- **Next:** N4a's gate (re-run alone: its first run failed one small-fix timing
-  guard under the load of concurrent Builders; eight quiet re-measurements gave
-  13-18 % against the 5 % bar), batch 5 and the live order (E0b next).
+- **Batches 4-5:** N4a `57bc3cd` (the pipeline), N4b `a81843c` (wiring), N0c
+  `f302ef3` (child-process tripwire), N5 `40778d9` (E2E), V4 `db745d1` (arm P in
+  `oss`), pypdf 6.21.4 `0bca456` (seven advisories); V7 and V8 next.
+- **E0-R (offline, 2026-10-31): the Amdahl multiplier stays 1.0.** The
+  pre-registered rule needs every L2a/L2b kept trial's anchor, ceiling and run
+  floor. 9 of 23 kept trials have no recorded ceiling for their function, no L2
+  run recorded its floor (`floor_pct` arrived with V4), and anchors are inferred
+  from trial titles. Of the known ceilings none is dropped at 1.5 × a plausible
+  floor, but idna `uts46_remap` (5.5 %) and mistune's bracket map (5.6 %)
+  survive only if their run's floor was ≤ 3.7 %. pycparser L2b gained 27.7 %
+  against a 25.6 % profile share, so the profile share can understate headroom:
+  one more reason not to tighten the gate. D44's caller hit rate needs a caller
+  graph and waits for the measured E0b re-run. Scripts and table: the Lead's
+  scratchpad, `e0r/`.
+- **Next:** V7 and V8, then the live order (E0b first).
 - **Owner's plan, for the record (2026-10-30):** after Wave 2's idea experiments
   (E1/E2) report, an "Improvement Wave 3" pilot: a multi-model developer team
   that studies, proposes and proves engine improvements. The owner sends its
