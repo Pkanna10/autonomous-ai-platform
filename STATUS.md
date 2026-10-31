@@ -544,8 +544,13 @@ Postgres at 100 % under CPython 3.13 and 3.11, prettier):
   input runs arm A alone for L5a. Its summaries give L5a's saturation call and
   L5b's pooled-rule inputs, and say "Incomplete, no reading" when a task or a
   control run is missing.
-- **Next:** L5a, then L5b; the O19 exams and the agent pilots; E1b is skipped
-  unless the owner wants it (it tunes the lanes of a pipeline that stays off).
+- **L5a (2026-10-31, 1.37 USD): corpus v2 is saturated.** Blind generation
+  delivered on 9 of the 10 slowdowns (auditchain missed) and on neither decoy.
+  As pre-registered (2026-10-25), arm B is not paid for, v2 is revised, and L5a
+  re-runs once; a second saturation ends the re-test. How to revise is open (the
+  spec does not say): put to the owner.
+- **Next:** the owner's call on the v2 revision; the O19 exams and the agent
+  pilots; E1b is skipped unless the owner wants it.
 - **Owner's plan, for the record (2026-10-30):** after Wave 2's idea experiments
   (E1/E2) report, the **Improvement pilot** (label I; renamed by the owner on
   2026-10-31 from "Improvement Wave 3", which clashed with Step 3's Wave 3,
@@ -1848,7 +1853,7 @@ days before it expires. The table below is the 2026-10-23 plan with stage C
 replaced by Step 3's own live plan (spec section 6, D24's spend rule); the
 register below says which questions are already answered.
 
-**Spent so far in Window 1: 49.90 USD by Step 3** (L0 0.00, L1a 2.21 with its
+**Spent so far in Window 1: 51.27 USD by Step 3** (L0 0.00, L1a 2.21 with its
 guards crashed in the harness, the L1a re-run 2.11, L1b 2.42, L2a 5.94 over two
 repetitions, L2b 5.46; Wave 1's live runs are done; Wave 2: L3 0.07, L4 1.67,
 E0b 1.46). The two Window 1 rows in the ledger (2026-10-23, 0.00 each) predate
@@ -2009,6 +2014,7 @@ builds it.
 | 2026-10-31 | 1      | [41185613381](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/41185613381)                                                                                                                                                                                         | E0b re-run  | 0.51       | After V7b's bounds (`68611ba`): count mode on mistune, sqlparse and pycparser, 3/3 passed in 2.6 min. Every lens request was sent and read exactly S1's cached data block (32,145, 31,616 and 31,074 tokens). With the first run, E0b's rule holds on all 10 libraries under the re-derived bounds. Artifact live-results-41185613381-1.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | 2026-10-31 | 1      | [41186544846](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/41186544846)                                                                                                                                                                                         | E1 (1 of 2) | 14.43      | `ideas-probe`, arms A-E plus the auditor on more_itertools, pyparsing, tomli, sortedcontainers; 4/4 passed in 56 min. Good ideas A/B/C/D/E: more_itertools 4/2/3/2/2, pyparsing 5/1/1/1/2, tomli 5/1/3/1/0, sortedcontainers (control) 4/2/1/1/3. Artifact live-results-41186544846-1.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | 2026-10-31 | 1      | [41190431186](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/41190431186)                                                                                                                                                                                         | E1 (2 of 2) | 15.28      | Same arms on mistune, sqlparse, markdown, idna; 4/4 passed in 53 min. Good ideas A/B/C/D/E: mistune 4/1/0/1/2, sqlparse 5/3/1/2/2, markdown 5/2/0/2/2, idna 5/2/2/2/3. Gate not met (best arm C: 3 or more on 2 of 7 counted libraries, needs 5). Artifact live-results-41190431186-1.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 2026-10-31 | 1      | [41200381767](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/41200381767)                                                                                                                                                                                         | L5a         | 1.37       | `ab-v2`, arm A (blind) alone, corpus v2, 1 rep, 12/12 passed in 15.7 min. Blind delivered on 9 of the 10 slowdowns (only auditchain missed), 0 of 2 decoy controls. Saturated by the pre-registered line (9/10 or more): arm B is not paid for, v2 is revised and L5a re-runs once. Artifact live-results-41200381767-1.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 ### 2026-10-24 (Window 0 final experiments: what they decide)
 
