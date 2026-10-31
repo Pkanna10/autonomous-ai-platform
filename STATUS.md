@@ -542,7 +542,46 @@ Postgres at 100 % under CPython 3.13 and 3.11, prettier):
 
 ---
 
+## Labels
+
+How work is named, so each unit, run and decision can be traced to its brief,
+its commit and its result. A label is unique within its step; one reused across
+steps is written with its step ("Window 0 E5", "Step 3 E2"). New labels follow
+`[Letter][number][small letter, optional]`: the letter is the kind, the number
+the order, the small letter a variant or a re-test (L1a, L1b; E0b after E0a).
+
+| Label                  | Means                                                                                                      | Where its record lives                                                                     |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Step 0-6, Wave 1-3     | build-order step (CLAUDE.md); a step's approved build waves                                                | CLAUDE.md; the step's spec §7; Development Log                                             |
+| Window 0-2             | a block of API credit                                                                                      | Live API testing plan                                                                      |
+| U, V, N, A, W + number | build units: U Step 3 Wave 1; V Wave 2 tests and CI; N Wave 2 engine code; A agent-pilot builds; W Wave 3  | spec §7 row (brief); one commit whose subject names the unit; Wave 2 build record; batches |
+| batch N                | units built in parallel on disjoint files, gated and committed one at a time                               | Wave 2 progress                                                                            |
+| L + number             | Step 3 live runs of the engine on corpora                                                                  | spec §6 row; live ledger (CI run link, cost, result)                                       |
+| E + number             | experiments that decide a setting; Window 0's E1-E9 and Step 3's E0-E4 are separate sets                   | the pre-registered rule (Decisions); ledger                                                |
+| E3-A to E3-L           | Step 3's end-to-end test scenarios, not experiments                                                        | `tests/e2e/test_step3*.py`                                                                 |
+| P0-P3; P1-P5; arm P    | agent pilots (built by A0-A3); paper-intake units (conditional, unbuilt); the idea-pipeline experiment arm | spec-wave2 §6; spec §7; the experiment's row                                               |
+| arm A-E                | the configurations an experiment compares                                                                  | the experiment's row                                                                       |
+| L3b, VC, A1s/A2s       | independent exams under O19 (setter, attempter and marker kept apart)                                      | spec-wave2 §6                                                                              |
+| D + number; O + number | a spec's decisions (numbered per step); the owner's decisions                                              | the step's spec; Decisions (dated)                                                         |
+| I + number (reserved)  | the owner's improvement pilot                                                                              | its brief, when sent                                                                       |
+
+**Trace:** unit → spec row → commit (`git log --grep`) → build record; run →
+ledger row → CI run → results artifact (artifacts expire after 90 days, so the
+numbers that decide anything are copied into the ledger).
+
+---
+
 ## Decisions
+
+### 2026-10-31 (owner: runs are not capped for budget, O22)
+
+- **O22.** No run is cut short to save credit: each dispatch's limit is set at
+  or above its full worst-case plan (E3 at 57 USD, not the spec's 40). The
+  workflow's 150 USD per-dispatch ceiling stays only as a fuse against a runaway
+  bug. D61's spend rule no longer stops and asks: before each run the Lead
+  reports the credit left and the run's estimate, and after it the actual cost.
+  **Why:** a run stopped part-way buys an unreadable result for most of its
+  price, while the owner keeps control through the report before each run.
 
 ### 2026-10-31 (pre-registered before E0b: the idea experiments' rules, D61)
 
@@ -580,12 +619,13 @@ can be fitted to its result. Full table: spec-wave2-ideas §6.
   trials": those two settings change for today's generator and the pipeline
   stays opt-in. `c' − b' ≥ 2` → it is "better ideas".
 - **E3, E4:** only on a positive or neutral E2; informational, no flip.
-- **Spend rule (binding).** Before each dispatch: Window 1's remaining credit
-  minus that dispatch's cap must stay ≥ the expected cost of every remaining
-  unconditional run (E1b ~4, E2 ~48-58, E2c ~9, L3-L5/W1 ~11); otherwise the
-  Lead stops and asks the owner. E2's expected cost is re-derived from E1's
-  measured cost per pipeline call before E2. Today: 181.78 USD remain; E1's cap
-  of 90 leaves 91.78 against ~82 expected, so the order holds.
+- **Spend rule (replaced by O22 the same day: report, not stop).** Before each
+  dispatch: Window 1's remaining credit minus that dispatch's cap must stay ≥
+  the expected cost of every remaining unconditional run (E1b ~4, E2 ~48-58, E2c
+  ~9, L3-L5/W1 ~11); otherwise the Lead stops and asks the owner. E2's expected
+  cost is re-derived from E1's measured cost per pipeline call before E2. Today:
+  181.78 USD remain; E1's cap of 90 leaves 91.78 against ~82 expected, so the
+  order holds.
 - **Why:** caps bound one bad run; the spend rule keeps the whole sequence
   inside the credit, and fixing every threshold now means a borderline result is
   reported as borderline, not argued into a flip.
@@ -2253,6 +2293,57 @@ U1 on 2026-10-24. The CI-red pushes were the macOS job missing `python3.9` and
 `3.10` for U4's template tests (fixed in `f1080dc`) and graphwalk's CI baseline
 at the corpus floor (fixed in `3e04294`); review fixes landed inside each unit's
 own commit, so they are not counted as rework.
+
+Step 3 Wave 2 (build, 2026-10-26 to 2026-10-31, a usage-limit pause from 10-26
+19:40 to 10-30 09:09): 3 CI-red pushes (`40778d9` and `db745d1`, seven new pypdf
+advisories, fixed in `0bca456`; `181f1ef`, the E3-A miss, Technical Debt);
+rework: N0c built twice (re-scoped) and six Lead follow-ups (`7b970bf`,
+`71940d0`, `a724611`, `2dd55cc`, `e6c2799`, `1c43097`); 0 reverts.
+
+### Step 3 Wave 2 build record (the baseline for the owner's improvement pilot)
+
+Each unit: an Opus 5.5 Builder (tests first), a Fable 5.1 Reviewer, an Opus 5.5
+fixer when the review had a blocker or should-fix finding, then the Lead's gate
+on a clean copy and one commit. Findings are blocker / should-fix / nit from the
+last review; tokens are summed per agent (input includes cache reads); time is
+active time, without the pause. Per-agent rows and the per-unit CSV:
+`.claude/handoff/step3/buildrecord/`. The Lead's own work (gates, hand-applied
+patches for files a Builder did not own, follow-up commits) is not in the rows.
+
+| Unit | Commit    | Findings B/S/N | Fix rounds | Output tokens | Input tokens | Active time |
+| ---- | --------- | -------------- | ---------- | ------------- | ------------ | ----------- |
+| N1a  | `cc2d416` | 0/2/1          | 1          | 146k          | 33.3M        | 1h29m       |
+| V1   | `6214f60` | 0/2/2          | 1          | 148k          | 20.6M        | 1h26m       |
+| V3   | `3068400` | 0/0/0          | 0          | 62k           | 9.3M         | 0h54m       |
+| V5   | `d7ba9a7` | 0/1/2          | 1          | 91k           | 13.2M        | 1h12m       |
+| N1b  | `988430f` | 0/2/4          | 1          | 174k          | 19.5M        | 1h31m       |
+| N0   | `801f22c` | 0/3/1          | 1          | 189k          | 26.0M        | 2h03m       |
+| V2   | `4c6a050` | 0/1/3          | 1          | 229k          | 41.0M        | 3h05m       |
+| V9   | `27e5e53` | 8/14/6         | 1          | 742k          | 99.2M        | 3h49m       |
+| A0   | `80a1b8b` | 0/2/1          | 1          | 213k          | 34.3M        | 1h36m       |
+| A1   | `de65965` | 0/2/3          | 1          | 320k          | 48.9M        | 2h25m       |
+| A2   | `1bb075f` | 0/2/2          | 1          | 271k          | 42.7M        | 1h46m       |
+| A3   | `d8c0699` | 0/1/1          | 1          | 294k          | 63.8M        | 2h36m       |
+| N2   | `a1ad5f2` | 0/1/3          | 1          | 161k          | 15.3M        | 0h53m       |
+| N3a  | `a490001` | 0/0/3          | 0          | 101k          | 12.5M        | 1h07m       |
+| N3b  | `99c0bfc` | 0/2/1          | 1          | 97k           | 8.6M         | 0h59m       |
+| N0b  | `6482cd1` | 0/0/1          | 0          | 58k           | 7.0M         | 0h34m       |
+| L4p  | `53abcc9` | 0/0/3          | 0          | 48k           | 10.5M        | 0h33m       |
+| N4a  | `57bc3cd` | 0/1/2          | 1          | 131k          | 16.7M        | 0h57m       |
+| N0c  | `f302ef3` | 0/1/2          | 1          | 146k          | 20.3M        | 1h05m       |
+| N4b  | `a81843c` | 0/0/2          | 0          | 87k           | 18.0M        | 0h55m       |
+| N5   | `40778d9` | 0/0/0          | 0          | 259k          | 60.2M        | 3h06m       |
+| V4   | `db745d1` | 0/2/1          | 2          | 132k          | 23.6M        | 1h18m       |
+| V7   | `181f1ef` | 0/4/0          | 1          | 245k          | 46.6M        | 1h43m       |
+| V8   | `2f95580` | 0/3/0          | 1          | 194k          | 47.1M        | 2h00m       |
+
+**Totals:** 88 agents (53 Opus 5.5, 30 Fable 5.1, 5 that failed before their
+first message), 4.64M output and 745M input tokens (709M of them cache reads),
+findings 9/49/45, 40h09m active. Included in the totals but not a unit row:
+N0c's superseded first build (1/3/1, 99k output) and 11 agents stopped by the
+usage limit or stalled (534k output). Exceptions: V9 used Fable as the blind
+bench builder and Opus as its reviewer (its 8 blockers); V4's second fix round
+ran as a standalone Opus agent.
 
 ## Lessons (retro per step)
 
