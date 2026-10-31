@@ -2237,7 +2237,7 @@ def test_from_results_command_line_prints_the_pairing(tmp_path: Path) -> None:
 
 STEP3_IDEAS = TESTS_DIR / "fixtures" / "step3_ideas"
 IDEAS_SCRIPT: Json = json.loads((STEP3_IDEAS / "scripted.json").read_text("utf-8"))
-AB_V2_P_NEED = 57.0  # 2 reps x 6 repos x (2.75 + 2 x 1.00); E3's row says 40
+AB_V2_P_NEED = 58.8  # 2 reps x 6 repos x (2.90 + 2 x 1.00); E3's row says 40
 
 
 def test_the_ab_set_selects_arm_p_on_the_three_textbook_groups() -> None:
@@ -2260,24 +2260,26 @@ def test_the_ab_set_selects_arm_p_on_the_three_textbook_groups() -> None:
 
 def test_arm_ps_generation_run_holds_phase_one_arm_a_and_the_whole_pipeline() -> None:
     """The shared run (phase 1, arm A's request, then arm P's S1, six lenses,
-    leap and reviewer) at every request's worst case, D55's prompt bounds,
-    rounded up to 0.05 USD; the pipeline's sum follows its settings."""
+    leap and reviewer) at every request's worst case, D55's prompt bounds as
+    E0b re-derived them (D61), rounded up to 0.05 USD; the pipeline's sum
+    follows its settings."""
     cfg = ab.pipeline_settings(settings)
     assert cfg.IDEA_PIPELINE and not settings.IDEA_PIPELINE
     assert (ab.IDEAS_LANE_PROMPT_BOUND, ab.IDEAS_REVIEW_PROMPT_BOUND) == (
-        34_000,
-        40_000,
+        38_000,
+        44_000,
     )
-    lane = _worst(34_000, cfg.IDEAS_LANE_MAX_TOKENS, (cfg.IDEAS_LANE_MODEL,))
-    leap = _worst(34_000, cfg.IDEAS_LEAP_MAX_TOKENS, (cfg.IDEAS_LEAP_MODEL,))
-    review = _worst(40_000, cfg.IDEAS_REVIEWER_MAX_TOKENS, (cfg.IDEAS_REVIEWER_MODEL,))
+    lane = _worst(38_000, cfg.IDEAS_LANE_MAX_TOKENS, (cfg.IDEAS_LANE_MODEL,))
+    leap = _worst(38_000, cfg.IDEAS_LEAP_MAX_TOKENS, (cfg.IDEAS_LEAP_MODEL,))
+    review = _worst(44_000, cfg.IDEAS_REVIEWER_MAX_TOKENS, (cfg.IDEAS_REVIEWER_MODEL,))
     pipeline = (1 + len(cfg.IDEAS_LENSES)) * lane + leap + review
     assert len(cfg.IDEAS_LENSES) == 6 and cfg.IDEAS_LEAP_N and cfg.IDEAS_REVIEW
     assert ab.pipeline_worst_usd(cfg) == pytest.approx(pipeline)
-    assert 2.365 < pipeline < 2.5  # D55's 2.365, plus the margin and allowance
+    assert 2.475 < pipeline < 2.6  # D61's 2.475, plus the margin and allowance
     phase = _worst(UNDERSTAND_PROMPT_BOUND, settings.UNDERSTAND_MAX_TOKENS, (SONNET,))
     blind = _worst(BLIND_PROMPT_BOUND, ab.AB_GENERATE_MAX_TOKENS, (SONNET,))
     _rounded(phase + blind + pipeline, ab.AB_P_GEN_CAP_USD)
+    assert ab.AB_P_GEN_CAP_USD == 2.9
     lean = cfg.model_copy(update={"IDEAS_REVIEW": False, "IDEAS_LEAP_N": 0})
     assert ab.pipeline_worst_usd(lean) == pytest.approx(7 * lane)
     one = cfg.model_copy(update={"IDEAS_LENSES": cfg.IDEAS_LENSES[:1]})

@@ -56,6 +56,7 @@ from autonomous_ai_agents.optimization.idea_types import (
 )
 from autonomous_ai_agents.orchestrator.factory import repo_reader
 
+from . import discovery_ab as ab
 from . import ideas_probe as ip
 from . import oss
 from . import test_discovery_guards as dg
@@ -78,11 +79,15 @@ Json = dict[str, Any]
 HAIKU = "claude-haiku-5-5"
 LIVE_DIR = TESTS_DIR / "live"
 SHA = "0123456789abcdef0123456789abcdef01234567"
-# The E1 row (spec amendment section 6), per pipeline call and per library.
-E1_ROW = {"B": 1.90, "C": 2.365, "D": 4.36, "E": 1.00, "auditor": 0.66}
-E1_CAP, E1B_CAP = 90.0, 20.0  # the row's caps (E1: over its four dispatches)
-TABLE = {"default": 22, "count": 8, "C-low,C-high": 19}  # the ci.yml needs
-E1_DISPATCH = "pyparsing,tomli"  # E1 runs two libraries a dispatch (120 minutes)
+# The E1 row (spec amendment section 6), per pipeline call and per library:
+# the spec's E1 row re-derived by E0b (D61) on its measured prompt maxima.
+E1_ROW = {"B": 1.99, "C": 2.475, "D": 4.53, "E": 1.04525, "auditor": 0.69}
+# The row's caps, independent of the needs (E1's whole plan needs 8 x 11.40).
+E1_CAP = 92.0  # the E1 cap re-derived from E0b, recorded in STATUS D61 (was 90)
+E1B_CAP = 20.0
+TABLE = {"default": 46, "count": 9, "C-low,C-high": 20}  # the ci.yml needs
+# E1 runs four libraries a dispatch (4 x 56 = 224 of the 240-minute job)
+E1_DISPATCH = "pyparsing,tomli,mistune,idna"
 
 SOURCE = '''"""Number tools."""
 
@@ -123,11 +128,19 @@ def _base() -> Settings:
 
 def test_each_arm_worst_case_is_the_e1_rows_sum_of_its_roles() -> None:
     """D55's bounds and the prices: S1 and six lenses on the lane model, the
-    leap and the reviewer; arm A today's generator on the OSS blind bound."""
+    leap and the reviewer; arm A today's generator on the OSS blind bound.
+    The bounds are discovery_ab's (one source, re-derived from E0b, D61)."""
+    assert (ip.LANE_PROMPT_BOUND, ip.REVIEW_PROMPT_BOUND) == (38_000, 44_000)
+    assert (ip.LANE_PROMPT_BOUND, ip.REVIEW_PROMPT_BOUND) == (
+        ab.IDEAS_LANE_PROMPT_BOUND,
+        ab.IDEAS_REVIEW_PROMPT_BOUND,
+    )
+    source = (LIVE_DIR / "ideas_probe.py").read_text(encoding="utf-8")
+    assert "38_000" not in source and "44_000" not in source
     lane = ip.request_usd(ip.LANE_PROMPT_BOUND, 12_000, SONNET)
-    assert lane == pytest.approx(0.205)
-    assert ip.request_usd(ip.LANE_PROMPT_BOUND, 12_000, OPUS) == pytest.approx(0.41)
-    assert ip.request_usd(ip.REVIEW_PROMPT_BOUND, 16_000, OPUS) == pytest.approx(0.52)
+    assert lane == pytest.approx(0.215)
+    assert ip.request_usd(ip.LANE_PROMPT_BOUND, 12_000, OPUS) == pytest.approx(0.43)
+    assert ip.request_usd(ip.REVIEW_PROMPT_BOUND, 16_000, OPUS) == pytest.approx(0.54)
     for arm in (ip.ARM_B, ip.ARM_C, ip.ARM_D, ip.ARM_E):
         assert ip.arm_usd(arm) == pytest.approx(E1_ROW[arm.key], abs=5e-3), arm
     assert ip.arm_usd(ip.ARM_C_LOW) == ip.arm_usd(ip.ARM_C_HIGH) == ip.arm_usd(ip.ARM_C)
@@ -136,7 +149,7 @@ def test_each_arm_worst_case_is_the_e1_rows_sum_of_its_roles() -> None:
     # bound the oss-ab suite measured is the real worst case.
     today = worst_usd(OSS_BLIND_PROMPT_BOUND, settings.GENERATOR_MAX_TOKENS, SONNET)
     assert ip.arm_usd(ip.ARM_A) == today == pytest.approx(0.26955)
-    assert ip.arm_usd(ip.ARM_COUNT) == pytest.approx(ip.COUNT_SENT * lane) == 0.41
+    assert ip.arm_usd(ip.ARM_COUNT) == pytest.approx(ip.COUNT_SENT * lane) == 0.43
 
 
 def test_the_three_dispatches_need_their_table_entries_within_the_row_caps() -> None:
@@ -145,16 +158,16 @@ def test_the_three_dispatches_need_their_table_entries_within_the_row_caps() -> 
     per_library = ceil_usd(
         OSS_PHASE_ONE_WORST_USD + sum(ip.arm_usd(a) for a in ip.E1_ARMS) + ip.AUDIT_USD
     )
-    assert e1.library_cap() == whole.library_cap() == per_library == 10.95
+    assert e1.library_cap() == whole.library_cap() == per_library == 11.40
     assert ip.probe_need(whole) == pytest.approx(8 * per_library)
     assert ip.probe_need(whole) <= E1_CAP
-    assert ip.probe_need(e1) == pytest.approx(2 * per_library)
+    assert ip.probe_need(e1) == pytest.approx(4 * per_library)
     count = ip.probe_plan({ip.ARMS_ENV: "count"})
-    assert count.library_cap() == ceil_usd(OSS_PHASE_ONE_WORST_USD + 0.41) == 0.8
-    assert ip.probe_need(count) == pytest.approx(8.0)
+    assert count.library_cap() == ceil_usd(OSS_PHASE_ONE_WORST_USD + 0.43) == 0.85
+    assert ip.probe_need(count) == pytest.approx(8.5)
     e1b = ip.ProbePlan((ip.ARM_C_LOW, ip.ARM_C_HIGH), _repos(ip.E1B_REPOS), Path("f"))
-    assert not e1b.audit and e1b.library_cap() == ceil_usd(2 * 2.365) == 4.75
-    assert ip.probe_need(e1b) == 19.0 <= E1B_CAP
+    assert not e1b.audit and e1b.library_cap() == ceil_usd(2 * 2.475) == 4.95
+    assert ip.probe_need(e1b) == 19.8 <= E1B_CAP
     for plan, key in ((e1, "default"), (count, "count")):
         assert ip.probe_need(plan) <= TABLE[key] < ip.probe_need(plan) + 1
     assert ip.probe_need(e1b) <= TABLE["C-low,C-high"] < ip.probe_need(e1b) + 1
@@ -166,7 +179,7 @@ def _repos(names: Sequence[str]) -> tuple[oss.OssRepo, ...]:
 
 def test_the_defaults_follow_the_pre_registered_runs() -> None:
     """Unset: E1 (arms A-E, its eight libraries, one auditor pass), which a
-    dispatch runs two libraries at a time; count alone: E0b on the ten OSS
+    dispatch runs four libraries at a time; count alone: E0b on the ten OSS
     libraries; the effort variants alone: E1b."""
     arms = ip.probe_arms({})
     assert arms == ip.E1_ARMS == (ip.ARM_A, ip.ARM_B, ip.ARM_C, ip.ARM_D, ip.ARM_E)
@@ -174,7 +187,7 @@ def test_the_defaults_follow_the_pre_registered_runs() -> None:
         r.name for r in OSS_SELECTABLE if r.name in ip.E1_REPOS
     ]
     e1 = ip.probe_plan({ip.REPOS_ENV: E1_DISPATCH})
-    assert [r.name for r in e1.repos] == ["pyparsing", "tomli"]
+    assert [r.name for r in e1.repos] == ["mistune", "pyparsing", "idna", "tomli"]
     assert len(ip.E1_REPOS) == 8 and e1.audit and e1.facts is None
     assert set(ip.E1_REPOS) == {
         "more_itertools", "pyparsing", "tomli", "sortedcontainers",
@@ -209,22 +222,29 @@ def test_knobs_parse_strictly_before_any_spend(env: dict[str, str], match: str) 
 
 
 def test_a_plan_past_the_jobs_minutes_is_refused_before_any_spend() -> None:
-    """D55's stages run in order, about ``STAGE_MINUTES`` each: E1 60 minutes
-    a library (phase 1, A, four pipeline calls of S1, two lens rounds on four
-    workers and the reviewer, the auditor), so two a 120-minute dispatch;
-    E0b's ten at 12, E1b's four at 25 on recorded facts."""
-    assert ip.JOB_MINUTES == 120 and ip.STAGE_MINUTES == 3
+    """D55's stages run in order, about ``STAGE_MINUTES`` each (kept until
+    E1's recorded seconds re-pin it: E0b timed only count mode's Sonnet
+    sends), phase 1 ``PHASE_ONE_MINUTES`` (E0b: a count-mode library about
+    47 s): E1 56 minutes a library (phase 1, A, four pipeline calls of S1,
+    two lens rounds on four workers and the reviewer, the auditor), so four
+    a 240-minute dispatch (224), five refused (280); E0b's ten at 8, E1b's
+    four at 25 on recorded facts."""
+    assert ip.JOB_MINUTES == 240 and ip.STAGE_MINUTES == 3
+    assert ip.PHASE_ONE_MINUTES == 2
     assert [ip.arm_stages(a) for a in ip.E1_ARMS] == [1, 4, 4, 4, 4]
     assert ip.arm_stages(ip.ARM_COUNT) == ip.COUNT_SENT == 2
-    assert ip.ProbePlan(ip.E1_ARMS, _repos(("tomli",))).library_minutes() == 60
-    assert ip.probe_plan({ip.REPOS_ENV: E1_DISPATCH}).minutes() == 120
-    assert ip.probe_plan({ip.ARMS_ENV: "count"}).minutes() == 10 * 12
+    assert ip.ProbePlan(ip.E1_ARMS, _repos(("tomli",))).library_minutes() == 56
+    assert ip.probe_plan({ip.REPOS_ENV: E1_DISPATCH}).minutes() == 4 * 56 == 224
+    assert ip.probe_plan({ip.ARMS_ENV: "count"}).minutes() == 10 * 8
     e1b = ip.ProbePlan((ip.ARM_C_LOW, ip.ARM_C_HIGH), _repos(ip.E1B_REPOS), Path("f"))
     assert e1b.library_minutes() == 25 and e1b.minutes() == 100
-    for env in ({}, {ip.REPOS_ENV: "pyparsing,tomli,idna"}):
-        with pytest.raises(ValueError, match="past the 120-minute job"):
+    five = ",".join(ip.E1_REPOS[:5])
+    for env in ({}, {ip.REPOS_ENV: five}):
+        with pytest.raises(ValueError, match="past the 240-minute job"):
             ip.probe_plan(env)
-    assert ip.probe_plan({ip.REPOS_ENV: "idna"}).minutes() == 60
+    assert ip.ProbePlan(ip.E1_ARMS, _repos(ip.E1_REPOS[:5])).minutes() == 280
+    assert ip.ProbePlan(ip.E1_ARMS, _repos(ip.E1_REPOS[:7])).minutes() == 392
+    assert ip.probe_plan({ip.REPOS_ENV: "idna"}).minutes() == 56
 
 
 def test_recorded_facts_resolve_against_the_service_directory(tmp_path: Path) -> None:
@@ -236,7 +256,7 @@ def test_recorded_facts_resolve_against_the_service_directory(tmp_path: Path) ->
     found = ip.probe_plan({**one, ip.FACTS_ENV: relative}).facts
     assert found == ip.SERVICE_DIR / relative
     plan = ip.probe_plan({ip.FACTS_ENV: str(facts), ip.ARMS_ENV: "C-low,C-high"})
-    assert plan.library_cap() == 4.75  # no phase 1 on recorded facts
+    assert plan.library_cap() == 4.95  # no phase 1 on recorded facts
 
 
 # ---------------------------------------------------------------------------
@@ -914,13 +934,13 @@ def _dispatch(
 @pytest.mark.parametrize(
     ("arms", "repos", "need", "exported", "facts"),
     [
-        (None, E1_DISPATCH, "22", "A,B,C,D,E", "unset"),
-        ("A,B,C,D,E", E1_DISPATCH, "22", "A,B,C,D,E", "unset"),
-        ("A,B,C,D,E", "idna", "11", "A,B,C,D,E", "unset"),
-        ("count", None, "8", "count", "unset"),
-        ("count", "", "8", "count", "unset"),
+        (None, E1_DISPATCH, "46", "A,B,C,D,E", "unset"),
+        ("A,B,C,D,E", E1_DISPATCH, "46", "A,B,C,D,E", "unset"),
+        ("A,B,C,D,E", "idna", "12", "A,B,C,D,E", "unset"),
+        ("count", None, "9", "count", "unset"),
+        ("count", "", "9", "count", "unset"),
         ("count", "tomli,idna,mistune", "3", "count", "unset"),
-        ("C-low,C-high", "", "19", "C-low,C-high", ip.FACTS_FIXTURE),
+        ("C-low,C-high", "", "20", "C-low,C-high", ip.FACTS_FIXTURE),
         ("C-low,C-high", "tomli,mistune", "10", "C-low,C-high", ip.FACTS_FIXTURE),
     ],
 )
@@ -969,10 +989,10 @@ def test_the_ideas_inputs_are_strict_and_for_the_probe_only(tmp_path: Path) -> N
         assert (code, calls) == (1, []) and "ideas_repos must be" in output, bad
     for index, unset in enumerate((None, "")):  # E1's eight: the module refuses
         code, output, calls = _dispatch(
-            tmp_path / f"e1-{index}", None, "22", repos=unset
+            tmp_path / f"e1-{index}", None, "46", repos=unset
         )
         assert code == 0 and calls[1] == "A,B,C,D,E" and calls[5] == "unset", output
-        with pytest.raises(ValueError, match="past the 120-minute job"):
+        with pytest.raises(ValueError, match="past the 240-minute job"):
             ip.probe_plan({ip.ARMS_ENV: calls[1]})
     code, output, calls = _dispatch(tmp_path / "other", "count", "12", "stage-a")
     assert (code, calls) == (1, []) and "ideas_arms is only for" in output
@@ -988,8 +1008,8 @@ def test_the_suite_row_timeout_noise_rule_and_stage_a_ignore() -> None:
     assert "ideas-probe" in inputs
     cap_help = _ci_block("      suite_cap_usd:", "\n\n")
     assert (
-        "ideas-probe 22 (E1, two libraries of ideas_repos, one 11; "
-        "ideas_arms count 8, C-low,C-high 19)" in cap_help
+        "ideas-probe 46 (E1, four libraries of ideas_repos, one 12; "
+        "ideas_arms count 9, C-low,C-high 20)" in cap_help
     )
     block = _ci_block("  live-smoke:", "    defaults:")
     assert f"inputs.suite == 'ideas-probe' && {ip.JOB_MINUTES} ||" in block

@@ -501,18 +501,14 @@ Postgres at 100 % under CPython 3.13 and 3.11, prettier):
   scratchpad, `e0r/`.
 - **V7 (`ideas-probe`), Lead decisions:** accepted as one module at about 850
   code lines against a ~400 row (the auditor, facts and count mode were in the
-  row; a split moves lines without shrinking the review). E1 runs as four
-  dispatches of two libraries (`ideas_repos`, need 22 each): an estimated 60
-  minutes a library cannot fit eight into one 120-minute job, and a killed job
-  loses its remaining facts. The minutes estimate is re-pinned from E0b's
-  recorded seconds. Arm A's cap is 0.27, not 0.18 (the measured 41,000-token OSS
-  prompt); E0b needs 8, not 5 (it still runs phase 1).
+  row; a split moves lines without shrinking the review). Arm A's cap is 0.27,
+  not 0.18 (the measured 41,000-token OSS prompt). Its dispatch plan (two
+  libraries a 120-minute job) is superseded by V7b, below.
 - **V8 (arm P in `ab-v2-p` and `evolve-p`):** arm P withholds exactly what the
-  engine's generate call withholds (phase 1's `extra_protected` included). Two
-  open items, settled before their runs: E3's 40 USD row cap is below its plan
-  (2 reps × 6 repositories = 57; one rep fits 28.5 but has no CI input), and
-  L5a/L5b's `ab-v2` suite (arm A, and A vs B, on v2) was never built; a small
-  unit adds it before L5a. E4 fits its row (54.3 a library).
+  engine's generate call withholds (phase 1's `extra_protected` included). E3
+  runs at its full plan under O22 (need 59 after V7b; the spec's 40 USD row cap
+  no longer applies); E4 needs 56 a library. Open: L5a/L5b's `ab-v2` suite (arm
+  A, and A vs B, on v2) was never built; a small unit adds it before L5a.
 - **E0b (2026-10-31, 1.46 USD): D55's lane bound was too low.** Counted lane
   prompts reached 35,686 tokens (mistune; sqlparse and pycparser also over
   34,000), so the probe refused their lens request, and in E1 the pipeline would
@@ -520,10 +516,14 @@ Postgres at 100 % under CPython 3.13 and 3.11, prettier):
   read exactly the data block S1 wrote. The reviewer with 16 ideas stayed under
   40,000 (max 39,463). As pre-registered, the bounds are re-derived before E1
   (V7b): lane 38,000, reviewer 44,000, auditor 58,000 (about 400 tokens an
-  idea). Requests took 9-18 s, so the minutes estimate falls too: E1 runs four
-  libraries a dispatch in a 240-minute job, not two. The three libraries' lens
-  cache read is measured again with V7b (about 0.3 USD). The engine itself was
-  never limited: it budgets each request from its own count.
+  idea), one source for both suites that run the pipeline (`discovery_ab.py`, so
+  arm P's E3 and E4 needs move to 59 and 56). Phase 1 took under a minute, so
+  its estimate falls from 6 to 2 minutes; a stage stays at 3 minutes because
+  only short Sonnet sends were timed (the Fable reviewer's call): E1 runs four
+  libraries a dispatch (56 minutes each, 224 of a 240-minute job, need 46), not
+  two; E1's cap becomes 92 (8 × 11.40 = 91.2). The three libraries' lens cache
+  read is measured again with V7b (about 0.3 USD). The engine itself was never
+  limited: it budgets each request from its own count.
 - **Next:** V7b, the three-library E0b re-run, then E1.
 - **Owner's plan, for the record (2026-10-30):** after Wave 2's idea experiments
   (E1/E2) report, the **Improvement pilot** (label I; renamed by the owner on
@@ -612,12 +612,13 @@ can be fitted to its result. Full table: spec-wave2-ideas §6.
   library's lane prompt is ≤ 34,000 and reviewer prompt ≤ 40,000 counted tokens,
   and the lens lane reads at least the data block's tokens from cache; else the
   caps are re-derived before E1.
-- **E1 (cap 90):** go to E2 only if the best arm gives ≥ 3 good ideas on ≥ 5 of
-  the 7 counted libraries (`sortedcontainers` is a reported control;
-  `more_itertools` counts because N0 is in). E2's arm P is the cheapest arm
-  within 1 good idea per library of the best; arm D (Fable) is never the
-  default. A role above 10 % `max_tokens` stops, or a reviewer refused on more
-  than 1 of 8 libraries, gets a re-derived `max_tokens` first.
+- **E1 (cap 90; re-derived to 92 after E0b, as this rule allows, V7b):** go to
+  E2 only if the best arm gives ≥ 3 good ideas on ≥ 5 of the 7 counted libraries
+  (`sortedcontainers` is a reported control; `more_itertools` counts because N0
+  is in). E2's arm P is the cheapest arm within 1 good idea per library of the
+  best; arm D (Fable) is never the default. A role above 10 % `max_tokens`
+  stops, or a reviewer refused on more than 1 of 8 libraries, gets a re-derived
+  `max_tokens` first.
 - **E1b (cap 20):** lanes stay `medium` unless `low` or `high` gives ≥ 2 more
   unique grounded mechanisms per library on average with a grounding pass rate
   within 10 points; a tie keeps `medium`.

@@ -1113,7 +1113,7 @@ EXPERIMENT_MINUTES = {
     "heal-agent": 120,  # 28 bugs, arm B up to 12 turns each
     "research-agent": 45,  # research_agent.JOB_MINUTES: 11 runs
     "watch": 90,  # watch_managed.JOB_MINUTES: one watched hosted run
-    "ideas-probe": 120,  # ideas_probe.JOB_MINUTES: E1 two libraries a dispatch
+    "ideas-probe": 240,  # ideas_probe.JOB_MINUTES: E1 four libraries a dispatch
 }  # batch wait; 5 papers; 18 web runs
 SWEEP_FABLE_ENV = {  # Fable 5.1 beside the one arm whose run phase 1 shares
     "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
@@ -1125,7 +1125,8 @@ EVOLVE_P_ARMS_ENV = {"LIVE_EVOLVE_ARMS": "blind,P", "LIVE_EVOLVE_ROUNDS": "6"}
 EVOLVE_P_REPO = "sqlparse"  # evolve-p runs one library a dispatch (E4: 3)
 AB_V2_P_ENV = {"LIVE_AB_SET": "v2-p"}
 OSS_AB_DISPATCH_REPO = "tabulate"  # oss-ab runs one library a dispatch
-IDEAS_E1_DISPATCH = {"LIVE_IDEAS_REPOS": "pyparsing,tomli"}  # E1: two a dispatch
+# E1: four a dispatch (4 x 56 of ideas_probe.JOB_MINUTES' 240)
+IDEAS_E1_DISPATCH = {"LIVE_IDEAS_REPOS": "pyparsing,tomli,mistune,idna"}
 SWEEP_RECORD_ENV = {  # one arm, recorded for hand labels and offline replay
     "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
     "LIVE_SWEEP_RECORD": "1",
@@ -2230,21 +2231,21 @@ def test_evolve_p_runs_both_arms_on_the_one_library_its_input_names(
     script = _run_script()
     assert f"export {line}\n" in script and script.count("LIVE_EVOLVE_ARMS") == 1
     code, output, calls = _dispatch(
-        tmp_path, "evolve-p", "claude-sonnet-5-5", "55", oss_repo=EVOLVE_P_REPO
+        tmp_path, "evolve-p", "claude-sonnet-5-5", "56", oss_repo=EVOLVE_P_REPO
     )
     assert code == 0 and calls, output
     for bad in ("", "sqlparse,tomli", "Sqlparse", "a;id"):
         (tmp_path / "called.txt").unlink(missing_ok=True)
         code, output, calls = _dispatch(
-            tmp_path, "evolve-p", "claude-sonnet-5-5", "55", oss_repo=bad
+            tmp_path, "evolve-p", "claude-sonnet-5-5", "56", oss_repo=bad
         )
         assert (code, calls) == (1, ""), (bad, output)
         assert "::error::evolve-p needs oss_repo" in output
     (tmp_path / "called.txt").unlink(missing_ok=True)
     code, output, calls = _dispatch(
-        tmp_path, "evolve-p", "claude-sonnet-5-5", "54", oss_repo=EVOLVE_P_REPO
+        tmp_path, "evolve-p", "claude-sonnet-5-5", "55", oss_repo=EVOLVE_P_REPO
     )
-    assert (code, calls) == (1, "") and "below the 55 USD suite evolve-p" in output
+    assert (code, calls) == (1, "") and "below the 56 USD suite evolve-p" in output
 
 
 def test_ab_v2_p_exports_its_set_only_for_its_own_suite() -> None:

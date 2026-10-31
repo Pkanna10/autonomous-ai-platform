@@ -128,8 +128,9 @@ from .oss import (
 LIVE_DIR = TESTS_DIR / "live"
 CAP_CEILING_USD = 150  # live-smoke's suite_cap_usd ceiling
 EVOLVE_NEED = 103.5  # 3 repos x 10 rounds x (0.45 + 3.00); the Lead copies it
-# E4 (V8): one library x 6 rounds x (blind 0.45 + 3.00 + P 2.60 + 3.00)
-EVOLVE_P_NEED = 54.3
+# E4 (V8): one library x 6 rounds x (blind 0.45 + 3.00 + P 2.75 + 3.00), P on
+# D55's bounds as E0b re-derived them (D61)
+EVOLVE_P_NEED = 55.2
 E4_ENV = {"LIVE_EVOLVE_REPOS": "sqlparse", "LIVE_EVOLVE_ARMS": "blind,P"}
 E4_ENV["LIVE_EVOLVE_ROUNDS"] = "6"
 LOCAL = GitPolicy(allow=re.compile(r"file:///[^\s?#]+\.git"), protocols="file")
@@ -1987,7 +1988,7 @@ def test_arm_ps_generation_run_holds_phase_one_and_the_whole_pipeline() -> None:
         pipeline_settings(evo.evolve_settings(settings))
     )
     assert total <= evo.EVOLVE_P_GEN_CAP_USD < total + 0.05 + 1e-9
-    assert evo.EVOLVE_P_GEN_CAP_USD == 2.6
+    assert evo.EVOLVE_P_GEN_CAP_USD == 2.75
     assert evo.evolve_gen_cap("blind") == evo.EVOLVE_GEN_CAP_USD == 0.45
     assert evo.evolve_gen_cap("P") == evo.EVOLVE_P_GEN_CAP_USD
 
@@ -2006,9 +2007,9 @@ def test_the_e4_plan_needs_both_arms_every_round_inside_its_row() -> None:
     assert evo.evolve_need(plan) == pytest.approx(EVOLVE_P_NEED)
     assert evo.evolve_need(plan) <= 60  # E4's row: 2 arms x 6 rounds x 5 USD
     assert evo.evolve_need(evo.evolve_plan({})) == pytest.approx(EVOLVE_NEED)
-    with pytest.raises(ValueError, match=r"x 2 arm\(s\).*54.30 USD"):
-        evo.check_suite_cap(plan, {"LIVE_SUITE_CAP_USD": "54.29"})
-    evo.check_suite_cap(plan, {"LIVE_SUITE_CAP_USD": "55"})
+    with pytest.raises(ValueError, match=r"x 2 arm\(s\).*55.20 USD"):
+        evo.check_suite_cap(plan, {"LIVE_SUITE_CAP_USD": "55.19"})
+    evo.check_suite_cap(plan, {"LIVE_SUITE_CAP_USD": "56"})
 
 
 def test_blind_rounds_still_send_the_one_generation_request(dry: Path) -> None:

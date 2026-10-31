@@ -70,7 +70,7 @@ on:
         options: [default, claude-sonnet-5-5]
         default: default
       suite_cap_usd:
-        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75 (corpus_select controls 15), hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 112, sweep-fable 41, sweep-record 24, ab 140, ab-v2-p 57, escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, evolve-p 55, heal-hard 8, build 27, grader 2, upstream-verify 0 (no request, but the cap must be above 0), upstream 50, agent-probes 1, heal-agent 8, research-agent 8, watch 2, watch-cleanup 2, ideas-probe 22 (E1, two libraries of ideas_repos, one 11; ideas_arms count 8, C-low,C-high 19)'
+        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75 (corpus_select controls 15), hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 112, sweep-fable 41, sweep-record 24, ab 140, ab-v2-p 59, escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, evolve-p 56, heal-hard 8, build 27, grader 2, upstream-verify 0 (no request, but the cap must be above 0), upstream 50, agent-probes 1, heal-agent 8, research-agent 8, watch 2, watch-cleanup 2, ideas-probe 46 (E1, four libraries of ideas_repos, one 12; ideas_arms count 9, C-low,C-high 20)'
         type: string
         default: '12'
       oss_repo:
@@ -98,12 +98,12 @@ on:
         options: [all, controls]
         default: all
       ideas_arms:
-        description: 'ideas-probe only: LIVE_IDEAS_ARMS, the arms each library runs (A,B,C,D,E: E1 with the auditor, two of its 8 libraries a dispatch named in ideas_repos, need 11 a library; count: E0b on the 10 OSS libraries, need 8; C-low,C-high: E1b on the facts E1 recorded, need 19)'
+        description: 'ideas-probe only: LIVE_IDEAS_ARMS, the arms each library runs (A,B,C,D,E: E1 with the auditor, four of its 8 libraries a dispatch named in ideas_repos, need 11.40 a library, 46 for four; count: E0b on the 10 OSS libraries, need 9; C-low,C-high: E1b on the facts E1 recorded, need 20)'
         type: choice
         options: ['A,B,C,D,E', count, 'C-low,C-high']
         default: 'A,B,C,D,E'
       ideas_repos:
-        description: 'ideas-probe only, and required for E1: LIVE_IDEAS_REPOS, comma-separated OSS library names (E1 at most two a dispatch, e.g. pyparsing,tomli; empty: the libraries of the arms); the need is the libraries x 10.95 (E1), 0.80 (count) or 4.75 (C-low,C-high), rounded up'
+        description: 'ideas-probe only, and required for E1: LIVE_IDEAS_REPOS, comma-separated OSS library names (E1 at most four a dispatch, e.g. pyparsing,tomli,mistune,idna; empty: the libraries of the arms); the need is the libraries x 11.40 (E1), 0.85 (count) or 4.95 (C-low,C-high), rounded up'
         type: string
         default: ''
 
@@ -615,12 +615,13 @@ jobs:
     # so both sit at the 8-minutes-a-loop floor: hard 90, corpus 120. oss
     # keeps 300: L2a measured 36-40 minutes for its 10 loops, and arm P or A
     # at portfolio_rounds 2 (E2) at most doubles the trials (re-pinned from
-    # E2's first dispatch). ideas-probe 120 (ideas_probe.JOB_MINUTES): about
-    # 3 minutes a sequential model stage, E1 60 a library (phase 1, arm A,
-    # four pipeline calls of four stages, the auditor), so two libraries a
-    # dispatch (ideas_repos); E0b's ten 12 each, E1b's four 25 each (re-pinned
-    # from E0b's recorded seconds).
-    timeout-minutes: ${{ inputs.suite == 'sweep' && 240 || inputs.suite == 'sweep-fable' && 180 || inputs.suite == 'sweep-record' && 150 || inputs.suite == 'ab' && 360 || inputs.suite == 'noise' && 90 || inputs.suite == 'oss-ab' && 120 || inputs.suite == 'evolve' && 300 || inputs.suite == 'evolve-more' && 300 || inputs.suite == 'evolve-p' && 300 || inputs.suite == 'ab-v2-p' && 300 || inputs.suite == 'build' && 120 || inputs.suite == 'upstream-verify' && 150 || inputs.suite == 'upstream' && 300 || inputs.suite == 'heal-agent' && 120 || inputs.suite == 'research-agent' && 45 || inputs.suite == 'ideas-probe' && 120 || inputs.suite == 'watch' && 90 || inputs.suite == 'escalation' && 90 || inputs.suite == 'triage' && 90 || inputs.suite == 'papers' && 60 || inputs.suite == 'web' && 90 || inputs.suite == 'corpus' && 120 || inputs.suite == 'oss' && 300 || inputs.suite == 'hard' && 90 || inputs.suite == 'attack' && 45 || 30 }}
+    # E2's first dispatch). ideas-probe 240 (ideas_probe.JOB_MINUTES): about
+    # 3 minutes a sequential model stage (kept until E1's recorded seconds
+    # re-pin it) and 2 for phase 1 (E0b: a count-mode library about 47 s),
+    # E1 56 a library (phase 1, arm A, four pipeline calls of four stages,
+    # the auditor), so four libraries a dispatch (ideas_repos, 224 minutes);
+    # E0b's ten 8 each, E1b's four 25 each.
+    timeout-minutes: ${{ inputs.suite == 'sweep' && 240 || inputs.suite == 'sweep-fable' && 180 || inputs.suite == 'sweep-record' && 150 || inputs.suite == 'ab' && 360 || inputs.suite == 'noise' && 90 || inputs.suite == 'oss-ab' && 120 || inputs.suite == 'evolve' && 300 || inputs.suite == 'evolve-more' && 300 || inputs.suite == 'evolve-p' && 300 || inputs.suite == 'ab-v2-p' && 300 || inputs.suite == 'build' && 120 || inputs.suite == 'upstream-verify' && 150 || inputs.suite == 'upstream' && 300 || inputs.suite == 'heal-agent' && 120 || inputs.suite == 'research-agent' && 45 || inputs.suite == 'ideas-probe' && 240 || inputs.suite == 'watch' && 90 || inputs.suite == 'escalation' && 90 || inputs.suite == 'triage' && 90 || inputs.suite == 'papers' && 60 || inputs.suite == 'web' && 90 || inputs.suite == 'corpus' && 120 || inputs.suite == 'oss' && 300 || inputs.suite == 'hard' && 90 || inputs.suite == 'attack' && 45 || 30 }}
     defaults:
       run:
         working-directory: ./services/python_agents
@@ -748,10 +749,11 @@ jobs:
           # noise 0 (no request); heal 8 x 0.75; oss-ab one library 102.6 (2
           # reps x (1.30 generation + 2 arms x 10 trials x 2.50)); evolve 3
           # repos x 10 rounds x (0.45 + 3); evolve-more the same on 4 more
-          # libraries, 138; V8's arm P: ab-v2-p (E3) 2 reps x 6 v2 repos x
-          # (2.75 generation, phase 1, arm A and the whole idea pipeline, + 2
-          # x 1.00), 57; evolve-p (E4) one library x 6 rounds x (blind 0.45 + 3
-          # + arm P 2.60 + 3), 54.3; heal-hard 10 x 0.75; build 3 specs x (0.80 build +
+          # libraries, 138; V8's arm P, on D55's bounds as E0b re-derived them
+          # (D61): ab-v2-p (E3) 2 reps x 6 v2 repos x (2.90 generation, phase
+          # 1, arm A and the whole idea pipeline, + 2 x 1.00), 58.8; evolve-p
+          # (E4) one library x 6 rounds x (blind 0.45 + 3 + arm P 2.75 + 3),
+          # 55.2; heal-hard 10 x 0.75; build 3 specs x (0.80 build +
           # 0.60 generation + 7.50 loop)); grader 6 repositories x 0.22725
           # (L3, one grader request each); upstream-verify 0 (no request);
           # upstream a batch of 10 verified candidates x 5 (one wired loop each);
@@ -763,10 +765,11 @@ jobs:
           # watch 1.85 (A3: one hosted run's worst case, the 25-cent session
           # budget + one maximal Haiku 5.5 request + 22 watched minutes, 1.60,
           # and a listing's triage, 0.25); watch-cleanup 1.60 (one session no
-          # ledger saw); ideas-probe E1 21.9 (2 libraries a dispatch x 10.95:
-          # phase 1 0.38, arms A 0.27, B 1.90, C 2.365, D 4.36, E 1.00, the
-          # auditor 0.66), E0b count 8 (10 x (0.38 + 2 x 0.205)), E1b 19 (4 x
-          # 2 x 2.365 on recorded facts),
+          # ledger saw); ideas-probe E1 45.6 (4 libraries a dispatch x 11.40,
+          # on D55's bounds re-derived from E0b's counts: phase 1 0.38, arms A
+          # 0.27, B 1.99, C 2.475, D 4.53, E 1.045, the auditor 0.69), E0b
+          # count 8.5 (10 x 0.85, 0.38 + 2 x 0.215), E1b 19.8 (4 x 2 x 2.475
+          # on recorded facts),
           # rounded up; a smaller cap would refuse, and fail, the later
           # tests of the suite.
           case "${INPUT_SUITE}" in
@@ -784,7 +787,7 @@ jobs:
             sweep-fable) paths=(tests/live/test_sweep_live.py); need=41 ;;
             sweep-record) paths=(tests/live/test_sweep_live.py); need=24 ;;
             ab) paths=(tests/live/test_ab_live.py); need=140 ;;
-            ab-v2-p) paths=(tests/live/test_ab_live.py); need=57 ;;
+            ab-v2-p) paths=(tests/live/test_ab_live.py); need=59 ;;
             escalation) paths=(tests/live/test_escalation_live.py); need=43 ;;
             acquire) paths=(tests/live/experiments/test_acquire_live.py); need=1 ;;
             noise) paths=(tests/live/test_noise_live.py); need=0 ;;
@@ -792,7 +795,7 @@ jobs:
             oss-ab) paths=(tests/live/test_oss_ab_live.py); need=103 ;;
             evolve) paths=(tests/live/test_evolution_live.py); need=104 ;;
             evolve-more) paths=(tests/live/test_evolution_live.py); need=138 ;;
-            evolve-p) paths=(tests/live/test_evolution_live.py); need=55 ;;
+            evolve-p) paths=(tests/live/test_evolution_live.py); need=56 ;;
             heal-hard) paths=(tests/live/experiments/test_heal_live.py); need=8 ;;
             build) paths=(tests/live/test_build_live.py); need=27 ;;
             grader) paths=(tests/live/test_grader_agreement_live.py); need=2 ;;
@@ -803,7 +806,7 @@ jobs:
             research-agent) paths=(tests/live/experiments/test_research_agent_live.py); need=8 ;;
             watch) paths=(tests/live/experiments/test_watch_managed_live.py); need=2 ;;
             watch-cleanup) paths=(tests/live/experiments/test_watch_managed_live.py); need=2 ;;
-            ideas-probe) paths=(tests/live/test_ideas_probe_live.py); need=22 ;;
+            ideas-probe) paths=(tests/live/test_ideas_probe_live.py); need=46 ;;
             *)
               echo "::error::unknown suite input (stage-a, corpus, attack, hard, oss, probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, ab-v2-p, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, evolve-p, heal-hard, build, grader, upstream-verify, upstream, agent-probes, heal-agent, research-agent, watch, watch-cleanup or ideas-probe)"
               exit 1
@@ -860,18 +863,18 @@ jobs:
           # lane efforts on E1's recorded facts (committed by the Lead at
           # tests/fixtures/ideas_probe/facts.jsonl; refused before any spend
           # while missing). An unset input reads as the default. ideas_repos
-          # names the libraries (E1 must: two fit the job's minutes, and the
+          # names the libraries (E1 must: four fit the job's minutes, and the
           # module fixture refuses E1's whole eight before any spend); the
           # need is their count x the plan's library cap in cents, rounded up.
           ideas_arms="${INPUT_IDEAS_ARMS-A,B,C,D,E}"
           ideas_repos="${INPUT_IDEAS_REPOS-}"
           if [ "${INPUT_SUITE}" = ideas-probe ]; then
             case "${ideas_arms}" in
-              A,B,C,D,E) cents=1095 ;;
-              count) cents=80; need=8 ;;
+              A,B,C,D,E) cents=1140 ;;
+              count) cents=85; need=9 ;;
               C-low,C-high)
-                cents=475
-                need=19
+                cents=495
+                need=20
                 export LIVE_IDEAS_FACTS=tests/fixtures/ideas_probe/facts.jsonl
                 ;;
               *)

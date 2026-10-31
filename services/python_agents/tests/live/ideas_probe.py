@@ -21,20 +21,25 @@ reviewer's removals, then the rest), neutral ids, its cost in the cap.
 
 Minutes: each sequential model stage counts ``STAGE_MINUTES`` (S1, two lens
 rounds on four workers, the reviewer: four a pipeline call), phase 1
-``PHASE_ONE_MINUTES``; a plan past ci.yml's ``JOB_MINUTES`` is refused, so
-E1 (60 minutes a library) runs two libraries a dispatch
-(``$LIVE_IDEAS_REPOS``). Count mode also counts the reviewer request with
-its ideas repeated under fresh ids up to ``IDEAS_REVIEW_MAX_IDEAS`` (D55's
+``PHASE_ONE_MINUTES`` (re-pinned from E0b: a count-mode library took about
+47 s; the stage minutes stay until E1's recorded seconds re-pin them, as E0b
+timed only count mode's Sonnet sends, 9-18 s); a plan past ci.yml's
+``JOB_MINUTES`` is refused, so E1 (56 minutes a library) runs four
+libraries a dispatch (``$LIVE_IDEAS_REPOS``, 224; five would take 280).
+Count mode (8 minutes a library) also counts the reviewer request with its
+ideas repeated under fresh ids up to ``IDEAS_REVIEW_MAX_IDEAS`` (D55's
 reviewer bound is for 16 ideas; S1 and one lens give fewer).
 
-Caps: an arm's cap is the sum of its requests' worst cases on D55's bounds
-(the E1 row: B 1.90, C 2.365, D 4.36, E 1.00, the auditor 0.66; A on the
-oss-ab suite's measured blind bound, 0.27), count mode's real spend is
-``COUNT_SENT`` lane requests (0.41, the tap refuses past it); a library's
-run is phase 1, its arms and the auditor, rounded up; a plan past the
-150 USD ceiling is refused in the module fixture. Fable (30-day retention)
-gets ``ALLOW_RETENTION_MODELS`` only in arm D's copy and only for a library
-of the pinned OSS manifests (O15); the flag is cleared in every other copy.
+Caps: an arm's cap is the sum of its requests' worst cases on D55's bounds,
+re-derived from E0b's counted maxima (D61; the E1 row: B 1.99, C 2.475, D
+4.53, E 1.045, the auditor 0.69; A on the oss-ab suite's measured blind
+bound, 0.27), count mode's real spend is ``COUNT_SENT`` lane requests (0.43,
+the tap refuses past it); a library's run is phase 1, its arms and the
+auditor, rounded up (E1 11.40, count 0.85, C-low/C-high 4.95); a plan past
+the 150 USD ceiling is refused in the module fixture. Fable (30-day
+retention) gets ``ALLOW_RETENTION_MODELS`` only in arm D's copy and only for
+a library of the pinned OSS manifests (O15); the flag is cleared in every
+other copy.
 
 Recorded, never asserted (``$LIVE_RESULTS_PATH``): per library the facts
 (``ideas-facts``, chunked JSON, keys redacted), per (library, arm) a row
@@ -129,7 +134,11 @@ from .discovery import (
     read_phase_one,
     worst_usd,
 )
-from .discovery_ab import ab_settings
+from .discovery_ab import (
+    IDEAS_LANE_PROMPT_BOUND,
+    IDEAS_REVIEW_PROMPT_BOUND,
+    ab_settings,
+)
 from .discovery_grader import reply_text
 from .discovery_io import ResultsSink, cells, write_markdown
 from .discovery_oss import (
@@ -153,17 +162,22 @@ FACTS_EXPERIMENT: Final = "ideas-facts"
 REPLY_EXPERIMENT: Final = "ideas-reply"
 AUDIT_EXPERIMENT: Final = "ideas-audit"
 HAIKU: Final = "claude-haiku-5-5"
-LANE_PROMPT_BOUND: Final = 34_000  # D55: counted, margin and allowance included
-REVIEW_PROMPT_BOUND: Final = 40_000  # D55: the reviewer with 16 ideas
-AUDIT_PROMPT_BOUND: Final = 52_000  # the reviewer prompt over 48 ideas
+# D55's lane and reviewer bounds are discovery_ab's (one source, re-derived
+# from E0b, D61); the auditor's over 48 ideas: about 33.1k base + 48 x ~420
+# a reviewed idea = 53.3k, + margin
+LANE_PROMPT_BOUND: Final = IDEAS_LANE_PROMPT_BOUND
+REVIEW_PROMPT_BOUND: Final = IDEAS_REVIEW_PROMPT_BOUND
+AUDIT_PROMPT_BOUND: Final = 58_000
 AUDIT_MAX_TOKENS: Final = 20_000
 AUDIT_MAX_IDEAS: Final = 48
 AUDIT_EFFORT: Final[Effort] = "high"
 RETENTION_MAX_TOKENS: Final = 20_000  # arm D's Fable leap and reviewer (D58)
 COUNT_SENT: Final = 2  # count mode sends S1 and the first lens lane
-JOB_MINUTES: Final = 120  # ci.yml's ideas-probe timeout
-STAGE_MINUTES: Final = 3  # one long request (re-pinned from E0b's seconds)
-PHASE_ONE_MINUTES: Final = 6  # L2a: 10 loops with trials in 36-40 minutes
+JOB_MINUTES: Final = 240  # ci.yml's ideas-probe timeout: E1 four libraries
+# one long request: kept until E1's recorded seconds re-pin it (E0b timed only
+# count mode's Sonnet sends, 8.8-18.4 s; Opus and Fable at 16-20k unmeasured)
+STAGE_MINUTES: Final = 3
+PHASE_ONE_MINUTES: Final = 2  # E0b: a whole count-mode library about 47 s
 CLONE_MINUTES: Final = 1  # recorded facts: a fresh clone only
 NOTE_CHARS: Final = _CELL_MAX
 E1_REPOS: Final = (

@@ -47,9 +47,10 @@ the factory's ``repo_reader`` with the run's protected patterns), on the
 lane, leap and reviewer transports ``corpus.role_wiring`` captures on the
 shared run, the role models and limits of the global settings, no fallback
 (no code context: no request, and the guard fails the arm). The shared run's
-cap adds the pipeline's every request at D55's prompt bounds
-(``AB_P_GEN_CAP_USD``); P's ideas then run one engine loop, as A's do. The
-summary pairs A with P; E3 is informational (no decision rides on it).
+cap adds the pipeline's every request at D55's prompt bounds as E0b
+re-derived them (D61; ``AB_P_GEN_CAP_USD``); P's ideas then run one engine
+loop, as A's do. The summary pairs A with P; E3 is informational (no
+decision rides on it).
 """
 
 from __future__ import annotations
@@ -148,10 +149,12 @@ E3_GROUPS: Final = ("deep", "misleading", "uncommon")
 AB_V2_P_REPOS: Final = tuple(r for group in E3_GROUPS for r in of_group(group))
 P_ARM: Final = Arm("idea-pipeline", AB_ARM.model, AB_ARM.effort)
 """Arm P's label; its run settings are A's, its role models the pipeline's."""
-IDEAS_LANE_PROMPT_BOUND: Final = 34_000  # D55: S1, a lens or the leap
-IDEAS_REVIEW_PROMPT_BOUND: Final = 40_000  # D55: the reviewer with 16 ideas
-"""D55's bounds, unverified until E0b counts them: a larger count is refused
-before it is sent (S1 recorded as the arm's error, S2 skipped whole)."""
+IDEAS_LANE_PROMPT_BOUND: Final = 38_000  # S1, a lens or the leap: E0b max 35,686
+IDEAS_REVIEW_PROMPT_BOUND: Final = 44_000  # the reviewer, 16 ideas: E0b max 39,463
+"""D55's bounds, counted with margin and allowance, re-derived from E0b's
+counted maxima on the ten OSS libraries (D61; both mistune) plus margin; the
+one source (``ideas_probe`` imports them): a larger count is refused before
+it is sent (S1 recorded as the arm's error, S2 skipped whole)."""
 
 
 def pipeline_settings(base: Settings) -> Settings:
