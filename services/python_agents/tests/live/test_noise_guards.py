@@ -30,13 +30,16 @@ import math
 import os
 import statistics
 import sys
+from collections import Counter
 from collections.abc import Iterator, Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 from e2e.conftest import Isolation, Launch, LaunchLog, UserRepo, _sandbox_problem
 
 from autonomous_ai_agents.common.config import settings
+from autonomous_ai_agents.common.errors import EngineError
 from autonomous_ai_agents.common.models import (
     METRIC_CPU_TIME_S,
     METRIC_PEAK_RSS_BYTES,
@@ -44,8 +47,14 @@ from autonomous_ai_agents.common.models import (
     Baseline,
     JudgeOutcome,
     Measurement,
+    NoiseCalibration,
+    Objective,
+    Project,
     RunStats,
+    Workload,
 )
+from autonomous_ai_agents.execution.measure import AbabMeasured
+from autonomous_ai_agents.execution.procrun import RunFailure
 from autonomous_ai_agents.optimization.judges import SpeedJudge
 
 from . import noise
@@ -724,3 +733,373 @@ def test_span_reaches_the_row_the_notes_and_the_summary() -> None:
     )  # fmt: skip
     assert len(noise.spread_note(longest)) <= NOTE_CHARS
     assert "span_s n/a" in noise.spread_note(one)
+
+
+# ---------------------------------------------------------------------------
+# L0: the paired path (Step 3, D41): A/A blocks through the engine's ABBA
+# ---------------------------------------------------------------------------
+
+PAIRED_ENV = {noise.NOISE_PATH_ENV: "paired"}
+
+
+def _pair(a: float, b: float, spread: float = 0.001) -> AbabMeasured:
+    """One workload's A/A block: the base (A) and its twin (B), ABBA."""
+    return AbabMeasured(_baseline(_around(a, spread)), _baseline(_around(b, spread)))
+
+
+def test_the_paired_path_is_explicit_and_needs_the_step3_rule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert noise.noise_plan({}).path == "baselines"  # Window 0's path
+    plan = noise.noise_plan(PAIRED_ENV)
+    assert (plan.path, plan.blocks, plan.confirm) == ("paired", 10, True)
+    assert plan.calibration_blocks == settings.NOISE_CALIBRATION_BLOCKS == 3
+    assert plan.comparisons == 130 == noise.AA_BLOCKS * len(noise.NOISE_TARGETS)
+    for bad in ("", "Paired", "paired ", "abba"):
+        with pytest.raises(ValueError, match=noise.NOISE_PATH_ENV):
+            noise.noise_plan({noise.NOISE_PATH_ENV: bad})
+    for key, off in (("PAIRED_TRIALS", False), ("NOISE_CALIBRATION_BLOCKS", 0)):
+        with monkeypatch.context() as patch:
+            patch.setattr(settings, key, off)
+            with pytest.raises(ValueError, match="Step 3 rule"):
+                noise.noise_plan(PAIRED_ENV)
+    monkeypatch.setattr(settings, "CONFIRM_WINNERS", False)
+    assert noise.noise_plan(PAIRED_ENV).confirm is False
+
+
+def test_the_paired_plan_fits_its_wall_budget_and_the_job() -> None:
+    """D41's count: one calibrated baseline (42 runs), 10 blocks of 12, 12
+    per single-look win (one planned a repository); the measured Window 0
+    rate (468 launches in 7 min, setup included, under the profiles' plain
+    seconds) makes the model's plain seconds an upper bound."""
+    runs = noise.baseline_runs()
+    assert noise.paired_launches(3) == runs * (1 + 2 * (3 + 10 + 1)) == 174
+    targets = noise.NOISE_TARGETS
+    assert 6 * runs * math.fsum(t.run_s for t in targets) >= 7 * 60
+    plan = noise.noise_plan(PAIRED_ENV)
+    assert plan.estimate_s == pytest.approx(math.fsum(
+        t.setup_s + 174 * t.run_s * noise.MEASURED_SLOWDOWN for t in targets
+    ))  # fmt: skip
+    assert 30 * 60 <= plan.estimate_s <= noise.WALL_BUDGET_S  # about 35-42 min
+    largest = max(noise.paired_estimate_s([t], 3) for t in targets)
+    assert 2 * largest <= noise.OVERRUN_S  # the target in flight at the budget
+    job_s = noise.NOISE_JOB_MINUTES * 60
+    assert noise.JOB_SETUP_S + plan.budget_s + noise.OVERRUN_S <= job_s
+    with pytest.raises(ValueError, match="paired path needs about"):
+        noise.noise_plan(PAIRED_ENV, targets, plan.estimate_s - 1.0)
+    assert noise.noise_need(plan) == 0.0  # still no request
+
+
+def test_a_look_is_the_real_judges_against_the_paired_base() -> None:
+    objective = noise.runtime_objective(PID)
+    win = noise.judge_look(PID, objective, [_pair(1.0, 0.95)])
+    assert (win.speed, win.keep) == (True, True)
+    assert win.gap == pytest.approx(-0.05, abs=1e-3) and win.confirmed is None
+    base = Baseline(
+        measurements=_pair(1.0, 0.95).a, objectives=(objective,),
+        guardrails=noise.noise_guardrails(PID),
+    )  # fmt: skip
+    trial = noise.as_trial(noise.aa_hypothesis(PID), _pair(1.0, 0.95).b)
+    judged = SpeedJudge(noise_multiplier=settings.NOISE_MULTIPLIER).evaluate(
+        base, trial
+    )
+    assert (judged.outcome is JudgeOutcome.passed) is win.speed
+    raised = objective.model_copy(update={"min_relative_gain": 0.06})
+    held = noise.judge_look(PID, raised, [_pair(1.0, 0.95)])
+    assert (held.speed, held.keep) == (False, False)
+    slower = noise.judge_look(PID, objective, [_pair(1.0, 1.05)])
+    assert not slower.keep and slower.gap == pytest.approx(0.05, abs=1e-3)
+    drifted = noise.judge_look(PID, objective, [_pair(1.0, 0.95, spread=0.2)])
+    assert not drifted.speed  # inside 2 stdev of the noisier side
+
+
+def test_the_raised_objective_is_the_baseline_nodes_floor() -> None:
+    low = NoiseCalibration(blocks=3, gaps={"w:wall_time_s": 0.004}, floor=0.02)
+    assert noise.raised_objective(PID, low).min_relative_gain == 0.02
+    high = NoiseCalibration(blocks=3, gaps={"w:wall_time_s": 0.03}, floor=0.06)
+    raised = noise.raised_objective(PID, high)
+    assert raised.min_relative_gain == 0.06 and raised.metric == METRIC_WALL_TIME_S
+    with pytest.raises(EngineError, match="no gain can be proven"):
+        noise.raised_objective(PID, NoiseCalibration(blocks=1, floor=1.0))
+
+
+def test_a_would_be_keep_is_confirmed_on_a_fresh_block() -> None:
+    script = {
+        "noise-aa-1": _pair(1.0, 0.95), "noise-aa-1-confirm": _pair(1.0, 1.0),
+        "noise-aa-2": _pair(1.0, 0.95), "noise-aa-2-confirm": _pair(1.0, 0.94),
+        "noise-aa-3": _pair(1.0, 1.001),
+    }  # fmt: skip
+    drawn: list[str] = []
+
+    def draw(run_id: str) -> tuple[AbabMeasured, ...]:
+        drawn.append(run_id)
+        return (script[run_id],)
+
+    objective = noise.runtime_objective(PID)
+    looks = noise.aa_looks(PID, objective, draw, 3, confirm=True)
+    assert drawn == list(script)  # one confirmation per would-be keep, no more
+    assert [(x.keep, x.confirmed) for x in looks] == [
+        (True, False), (True, True), (False, None)
+    ]  # fmt: skip
+    assert noise.kept_count(looks) == 1
+    drawn.clear()
+    unconfirmed = noise.aa_looks(PID, objective, draw, 2, confirm=False)
+    assert drawn == ["noise-aa-1", "noise-aa-2"]
+    assert noise.kept_count(unconfirmed) == 2  # CONFIRM_WINNERS off: keeps stand
+
+
+def _paired(
+    name: str = "tabulate",
+    wins: int = 0,
+    kept: int = 0,
+    *,
+    rejects: int = 0,
+    floor: float = 0.03,
+) -> noise.PairedNoise:
+    """Ten looks: ``wins`` would-be keeps (``kept`` of them confirmed), then
+    ``rejects`` speed passes the whole verdict rejects (e.g. the RSS bound)."""
+    looks = tuple(
+        noise.Look(-0.03 if i < wins + rejects else 0.002, i < wins + rejects,
+                   i < wins, (i < kept) if i < wins else None)
+        for i in range(10)
+    )  # fmt: skip
+    return noise.PairedNoise(
+        name, "oss", 10, floor, 0.012, looks, None, 120.0, judged_floor=floor
+    )
+
+
+def test_the_paired_summary_counts_the_gate_the_sign_and_row_o() -> None:
+    """The gate counts would-be keeps (what confirmation and the router act
+    on), never SpeedJudge passes (Window 0's 2.8 % counted those), and the
+    note names both; row O clears its floor only strictly above it."""
+    mixed = _paired("tabulate", wins=1, rejects=1)
+    assert (mixed.wins, mixed.speed_wins) == (1, 2)  # wins < speed_wins
+    assert mixed.looks[1].speed and not mixed.looks[1].keep
+    full = [_paired(f"r{i}") for i in range(12)] + [mixed]
+    found = noise.summarize_paired(full, planned=130)
+    assert (found.wins, found.speed_wins, found.gate) == (1, 2, "pass")
+    text = noise.paired_summary_note(found)
+    assert "single-look wins 1/130 (would-be keeps; gate <= 1: pass" in text
+    assert "speed passes 2 (Window 0's 2.8 % counted these)" in text
+    two = noise.summarize_paired([*full[:12], _paired("x", wins=2)], planned=130)
+    assert (two.wins, two.gate) == (2, "fail")
+
+    assert _paired("tabulate", floor=0.143).row_o_clears is False  # equal: no
+    assert _paired("tabulate", floor=0.1429).row_o_clears is True
+    assert _paired("mistune", floor=0.01).row_o_clears is True  # 3.2 % > 2 %
+    assert _paired("tabulate", floor=0.2).row()["judged_floor"] == 0.2
+    repo = _paired("tabulate", wins=1)
+    assert (repo.wins, repo.speed_wins, repo.kept, repo.confirmations) == (1, 1, 0, 1)
+    assert repo.mean_gap == pytest.approx((-0.03 + 9 * 0.002) / 10)
+    assert repo.row_o_gain == 0.143 and repo.row_o_clears is True
+    assert _paired("lettertally").row_o_clears is None  # not in row O
+    row = repo.row()
+    assert (row["kind"], row["wins"], row["kept"], row["looks"]) == ("paired", 1, 0, 10)
+    note = noise.paired_note(repo)
+    assert note.startswith("NOISE paired tabulate: floor 0.0300 gap 0.0120 wins 1/10")
+    full = [_paired(f"r{i}") for i in range(12)] + [repo]
+    found = noise.summarize_paired(full, planned=130)
+    assert (found.looks, found.wins, found.kept, found.gate) == (130, 1, 0, "pass")
+    assert noise.summarize_paired([*full, _paired("x", wins=1)], 140).gate == "fail"
+    assert noise.summarize_paired(full[:5], planned=130).gate == "incomplete"
+    text = noise.paired_summary_note(found)
+    assert (
+        "single-look wins 1/130 (would-be keeps; gate <= 1: pass, 130 planned)" in text
+    )
+    worst = noise.PairedSummary(
+        9999, 9999, 9999, 9999, 9999, -0.123456, 13, 13, 13, 13, 13, "incomplete"
+    )
+    long_repo = noise.PairedNoise(
+        "more_itertools", "oss", 10, 0.99, 0.99, repo.looks, "x" * 300, 9999.0,
+        judged_floor=0.99,
+    )  # fmt: skip
+    detail = noise.paired_detail_note(found)
+    assert detail == (
+        "NOISE paired detail: mean gap 0.0018 (faster 1, slower 12 repos), "
+        "row O clears 1/1, stopped 0"
+    )
+    notes = (noise.paired_summary_note(worst), noise.paired_detail_note(worst))
+    for text in (*notes, noise.paired_note(long_repo)):
+        assert len(text) <= NOTE_CHARS, text
+
+
+def _paired_plan(target: noise.NoiseTarget, blocks: int = 1) -> noise.NoisePlan:
+    return noise.NoisePlan(
+        (target,), 0, 0, 0.0, path="paired", blocks=blocks, calibration_blocks=1,
+        confirm=True,
+    )  # fmt: skip
+
+
+_JUDGED: list[Objective] = []  # the objective each paired driver judged under
+
+
+@pytest.fixture(scope="module")
+def paired(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[tuple[noise.PairedRun, LaunchLog]]:
+    """``lettertally``: a calibrated baseline (1 block) and one A/A block,
+    the real runner, sandbox and judges (about 20 s)."""
+    _require_sandbox()
+    root = Path(os.path.realpath(tmp_path_factory.mktemp("paired")))
+    (root / "wt-root").mkdir()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(settings, "WORKTREE_ROOT", root / "wt-root")
+        real = noise.aa_looks
+
+        def spy(
+            project_id: str, objective: Objective, *args: Any, **kwargs: Any
+        ) -> tuple[noise.Look, ...]:
+            _JUDGED.append(objective)
+            return real(project_id, objective, *args, **kwargs)
+
+        patch.setattr(noise, "aa_looks", spy)
+        launches = LaunchLog()
+        plan = _paired_plan(_control())
+        found = noise.measure_paired(
+            _control(), root, Isolation("required", None), launches, plan
+        )
+        yield found, launches
+
+
+def test_the_paired_driver_measures_a_control_offline_in_the_sandbox(
+    paired: tuple[noise.PairedRun, LaunchLog],
+) -> None:
+    found, launches = paired
+    assert found.stopped is None, found.stopped
+    assert len(found.baselines) == 1 and found.floor is not None
+    assert found.floor >= settings.MIN_RELATIVE_GAIN
+    assert len(found.looks) == 1 and found.looks[0].gap is not None
+    (judged,) = _JUDGED  # the looks are judged under the raised floor
+    raised = max(settings.MIN_RELATIVE_GAIN, found.floor)
+    assert judged.min_relative_gain == found.judged_floor == raised
+    assert judged.metric == METRIC_WALL_TIME_S
+    runs = noise.baseline_runs()
+    count = Counter(x.phase for x in launches.launches)
+    confirmations = sum(x.keep for x in found.looks)
+    assert count["baseline"] == runs  # no test suite launch
+    assert count["calibrate"] == count["twin-calibrate"] == runs  # 1 block
+    assert count["aa-block"] == count["twin-aa-block"] == runs * (1 + confirmations)
+    assert set(count) == noise.PAIRED_PHASES
+    run = LiveRun("offline", noise.NOISE_RUN_CAP_USD)
+    noise.check_noise_guards(run, found, launches, Isolation("required", None))
+    widened = LaunchLog()
+    widened.launches = [*launches.launches, Launch("profile", "required", "required", True, True)]  # fmt: skip
+    with pytest.raises(AssertionError, match="^phases outside"):
+        noise.check_noise_guards(run, found, widened, Isolation("required", None))
+
+
+def test_run_target_takes_the_paired_path_and_records_it(
+    paired: tuple[noise.PairedRun, LaunchLog],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    found, real = paired
+
+    def replay(
+        target: noise.NoiseTarget,
+        root: Path,
+        isolation: Isolation,
+        launches: LaunchLog,
+        plan: noise.NoisePlan,
+    ) -> noise.PairedRun:
+        launches.launches.extend(real.launches)
+        return found  # fmt: skip
+
+    monkeypatch.setattr(noise, "measure_paired", replay)
+    results = tmp_path / "results.jsonl"
+    recorder = noise.NoiseRecorder(
+        _paired_plan(_control()), ResultsSink({"LIVE_RESULTS_PATH": str(results)})
+    )
+    run = LiveRun("paired", noise.NOISE_RUN_CAP_USD)
+    result = noise.run_target(
+        _control(), run, tmp_path, Isolation("required", None), recorder
+    )
+    assert isinstance(result, noise.PairedNoise) and recorder.paired == [result]
+    assert result.judged_floor == found.judged_floor is not None
+    assert recorder.results == []  # the Window 0 pool stays empty
+    assert run.notes[0].startswith("NOISE paired lettertally: floor ")
+    summary = LiveRun("summary", noise.NOISE_RUN_CAP_USD)
+    recorder.summarize(summary)
+    assert summary.notes[0].startswith("NOISE paired summary: single-look wins ")
+    assert summary.notes[1].startswith("NOISE paired detail: mean gap ")
+    rows = [json.loads(line) for line in results.read_text().splitlines()]
+    assert [r["kind"] for r in rows] == ["paired", "paired-summary"]
+    assert rows[1]["planned"] == 1 and rows[1]["looks"] == 1
+    echoed: list[str] = []
+    recorder.finish(echoed.append)
+    assert any(line.startswith("| lettertally | control | ") for line in echoed)
+    assert any(line.startswith("NOISE paired summary:") for line in echoed)
+
+
+def test_a_paired_target_the_engine_would_stop_is_recorded_not_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _require_sandbox()
+    root = Path(os.path.realpath(tmp_path))
+    (root / "wt-root").mkdir()
+    monkeypatch.setattr(settings, "WORKTREE_ROOT", root / "wt-root")
+    source = root / "src"
+    (source / "flaky").mkdir(parents=True)
+    (source / "flaky" / "__init__.py").write_text("", encoding="utf-8")
+    (source / "flaky" / "main.py").write_text("raise SystemExit(3)\n", encoding="utf-8")
+    target = noise.NoiseTarget(
+        "flaky", "control", ("python", "-m", "flaky.main"), 0.1, 1.0,
+        functools.partial(make_repo, source),
+    )  # fmt: skip
+    recorder = noise.NoiseRecorder(_paired_plan(target), ResultsSink({}))
+    run = LiveRun("x", 0.0)
+    found = noise.run_target(target, run, root, Isolation("required", None), recorder)
+    assert isinstance(found, noise.PairedNoise)
+    assert found.stopped is not None and "exit status 3" in found.stopped
+    assert (found.looks, found.floor, found.row_o_clears) == ((), None, None)
+    assert found.judged_floor is None and found.row()["judged_floor"] is None
+    assert run.notes[0].endswith(f"stopped {found.stopped[:40]}")
+    recorder.record_skip("late", run)
+    recorder.record_error("gone", run, "CloneRefusedError: no route")
+    table = recorder.markdown()
+    assert "| flaky | control | n/a | n/a | 0 | 0 | 0 | n/a | None |" in table
+    assert "| late | skipped | wall budget |" in table and "| gone | error |" in table
+    assert "gate <= 1: incomplete" in table
+
+
+def test_a_paired_preparation_or_guard_failure_is_an_error_row(
+    paired: tuple[noise.PairedRun, LaunchLog],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def refuse(dest: Path) -> UserRepo:
+        raise CloneRefusedError("no route to github.com")
+
+    gone = noise.NoiseTarget("gone", "oss", ("python", "x.py"), 1.0, 1.0, refuse)
+    recorder = noise.NoiseRecorder(_paired_plan(gone), ResultsSink({}))
+    run = LiveRun("gone", noise.NOISE_RUN_CAP_USD)
+    with pytest.raises(CloneRefusedError):
+        noise.run_target(gone, run, tmp_path, Isolation("required", None), recorder)
+    assert recorder.errors == [("gone", "CloneRefusedError: no route to github.com")]
+    found, real = paired
+    monkeypatch.setattr(noise, "measure_paired", lambda *_: found)
+    breach = LiveRun("breach", noise.NOISE_RUN_CAP_USD)
+    breach.records.append(object())  # type: ignore[arg-type]  # a request was sent
+    with pytest.raises(AssertionError, match="no request"):
+        noise.run_target(
+            _control(), breach, tmp_path, Isolation("required", None), recorder
+        )
+    assert recorder.paired == [] and recorder.errors[-1][1].startswith("guards: ")
+
+
+def test_an_aa_block_that_fails_stops_with_the_engine_error_and_cleans_up(
+    paired: tuple[noise.PairedRun, LaunchLog], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    found, _ = paired
+    monkeypatch.setattr(settings, "WORKTREE_ROOT", found.user.path.parent / "wt-root")
+    project = Project(name="lettertally", root_path=str(found.user.path))
+    workload = Workload(project_id=project.id, name="w", command=_control().argv)
+    runner = noise.AaRunner(project, network="required", fs="required")
+
+    def crash(*_: object) -> AbabMeasured:
+        raise RunFailure("exit status 3", ("a note",))
+
+    monkeypatch.setattr(noise, "measure_abab", crash)
+    with pytest.raises(EngineError, match="an A/A block could not be measured: exit"):
+        runner.aa_block([workload], run_id="noise-aa-x", commit=found.user.base)
+    assert len(found.user.worktrees()) == 1  # both block worktrees removed

@@ -15,21 +15,52 @@ one pair of isolation modes:
   project after each check (``ConnectedRunners``), and the context holds
   delegates (``ConnectedBaselineRunner``, ``ConnectedTrialRunner``);
 - ``min_trial_budget_usd``: one worst-case editor request
-  (``min_trial_budget``), unless given.
+  (``min_trial_budget``, the editor's chain), unless given.
+
+Step 3 (U10). Each role's transport bills its own chain (spec section 5):
+injected through ``role_transports``; else, when the engine's transport is
+injected, the caller wires every transport (a captured run never gains an
+uncaptured one), so only the editor may reuse it, while it bills the
+editor's chain, as in Step 2; else, with a key,
+``transport_factory(role_settings(settings, role))``, never the base
+settings. A transport on another chain is refused. The generator is built
+when it has a transport; the matcher and the playbook only for ``matched``
+retrieval (blind keeps ``techniques`` and ``playbook`` empty, D1). The trial
+runner gets ``EDITOR_FIX_RETRIES``, the floor ``min_trial_budget()`` and
+``PAIRED_TRIALS``; the context the run's fix retries, the output check,
+confirmation and the calibrator (the connected baseline runner, when any
+block is set) with its blocks, all from the settings (D4); with
+``PAIRED_TRIALS``, ``CONFIRM_WINNERS`` and the blocks off they are Step 2's. With a confirmed ``quality`` check one
+``FrozenScorer`` (launching through a ``NoteTap`` of ``run``) is in both
+runners, the combiner and the profiler, which mask its frozen files, and the
+judges print its drops in its unit (D37, D38); without one nothing changes.
+
+Step 3 Wave 2 (N4b; D43, D54, C11). With ``IDEA_PIPELINE`` on the
+generator is ``IdeaPipelineGenerator`` on the ``lane``, ``leap`` and
+``reviewer`` transports, resolved as every role's is; all three must
+resolve or the build is refused naming the missing role (never today's
+generator, never no generator, in silence). Today's generator, when it has a
+transport, is the pipeline's fallback for a call with no code context; the
+pipeline reads code through ``repo_reader`` (a ``GitWorkspace`` on the
+project's checkout, at the base commit it is given). The discovery share is
+``IDEAS_DISCOVERY_MAX_SHARE`` with the pipeline on, else
+``DISCOVERY_MAX_SHARE``; ``portfolio_rounds`` is ``PORTFOLIO_ROUNDS`` either
+way. With the pipeline off no pipeline transport is resolved or built.
 
 Everything that launches repository code (preflight's probe, the profiler,
-both runners, the combiner) is passed the context's isolation modes and one
-launcher (``run``, ``procrun.run_once`` unless a test injects a recorder)
-explicitly. The runners' notes (``RunSample``, ``RunFailure``, ``Measured``,
+both runners, the combiner, the quality scorer) is passed the context's
+isolation modes and one launcher (``run``, ``procrun.run_once`` unless a
+test injects a recorder) explicitly. The runners' notes (``RunSample``, ``RunFailure``, ``Measured``,
 e.g. the nondeterministic-output warning) are ``runner_note`` warning
 events of the run and phase the delegate serves (``RunNotes``); a context
 serves one run at a time, since connect rebinds its runners.
 
-The transport is the injected one, else ``transport_factory(settings)``
-(``AnthropicTransport``) only when ``ANTHROPIC_API_KEY`` is set, else none:
-understand then keeps its Step 1 stub, and the trials need an injected
-editor (``LLMConfigError`` otherwise, before anything runs). The factory
-never reads the key: ``AnthropicTransport`` is the only code that unwraps
+The engine's transport is the injected one, else
+``transport_factory(settings)`` (``AnthropicTransport``) only when
+``ANTHROPIC_API_KEY`` is set, else none: understand then keeps its Step 1
+stub, and the trials need an editor transport or an injected editor
+(``LLMConfigError`` otherwise, before anything runs). The factory never
+reads the key: ``AnthropicTransport`` is the only code that unwraps
 the ``SecretStr``, and it sends to ``ENGINE_API_BASE_URL``, never the SDK's
 ``ANTHROPIC_BASE_URL``. The ``anthropic`` logger is raised to INFO (its
 DEBUG log prints request options). A ``WORKTREE_ROOT`` that overlaps the
@@ -47,14 +78,22 @@ import functools
 import logging
 import os
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
+from typing import Final, Protocol, runtime_checkable
 
 import structlog
 
-from autonomous_ai_agents.clients.cost import chain, preflight_estimate
+from autonomous_ai_agents.clients.cost import preflight_estimate
 from autonomous_ai_agents.clients.transport import AnthropicTransport, LLMTransport
-from autonomous_ai_agents.common.config import IsolationMode, Settings, settings
+from autonomous_ai_agents.common.config import (
+    IsolationMode,
+    Role,
+    Settings,
+    role_chain,
+    role_settings,
+    settings,
+)
 from autonomous_ai_agents.common.errors import (
     EngineError,
     LLMConfigError,
@@ -63,14 +102,18 @@ from autonomous_ai_agents.common.errors import (
 from autonomous_ai_agents.common.models import (
     Baseline,
     EventLevel,
+    FrozenFile,
     Guardrail,
     Hypothesis,
     Measurement,
+    NoiseCalibration,
     Project,
+    QualityCheck,
     RunPhase,
     Trial,
     Workload,
 )
+from autonomous_ai_agents.common.repo_read import RepoReader
 from autonomous_ai_agents.execution.combine import GitBranchPublisher, GitCombiner
 from autonomous_ai_agents.execution.editor import ClaudeEditor
 from autonomous_ai_agents.execution.git import GitWorkspace
@@ -83,21 +126,30 @@ from autonomous_ai_agents.execution.protocols import (
     PreflightReport,
     TrialBrief,
 )
+from autonomous_ai_agents.execution.quality import FrozenScorer
 from autonomous_ai_agents.execution.runner import BaselineRunner, TrialRunner
 from autonomous_ai_agents.execution.trial_runner import (
     EditorFactory,
     GitBaselineRunner,
     GitTrialRunner,
+    NoteTap,
 )
 from autonomous_ai_agents.optimization.anticheat import DEFAULT_PROTECTED_PATTERNS
+from autonomous_ai_agents.optimization.hypothesis_source import (
+    ClaudeHypothesisGenerator,
+    ClaudeTechniqueMatcher,
+)
+from autonomous_ai_agents.optimization.idea_pipeline import IdeaPipelineGenerator
 from autonomous_ai_agents.optimization.judges import Judge, default_judges
+from autonomous_ai_agents.optimization.sources import HypothesisGenerator
 from autonomous_ai_agents.orchestrator.events import emit, make_event
-from autonomous_ai_agents.orchestrator.nodes import NodeContext
+from autonomous_ai_agents.orchestrator.nodes import NodeContext, NoiseCalibrator
 from autonomous_ai_agents.orchestrator.understand import ClaudeUnderstander
 from autonomous_ai_agents.persistence.repository import (
     InMemoryRepository,
     Repository,
 )
+from autonomous_ai_agents.research.playbook import load_playbook
 
 TransportFactory = Callable[[Settings], LLMTransport]
 """Builds the engine's transport from the settings (``AnthropicTransport``)."""
@@ -105,14 +157,25 @@ TransportFactory = Callable[[Settings], LLMTransport]
 _Runners = tuple[BaselineRunner, TrialRunner]
 
 SDK_LOGGER = "anthropic"
+PIPELINE_ROLES: Final[tuple[Role, ...]] = ("lane", "leap", "reviewer")
+_ROLE_TRANSPORTS: Final[tuple[Role, ...]] = (
+    "editor",
+    "generator",
+    "matcher",
+    *PIPELINE_ROLES,
+)
 _LOG = structlog.get_logger("autonomous_ai_agents.engine")
 
 
 def min_trial_budget() -> float:
     """One worst-case editor request: no prompt, ``EDITOR_MAX_TOKENS`` out,
-    priced over the chain the transport sends (spec decision 10)."""
+    priced over the chain the editor's transport sends (spec decision 10;
+    the engine's while ``EDITOR_MODEL`` is unset). Also the retry floor (D12)."""
     return preflight_estimate(
-        0, settings.EDITOR_MAX_TOKENS, chain(settings), settings.MODEL_PRICING
+        0,
+        settings.EDITOR_MAX_TOKENS,
+        role_chain(settings, "editor"),
+        settings.MODEL_PRICING,
     )
 
 
@@ -125,6 +188,62 @@ def engine_transport(
     if settings.ANTHROPIC_API_KEY is None:
         return None
     return transport_factory(settings)
+
+
+def role_transport(
+    role: Role,
+    given: Mapping[Role, LLMTransport],
+    injected: LLMTransport | None,
+    transport_factory: TransportFactory,
+) -> LLMTransport | None:
+    """``role``'s transport (module docstring), checked to bill ``role``'s chain."""
+    expected = role_chain(settings, role)
+    found = given.get(role)
+    if found is None and injected is not None:  # the caller wires (captures) them
+        shared = role == "editor" and tuple(injected.chain) == expected
+        found = injected if shared else None
+    elif found is None and settings.ANTHROPIC_API_KEY is not None:
+        found = transport_factory(role_settings(settings, role))
+    if found is not None and tuple(found.chain) != expected:
+        raise ValueError(
+            f"the {role} transport bills {list(found.chain)}, "
+            f"not the {role} chain {list(expected)}"
+        )
+    return found
+
+
+def repo_reader(project: Project) -> RepoReader:
+    """The idea pipeline's reader: the project's git objects, never its
+    working tree (D44), as the understander reads them."""
+    return GitWorkspace(
+        Path(project.root_path),
+        executable=settings.GIT_EXECUTABLE,
+        timeout_s=settings.GIT_TIMEOUT_S,
+    )
+
+
+def idea_pipeline(
+    role: Callable[[Role], LLMTransport | None],
+    fallback: HypothesisGenerator | None,
+    *,
+    sleep: Callable[[float], None],
+) -> IdeaPipelineGenerator:
+    """The pipeline on every one of its roles' transports, or ``ValueError``
+    naming the first role with none (C11): a captured run never gains an
+    uncaptured transport, and a missing role never quietly means today's
+    generator or none."""
+    transports: dict[Role, LLMTransport] = {}
+    for name in PIPELINE_ROLES:
+        found = role(name)
+        if found is None:
+            raise ValueError(
+                f"IDEA_PIPELINE is on and the idea pipeline needs a {name} transport:"
+                f" give role_transports[{name!r}] or set ANTHROPIC_API_KEY"
+            )
+        transports[name] = found
+    return IdeaPipelineGenerator(
+        transports, reader=repo_reader, config=settings, sleep=sleep, fallback=fallback
+    )
 
 
 def claude_editor_factory(
@@ -249,8 +368,21 @@ class ConnectedPreflight:
         return report
 
 
+@runtime_checkable
+class _Freezing(Protocol):
+    """What a quality-aware baseline runner reports (``GitBaselineRunner``)."""
+
+    @property
+    def quality_files(self) -> tuple[FrozenFile, ...]: ...
+
+    @property
+    def label_leaks(self) -> tuple[str, ...]: ...
+
+
 class ConnectedBaselineRunner:
-    """``BaselineRunner`` that delegates to the currently bound runner."""
+    """``BaselineRunner`` and ``NoiseCalibrator`` that delegate to the currently
+    bound runner, with its ``quality_files`` and ``label_leaks`` (none for a
+    runner that freezes nothing)."""
 
     def __init__(self, runners: ConnectedRunners) -> None:
         self.runners = runners
@@ -258,6 +390,27 @@ class ConnectedBaselineRunner:
     @property
     def current(self) -> BaselineRunner:
         return self.runners.baseline
+
+    @property
+    def quality_files(self) -> tuple[FrozenFile, ...]:
+        current = self.current
+        return current.quality_files if isinstance(current, _Freezing) else ()
+
+    @property
+    def label_leaks(self) -> tuple[str, ...]:
+        current = self.current
+        return current.label_leaks if isinstance(current, _Freezing) else ()
+
+    def calibrate(
+        self, workloads: Sequence[Workload], *, run_id: str, commit: str, blocks: int
+    ) -> NoiseCalibration:
+        current = self.current
+        if not isinstance(current, NoiseCalibrator):
+            raise EngineError("the bound baseline runner cannot calibrate the noise")
+        with self.runners.notes.scope(run_id, RunPhase.baseline):
+            return current.calibrate(
+                workloads, run_id=run_id, commit=commit, blocks=blocks
+            )
 
     def measure(
         self, workloads: Sequence[Workload], *, run_id: str, commit: str | None
@@ -310,6 +463,7 @@ def build_context(
     branch_prefix: str | None = None,
     max_hypotheses_per_round: int = 3,
     transport: LLMTransport | None = None,
+    role_transports: Mapping[Role, LLMTransport] | None = None,
     transport_factory: TransportFactory = AnthropicTransport,
     editor: EditorFactory | None = None,
     min_trial_budget_usd: float | None = None,
@@ -317,19 +471,60 @@ def build_context(
     fs: IsolationMode | None = None,
     run: RunOnce = run_once,
     sleep: Callable[[float], None] = time.sleep,
+    quality: QualityCheck | None = None,
 ) -> NodeContext:
-    """The real context for ``project``; keyword overrides are for tests."""
+    """The real context for ``project``; ``quality`` is the caller's confirmed
+    check (D40); the other keyword overrides are for tests.
+
+    ``role_transports`` without ``transport=`` and with a key set builds the
+    engine's transport and every role missing from it from the key; with
+    ``transport=`` it builds none (module docstring). Unknown roles, ``None``
+    and ``editor=`` beside an editor transport are refused with ``ValueError``.
+    """
     _refuse_overlap(project)
     _pin_sdk_logger()
-    llm = engine_transport(transport, transport_factory)
-    if editor is None:
-        if llm is None:
-            raise LLMConfigError(
-                "ANTHROPIC_API_KEY is not set (.env or environment): the trial"
-                " editor needs Claude"
+    given = dict(role_transports or {})
+    if "engine" in given:
+        raise ValueError("pass the engine's transport as transport=")
+    for name, found in given.items():  # a typo or None would be built from the key
+        if name not in _ROLE_TRANSPORTS or found is None:
+            raise ValueError(
+                f"unknown role transport {name!r}: give a transport for any of"
+                f" {', '.join(_ROLE_TRANSPORTS)}"
             )
-        editor = claude_editor_factory(llm, sleep=sleep)
+    if editor is not None and "editor" in given:
+        raise ValueError("pass editor= or an editor transport, not both")
+    llm = engine_transport(transport, transport_factory)
+
+    def role(name: Role) -> LLMTransport | None:
+        return role_transport(name, given, transport, transport_factory)
+
+    if editor is None:
+        editing = role("editor")
+        if editing is None:
+            raise LLMConfigError(
+                "ANTHROPIC_API_KEY is not set (.env or environment), or no"
+                " transport bills the editor's chain: the trial editor needs Claude"
+            )
+        editor = claude_editor_factory(editing, sleep=sleep)
     trial_editor = editor
+    generating = role("generator")
+    generator: HypothesisGenerator | None = (
+        None
+        if generating is None
+        else ClaudeHypothesisGenerator(generating, config=settings, sleep=sleep)
+    )
+    pipeline = settings.IDEA_PIPELINE
+    if pipeline:
+        generator = idea_pipeline(role, generator, sleep=sleep)
+    matched = settings.RESEARCH_RETRIEVAL == "matched"
+    matching = role("matcher") if matched else None
+    matcher = (
+        None
+        if matching is None
+        else ClaudeTechniqueMatcher(matching, config=settings, sleep=sleep)
+    )
+    floor = min_trial_budget()
     prefix = settings.TRIAL_BRANCH_PREFIX if branch_prefix is None else branch_prefix
     network = settings.NETWORK_ISOLATION if network is None else network
     fs = settings.FS_ISOLATION if fs is None else fs
@@ -341,11 +536,23 @@ def build_context(
     )
 
     notes = RunNotes()
+    tap: NoteTap | None = None
+    scorer: FrozenScorer | None = None
+    if quality is not None:
+        tap = NoteTap(run)
+        scorer = FrozenScorer(quality, run=tap, network=network, fs=fs)
 
     def runners_for(bound: Project) -> _Runners:
         return (
             GitBaselineRunner(
-                bound, git=git, on_note=notes, network=network, fs=fs, run=run
+                bound,
+                git=git,
+                on_note=notes,
+                network=network,
+                fs=fs,
+                run=run,
+                scorer=scorer,
+                scorer_notes=tap,
             ),
             GitTrialRunner(
                 bound,
@@ -356,10 +563,15 @@ def build_context(
                 network=network,
                 fs=fs,
                 run=run,
+                fix_retries=settings.EDITOR_FIX_RETRIES,
+                retry_floor_usd=floor,
+                paired=settings.PAIRED_TRIALS,
+                scorer=scorer,
             ),
         )
 
     runners = ConnectedRunners(project, runners_for, prefix=prefix, notes=notes)
+    baseline_runner = ConnectedBaselineRunner(runners)
     preflight = GitPreflight(
         executable=settings.GIT_EXECUTABLE,
         protected=protected,
@@ -369,9 +581,9 @@ def build_context(
     )
     return NodeContext(
         runner=ConnectedTrialRunner(runners),
-        baseline_runner=ConnectedBaselineRunner(runners),
+        baseline_runner=baseline_runner,
         judges=(
-            default_judges(settings.NOISE_MULTIPLIER)
+            default_judges(settings.NOISE_MULTIPLIER, quality=quality)
             if judges is None
             else tuple(judges)
         ),
@@ -386,10 +598,32 @@ def build_context(
             if llm is None
             else ClaudeUnderstander(llm, config=settings, sleep=sleep)
         ),
-        profiler=CProfiler(project, git=git, network=network, fs=fs, run=run),
-        combiner=GitCombiner(git=git, network=network, fs=fs, run=run),
+        profiler=CProfiler(
+            project, git=git, network=network, fs=fs, run=run, scorer=scorer
+        ),
+        combiner=GitCombiner(git=git, network=network, fs=fs, run=run, scorer=scorer),
         publisher=GitBranchPublisher(git=git, prefix=prefix),
         min_trial_budget_usd=(
-            min_trial_budget() if min_trial_budget_usd is None else min_trial_budget_usd
+            floor if min_trial_budget_usd is None else min_trial_budget_usd
         ),
+        generator=generator,
+        matcher=matcher,
+        retrieval=settings.RESEARCH_RETRIEVAL,
+        generated_classes=settings.GENERATED_CLASSES,
+        generator_n=settings.GENERATOR_N,
+        generator_max_calls=settings.GENERATOR_MAX_CALLS,
+        matcher_k=settings.MATCHER_K,
+        discovery_max_share=(
+            settings.IDEAS_DISCOVERY_MAX_SHARE
+            if pipeline
+            else settings.DISCOVERY_MAX_SHARE
+        ),
+        fix_retries_per_run=settings.EDITOR_FIX_RETRIES_PER_RUN,
+        playbook=load_playbook() if matched else (),
+        quality=quality,
+        default_output_check=settings.DEFAULT_OUTPUT_CHECK,
+        calibrator=baseline_runner if settings.NOISE_CALIBRATION_BLOCKS else None,
+        calibration_blocks=settings.NOISE_CALIBRATION_BLOCKS,
+        confirm_winners=settings.CONFIRM_WINNERS,
+        portfolio_rounds=settings.PORTFOLIO_ROUNDS,
     )

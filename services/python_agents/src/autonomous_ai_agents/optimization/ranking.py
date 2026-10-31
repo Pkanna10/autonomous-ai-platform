@@ -9,6 +9,16 @@ technique or hypothesis: each ``keep`` lesson adds ``LESSON_STEP * weight``,
 each ``reject`` subtracts it, other outcomes are ignored, and the total is
 clamped to ``[-MAX_LESSON_BOOST, MAX_LESSON_BOOST]`` so no amount of history
 can swamp the hypothesis's own merit.
+
+Generated hypotheses (Step 3, D8) rank by ``rank_generated`` instead::
+
+    score = (1 + lesson_boost) / (1 + position)
+
+where ``position`` is the hypothesis's index in the model's order: that order
+is the only measured signal (hit@1 19-21/22 in E3), while a generated
+``expected_gain`` is uncalibrated, so only lessons reorder generated ideas.
+A ``review`` lesson, like every outcome but ``keep`` and ``reject``, is
+neutral (D10).
 """
 
 from __future__ import annotations
@@ -70,5 +80,22 @@ def rank_hypotheses(
     scored = [
         hypothesis.model_copy(update={"score": score_hypothesis(hypothesis, lessons)})
         for hypothesis in hypotheses
+    ]
+    return tuple(sorted(scored, key=lambda scored_one: scored_one.score, reverse=True))
+
+
+def rank_generated(
+    hypotheses: Sequence[Hypothesis], lessons: Sequence[Lesson] = ()
+) -> tuple[Hypothesis, ...]:
+    """Return copies of generated ``hypotheses`` (model order) with ``score``
+    filled as ``(1 + lesson_boost) / (1 + position)``, best first (D8).
+
+    Ties keep their input order (stable sort). The inputs are not mutated.
+    """
+    scored = [
+        hypothesis.model_copy(
+            update={"score": (1.0 + lesson_boost(hypothesis, lessons)) / (1 + position)}
+        )
+        for position, hypothesis in enumerate(hypotheses)
     ]
     return tuple(sorted(scored, key=lambda scored_one: scored_one.score, reverse=True))

@@ -32,7 +32,11 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, TypeVar, get_args
 
-from anthropic.types.beta import BetaOutputConfigParam, BetaTextBlock
+from anthropic.types.beta import (
+    BetaOutputConfigParam,
+    BetaTextBlock,
+    BetaTextBlockParam,
+)
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from autonomous_ai_agents.clients.budget import Budget
@@ -219,17 +223,34 @@ def structured_request(
     max_tokens: int,
     effort: Effort | None,
     cache: bool,
+    prefix: str | None = None,
 ) -> LLMRequest:
     """One user message under ``system``; ``cache`` puts the transport's
-    5-minute breakpoint on the system block (and top-level auto caching)."""
+    5-minute breakpoint on the system block (and top-level auto caching).
+
+    With a ``prefix`` (the idea pipeline's data block, D59) the message is two
+    text blocks, the prefix first; ``cache`` then puts the request's only
+    breakpoint, a 5-minute one, on the prefix block (the prefix covers the
+    system block too), with no system breakpoint and no automatic tail
+    caching, and ``cache=False`` sends no breakpoint at all.
+    """
     config: BetaOutputConfigParam = {
         "format": {"type": "json_schema", "schema": dict(schema)}
     }
     if effort is not None:
         config["effort"] = effort
+    content: list[BetaTextBlockParam] = [{"type": "text", "text": text}]
+    if prefix is not None:
+        if not prefix:
+            raise ValueError("prefix must not be empty: the API refuses empty text")
+        head: BetaTextBlockParam = {"type": "text", "text": prefix}
+        if cache:
+            head["cache_control"] = {"type": "ephemeral"}
+        content.insert(0, head)
+        cache = False
     return LLMRequest(
         system=system,
-        messages=({"role": "user", "content": [{"type": "text", "text": text}]},),
+        messages=({"role": "user", "content": content},),
         max_tokens=max_tokens,
         output_config=config,
         cache=cache,

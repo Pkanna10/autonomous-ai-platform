@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: 'Live suite: stage-a, corpus, attack, hard, oss, or an experiment (probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, heal-hard, build) (one at a time: together they need more than the 150 USD ceiling)'
+        description: 'Live suite: stage-a, corpus, attack, hard, oss, or an experiment (probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, ab-v2-p, ab-v2, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, evolve-p, heal-hard, build, grader, upstream-verify, upstream, agent-probes, heal-agent, research-agent, watch, watch-cleanup, ideas-probe) (one at a time: together they need more than the 150 USD ceiling)'
         type: choice
         options:
           [
@@ -32,6 +32,8 @@ on:
             sweep-fable,
             sweep-record,
             ab,
+            ab-v2-p,
+            ab-v2,
             escalation,
             acquire,
             noise,
@@ -39,28 +41,77 @@ on:
             oss-ab,
             evolve,
             evolve-more,
+            evolve-p,
             heal-hard,
             build,
+            grader,
+            upstream-verify,
+            upstream,
+            agent-probes,
+            heal-agent,
+            research-agent,
+            watch,
+            watch-cleanup,
+            ideas-probe,
           ]
         default: stage-a
       mode:
-        description: 'Corpus mode (LIVE_CORPUS_MODE): aimed (both manifest hypotheses), blind (one generic hypothesis), decoy (the neutral one alone)'
+        description: 'Corpus mode (LIVE_CORPUS_MODE): aimed (both manifest hypotheses), blind (one generic hypothesis), decoy (the neutral one alone), wired (none: the engine generates them)'
         type: choice
-        options: [aimed, blind, decoy]
+        options: [aimed, blind, decoy, wired]
         default: aimed
       engine_model:
         description: 'ENGINE_MODEL for the run (Sonnet runs without fallbacks)'
         type: choice
         options: [claude-opus-5-5, claude-sonnet-5-5]
         default: claude-opus-5-5
+      editor_model:
+        description: 'EDITOR_MODEL for the trial editor: default (the engine chain) or claude-sonnet-5-5 alone at EDITOR_EFFORT=low'
+        type: choice
+        options: [default, claude-sonnet-5-5]
+        default: default
       suite_cap_usd:
-        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75, hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 77, sweep-fable 33, sweep-record 17, ab 140, escalation 43, acquire 1, noise 0, heal 6, oss-ab 103, evolve 104, evolve-more 138, heal-hard 8, build 27'
+        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75 (corpus_select controls 15), hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 112, sweep-fable 41, sweep-record 24, ab 140, ab-v2-p 59, ab-v2 68 (L5b; ab_arms A, L5a, 17), escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, evolve-p 56, heal-hard 8, build 27, grader 2, upstream-verify 0 (no request, but the cap must be above 0), upstream 50, agent-probes 1, heal-agent 8, research-agent 8, watch 2, watch-cleanup 2, ideas-probe 46 (E1, four libraries of ideas_repos, one 12; ideas_arms count 9, C-low,C-high 20)'
         type: string
         default: '12'
       oss_repo:
-        description: 'oss-ab only, and required there: the one OSS library this dispatch runs (LIVE_OSS_AB_REPOS), from the first or second set, e.g. tabulate or toml'
+        description: 'oss-ab and evolve-p only, and required there: the one OSS library this dispatch runs (oss-ab: LIVE_OSS_AB_REPOS, from the first or second set, e.g. tabulate or toml; evolve-p: LIVE_EVOLVE_REPOS, from the first set, e.g. sqlparse, tomli or pyparsing)'
         type: string
         default: ''
+      upstream_batch:
+        description: 'upstream-verify and upstream only: the batch of ten upstream corpus candidates this dispatch runs (LIVE_UPSTREAM_BATCH; upstream: of the verified ones)'
+        type: choice
+        options: ['1', '2', '3']
+        default: '1'
+      idea_pipeline:
+        description: 'oss and corpus only: IDEA_PIPELINE (off: arm A, the current generator; on: arm P, the idea pipeline on its own lane, leap and reviewer transports; on runs wired only)'
+        type: choice
+        options: ['off', 'on']
+        default: 'off'
+      portfolio_rounds:
+        description: 'oss and corpus only: PORTFOLIO_ROUNDS, the trial rounds after the first a portfolio may take (0 keeps the current router; E2 sets 2 on both arms)'
+        type: choice
+        options: ['0', '1', '2', '3']
+        default: '0'
+      corpus_select:
+        description: 'corpus only: all (its 15 repositories, need 75) or controls (its three controls alone, need 15: the E2 control dispatches)'
+        type: choice
+        options: [all, controls]
+        default: all
+      ideas_arms:
+        description: 'ideas-probe only: LIVE_IDEAS_ARMS, the arms each library runs (A,B,C,D,E: E1 with the auditor, four of its 8 libraries a dispatch named in ideas_repos, need 11.40 a library, 46 for four; count: E0b on the 10 OSS libraries, need 9; C-low,C-high: E1b on the facts E1 recorded, need 20)'
+        type: choice
+        options: ['A,B,C,D,E', count, 'C-low,C-high']
+        default: 'A,B,C,D,E'
+      ideas_repos:
+        description: 'ideas-probe only, and required for E1: LIVE_IDEAS_REPOS, comma-separated OSS library names (E1 at most four a dispatch, e.g. pyparsing,tomli,mistune,idna; empty: the libraries of the arms); the need is the libraries x 11.40 (E1), 0.85 (count) or 4.95 (C-low,C-high), rounded up'
+        type: string
+        default: ''
+      ab_arms:
+        description: 'ab-v2 only: LIVE_AB_ARMS, the arms on all twelve corpus v2 repositories (A,B: L5b, arms A and B, 2 repetitions, need 68; A: L5a, arm A alone, 1 repetition, need 17)'
+        type: choice
+        options: ['A,B', A]
+        default: 'A,B'
 
 # Least privilege by default; a job that needs more says so itself.
 permissions:
@@ -389,20 +440,21 @@ jobs:
           uv run python -c 'import sys; print("engine python", sys.version)'
 
       # The profiler shim runs on workload interpreters >= 3.8, and its tests
-      # run every python3.N found on PATH (they skip the missing ones).
-      - name: Install workload interpreters 3.8 to 3.12
+      # run every python3.N found on PATH (they skip the missing ones). The
+      # retry's live error-message templates (spec D13) need 3.13 and 3.14 too.
+      - name: Install workload interpreters 3.8 to 3.14
         run: |
-          uv python install 3.8 3.9 3.10 3.11 3.12
+          uv python install 3.8 3.9 3.10 3.11 3.12 3.13 3.14
           uv python dir --bin >> "$GITHUB_PATH"
 
       - name: Workload interpreters are on PATH
         run: |
           status=0
-          for version in 3.8 3.9 3.10 3.11 3.12; do
+          for version in 3.8 3.9 3.10 3.11 3.12 3.13 3.14; do
             if command -v "python${version}" >/dev/null 2>&1; then
               echo "python${version}: $(command -v "python${version}") ($("python${version}" -c 'import sys; print(sys.version.split()[0])'))"
             else
-              echo "::error::python${version} is not on PATH, so the profiler shim tests for it would skip"
+              echo "::error::python${version} is not on PATH, so the profiler shim and retry template tests for it would skip"
               status=1
             fi
           done
@@ -416,6 +468,12 @@ jobs:
 
       - name: Type check with Mypy
         run: uv run mypy src tests
+
+      # A known vulnerability in the synced environment (the dev, database
+      # and experiments extras) fails the PR (spec D19), with the stage
+      # gate's command; security.yml audits the whole lock weekly.
+      - name: Audit dependencies with pip-audit
+        run: uv run pip-audit --progress-spinner off
 
       # Fails loudly (instead of letting REQUIRE_* turn every sandbox test red)
       # when the runner cannot give the engine its Linux sandbox: the exact
@@ -508,6 +566,26 @@ jobs:
       - name: Install dependencies with uv sync
         run: uv sync --frozen --extra dev
 
+      # Same as the python job: the retry template and profiler shim tests
+      # run every python3.N on PATH and fail in CI when one is missing.
+      - name: Install workload interpreters 3.8 to 3.14
+        run: |
+          uv python install 3.8 3.9 3.10 3.11 3.12 3.13 3.14
+          uv python dir --bin >> "$GITHUB_PATH"
+
+      - name: Workload interpreters are on PATH
+        run: |
+          status=0
+          for version in 3.8 3.9 3.10 3.11 3.12 3.13 3.14; do
+            if command -v "python${version}" >/dev/null 2>&1; then
+              echo "python${version}: $(command -v "python${version}") ($("python${version}" -c 'import sys; print(sys.version.split()[0])'))"
+            else
+              echo "::error::python${version} is not on PATH, so the profiler shim and retry template tests for it would skip"
+              status=1
+            fi
+          done
+          exit "${status}"
+
       - name: Sandbox probe (sandbox-exec and Apple git)
         run: |
           sw_vers
@@ -524,9 +602,9 @@ jobs:
   # Live Claude smoke test: costs money, so it runs only when started by hand
   # (Actions > CI > Run workflow), never on push or pull_request. The key is
   # passed to the test step only and never echoed (GitHub masks it as well).
-  # Environment 'live' must have required reviewers and hold ANTHROPIC_API_KEY
-  # as an environment secret (not a repository secret), so starting a run on
-  # any branch still needs a second person before the key reaches the runner.
+  # Environment 'live' holds ANTHROPIC_API_KEY as an environment secret (not a
+  # repository secret). The owner removed its required reviewers on 2026-10-24
+  # (STATUS.md), so each run's hard cost cap is what bounds the spend.
   live-smoke:
     name: Live Claude API suite (manual)
     runs-on: ubuntu-22.04
@@ -537,13 +615,27 @@ jobs:
     # Each whole loop takes a few minutes of real trials (up to about 8): Stage A
     # runs 2, attack 3, corpus 15, hard 10 and oss at most 10 (larger
     # repositories). A killed job loses the cost table, so each suite gets room
-    # for its loops (the hosted maximum is 360).
-    timeout-minutes: ${{ inputs.suite == 'sweep' && 240 || inputs.suite == 'sweep-fable' && 180 || inputs.suite == 'sweep-record' && 150 || inputs.suite == 'ab' && 360 || inputs.suite == 'noise' && 90 || inputs.suite == 'oss-ab' && 120 || inputs.suite == 'evolve' && 300 || inputs.suite == 'evolve-more' && 300 || inputs.suite == 'build' && 120 || inputs.suite == 'escalation' && 90 || inputs.suite == 'triage' && 90 || inputs.suite == 'papers' && 60 || inputs.suite == 'web' && 90 || inputs.suite == 'corpus' && 180 || inputs.suite == 'oss' && 180 || inputs.suite == 'hard' && 120 || inputs.suite == 'attack' && 45 || 30 }}
+    # for its loops (the hosted maximum is 360). Under the Step 3 noise rule
+    # (paired trials, confirmation, calibration) and wired ideas, L1a and L1b
+    # measured hard 28-29 and corpus 34 minutes (2.3-2.9 a loop, 2026-10-25),
+    # so both sit at the 8-minutes-a-loop floor: hard 90, corpus 120. oss
+    # keeps 300: L2a measured 36-40 minutes for its 10 loops, and arm P or A
+    # at portfolio_rounds 2 (E2) at most doubles the trials (re-pinned from
+    # E2's first dispatch). ideas-probe 240 (ideas_probe.JOB_MINUTES): about
+    # 3 minutes a sequential model stage (kept until E1's recorded seconds
+    # re-pin it) and 2 for phase 1 (E0b: a count-mode library about 47 s),
+    # E1 56 a library (phase 1, arm A, four pipeline calls of four stages,
+    # the auditor), so four libraries a dispatch (ideas_repos, 224 minutes);
+    # E0b's ten 8 each, E1b's four 25 each.
+    timeout-minutes: ${{ inputs.suite == 'sweep' && 240 || inputs.suite == 'sweep-fable' && 180 || inputs.suite == 'sweep-record' && 150 || inputs.suite == 'ab' && 360 || inputs.suite == 'noise' && 90 || inputs.suite == 'oss-ab' && 120 || inputs.suite == 'evolve' && 300 || inputs.suite == 'evolve-more' && 300 || inputs.suite == 'evolve-p' && 300 || inputs.suite == 'ab-v2-p' && 300 || inputs.suite == 'ab-v2' && 300 || inputs.suite == 'build' && 120 || inputs.suite == 'upstream-verify' && 150 || inputs.suite == 'upstream' && 300 || inputs.suite == 'heal-agent' && 120 || inputs.suite == 'research-agent' && 45 || inputs.suite == 'ideas-probe' && 240 || inputs.suite == 'watch' && 90 || inputs.suite == 'escalation' && 90 || inputs.suite == 'triage' && 90 || inputs.suite == 'papers' && 60 || inputs.suite == 'web' && 90 || inputs.suite == 'corpus' && 120 || inputs.suite == 'oss' && 300 || inputs.suite == 'hard' && 90 || inputs.suite == 'attack' && 45 || 30 }}
     defaults:
       run:
         working-directory: ./services/python_agents
     env:
-      UV_PYTHON: '3.11'
+      # CPython 3.11 as the python job, except the upstream corpus suites: the
+      # networkx before-trees need 3.12, which every candidate admits
+      # (upstream.UPSTREAM_PYTHON; prepare_repo refuses one outside its range).
+      UV_PYTHON: ${{ (inputs.suite == 'upstream' || inputs.suite == 'upstream-verify') && '3.12' || '3.11' }}
       # The live E2E and attack runs must be sandboxed: a runner that cannot
       # isolate fails instead of running Claude-edited code unconfined.
       REQUIRE_NETWORK_SANDBOX: '1'
@@ -558,7 +650,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.11'
+          python-version: ${{ env.UV_PYTHON }}
 
       - name: Setup uv (fast Python package installer)
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
@@ -622,8 +714,11 @@ jobs:
       # (Sonnet with ENGINE_FALLBACKS off, so the comparison bills Sonnet only
       # and its worst case is priced on Sonnet alone), and the cap becomes
       # LIVE_SUITE_CAP_USD, which tests/live/conftest.py enforces before each
-      # test spends. The mode becomes LIVE_CORPUS_MODE (the corpus and hard
-      # suites read it; stage-a, attack and oss ignore it). The cost table and
+      # test spends. The mode becomes LIVE_CORPUS_MODE (the corpus, hard and
+      # oss suites read it; stage-a and attack ignore it). editor_model sets
+      # EDITOR_MODEL with EDITOR_EFFORT=low, which start_loop and
+      # start_oss_loop give its own captured editor transport. Every suite gets
+      # its noise rule explicitly. The cost table and
       # the corpus summary go to the job summary; one JSON line per corpus run
       # goes to LIVE_RESULTS_PATH.
       - name: Run live tests
@@ -632,27 +727,58 @@ jobs:
           INPUT_SUITE: ${{ inputs.suite }}
           INPUT_MODE: ${{ inputs.mode }}
           INPUT_ENGINE_MODEL: ${{ inputs.engine_model }}
+          INPUT_EDITOR_MODEL: ${{ inputs.editor_model }}
           INPUT_SUITE_CAP_USD: ${{ inputs.suite_cap_usd }}
           INPUT_OSS_REPO: ${{ inputs.oss_repo }}
+          INPUT_UPSTREAM_BATCH: ${{ inputs.upstream_batch }}
+          INPUT_IDEA_PIPELINE: ${{ inputs.idea_pipeline }}
+          INPUT_PORTFOLIO_ROUNDS: ${{ inputs.portfolio_rounds }}
+          INPUT_CORPUS_SELECT: ${{ inputs.corpus_select }}
+          INPUT_IDEAS_ARMS: ${{ inputs.ideas_arms }}
+          INPUT_IDEAS_REPOS: ${{ inputs.ideas_repos }}
+          INPUT_AB_ARMS: ${{ inputs.ab_arms }}
           LIVE_RESULTS_PATH: ${{ runner.temp }}/live-results.jsonl
         run: |
           if [ -z "${ANTHROPIC_API_KEY}" ]; then
             echo "::error::the ANTHROPIC_API_KEY secret of environment 'live' is not set"
             exit 1
           fi
-          corpus=(--ignore=tests/live/test_corpus_live.py --ignore=tests/live/test_attack_corpus_live.py --ignore=tests/live/test_hard_corpus_live.py --ignore=tests/live/test_oss_live.py --ignore=tests/live/experiments --ignore=tests/live/test_sweep_live.py --ignore=tests/live/test_ab_live.py --ignore=tests/live/test_escalation_live.py --ignore=tests/live/test_noise_live.py --ignore=tests/live/test_oss_ab_live.py --ignore=tests/live/test_evolution_live.py --ignore=tests/live/test_build_live.py)
+          corpus=(--ignore=tests/live/test_corpus_live.py --ignore=tests/live/test_attack_corpus_live.py --ignore=tests/live/test_hard_corpus_live.py --ignore=tests/live/test_oss_live.py --ignore=tests/live/experiments --ignore=tests/live/test_sweep_live.py --ignore=tests/live/test_ab_live.py --ignore=tests/live/test_escalation_live.py --ignore=tests/live/test_noise_live.py --ignore=tests/live/test_oss_ab_live.py --ignore=tests/live/test_evolution_live.py --ignore=tests/live/test_build_live.py --ignore=tests/live/test_grader_agreement_live.py --ignore=tests/live/test_upstream_verify_live.py --ignore=tests/live/test_upstream_live.py --ignore=tests/live/test_ideas_probe_live.py)
           # need: the sum of the caps the suite's live tests ask the ledger for
           # (Stage A 8.55, corpus 15 x 5, attack 3 x 4, hard 10 x 5, oss at most
           # 10 x 5; the Window 0 experiments under tests/live/experiments: probes
           # 0.46, triage 1.25, papers 3 x 1.25 + 2 x 2.75 + 0.75, web 18 caps 51.08, prescreen 2 x 1.11; the discovery
-          # suites: sweep 76.15, sweep-fable 33 (one Sonnet arm and Fable 5.1 on
-          # the 12 slowdowns), sweep-record 16.2 (one Sonnet arm, recorded), ab 2
+          # suites, the sweeps on 37 repositories (v1, hard and v2: 32 slowdowns,
+          # 5 controls): sweep 111.75, sweep-fable 40.3 (one Sonnet arm and
+          # Fable 5.1 on the 12 v1 slowdowns), sweep-record 23.5 (one Sonnet
+          # arm, recorded), ab 2
           # reps 140, escalation 42.9; acquire 0.60 (Part B; Part A is free);
           # noise 0 (no request); heal 8 x 0.75; oss-ab one library 102.6 (2
           # reps x (1.30 generation + 2 arms x 10 trials x 2.50)); evolve 3
           # repos x 10 rounds x (0.45 + 3); evolve-more the same on 4 more
-          # libraries, 138; heal-hard 10 x 0.75; build 3 specs x (0.80 build +
-          # 0.60 generation + 7.50 loop)),
+          # libraries, 138; V8's arm P, on D55's bounds as E0b re-derived them
+          # (D61): ab-v2-p (E3) 2 reps x 6 v2 repos x (2.90 generation, phase
+          # 1, arm A and the whole idea pipeline, + 2 x 1.00), 58.8; V10's
+          # ab-v2 (L5b) 2 reps x 12 v2 repos x (0.80 + 2 x 1.00), 67.2, and
+          # ab_arms A (L5a) 1 rep x 12 x (0.35 + 1.00), 16.2; evolve-p
+          # (E4) one library x 6 rounds x (blind 0.45 + 3 + arm P 2.75 + 3),
+          # 55.2; heal-hard 10 x 0.75; build 3 specs x (0.80 build +
+          # 0.60 generation + 7.50 loop)); grader 6 repositories x 0.22725
+          # (L3, one grader request each); upstream-verify 0 (no request);
+          # upstream a batch of 10 verified candidates x 5 (one wired loop each);
+          # agent-probes 0.97 (A0: five probes at 0, 0, 0.47, 0.30 and 0.20);
+          # heal-agent 12 new bugs x 0.40 + 16 regression bugs x 0.20 (P1,
+          # A1: one run per bug, both arms);
+          # research-agent 7.35 (A2: arm A 5 x 1.14, arm B 5 x 0.30, the
+          # builder's injection page 0.15; each A2s page adds 0.15);
+          # watch 1.85 (A3: one hosted run's worst case, the 25-cent session
+          # budget + one maximal Haiku 5.5 request + 22 watched minutes, 1.60,
+          # and a listing's triage, 0.25); watch-cleanup 1.60 (one session no
+          # ledger saw); ideas-probe E1 45.6 (4 libraries a dispatch x 11.40,
+          # on D55's bounds re-derived from E0b's counts: phase 1 0.38, arms A
+          # 0.27, B 1.99, C 2.475, D 4.53, E 1.045, the auditor 0.69), E0b
+          # count 8.5 (10 x 0.85, 0.38 + 2 x 0.215), E1b 19.8 (4 x 2 x 2.475
+          # on recorded facts),
           # rounded up; a smaller cap would refuse, and fail, the later
           # tests of the suite.
           case "${INPUT_SUITE}" in
@@ -666,10 +792,12 @@ jobs:
             papers) paths=(tests/live/experiments/test_extraction_live.py); need=10 ;;
             web) paths=(tests/live/experiments/test_web_live.py); need=52 ;;
             prescreen) paths=(tests/live/experiments/test_prescreen_live.py); need=3 ;;
-            sweep) paths=(tests/live/test_sweep_live.py); need=77 ;;
-            sweep-fable) paths=(tests/live/test_sweep_live.py); need=33 ;;
-            sweep-record) paths=(tests/live/test_sweep_live.py); need=17 ;;
+            sweep) paths=(tests/live/test_sweep_live.py); need=112 ;;
+            sweep-fable) paths=(tests/live/test_sweep_live.py); need=41 ;;
+            sweep-record) paths=(tests/live/test_sweep_live.py); need=24 ;;
             ab) paths=(tests/live/test_ab_live.py); need=140 ;;
+            ab-v2-p) paths=(tests/live/test_ab_live.py); need=59 ;;
+            ab-v2) paths=(tests/live/test_ab_live.py); need=68 ;;
             escalation) paths=(tests/live/test_escalation_live.py); need=43 ;;
             acquire) paths=(tests/live/experiments/test_acquire_live.py); need=1 ;;
             noise) paths=(tests/live/test_noise_live.py); need=0 ;;
@@ -677,13 +805,110 @@ jobs:
             oss-ab) paths=(tests/live/test_oss_ab_live.py); need=103 ;;
             evolve) paths=(tests/live/test_evolution_live.py); need=104 ;;
             evolve-more) paths=(tests/live/test_evolution_live.py); need=138 ;;
+            evolve-p) paths=(tests/live/test_evolution_live.py); need=56 ;;
             heal-hard) paths=(tests/live/experiments/test_heal_live.py); need=8 ;;
             build) paths=(tests/live/test_build_live.py); need=27 ;;
+            grader) paths=(tests/live/test_grader_agreement_live.py); need=2 ;;
+            upstream-verify) paths=(tests/live/test_upstream_verify_live.py); need=0 ;;
+            upstream) paths=(tests/live/test_upstream_live.py); need=50 ;;
+            agent-probes) paths=(tests/live/experiments/test_agent_probes_live.py); need=1 ;;
+            heal-agent) paths=(tests/live/experiments/test_heal_agent_live.py); need=8 ;;
+            research-agent) paths=(tests/live/experiments/test_research_agent_live.py); need=8 ;;
+            watch) paths=(tests/live/experiments/test_watch_managed_live.py); need=2 ;;
+            watch-cleanup) paths=(tests/live/experiments/test_watch_managed_live.py); need=2 ;;
+            ideas-probe) paths=(tests/live/test_ideas_probe_live.py); need=46 ;;
             *)
-              echo "::error::unknown suite input (stage-a, corpus, attack, hard, oss, probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, heal-hard or build)"
+              echo "::error::unknown suite input (stage-a, corpus, attack, hard, oss, probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, ab-v2-p, ab-v2, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, evolve-p, heal-hard, build, grader, upstream-verify, upstream, agent-probes, heal-agent, research-agent, watch, watch-cleanup or ideas-probe)"
               exit 1
               ;;
           esac
+          # The arm of an oss or corpus run (V4 amended, E2): IDEA_PIPELINE
+          # (arm P, wired only: the factory then needs the lane, leap and
+          # reviewer transports corpus.role_wiring captures) and
+          # PORTFOLIO_ROUNDS, both exported explicitly for those two suites
+          # and refused for every other; corpus_select=controls runs the
+          # corpus suite's three controls alone (3 x 5 USD). An unset input
+          # (an older caller) reads as its default, an empty one is refused.
+          case "${INPUT_IDEA_PIPELINE-off}" in
+            off) idea_pipeline=false ;;
+            on) idea_pipeline=true ;;
+            *)
+              echo "::error::unknown idea_pipeline input (off or on)"
+              exit 1
+              ;;
+          esac
+          case "${INPUT_PORTFOLIO_ROUNDS-0}" in
+            0 | 1 | 2 | 3) portfolio_rounds="${INPUT_PORTFOLIO_ROUNDS-0}" ;;
+            *)
+              echo "::error::unknown portfolio_rounds input (0, 1, 2 or 3)"
+              exit 1
+              ;;
+          esac
+          if [ "${INPUT_SUITE}" = oss ] || [ "${INPUT_SUITE}" = corpus ]; then
+            if [ "${idea_pipeline}" = true ] && [ "${INPUT_MODE}" != wired ]; then
+              echo "::error::idea_pipeline on runs wired only (mode wired)"
+              exit 1
+            fi
+            export IDEA_PIPELINE="${idea_pipeline}" PORTFOLIO_ROUNDS="${portfolio_rounds}"
+          elif [ "${idea_pipeline}" = true ] || [ "${portfolio_rounds}" != 0 ]; then
+            echo "::error::idea_pipeline and portfolio_rounds are only for the oss and corpus suites"
+            exit 1
+          fi
+          case "${INPUT_CORPUS_SELECT-all}" in
+            all) ;;
+            controls)
+              if [ "${INPUT_SUITE}" != corpus ]; then
+                echo "::error::corpus_select controls is only for the corpus suite"
+                exit 1
+              fi
+              paths=("tests/live/test_corpus_live.py::test_corpus_whole_loop[blockhash]" "tests/live/test_corpus_live.py::test_corpus_whole_loop[sortstats]" "tests/live/test_corpus_live.py::test_corpus_whole_loop[lettertally]")
+              need=15
+              ;;
+            *)
+              echo "::error::unknown corpus_select input (all or controls)"
+              exit 1
+              ;;
+          esac
+          # The ideas-probe arms (V7): E1 by default, E0b's count mode, or E1b's
+          # lane efforts on E1's recorded facts (committed by the Lead at
+          # tests/fixtures/ideas_probe/facts.jsonl; refused before any spend
+          # while missing). An unset input reads as the default. ideas_repos
+          # names the libraries (E1 must: four fit the job's minutes, and the
+          # module fixture refuses E1's whole eight before any spend); the
+          # need is their count x the plan's library cap in cents, rounded up.
+          ideas_arms="${INPUT_IDEAS_ARMS-A,B,C,D,E}"
+          ideas_repos="${INPUT_IDEAS_REPOS-}"
+          if [ "${INPUT_SUITE}" = ideas-probe ]; then
+            case "${ideas_arms}" in
+              A,B,C,D,E) cents=1140 ;;
+              count) cents=85; need=9 ;;
+              C-low,C-high)
+                cents=495
+                need=20
+                export LIVE_IDEAS_FACTS=tests/fixtures/ideas_probe/facts.jsonl
+                ;;
+              *)
+                echo "::error::unknown ideas_arms input (A,B,C,D,E, count or C-low,C-high)"
+                exit 1
+                ;;
+            esac
+            if [ -n "${ideas_repos}" ]; then
+              if ! [[ "${ideas_repos}" =~ ^[a-z][a-z0-9_]{0,39}(,[a-z][a-z0-9_]{0,39}){0,19}$ ]]; then
+                echo "::error::ideas_repos must be comma-separated OSS library names (lower case)"
+                exit 1
+              fi
+              commas="${ideas_repos//[^,]/}"
+              need=$(( ((${#commas} + 1) * cents + 99) / 100 ))
+              export LIVE_IDEAS_REPOS="${ideas_repos}"
+            fi
+            export LIVE_IDEAS_ARMS="${ideas_arms}"
+          elif [ "${ideas_arms}" != A,B,C,D,E ]; then
+            echo "::error::ideas_arms is only for the ideas-probe suite"
+            exit 1
+          elif [ -n "${ideas_repos}" ]; then
+            echo "::error::ideas_repos is only for the ideas-probe suite"
+            exit 1
+          fi
           if [ "${INPUT_SUITE}" = sweep-fable ]; then
             # Fable 5.1 (the research plan's optional arm) beside the one arm
             # whose per-repository run phase 1 shares
@@ -698,27 +923,80 @@ jobs:
             # the harder bugs: wrong-place causes, misleading reports, controls
             export LIVE_HEAL_SET=hard
           fi
+          if [ "${INPUT_SUITE}" = watch-cleanup ]; then
+            # A3 (P3): no hosted run, only the cleanup and its listing check
+            export LIVE_WATCH_CANCEL=1
+          fi
           if [ "${INPUT_SUITE}" = evolve-more ]; then
             # the four other libraries the OSS A/B improved
             export LIVE_EVOLVE_REPOS=idna,mistune,sqlparse,pycparser
           fi
-          if [ "${INPUT_SUITE}" = oss-ab ]; then
+          if [ "${INPUT_SUITE}" = ab-v2-p ]; then
+            # E3 (V8): arm P beside arm A on v2's deep, misleading, uncommon
+            export LIVE_AB_SET=v2-p
+          fi
+          # The retrieval re-test (V10, spec D2): ab-v2 runs arms A and B on
+          # all twelve corpus v2 repositories, 2 reps (L5b, need 68); ab_arms A
+          # runs arm A alone, 1 rep (L5a, need 17: phase 1 and A's request
+          # share a 0.35 USD run). An unset input (an older caller) reads as
+          # A,B, an empty one is refused.
+          ab_arms="${INPUT_AB_ARMS-A,B}"
+          if [ "${INPUT_SUITE}" = ab-v2 ]; then
+            case "${ab_arms}" in
+              A,B) ;;
+              A)
+                export LIVE_AB_REPS=1
+                need=17
+                ;;
+              *)
+                echo "::error::unknown ab_arms input (A,B or A)"
+                exit 1
+                ;;
+            esac
+            export LIVE_AB_SET=v2 LIVE_AB_ARMS="${ab_arms}"
+          elif [ "${ab_arms}" != A,B ]; then
+            echo "::error::ab_arms is only for the ab-v2 suite"
+            exit 1
+          fi
+          if [ "${INPUT_SUITE}" = oss-ab ] || [ "${INPUT_SUITE}" = evolve-p ]; then
             # one library a dispatch: the whole plan needs more than the ceiling
             if ! [[ "${INPUT_OSS_REPO}" =~ ^[a-z][a-z0-9_]{0,39}$ ]]; then
-              echo "::error::oss-ab needs oss_repo, one OSS library name (lower case)"
+              echo "::error::${INPUT_SUITE} needs oss_repo, one OSS library name (lower case)"
               exit 1
             fi
-            export LIVE_OSS_AB_REPOS="${INPUT_OSS_REPO}"
+            if [ "${INPUT_SUITE}" = oss-ab ]; then
+              export LIVE_OSS_AB_REPOS="${INPUT_OSS_REPO}"
+            else
+              # E4 (V8): arm P beside blind on the library, up to 6 rounds each
+              export LIVE_EVOLVE_REPOS="${INPUT_OSS_REPO}" LIVE_EVOLVE_ARMS=blind,P LIVE_EVOLVE_ROUNDS=6
+            fi
           elif [ -n "${INPUT_OSS_REPO}" ]; then
-            echo "::error::oss_repo is only for the oss-ab suite"
+            echo "::error::oss_repo is only for the oss-ab and evolve-p suites"
             exit 1
+          fi
+          if [ "${INPUT_SUITE}" = upstream ] || [ "${INPUT_SUITE}" = upstream-verify ]; then
+            # ten candidates a dispatch; the packages some need beyond their
+            # checkout: exact versions, wheels only, hash-pinned, no deps
+            case "${INPUT_UPSTREAM_BATCH}" in
+              1 | 2 | 3) export LIVE_UPSTREAM_BATCH="${INPUT_UPSTREAM_BATCH}" ;;
+              *)
+                echo "::error::upstream_batch must be 1, 2 or 3"
+                exit 1
+                ;;
+            esac
+            if [ "${INPUT_SUITE}" = upstream ] && [ "${INPUT_MODE}" != wired ]; then
+              echo "::error::the upstream suite runs wired only (mode wired)"
+              exit 1
+            fi
+            uv pip install --no-deps --require-hashes --only-binary :all: -r tests/fixtures/upstream_corpus/requirements.txt
           fi
           case "${INPUT_MODE}" in
             aimed) ;;
             blind) ;;
             decoy) ;;
+            wired) ;;
             *)
-              echo "::error::unknown mode input (aimed, blind or decoy)"
+              echo "::error::unknown mode input (aimed, blind, decoy or wired)"
               exit 1
               ;;
           esac
@@ -730,6 +1008,39 @@ jobs:
               exit 1
               ;;
           esac
+          case "${INPUT_EDITOR_MODEL}" in
+            default) ;;
+            claude-sonnet-5-5) export EDITOR_MODEL=claude-sonnet-5-5 EDITOR_EFFORT=low ;;
+            *)
+              echo "::error::unknown editor_model input (default or claude-sonnet-5-5)"
+              exit 1
+              ;;
+          esac
+          # The noise rule of every suite, never a default (D41): step3 measures
+          # the Step 3 defaults (paired trials, confirmation, 3 calibration
+          # blocks) on L0-L2; step2 keeps Step 2's measurement for the other
+          # suites (their timeouts and Window 0 comparisons; an A/A floor of a
+          # millisecond workload can pass 100 % and stop the run).
+          case "${INPUT_SUITE}" in
+            noise | corpus | hard | oss | upstream-verify | upstream) noise_rule=step3 ;;
+            stage-a | attack | probes | triage | papers | web | prescreen) noise_rule=step2 ;;
+            sweep | sweep-fable | sweep-record | ab | ab-v2-p | ab-v2 | escalation | acquire) noise_rule=step2 ;;
+            heal | oss-ab | evolve | evolve-more | evolve-p | heal-hard | build | grader | agent-probes | heal-agent | research-agent) noise_rule=step2 ;;
+            watch | watch-cleanup | ideas-probe) noise_rule=step2 ;;
+            *)
+              echo "::error::no noise rule for suite ${INPUT_SUITE}"
+              exit 1
+              ;;
+          esac
+          if [ "${noise_rule}" = step3 ]; then
+            export PAIRED_TRIALS=true CONFIRM_WINNERS=true NOISE_CALIBRATION_BLOCKS=3
+          else
+            export PAIRED_TRIALS=false CONFIRM_WINNERS=false NOISE_CALIBRATION_BLOCKS=0
+          fi
+          if [ "${INPUT_SUITE}" = noise ]; then
+            # L0: A/A blocks through the engine's paired path, 10 a repository
+            export LIVE_NOISE_PATH=paired
+          fi
           if ! [[ "${INPUT_SUITE_CAP_USD}" =~ ^[0-9]{1,3}([.][0-9]{1,2})?$ ]] ||
             ! awk -v cap="${INPUT_SUITE_CAP_USD}" 'BEGIN { exit !(cap > 0 && cap <= 150) }'; then
             echo "::error::suite_cap_usd must be a number of USD above 0 and at most 150"
@@ -743,7 +1054,7 @@ jobs:
           export LIVE_SUITE_CAP_USD="${INPUT_SUITE_CAP_USD}"
           export LIVE_CORPUS_MODE="${INPUT_MODE}"
           : > "${LIVE_RESULTS_PATH}"
-          echo "suite ${INPUT_SUITE}, mode ${LIVE_CORPUS_MODE}, ENGINE_MODEL ${ENGINE_MODEL}, LIVE_SUITE_CAP_USD ${LIVE_SUITE_CAP_USD}"
+          echo "suite ${INPUT_SUITE}, mode ${LIVE_CORPUS_MODE}, ENGINE_MODEL ${ENGINE_MODEL}, EDITOR_MODEL ${EDITOR_MODEL:-default}, noise rule ${noise_rule}, LIVE_SUITE_CAP_USD ${LIVE_SUITE_CAP_USD}, idea pipeline ${INPUT_IDEA_PIPELINE-off}, portfolio rounds ${portfolio_rounds}, corpus select ${INPUT_CORPUS_SELECT-all}, ab arms ${ab_arms}"
           uv run pytest "${paths[@]}" -m live --no-cov -n 0 -rA
 
       # One JSON line per corpus run (CorpusOutcome), kept for the STATUS
@@ -758,7 +1069,7 @@ jobs:
           retention-days: 30
 
   # Database schema: apply every migration to a real Postgres, then re-apply the
-  # engine migrations (003, 004) to prove they are idempotent. 001 and 002 are
+  # engine migrations (003 onward) to prove they are idempotent. 001 and 002 are
   # not idempotent (plain CREATE TABLE packages, CREATE INDEX idx_packages_name),
   # so they run once. Same pinned image as the python job's service.
   schema-apply:
@@ -797,7 +1108,7 @@ jobs:
 
       # Same order as docker-entrypoint-initdb.d on a fresh volume (file name
       # order); every file runs exactly once here.
-      - name: Apply migrations once in order (001 -> 004)
+      - name: Apply migrations once in order (001 onward)
         run: |
           for file in infrastructure/schema/*.sql; do
             echo "::group::${file}"
@@ -805,7 +1116,7 @@ jobs:
             echo "::endgroup::"
           done
 
-      - name: Re-apply 003 then 004 and diff the catalog (idempotence proof)
+      - name: Re-apply 003 onward and diff the catalog (idempotence proof)
         run: |
           snapshot() {
             {
@@ -815,7 +1126,12 @@ jobs:
             } > "$1"
           }
           snapshot "${RUNNER_TEMP}/schema-before.txt"
-          for file in infrastructure/schema/003_engine.sql infrastructure/schema/004_engine_repository.sql; do
+          # Every engine migration from 003 on, in file-name order, so a new
+          # migration is covered without a workflow edit (Step 3, D25).
+          for file in infrastructure/schema/*.sql; do
+            case "$(basename "${file}")" in
+              00[12]_*) continue ;;
+            esac
             echo "::group::re-apply ${file}"
             PGPASSWORD=devpass psql -h localhost -U dev -d ai_platform -v ON_ERROR_STOP=1 -f "${file}"
             echo "::endgroup::"
@@ -838,10 +1154,12 @@ jobs:
               status=1
             fi
           done
-          # table.column:data_type (003 research columns, then the 004 additions)
+          # table.column:data_type (003 research columns, the 004 additions,
+          # then 005's caller-id columns)
           for spec in research_papers.claims:jsonb research_papers.citation_count:integer \
             projects.test_command:jsonb lessons.seq:bigint \
-            lessons.gain:'double precision' lessons.weight:'double precision'; do
+            lessons.gain:'double precision' lessons.weight:'double precision' \
+            lessons.hypothesis_id:'character varying' lessons.technique_id:'character varying'; do
             target="${spec%%:*}"
             want="${spec#*:}"
             got="$(query "SELECT data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '${target%%.*}' AND column_name = '${target#*.}'")"
@@ -864,6 +1182,29 @@ jobs:
             echo "constraint chk_project_test_command_argv: present once"
           else
             echo "::error::constraint chk_project_test_command_argv is missing or duplicated"
+            status=1
+          fi
+          # 005: the caller-id columns are 64 wide, each with its id-rule CHECK
+          for column in hypothesis_id technique_id; do
+            width="$(query "SELECT character_maximum_length FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'lessons' AND column_name = '${column}'")"
+            if [ "${width}" = "64" ]; then
+              echo "column lessons.${column}: VARCHAR(64)"
+            else
+              echo "::error::column lessons.${column} should be VARCHAR(64), found width '${width}'"
+              status=1
+            fi
+            if [ "$(query "SELECT count(*) FROM pg_constraint WHERE conname = 'chk_lesson_${column}' AND conrelid = 'public.lessons'::regclass")" = "1" ]; then
+              echo "constraint chk_lesson_${column}: present once"
+            else
+              echo "::error::constraint chk_lesson_${column} is missing or duplicated"
+              status=1
+            fi
+          done
+          # 006: a lesson may record the review outcome (D35)
+          if [ "$(query "SELECT count(*) FROM pg_constraint WHERE conname = 'chk_lesson_outcome' AND conrelid = 'public.lessons'::regclass AND pg_get_constraintdef(oid) LIKE '%''review''%'")" = "1" ]; then
+            echo "constraint chk_lesson_outcome: allows review"
+          else
+            echo "::error::constraint chk_lesson_outcome does not allow review (006)"
             status=1
           fi
           exit "${status}"
@@ -938,7 +1279,7 @@ jobs:
           echo "public tables: ${count}"
           docker compose exec -T postgres psql -U dev -d ai_platform -c '\dt'
           if [ "${count}" != "14" ]; then
-            echo "::error::expected 14 tables after 001 -> 004 (004 adds none), found ${count}"
+            echo "::error::expected 14 tables after 001 -> 006 (004 to 006 add none), found ${count}"
             exit 1
           fi
 

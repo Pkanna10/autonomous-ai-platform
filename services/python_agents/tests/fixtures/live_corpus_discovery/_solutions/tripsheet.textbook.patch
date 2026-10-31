@@ -1,0 +1,26 @@
+diff --git a/tripsheet/report.py b/tripsheet/report.py
+index f170709..14d02f4 100644
+--- a/tripsheet/report.py
++++ b/tripsheet/report.py
+@@ -1,6 +1,7 @@
+ """The monthly summary of trip records (see ``data.records`` for the fields)."""
+ 
+ import json
++from collections import Counter
+ 
+ 
+ def total_metres(lines: list[str]) -> int:
+@@ -16,10 +17,9 @@ def fares_by_region(lines: list[str]) -> dict[str, int]:
+ 
+ 
+ def busiest_mode(lines: list[str]) -> str:
+-    riders: dict[str, int] = {}
+-    for line in lines:
+-        record = json.loads(line)
+-        riders[record["mode"]] = riders.get(record["mode"], 0) + record["riders"]
++    riders: Counter[str] = Counter()
++    for record in map(json.loads, lines):
++        riders[record["mode"]] += record["riders"]
+     return max(riders, key=riders.__getitem__)
+ 
+ 

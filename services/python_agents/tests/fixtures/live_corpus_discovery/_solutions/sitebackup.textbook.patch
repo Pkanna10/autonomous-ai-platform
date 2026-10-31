@@ -1,0 +1,37 @@
+diff --git a/sitebackup/backup.py b/sitebackup/backup.py
+index 45980ab..33380f3 100644
+--- a/sitebackup/backup.py
++++ b/sitebackup/backup.py
+@@ -6,10 +6,9 @@ import lzma
+ 
+ def bundle(site: dict[str, list[str]]) -> bytes:
+     """Every page, in section order, as one UTF-8 document."""
+-    document = ""
+-    for section, pages in site.items():
+-        document = document + f"== {section}\n" + "".join(pages)
+-    return document.encode()
++    return "".join(
++        f"== {section}\n" + "".join(pages) for section, pages in site.items()
++    ).encode()
+ 
+ 
+ def archive(site: dict[str, list[str]]) -> bytes:
+diff --git a/sitebackup/site.py b/sitebackup/site.py
+index 5fd6ac8..19713a7 100644
+--- a/sitebackup/site.py
++++ b/sitebackup/site.py
+@@ -13,10 +13,11 @@ WORDS = tuple(
+ 
+ def page(section: str, number: int, rng: random.Random) -> str:
+     """One page: a title and ten paragraphs of generated text."""
+-    html = f"<h1>{section} {number}</h1>\n"
++    word = WORDS.__getitem__
++    parts = [f"<h1>{section} {number}</h1>\n"]
+     for _ in range(10):
+-        html += "<p>" + " ".join(map(WORDS.__getitem__, rng.randbytes(24))) + "</p>\n"
+-    return html
++        parts.append(f"<p>{' '.join(map(word, rng.randbytes(24)))}</p>\n")
++    return "".join(parts)
+ 
+ 
+ def render(pages: int) -> dict[str, list[str]]:

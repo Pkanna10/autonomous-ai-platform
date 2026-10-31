@@ -357,7 +357,8 @@ def test_the_re_test_interleaves_base_and_tip_and_runs_the_suite_on_the_tip(
     """
     GIVEN one workload with a warm-up and a test command
     WHEN a change is combined
-    THEN the runs alternate combine-base / combine (warm-up included), each
+    THEN the runs alternate ABBA on one counter (combine-base leads the
+        warm-up and every even index, combine every odd one), each
         side has its own scratch and probe dirs, the suite runs once on the
         tip only, and the result splits A rows from B rows plus tests_passed
     """
@@ -366,7 +367,8 @@ def test_the_re_test_interleaves_base_and_tip_and_runs_the_suite_on_the_tip(
 
     result = rig.combine(kept("t1", rig.t1), workloads=[load], project=project)
 
-    assert rig.run.sides() == ["combine-base", "combine"] * 6 + ["combine"]
+    abba = ["combine-base", "combine", "combine", "combine-base"]
+    assert rig.run.sides() == abba * 3 + ["combine"]
     assert rig.run.calls[-1].argv == (PY, "-m", "unittest")
     for call in rig.run.calls:
         side = call.cwd.name

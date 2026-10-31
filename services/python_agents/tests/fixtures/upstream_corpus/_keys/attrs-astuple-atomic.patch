@@ -1,0 +1,13 @@
+diff --git a/src/attr/_funcs.py b/src/attr/_funcs.py
+index d213efc..c88c175 100644
+--- a/src/attr/_funcs.py
++++ b/src/attr/_funcs.py
+@@ -301,7 +301,7 @@ def astuple(
+                             tuple_factory=tuple_factory,
+                             retain_collection_types=retain,
+                         )
+-                        if has(j.__class__)
++                        if type(j) not in _ATOMIC_TYPES and has(j.__class__)
+                         else j
+                     )
+                     for j in v

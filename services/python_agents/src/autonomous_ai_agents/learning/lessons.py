@@ -4,6 +4,12 @@ Pure functions, no I/O. A ``Lesson`` records the outcome (and gain) of one
 verdict against the technique and hypothesis it judged, with context tags
 describing when it applies. ``optimization.ranking.lesson_boost`` reads them
 back when ranking the next round's hypotheses.
+
+Step 3 Wave 2 (D57): a hypothesis's ``tags`` (its lane, review verdict and
+the model's ``claimed_`` labels) join the lesson's ``context``, deduplicated
+and sorted, so they are queryable later; the ``text`` keeps being built from
+the node's context only, so the text later shown to a model never gains the
+claimed labels. Nothing reads the tags yet.
 """
 
 from __future__ import annotations
@@ -23,14 +29,17 @@ def lesson_from_verdict(
     *,
     project_id: str | None,
     context: Sequence[str] = (),
+    extra_context: Sequence[str] = (),
 ) -> Lesson:
     """Return the ``Lesson`` that ``verdict`` teaches about ``hypothesis``.
 
     ``project_id`` of ``None`` makes the lesson global. The text reads
     ``"<context tags or 'general'> -> <title>: <outcome> (<gain>)"``, the gain
-    suffix present only when the verdict measured one. The id is the uuid5 of
-    the verdict id, so learning the same verdict twice (a re-executed learn
-    node) replaces the stored lesson instead of adding a second one.
+    suffix present only when the verdict measured one; ``extra_context`` (the
+    hypothesis's tags) joins ``context`` in the lesson's ``context`` only,
+    deduplicated and sorted, and leaves it as given when empty. The id is the
+    uuid5 of the verdict id, so learning the same verdict twice (a re-executed
+    learn node) replaces the stored lesson instead of adding a second one.
 
     Raises ``ValueError`` when the verdict belongs to a different hypothesis,
     so an outcome is never attributed to the wrong idea.
@@ -46,6 +55,8 @@ def lesson_from_verdict(
     )
     if verdict.gain is not None:
         text += f" ({verdict.gain:+.1%})"
+    if extra_context:
+        tags = tuple(sorted({*tags, *extra_context}))
     return Lesson(
         id=str(uuid.uuid5(LESSON_NAMESPACE, verdict.id)),
         project_id=project_id,
@@ -67,7 +78,8 @@ def lessons_from_verdicts(
     project_id: str | None,
     context: Sequence[str] = (),
 ) -> tuple[Lesson, ...]:
-    """Return one lesson per verdict, in order, skipping unknown hypotheses."""
+    """Return one lesson per verdict, in order, skipping unknown hypotheses;
+    each lesson's context gains its hypothesis's tags (D57)."""
     lessons: list[Lesson] = []
     for verdict in verdicts:
         hypothesis = hypotheses_by_id.get(verdict.hypothesis_id)
@@ -75,7 +87,11 @@ def lessons_from_verdicts(
             continue
         lessons.append(
             lesson_from_verdict(
-                verdict, hypothesis, project_id=project_id, context=context
+                verdict,
+                hypothesis,
+                project_id=project_id,
+                context=context,
+                extra_context=hypothesis.tags,
             )
         )
     return tuple(lessons)

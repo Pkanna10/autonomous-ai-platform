@@ -1,0 +1,6 @@
+The nightly import's retry plan fails now and then. We call
+plan(6, base=4, cap=8, deadline=48, seed=job_seed) and on some nights it
+raises DeadlineError ("retries need 57.6 s, more than the 48 s deadline");
+on most nights it works. The docstring promises that six retries of at most
+8 s always fit in 48 s. The night with job_seed 5 failed, and seed 5 fails
+every time we try it again.

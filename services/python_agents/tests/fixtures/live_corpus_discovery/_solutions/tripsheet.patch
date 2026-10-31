@@ -1,0 +1,107 @@
+diff --git a/tripsheet/report.py b/tripsheet/report.py
+index f170709..ca65171 100644
+--- a/tripsheet/report.py
++++ b/tripsheet/report.py
+@@ -1,58 +1,57 @@
+ """The monthly summary of trip records (see ``data.records`` for the fields)."""
+ 
+ import json
++from typing import Any
+ 
++Record = dict[str, Any]
+ 
+-def total_metres(lines: list[str]) -> int:
+-    return sum(json.loads(line)["metres"] for line in lines)
+ 
++def total_metres(records: list[Record]) -> int:
++    return sum(record["metres"] for record in records)
+ 
+-def fares_by_region(lines: list[str]) -> dict[str, int]:
++
++def fares_by_region(records: list[Record]) -> dict[str, int]:
+     fares: dict[str, int] = {}
+-    for line in lines:
+-        record = json.loads(line)
++    for record in records:
+         fares[record["region"]] = fares.get(record["region"], 0) + record["fare"]
+     return fares
+ 
+ 
+-def busiest_mode(lines: list[str]) -> str:
++def busiest_mode(records: list[Record]) -> str:
+     riders: dict[str, int] = {}
+-    for line in lines:
+-        record = json.loads(line)
++    for record in records:
+         riders[record["mode"]] = riders.get(record["mode"], 0) + record["riders"]
+     return max(riders, key=riders.__getitem__)
+ 
+ 
+-def longest_trip(lines: list[str]) -> str:
++def longest_trip(records: list[Record]) -> str:
+     best, name = -1, ""
+-    for line in lines:
+-        record = json.loads(line)
++    for record in records:
+         if record["metres"] > best:
+             best, name = record["metres"], record["trip"]
+     return name
+ 
+ 
+-def total_fares(lines: list[str]) -> int:
+-    return sum(json.loads(line)["fare"] for line in lines)
++def total_fares(records: list[Record]) -> int:
++    return sum(record["fare"] for record in records)
+ 
+ 
+-def crowded_trips(lines: list[str]) -> int:
+-    return sum(1 for line in lines if json.loads(line)["riders"] >= 4)
++def crowded_trips(records: list[Record]) -> int:
++    return sum(1 for record in records if record["riders"] >= 4)
+ 
+ 
+-def night_trips(lines: list[str]) -> int:
++def night_trips(records: list[Record]) -> int:
+     count = 0
+-    for line in lines:
+-        hour = json.loads(line)["hour"]
++    for record in records:
++        hour = record["hour"]
+         if hour >= 22 or hour < 5:
+             count += 1
+     return count
+ 
+ 
+-def short_hop_fares(lines: list[str]) -> int:
++def short_hop_fares(records: list[Record]) -> int:
+     total = 0
+-    for line in lines:
+-        record = json.loads(line)
++    for record in records:
+         if record["metres"] < 1000:
+             total += record["fare"]
+     return total
+@@ -60,14 +59,15 @@ def short_hop_fares(lines: list[str]) -> int:
+ 
+ def summarise(lines: list[str]) -> dict[str, str]:
+     """Every figure of the summary, formatted, in report order."""
+-    metres = total_metres(lines)
++    records = [json.loads(line) for line in lines]
++    metres = total_metres(records)
+     summary = {"distance km": f"{metres / 1000:.3f}"}
+-    for region, cents in fares_by_region(lines).items():
++    for region, cents in fares_by_region(records).items():
+         summary[f"fare {region}"] = f"{cents / 100:.2f}"
+-    summary["busiest mode"] = busiest_mode(lines)
+-    summary["longest trip"] = longest_trip(lines)
+-    summary["fare per km"] = f"{total_fares(lines) * 10 / metres:.4f}"
+-    summary["crowded share"] = f"{crowded_trips(lines) / len(lines):.3f}"
+-    summary["night trips"] = str(night_trips(lines))
+-    summary["short-hop fares"] = f"{short_hop_fares(lines) / 100:.2f}"
++    summary["busiest mode"] = busiest_mode(records)
++    summary["longest trip"] = longest_trip(records)
++    summary["fare per km"] = f"{total_fares(records) * 10 / metres:.4f}"
++    summary["crowded share"] = f"{crowded_trips(records) / len(records):.3f}"
++    summary["night trips"] = str(night_trips(records))
++    summary["short-hop fares"] = f"{short_hop_fares(records) / 100:.2f}"
+     return summary

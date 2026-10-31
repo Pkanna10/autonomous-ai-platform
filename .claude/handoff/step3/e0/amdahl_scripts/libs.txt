@@ -1,0 +1,10 @@
+tabulate https://github.com/astanin/python-tabulate.git v0.10.0 3b4cd509820e4c45cd2aaba833aa585ea6308b94 tabulate
+more_itertools https://github.com/more-itertools/more-itertools.git v11.1.0 64be96ceb2a6e836f76f069f4a96d2394d59fd0c more_itertools
+sortedcontainers https://github.com/grantjenks/python-sortedcontainers.git v2.4.0 a1f52d6713dd2c2713a881d4f4d86ed68ff71cab sortedcontainers
+mistune https://github.com/lepture/mistune.git v3.3.4 69ec2b8a6d5b37ecb3c56d96df4b40b9d3004657 src/mistune
+sqlparse https://github.com/andialbrecht/sqlparse.git 0.5.5 0d240230939bfb3b751b504878b1c7df04a3cab3 sqlparse
+pyparsing https://github.com/pyparsing/pyparsing.git 3.3.3 d90d38b283efaece7ac7cace7050ba55cb82abe5 pyparsing
+markdown https://github.com/Python-Markdown/markdown.git 3.11.0 0ffbf00cf667971d46f43aafba825e8d25098bc5 markdown
+idna https://github.com/kjd/idna.git v3.20 d55e65e1a3b1ede7f556bc202738066f5597e249 idna
+tomli https://github.com/hukkin/tomli.git 2.5.0 a2a578949199336ebc3884eeba4aede87da41ef2 src/tomli
+pycparser https://github.com/eliben/pycparser.git release_v3.11 ccb34399dedf518baac209592518757f367430fe pycparser

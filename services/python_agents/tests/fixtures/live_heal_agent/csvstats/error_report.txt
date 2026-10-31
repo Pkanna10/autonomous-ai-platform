@@ -1,0 +1,18 @@
+column_summary crashes on the stationery export because one item name has a
+comma in it (it is quoted, as CSV does). The median price of these four rows
+should be 12.5.
+
+    item,price
+    "Pens, blue",10
+    Stapler,20
+    Folder,12
+    "Ink, black",13
+
+Traceback (most recent call last):
+  File "/srv/reports/weekly.py", line 22, in build
+    stats = column_summary(export, "price")
+  File "/srv/reports/vendor/csvstats/csvstats/summary.py", line 8, in column_values
+    return [float(row[column]) for row in read_rows(text)]
+  File "/srv/reports/vendor/csvstats/csvstats/reader.py", line 31, in read_rows
+    raise RowLengthError(
+csvstats.reader.RowLengthError: line 2 has 3 fields, expected 2

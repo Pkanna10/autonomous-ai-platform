@@ -1,0 +1,231 @@
+{
+  "source": "synthetic (Wave 1, U12): hand-written replies on four corpus repositories; L4's sweep-record replaces it (V6)",
+  "arm": "sonnet-5-5-medium",
+  "k": 3,
+  "baseline_hits": 2,
+  "cases": [
+    {
+      "repo": "tagfilter",
+      "kind": "slowdown",
+      "hotspots": [
+        "tagfilter/core.py:matches",
+        "tagfilter/core.py:count_by_kind",
+        "tagfilter/data.py:records"
+      ],
+      "reply": "{\"hypotheses\": [{\"title\": \"Build a set from the allowlist once in count_by_kind\", \"technique_slug\": null, \"hotspots\": [{\"file_path\": \"tagfilter/core.py\", \"symbol\": \"matches\"}, {\"file_path\": \"tagfilter/core.py\", \"symbol\": \"count_by_kind\"}], \"change_summary\": \"Turn the allowed list into a set once before the loop and test membership against it.\", \"justification_summary\": \"matches scans the whole allowlist for every tag of every record.\", \"change_class\": \"efficiency\", \"expected_gain\": 0.6, \"provability\": 0.8, \"risk\": 0.1}, {\"title\": \"Stop at the first matching tag with any()\", \"technique_slug\": null, \"hotspots\": [{\"file_path\": \"tagfilter/core.py\", \"symbol\": \"matches\"}], \"change_summary\": \"Stop at the first matching tag with any().\", \"justification_summary\": \"The hotspot dominates the profile.\", \"change_class\": \"efficiency\", \"expected_gain\": 0.1, \"provability\": 0.8, \"risk\": 0.1}, {\"title\": \"Generate the synthetic records lazily\", \"technique_slug\": null, \"hotspots\": [{\"file_path\": \"tagfilter/data.py\", \"symbol\": \"records\"}], \"change_summary\": \"Generate the synthetic records lazily.\", \"justification_summary\": \"The hotspot dominates the profile.\", \"change_class\": \"efficiency\", \"expected_gain\": 0.05, \"provability\": 0.8, \"risk\": 0.1}, {\"title\": \"Count kinds with collections.Counter\", \"technique_slug\": null, \"hotspots\": [{\"file_path\": \"tagfilter/core.py\", \"symbol\": \"count_by_kind\"}], \"change_summary\": \"Count kinds with collections.Counter.\", \"justification_summary\": \"The hotspot dominates the profile.\", \"change_class\": \"efficiency\", \"expected_gain\": 0.05, \"provability\": 0.8, \"risk\": 0.1}, {\"title\": \"Sort the allowlist and bisect it\", \"technique_slug\": null, \"hotspots\": [{\"file_path\": \"tagfilter/core.py\", \"symbol\": \"matches\"}], \"change_summary\": \"Sort the allowlist and bisect it.\", \"justification_summary\": \"The hotspot dominates the profile.\", \"change_class\": \"behaviour\", \"expected_gain\": 0.3, \"provability\": 0.8, \"risk\": 0.1}]}",
+      "hypotheses": [
+        {
+          "title": "Build a set from the allowlist once in count_by_kind",
+          "change_class": "efficiency",
+          "expected_gain": 0.6,
+          "hotspots": [
+            "tagfilter/core.py:matches",
+            "tagfilter/core.py:count_by_kind"
+          ]
+        },
+        {
+          "title": "Stop at the first matching tag with any()",
+          "change_class": "efficiency",
+          "expected_gain": 0.1,
+          "hotspots": ["tagfilter/core.py:matches"]
+        },
+        {
+          "title": "Generate the synthetic records lazily",
+          "change_class": "efficiency",
+          "expected_gain": 0.05,
+          "hotspots": ["tagfilter/data.py:records"]
+        },
+        {
+          "title": "Count kinds with collections.Counter",
+          "change_class": "efficiency",
+          "expected_gain": 0.05,
+          "hotspots": ["tagfilter/core.py:count_by_kind"]
+        },
+        {
+          "title": "Sort the allowlist and bisect it",
+          "change_class": "behaviour",
+          "expected_gain": 0.3,
+          "hotspots": ["tagfilter/core.py:matches"]
+        }
+      ],
+      "labels": {
+        "build a set from the allowlist once in count_by_kind": {
+          "hit": true,
+          "part": 1
+        },
+        "stop at the first matching tag with any()": {
+          "hit": false,
+          "part": null
+        },
+        "generate the synthetic records lazily": {
+          "hit": false,
+          "part": null
+        },
+        "count kinds with collections.counter": {
+          "hit": false,
+          "part": null
+        },
+        "sort the allowlist and bisect it": {
+          "hit": false,
+          "part": null
+        }
+      },
+      "grader_reply": "{\"grades\": [{\"hypothesis_id\": \"H1\", \"targets_reference_root_cause\": false, \"root_cause\": null, \"justification_summary\": \"Another cost.\"}, {\"hypothesis_id\": \"H2\", \"targets_reference_root_cause\": true, \"root_cause\": 1, \"justification_summary\": \"Removes that root cause.\"}, {\"hypothesis_id\": \"H3\", \"targets_reference_root_cause\": false, \"root_cause\": null, \"justification_summary\": \"Another cost.\"}, {\"hypothesis_id\": \"H4\", \"targets_reference_root_cause\": false, \"root_cause\": null, \"justification_summary\": \"Another cost.\"}, {\"hypothesis_id\": \"H5\", \"targets_reference_root_cause\": false, \"root_cause\": null, \"justification_summary\": \"Another cost.\"}]}"
+    },
+    {
+      "repo": "wordcount",
+      "kind": "slowdown",
+      "hotspots": [
+        "wordcount/core.py:most_common",
+        "wordcount/core.py:frequencies",
+        "wordcount/data.py:words"
+      ],
+      "reply": "{\"hypotheses\": [{\"title\": \"Use heapq.nlargest in most_common\", \"technique_slug\": null, \"hotspots\": [{\"file_path\": \"wordcount/core.py\", \"symbol\": \"most_common\"}], \"change_summary\": \"Use heapq.nlargest in most_common.\", \"justification_summary\": \"The hotspot dominates the profile.\", \"change_class\": \"efficiency\", \"expected_gain\": 0.2, \"provability\": 0.8, \"risk\": 0.1}, {\"title\": \"Count every word in one pass in frequencies\", \"technique_slug\": null, \"hotspots\": [{\"file_path\": \"wordcount/core.py\", \"symbol\": \"frequencies\"}], \"change_summary\": \"Replace the words.count call per distinct word with one dictionary pass.\", \"justification_summary\": \"frequencies calls list.count once per distinct word: quadratic.\", \"change_class\": \"efficiency\", \"expected_gain\": 0.7, \"provability\": 0.8, \"risk\": 0.1}, {\"title\": \"Count  every word in ONE pass in frequencies\", \"technique_slug\": null, \"hotspots\": [{\"file_path\": \"wordcount/core.py\", \"symbol\": \"frequencies\"}], \"change_summary\": \"Count  every word in ONE pass in frequencies.\", \"justification_summary\": \"The hotspot dominates the profile.\", \"change_class\": \"efficiency\", \"expected_gain\": 0.7, \"provability\": 0.8, \"risk\": 0.1}, {\"title\": \"Cache the sorted frequency table\", \"technique_slug\": null, \"hotspots\": [{\"file_path\": \"wordcount/core.py\", \"symbol\": \"most_common\"}], \"change_summary\": \"Cache the sorted frequency table.\", \"justification_summary\": \"The hotspot dominates the profile.\", \"change_class\": \"efficiency\", \"expected_gain\": 0.1, \"provability\": 0.8, \"risk\": 0.1}, {\"title\": \"Read the word list once\", \"technique_slug\": null, \"hotspots\": [{\"file_path\": \"wordcount/data.py\", \"symbol\": \"words\"}], \"change_summary\": \"Read the word list once.\", \"justification_summary\": \"The hotspot dominates the profile.\", \"change_class\": \"efficiency\", \"expected_gain\": 0.05, \"provability\": 0.8, \"risk\": 0.1}, {\"title\": \"Intern the words before counting\", \"technique_slug\": null, \"hotspots\": [{\"file_path\": \"wordcount/core.py\", \"symbol\": \"frequencies\"}], \"change_summary\": \"Intern the words before counting.\", \"justification_summary\": \"The hotspot dominates the profile.\", \"change_class\": \"efficiency\", \"expected_gain\": 0.05, \"provability\": 0.8, \"risk\": 0.1}]}",
+      "hypotheses": [
+        {
+          "title": "Use heapq.nlargest in most_common",
+          "change_class": "efficiency",
+          "expected_gain": 0.2,
+          "hotspots": ["wordcount/core.py:most_common"]
+        },
+        {
+          "title": "Count every word in one pass in frequencies",
+          "change_class": "efficiency",
+          "expected_gain": 0.7,
+          "hotspots": ["wordcount/core.py:frequencies"]
+        },
+        {
+          "title": "Cache the sorted frequency table",
+          "change_class": "efficiency",
+          "expected_gain": 0.1,
+          "hotspots": ["wordcount/core.py:most_common"]
+        },
+        {
+          "title": "Read the word list once",
+          "change_class": "efficiency",
+          "expected_gain": 0.05,
+          "hotspots": ["wordcount/data.py:words"]
+        },
+        {
+          "title": "Intern the words before counting",
+          "change_class": "efficiency",
+          "expected_gain": 0.05,
+          "hotspots": ["wordcount/core.py:frequencies"]
+        }
+      ],
+      "labels": {
+        "use heapq.nlargest in most_common": {
+          "hit": false,
+          "part": null
+        },
+        "count every word in one pass in frequencies": {
+          "hit": true,
+          "part": 1
+        },
+        "cache the sorted frequency table": {
+          "hit": false,
+          "part": null
+        },
+        "read the word list once": {
+          "hit": false,
+          "part": null
+        },
+        "intern the words before counting": {
+          "hit": false,
+          "part": null
+        }
+      },
+      "grader_reply": "{\"grades\": [{\"hypothesis_id\": \"H1\", \"targets_reference_root_cause\": false, \"root_cause\": null, \"justification_summary\": \"Another cost.\"}, {\"hypothesis_id\": \"H2\", \"targets_reference_root_cause\": false, \"root_cause\": null, \"justification_summary\": \"Another cost.\"}, {\"hypothesis_id\": \"H3\", \"targets_reference_root_cause\": false, \"root_cause\": null, \"justification_summary\": \"Another cost.\"}, {\"hypothesis_id\": \"H4\", \"targets_reference_root_cause\": false, \"root_cause\": null, \"justification_summary\": \"Another cost.\"}, {\"hypothesis_id\": \"H5\", \"targets_reference_root_cause\": true, \"root_cause\": 1, \"justification_summary\": \"Removes that root cause.\"}]}"
+    },
+    {
+      "repo": "shipmerge",
+      "kind": "slowdown",
+      "hotspots": [
+        "shipmerge/orders.py:arrival_ranks",
+        "shipmerge/catalog.py:distinct_skus",
+        "shipmerge/catalog.py:units_by_warehouse",
+        "shipmerge/orders.py:rank_digest",
+        "shipmerge/data.py:shipments"
+      ],
+      "reply": "{\"hypotheses\": [{\"title\": \"Sum units per warehouse with a defaultdict\", \"technique_slug\": null, \"hotspots\": [{\"file_path\": \"shipmerge/catalog.py\", \"symbol\": \"units_by_warehouse\"}], \"change_summary\": \"Sum units per warehouse with a defaultdict.\", \"justification_summary\": \"The hotspot dominates the profile.\", \"change_class\": \"efficiency\", \"expected_gain\": 0.1, \"provability\": 0.8, \"risk\": 0.1}, {\"title\": \"Memoise rank_digest\", \"technique_slug\": null, \"hotspots\": [{\"file_path\": \"shipmerge/orders.py\", \"symbol\": \"rank_digest\"}], \"change_summary\": \"Memoise rank_digest.\", \"justification_summary\": \"The hotspot dominates the profile.\", \"change_class\": \"efficiency\", \"expected_gain\": 0.1, \"provability\": 0.8, \"risk\": 0.1}, {\"title\": \"Precompute the shipment fields once\", \"technique_slug\": null, \"hotspots\": [{\"file_path\": \"shipmerge/catalog.py\", \"symbol\": \"units_by_warehouse\"}], \"change_summary\": \"Precompute the shipment fields once.\", \"justification_summary\": \"The hotspot dominates the profile.\", \"change_class\": \"efficiency\", \"expected_gain\": 0.05, \"provability\": 0.8, \"risk\": 0.1}, {\"title\": \"Cache the generated shipments between calls\", \"technique_slug\": null, \"hotspots\": [{\"file_path\": \"shipmerge/data.py\", \"symbol\": \"shipments\"}], \"change_summary\": \"Cache the generated shipments between calls.\", \"justification_summary\": \"The hotspot dominates the profile.\", \"change_class\": \"efficiency\", \"expected_gain\": 0.05, \"provability\": 0.8, \"risk\": 0.1}, {\"title\": \"Map each order number to its rank once in arrival_ranks\", \"technique_slug\": null, \"hotspots\": [{\"file_path\": \"shipmerge/orders.py\", \"symbol\": \"arrival_ranks\"}], \"change_summary\": \"Build a dict from order number to rank and look each line up.\", \"justification_summary\": \"arrival_ranks calls list.index for every line.\", \"change_class\": \"efficiency\", \"expected_gain\": 0.4, \"provability\": 0.8, \"risk\": 0.1}, {\"title\": \"Keep the seen SKUs in an ordered dict in distinct_skus\", \"technique_slug\": null, \"hotspots\": [{\"file_path\": \"shipmerge/catalog.py\", \"symbol\": \"distinct_skus\"}], \"change_summary\": \"Replace the list membership test with dict.fromkeys over the SKUs.\", \"justification_summary\": \"distinct_skus tests membership in a growing list.\", \"change_class\": \"efficiency\", \"expected_gain\": 0.4, \"provability\": 0.8, \"risk\": 0.1}]}",
+      "hypotheses": [
+        {
+          "title": "Sum units per warehouse with a defaultdict",
+          "change_class": "efficiency",
+          "expected_gain": 0.1,
+          "hotspots": ["shipmerge/catalog.py:units_by_warehouse"]
+        },
+        {
+          "title": "Memoise rank_digest",
+          "change_class": "efficiency",
+          "expected_gain": 0.1,
+          "hotspots": ["shipmerge/orders.py:rank_digest"]
+        },
+        {
+          "title": "Precompute the shipment fields once",
+          "change_class": "efficiency",
+          "expected_gain": 0.05,
+          "hotspots": ["shipmerge/catalog.py:units_by_warehouse"]
+        },
+        {
+          "title": "Cache the generated shipments between calls",
+          "change_class": "efficiency",
+          "expected_gain": 0.05,
+          "hotspots": ["shipmerge/data.py:shipments"]
+        },
+        {
+          "title": "Map each order number to its rank once in arrival_ranks",
+          "change_class": "efficiency",
+          "expected_gain": 0.4,
+          "hotspots": ["shipmerge/orders.py:arrival_ranks"]
+        }
+      ],
+      "labels": {
+        "sum units per warehouse with a defaultdict": {
+          "hit": false,
+          "part": null
+        },
+        "memoise rank_digest": {
+          "hit": false,
+          "part": null
+        },
+        "precompute the shipment fields once": {
+          "hit": false,
+          "part": null
+        },
+        "cache the generated shipments between calls": {
+          "hit": false,
+          "part": null
+        },
+        "map each order number to its rank once in arrival_ranks": {
+          "hit": true,
+          "part": 2
+        }
+      },
+      "grader_reply": "{\"grades\": [{\"hypothesis_id\": \"H1\", \"targets_reference_root_cause\": false, \"root_cause\": null, \"justification_summary\": \"Another cost.\"}, {\"hypothesis_id\": \"H2\", \"targets_reference_root_cause\": false, \"root_cause\": null, \"justification_summary\": \"Another cost.\"}, {\"hypothesis_id\": \"H3\", \"targets_reference_root_cause\": false, \"root_cause\": null, \"justification_summary\": \"Another cost.\"}, {\"hypothesis_id\": \"H4\", \"targets_reference_root_cause\": true, \"root_cause\": 2, \"justification_summary\": \"Removes that root cause.\"}, {\"hypothesis_id\": \"H5\", \"targets_reference_root_cause\": false, \"root_cause\": null, \"justification_summary\": \"Another cost.\"}]}"
+    },
+    {
+      "repo": "lettertally",
+      "kind": "control",
+      "hotspots": [
+        "lettertally/core.py:top_words",
+        "lettertally/core.py:sample"
+      ],
+      "reply": "{\"hypotheses\": [{\"title\": \"Use Counter.most_common in top_words\", \"technique_slug\": null, \"hotspots\": [{\"file_path\": \"lettertally/core.py\", \"symbol\": \"top_words\"}], \"change_summary\": \"Use Counter.most_common in top_words.\", \"justification_summary\": \"The hotspot dominates the profile.\", \"change_class\": \"efficiency\", \"expected_gain\": 0.1, \"provability\": 0.8, \"risk\": 0.1}, {\"title\": \"Generate the sample with one random call\", \"technique_slug\": null, \"hotspots\": [{\"file_path\": \"lettertally/core.py\", \"symbol\": \"sample\"}], \"change_summary\": \"Generate the sample with one random call.\", \"justification_summary\": \"The hotspot dominates the profile.\", \"change_class\": \"efficiency\", \"expected_gain\": 0.05, \"provability\": 0.8, \"risk\": 0.1}]}",
+      "hypotheses": [
+        {
+          "title": "Use Counter.most_common in top_words",
+          "change_class": "efficiency",
+          "expected_gain": 0.1,
+          "hotspots": ["lettertally/core.py:top_words"]
+        },
+        {
+          "title": "Generate the sample with one random call",
+          "change_class": "efficiency",
+          "expected_gain": 0.05,
+          "hotspots": ["lettertally/core.py:sample"]
+        }
+      ]
+    }
+  ]
+}

@@ -111,6 +111,21 @@ SLOW_LOOP = (
     "    return result\n"
 )
 Json = dict[str, object]
+STEP2_MODE = {
+    "PAIRED_TRIALS": False,
+    "CONFIRM_WINNERS": False,
+    "NOISE_CALIBRATION_BLOCKS": 0,
+}
+"""The Step 2 loop, which this file verifies: the noise rule (D41) off."""
+
+
+@pytest.fixture(autouse=True)
+def step2_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin ``STEP2_MODE`` in the settings and the environment (the killed
+    run's child process reads its settings from the environment)."""
+    for key, value in STEP2_MODE.items():
+        monkeypatch.setattr(settings, key, value)
+        monkeypatch.setenv(key, str(value).lower())
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +340,9 @@ def _check_repo_untouched(
     assert delivery is not None
     if delivery.kind is DeliveryKind.branch:
         expected[f"refs/heads/engine/run-{run}"] = delivery.commit
+    review = state["review_delivery"]  # Step 3 (D10): engine/review-<id>
+    if review is not None:
+        expected[f"refs/heads/engine/review-{run}"] = review.commit
     created = {ref: sha for ref, sha in after.refs.items() if ref not in before.refs}
     assert created == expected
     assert {ref: after.refs.get(ref) for ref in before.refs} == before.refs

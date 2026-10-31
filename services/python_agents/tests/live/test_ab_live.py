@@ -13,6 +13,15 @@ cleared, and every corpus guard.
 Wins are recorded (JSON lines to ``$LIVE_RESULTS_PATH``; the summary with
 the per-arm rates, the paired outcomes, McNemar's exact p and the
 decision rule in the job summary), never asserted.
+
+E3 (V8, ``$LIVE_AB_SET=v2-p``, the ``ab-v2-p`` suite): the repositories are
+corpus v2's deep, misleading and uncommon slowdowns (read at collection),
+the shared run is capped at ``AB_P_GEN_CAP_USD``, and arm P (the idea
+pipeline on phase 1's facts and the code at its base commit) replaces B.
+
+L5 (V10, ``$LIVE_AB_SET=v2``, the ``ab-v2`` suite): the repositories are all
+twelve of corpus v2; arms A and B (L5b), or with ``$LIVE_AB_ARMS=A`` arm A
+alone on a shared run capped at ``AB_A_GEN_CAP_USD`` (L5a: B never runs).
 """
 
 from __future__ import annotations
@@ -33,28 +42,30 @@ from .conftest import StartLive
 from .corpus import CorpusRepo, start_loop
 from .discovery import (
     carry,
-    check_calls,
     check_untouched,
     phase_one,
     run_engine,
 )
 from .discovery_ab import (
-    AB_GEN_CAP_USD,
     AB_MAX_REPS,
-    AB_REPOS,
     REPS_ENV,
     AbRecorder,
     ab_plan,
     ab_settings,
     blind_arm,
+    check_arm_calls,
     load_distractors,
+    pipeline_arm,
     retrieval_arm,
+    withheld,
 )
 from .discovery_io import (
     ResultsSink,
 )
 
 pytestmark = pytest.mark.live
+
+AB_PLAN_REPOS = ab_plan(os.environ).repos  # a bad $LIVE_AB_SET fails collection
 
 
 @pytest.fixture(scope="module")
@@ -68,7 +79,7 @@ def ab() -> Iterator[AbRecorder]:
 
 
 @pytest.mark.parametrize("rep", range(1, AB_MAX_REPS + 1))
-@pytest.mark.parametrize("repo", AB_REPOS, ids=[r.name for r in AB_REPOS])
+@pytest.mark.parametrize("repo", AB_PLAN_REPOS, ids=[r.name for r in AB_PLAN_REPOS])
 def test_retrieval_ab(
     repo: CorpusRepo,
     rep: int,
@@ -81,14 +92,23 @@ def test_retrieval_ab(
         pytest.skip(f"{REPS_ENV} is {ab.plan.reps}")
     playbook = load_playbook()
     cfg = ab_settings(settings)
-    gen = live(AB_GEN_CAP_USD)
+    gen = live(ab.plan.gen_cap)
     phase = phase_one(repo, gen, live_root / "phase", live_isolation, cfg)
     budget = Budget(gen.cap_usd, gen.spent_usd)
-    arms = {
-        "A": blind_arm(gen, budget, phase.facts),
-        "B": retrieval_arm(gen, budget, phase.facts, playbook=playbook),
-    }
-    check_calls(gen, budget, list(arms.values()))
+    arms = {"A": blind_arm(gen, budget, phase.facts)}
+    if ab.plan.pipeline:
+        protected, read_deny = withheld(phase.loop.context, phase.extra_protected)
+        arms["P"] = pipeline_arm(
+            gen,
+            budget,
+            phase.facts,
+            commit=phase.loop.user.base,
+            protected=protected,
+            read_deny=read_deny,
+        )
+    elif "B" in ab.plan.arms:
+        arms["B"] = retrieval_arm(gen, budget, phase.facts, playbook=playbook)
+    check_arm_calls(gen, budget, arms)
     check_untouched(phase)
     for label, produced in arms.items():
         candidates = carry(produced.hypotheses)

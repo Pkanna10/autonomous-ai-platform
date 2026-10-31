@@ -30,60 +30,92 @@ Step 2 adds five optional seams to the context (``preflight``,
 ``understander``, ``profiler``, ``combiner``, ``publisher``). Each defaults
 to ``None``, which keeps that node's Step 1 behaviour exactly: ``connect``,
 ``understand`` and ``profile`` stay stubs, ``combine`` keeps every kept
-verdict without a re-test and ``deliver`` joins the trial diffs. ``research``
-and ``watch`` stay stubs until Step 3. Whatever the seams, the trials node
-keeps a running cost total and stops below ``min_trial_budget_usd``, the
-baseline fails closed on nondeterministic output or a failing test suite,
-and every report carries a "Run conditions" section.
+verdict without a re-test and ``deliver`` joins the trial diffs. ``watch``
+stays a stub; ``research`` copies the context's techniques unless ``matched``
+retrieval (Step 3, off by default) asks the matcher. Whatever the seams,
+the trials node keeps a running cost total and stops below
+``min_trial_budget_usd``, the baseline fails closed on nondeterministic
+output or a failing test suite, and every report carries a "Run conditions"
+section.
 """
 
 from __future__ import annotations
 
+import glob
+import hashlib
 import math
 import re
 import statistics
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
-from typing import Literal, Protocol
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
+from datetime import datetime
+from typing import Literal, Protocol, runtime_checkable
 
 from langgraph.types import interrupt
 from pydantic import ValidationError
 
 from autonomous_ai_agents.clients.budget import Budget
-from autonomous_ai_agents.common.config import settings
-from autonomous_ai_agents.common.errors import DeliveryError as DeliveryError
-from autonomous_ai_agents.common.errors import EngineError as EngineError
+from autonomous_ai_agents.clients.structured import shown
+from autonomous_ai_agents.common.config import (
+    FIX_RETRIES_MAX,
+    GENERATOR_MAX_CALLS_MAX,
+    GENERATOR_N_MAX,
+    MATCHER_K_MAX,
+    PORTFOLIO_ROUNDS_MAX,
+    Retrieval,
+    settings,
+)
 from autonomous_ai_agents.common.errors import (
+    BudgetExceeded,
+    LLMConfigError,
+    LLMRequestError,
+    LLMUnavailable,
     TrialUnaffordable,
+    UnusableReplyError,
     add_spend,
     spend_of,
 )
+from autonomous_ai_agents.common.errors import DeliveryError as DeliveryError
+from autonomous_ai_agents.common.errors import EngineError as EngineError
 from autonomous_ai_agents.common.models import (
+    METRIC_CPU_TIME_S,
     METRIC_PEAK_RSS_BYTES,
     METRIC_TESTS_PASSED,
     METRIC_WALL_TIME_S,
+    NOISE_CALIBRATION_BLOCKS_MAX,
+    NOISE_FLOOR_MIN,
+    QUALITY_METRIC_PREFIX,
     ApprovalDecision,
     ApprovalItem,
     ApprovalRequest,
     Baseline,
+    ChangeClass,
     Delivery,
     DeliveryKind,
     Direction,
+    DropUnit,
     EngineEvent,
     EventLevel,
+    FrozenFile,
     Guardrail,
     GuardrailKind,
     Hotspot,
     Hypothesis,
     HypothesisStatus,
+    JudgeOutcome,
+    Lesson,
     Measurement,
+    NoiseCalibration,
     Objective,
     ObjectiveKind,
+    OutputTolerance,
     Paper,
+    QualityCheck,
     RunPhase,
     ScalarDict,
     Technique,
+    TechniqueMatchRecord,
     Trial,
     TrialStatus,
     Verdict,
@@ -91,6 +123,7 @@ from autonomous_ai_agents.common.models import (
     Violation,
     ViolationRule,
     Workload,
+    utc_now,
 )
 from autonomous_ai_agents.common.refnames import (
     assert_safe_branch as assert_safe_branch,
@@ -99,6 +132,7 @@ from autonomous_ai_agents.execution.measure import (
     UNKNOWN,
     baseline_test_count,
     classify_runner,
+    output_fingerprint,
 )
 from autonomous_ai_agents.execution.protocols import (
     BranchPublisher,
@@ -120,15 +154,27 @@ from autonomous_ai_agents.optimization.anticheat import (
 from autonomous_ai_agents.optimization.judges import (
     Judge,
     derive_verdict,
+    drop_text,
+    is_point_measure,
     primary_metric,
 )
-from autonomous_ai_agents.optimization.ranking import rank_hypotheses
+from autonomous_ai_agents.optimization.ranking import rank_generated, rank_hypotheses
+from autonomous_ai_agents.optimization.sources import (
+    HypothesisGenerator,
+    TechniqueMatcher,
+)
 from autonomous_ai_agents.orchestrator.combine_node import (
+    CombineOutcome,
     CombineRules,
     CombineTarget,
     combine_kept,
     is_commit,
     kept_changes,
+)
+from autonomous_ai_agents.orchestrator.confirm import (
+    CONFIRMABLE,
+    confirm_one,
+    reported_gain,
 )
 from autonomous_ai_agents.orchestrator.events import emit, make_event
 from autonomous_ai_agents.orchestrator.state import EngineState, validate_run_id
@@ -151,6 +197,40 @@ class RouterFn(Protocol):
     """The conditional edge after ``verdicts``."""
 
     def __call__(self, state: EngineState) -> Route: ...
+
+
+@runtime_checkable
+class NoiseCalibrator(Protocol):
+    """Measures the base against itself in ``blocks`` A/A blocks (D41 c).
+
+    Declared here (U17) beside its only reader, the baseline node; the git
+    baseline runner implements it (U20) and the factory injects it (U10).
+    """
+
+    def calibrate(
+        self,
+        workloads: Sequence[Workload],
+        *,
+        run_id: str,
+        commit: str,
+        blocks: int,
+    ) -> NoiseCalibration: ...
+
+
+@runtime_checkable
+class _Freezing(Protocol):
+    """What a quality-aware baseline runner reports after ``measure`` (D37):
+    ``GitBaselineRunner`` (U24), through the factory's connected runner."""
+
+    @property
+    def quality_files(self) -> tuple[FrozenFile, ...]: ...
+
+    @property
+    def label_leaks(self) -> tuple[str, ...]: ...
+
+
+EMPTY_OUTPUT = output_fingerprint(0, hashlib.sha256(b"").hexdigest(), None)
+"""Empty stdout and no ``output_file`` (D40): an output check compares nothing."""
 
 
 LOOP_NODES: tuple[str, ...] = (
@@ -191,9 +271,28 @@ class NodeContext:
     their node. ``min_trial_budget_usd`` is the least a trial must be able to
     spend before it starts (the factory sets one worst-case editor request).
 
+    Step 3 discovery and retry fields (U2): ``generator`` and ``matcher``
+    default to ``None`` (Step 2: no generation, no matching); ``playbook`` is
+    what the matcher picks from in ``matched`` retrieval; the knobs mirror
+    their settings (``GENERATOR_N`` and so on), which only the factory reads.
+    ``fix_retries_per_run`` defaults to 0, so no trial retries until the
+    factory passes ``EDITOR_FIX_RETRIES_PER_RUN`` (fail closed, D12).
+
+    Step 3 quality and noise fields (U17), Step 2 by default: ``quality`` is
+    the caller's confirmed check (D40; ``None``: none), and
+    ``default_output_check``, ``calibrator`` with ``calibration_blocks`` and
+    ``confirm_winners`` stay off until the factory passes
+    ``DEFAULT_OUTPUT_CHECK``, the baseline runner with
+    ``NOISE_CALIBRATION_BLOCKS``, and ``CONFIRM_WINNERS`` (D4, D41).
+
+    Step 3 Wave 2 (D54): ``portfolio_rounds`` (0-3, ``PORTFOLIO_ROUNDS``) is
+    how many rounds a keep waits before it ends exploration; 0 is Step 2's.
+
     Construction refuses duplicate or refname-unsafe candidate ids (each id
-    names a trial branch), knobs below 1 and a negative or non-finite
-    ``min_trial_budget_usd``, with ``ValueError``.
+    names a trial branch), knobs below 1, a negative or non-finite
+    ``min_trial_budget_usd`` and discovery or retry knobs outside their
+    settings' ranges, or calibration blocks outside 0-5 or with no
+    calibrator, with ``ValueError``.
     """
 
     runner: TrialRunner
@@ -213,6 +312,25 @@ class NodeContext:
     combiner: Combiner | None = None
     publisher: BranchPublisher | None = None
     min_trial_budget_usd: float = 0.0
+    generator: HypothesisGenerator | None = None
+    matcher: TechniqueMatcher | None = None
+    retrieval: Retrieval = "blind"
+    generated_classes: tuple[ChangeClass, ...] = (
+        ChangeClass.efficiency,
+        ChangeClass.behaviour,
+    )
+    generator_n: int = 5
+    generator_max_calls: int = 2
+    matcher_k: int = 3
+    discovery_max_share: float = 0.25
+    fix_retries_per_run: int = 0
+    playbook: tuple[Technique, ...] = ()
+    quality: QualityCheck | None = None
+    default_output_check: bool = False
+    calibrator: NoiseCalibrator | None = None
+    calibration_blocks: int = 0
+    confirm_winners: bool = False
+    portfolio_rounds: int = 0
 
     def __post_init__(self) -> None:
         counts = Counter(candidate.id for candidate in self.candidates)
@@ -240,6 +358,42 @@ class NodeContext:
                 "min_trial_budget_usd must be finite and at least 0, "
                 f"got {self.min_trial_budget_usd}"
             )
+        self._check_discovery_knobs()
+        self._check_noise_knobs()
+
+    def _check_discovery_knobs(self) -> None:
+        """The ranges of the matching settings (``common/config.py``)."""
+        ranges = {
+            "generator_n": (self.generator_n, 1, GENERATOR_N_MAX),
+            "matcher_k": (self.matcher_k, 1, MATCHER_K_MAX),
+            "generator_max_calls": (
+                self.generator_max_calls,
+                0,
+                GENERATOR_MAX_CALLS_MAX,
+            ),
+            "fix_retries_per_run": (self.fix_retries_per_run, 0, FIX_RETRIES_MAX),
+            "portfolio_rounds": (self.portfolio_rounds, 0, PORTFOLIO_ROUNDS_MAX),
+        }
+        for name, (value, low, high) in ranges.items():
+            if not low <= value <= high:
+                raise ValueError(f"{name} must be {low}-{high}, got {value}")
+        share = self.discovery_max_share
+        if not (math.isfinite(share) and 0 < share < 1):
+            raise ValueError(f"discovery_max_share must be in (0, 1), got {share}")
+        classes = self.generated_classes
+        if not classes or ChangeClass.novel in classes:
+            raise ValueError(
+                "generated_classes must name efficiency and/or behaviour, "
+                f"never novel; got {[c.value for c in classes]}"
+            )
+
+    def _check_noise_knobs(self) -> None:
+        """``NOISE_CALIBRATION_BLOCKS``'s range; blocks need a calibrator to run."""
+        blocks, high = self.calibration_blocks, NOISE_CALIBRATION_BLOCKS_MAX
+        if not 0 <= blocks <= high:
+            raise ValueError(f"calibration_blocks must be 0-{high}, got {blocks}")
+        if blocks and self.calibrator is None:
+            raise ValueError(f"calibration_blocks={blocks} needs a calibrator")
 
 
 # ---------------------------------------------------------------------------
@@ -282,6 +436,7 @@ _STATUS_AFTER_VERDICT: dict[VerdictOutcome, HypothesisStatus] = {
     VerdictOutcome.reject: HypothesisStatus.rejected,
     VerdictOutcome.inconclusive: HypothesisStatus.inconclusive,
     VerdictOutcome.needs_approval: HypothesisStatus.trialled,
+    VerdictOutcome.review: HypothesisStatus.trialled,  # D35, as needs_approval
 }
 
 _RUNNER_STATUSES: frozenset[TrialStatus] = frozenset(
@@ -453,13 +608,76 @@ def _baseline_workload_ids(baseline: Baseline, metrics: Sequence[str]) -> list[s
     )
 
 
+def _fix_retries_spent(*sources: Iterable[Trial]) -> int:
+    """The run's fix retries spent (D12): one per attempt after the first,
+    summed over trials, never below 0.
+
+    One trial id in several sources (the checkpoint, the repository, this
+    round) or twice in one is one trial (ids are ``trial_id_for(branch,
+    round)``, so a re-executed round rebuilds them): its largest count wins."""
+    most: dict[str, int] = {}
+    for source in sources:
+        for trial in source:
+            most[trial.id] = max(most.get(trial.id, 0), trial.attempts - 1)
+    return sum(most.values())
+
+
+_UNREADABLE = "fix_retry_count_unavailable"
+
+
+def _recorded_fix_retries(
+    ctx: NodeContext, state: EngineState
+) -> tuple[dict[str, Trial] | None, list[EngineEvent]]:
+    """The run's trials the repository records, by id (D12); ``None`` (with
+    one warning) when it cannot say; at cap 0 there is nothing to grant, so
+    nothing is read (Step 2).
+
+    Each trial is saved before the next starts, so the record survives a
+    crash inside the trials node that the checkpoint loses, and a re-executed
+    round's save keeps a higher recorded count (``_carried``). A trial lost
+    after its retry request (an engine error or a failed save) is not
+    recorded, so resuming such a failed run directly through the graph could
+    grant one more retry. Orchestrator refuses to resume a failed run; any
+    later resume path must first record the grant durably."""
+    if ctx.fix_retries_per_run == 0:
+        return {}, []
+    try:
+        recorded = ctx.repository.list_trials(state["run_id"])
+    except Exception as exc:  # fail closed: no retry this round, the run goes on
+        kind = type(exc).__name__  # never str(exc): it may carry a DSN
+        warning = _note(state, RunPhase.trials, _UNREADABLE,
+                        f"the run's trials could not be read ({kind}); no fix retry",
+                        level=EventLevel.warning, data={"error": kind})  # fmt: skip
+        return None, [warning]
+    return {trial.id: trial for trial in recorded}, []
+
+
+def _carried(trial: Trial, prior: Trial | None) -> Trial:
+    """``trial`` with a higher recorded count carried forward (D12): a
+    re-executed round keeps its id, and its save must not erase a spent retry."""
+    if prior is None or prior.attempts <= trial.attempts:
+        return trial
+    notes = (*prior.retry_notes, *trial.retry_notes)
+    return trial.model_copy(update={"attempts": prior.attempts, "retry_notes": notes})
+
+
 def _runner_trial_problems(
-    trial: Trial, hypothesis: Hypothesis, round_number: int, budget_usd: float
+    trial: Trial,
+    hypothesis: Hypothesis,
+    round_number: int,
+    budget_usd: float,
+    fix_retries_left: int,
 ) -> list[str]:
     """Why a runner's Trial cannot be trusted as this hypothesis's round trial."""
     problems: list[str] = []
     if trial.cost_usd > budget_usd:
         problems.append(f"cost_usd {trial.cost_usd} exceeds its budget {budget_usd}")
+    if trial.attempts - 1 > fix_retries_left:
+        retries = "retry" if fix_retries_left == 1 else "retries"
+        problems.append(
+            f"attempts {trial.attempts} exceeds the {fix_retries_left} fix "
+            f"{retries} it was given"
+        )
     if trial.hypothesis_id != hypothesis.id:
         problems.append(
             f"hypothesis_id is {trial.hypothesis_id!r}, expected {hypothesis.id!r}"
@@ -473,12 +691,21 @@ def _runner_trial_problems(
     return problems
 
 
+_BY_MESSAGE: frozenset[ViolationRule] = frozenset(
+    {ViolationRule.missing_measurement, ViolationRule.too_few_runs}
+)
+"""Rules with no path whose message is what tells two findings apart."""
+
+
 def _dedupe(violations: Iterable[Violation]) -> tuple[Violation, ...]:
-    """``violations`` in order, each (rule, path, pattern) once (the first wins)."""
-    seen: set[tuple[ViolationRule, str | None, str | None]] = set()
+    """``violations`` in order, each (rule, path, pattern) once (the first
+    wins); a measurement rule's key adds its message, so a second missing
+    metric or workload is never hidden behind the first (U22 review N2)."""
+    seen: set[tuple[ViolationRule, str | None, str | None, str | None]] = set()
     unique: list[Violation] = []
     for violation in violations:
-        key = (violation.rule, violation.path, violation.pattern)
+        message = violation.message if violation.rule in _BY_MESSAGE else None
+        key = (violation.rule, violation.path, violation.pattern, message)
         if key not in seen:
             seen.add(key)
             unique.append(violation)
@@ -640,6 +867,259 @@ def _understand_failed(state: EngineState, budget: Budget, exc: Exception) -> No
     }
 
 
+_SOFT_DISCOVERY = (LLMUnavailable, LLMRequestError, UnusableReplyError)
+"""Generator outcomes that leave the run going (D18): a note, charged."""
+
+
+def _untried(
+    ctx: NodeContext, state: EngineState
+) -> tuple[list[Hypothesis], list[Hypothesis]]:
+    """Caller candidates and pooled ideas no trial ran and no round holds."""
+    seen = {trial.hypothesis_id for trial in state["trials"]} | {
+        hypothesis.id for hypothesis in state["hypotheses"]
+    }
+    return (
+        [h for h in ctx.candidates if h.id not in seen],
+        [h for h in state["candidate_pool"] if h.id not in seen],
+    )
+
+
+def _discovery_cap(ctx: NodeContext, state: EngineState) -> float:
+    """D7's ``d``: discovery keeps one trial's reserve and stays in its share."""
+    cap, cost = state["max_cost_usd"], state["cost_usd"]
+    share_left = ctx.discovery_max_share * cap - state["discovery_cost_usd"]
+    return min(cap - ctx.min_trial_budget_usd, cost + share_left)
+
+
+def _live_generator(
+    ctx: NodeContext, state: EngineState, *, priced: bool
+) -> HypothesisGenerator | None:
+    """The generator while a request is still allowed (calls, money), else None.
+
+    ``priced`` (the router) also needs ``d > cost_usd``, so no round is
+    scheduled only to find discovery unaffordable; the node leaves that check
+    to ``_generate``, which then records ``discovery_exhausted``."""
+    spent = state["generator_calls"] >= ctx.generator_max_calls
+    if spent or state["budget_exhausted"] or state["discovery_exhausted"]:
+        return None
+    if priced and _discovery_cap(ctx, state) <= state["cost_usd"]:
+        return None
+    return ctx.generator
+
+
+def _title_key(title: str) -> str:
+    """A title compared as ``generate.py`` dedupes: spacing and case aside."""
+    return " ".join(title.split()).casefold()
+
+
+def _usable_id(hypothesis_id: str, used: set[str]) -> bool:
+    try:
+        validate_run_id(hypothesis_id)
+    except ValueError:
+        return False
+    return hypothesis_id not in used
+
+
+@dataclass(frozen=True)
+class _Generated:
+    """One generator turn: new ideas (model order), state keys, events."""
+
+    hypotheses: list[Hypothesis]
+    delta: NodeDelta
+    events: list[EngineEvent]
+
+
+def _discovery_spend(state: EngineState, budget: Budget, *, called: bool) -> NodeDelta:
+    """The run and discovery totals after a generator turn (D7, D18)."""
+    cost_usd, tokens_used = _charged(state, budget)
+    spent = cost_usd - state["cost_usd"]
+    return {
+        "cost_usd": cost_usd,
+        "tokens_used": tokens_used,
+        "discovery_cost_usd": state["discovery_cost_usd"] + spent,
+        "generator_calls": state["generator_calls"] + int(called),
+    }
+
+
+def _sift(
+    ctx: NodeContext, state: EngineState, generated: Sequence[Hypothesis]
+) -> tuple[list[Hypothesis], list[Hypothesis], list[str]]:
+    """Kept and parked ideas, and a note per drop or park (spec 4.2, 3).
+
+    No ``needs_package`` filter yet: ``Hypothesis`` has no ``packages`` field
+    until 3b, and the generator prompt forbids new dependencies (D9)."""
+    known = [*ctx.candidates, *state["hypotheses"], *state["parked"]]
+    known += state["candidate_pool"]
+    titles = {_title_key(h.title) for h in known}
+    used = {t.hypothesis_id for t in state["trials"]} | {h.id for h in known}
+    kept: list[Hypothesis] = []
+    parked: list[Hypothesis] = []
+    notes: list[str] = []
+    for hypothesis in generated:
+        named, key = shown(hypothesis.title), _title_key(hypothesis.title)
+        if not _usable_id(hypothesis.id, used):
+            notes.append(f"dropped hypothesis {named}: its id is unusable or taken")
+        elif key in titles:
+            notes.append(f"dropped repeated hypothesis {named}")
+        elif hypothesis.change_class not in ctx.generated_classes:
+            reason = {"parked_reason": "needs approval"}
+            parked.append(hypothesis.model_copy(update=reason))
+            notes.append(f"parked {hypothesis.change_class.value} hypothesis {named}")
+        else:
+            kept.append(hypothesis)
+        used.add(hypothesis.id)
+        titles.add(key)
+    return kept, parked, notes
+
+
+def _generate(
+    ctx: NodeContext,
+    state: EngineState,
+    generator: HypothesisGenerator,
+    lessons: Sequence[Lesson],
+) -> _Generated:
+    """One generator request on D7's narrowed budget, or none when unaffordable."""
+    phase, cost, d = RunPhase.hypotheses, state["cost_usd"], _discovery_cap(ctx, state)
+    unaffordable, warn = "discovery_unaffordable", EventLevel.warning
+    if d <= cost:  # never a Budget: a negative cap is a ValueError (D7)
+        message = f"no request: discovery may spend up to {d:.6f} USD"
+        event = _note(state, phase, unaffordable, message, level=warn)
+        return _Generated([], {"discovery_exhausted": True}, [event])
+    # The baseline's objectives carry the calibrated floor (D41 c); a direct
+    # call before any baseline (node tests) reads define's.
+    measured = state["baseline"]
+    objectives = state["objectives"] if measured is None else measured.objectives
+    if not objectives:
+        raise EngineError("hypotheses needs an objective: define must run first")
+    budget = Budget(cap_usd=d, spent_usd=cost, tokens=state["tokens_used"])
+    try:
+        result = generator.generate(
+            project=state["project"],
+            understanding=state["understanding"],
+            hotspots=state["hotspots"],
+            objective=objectives[0],
+            techniques=state["techniques"],
+            lessons=lessons,
+            avoid_titles=[h.title for h in (*state["hypotheses"], *state["parked"])],
+            n=ctx.generator_n,
+            budget=budget,
+            commit=state["base_commit"],
+            run_id=state["run_id"],
+            call_index=state["generator_calls"],
+            protected=(*ctx.protected_patterns, *state["extra_protected"]),
+            read_deny=() if ctx.quality is None else ctx.quality.frozen_paths,
+        )
+    except BudgetExceeded as exc:  # the reserve or the share refused it (D7)
+        spend = _discovery_spend(state, budget, called=budget.spent_usd > cost)
+        event = _note(state, phase, unaffordable, str(exc)[:300], level=warn)
+        return _Generated([], {**spend, "discovery_exhausted": True}, [event])
+    except _SOFT_DISCOVERY as exc:
+        message = f"{type(exc).__name__}: {str(exc)[:300]}"
+        event = _note(state, phase, "generate_failed", message, level=warn)
+        return _Generated([], _discovery_spend(state, budget, called=True), [event])
+    except Exception as exc:  # LLMConfigError or a bug: the run ends, charged
+        keep_progress(exc, _discovery_spend(state, budget, called=True))
+        raise
+    kept, parked, notes = _sift(ctx, state, result.hypotheses)
+    delta = _discovery_spend(state, budget, called=True)
+    delta["parked"] = [*state["parked"], *parked]
+    counts: ScalarDict = {"kept": len(kept), "parked": len(parked)}
+    summary = f"{len(kept)} hypothesis(es) kept, {len(parked)} parked"
+    events = [_note(state, phase, "generated", summary, data=counts)]
+    for found in result.events:  # the pipeline's own codes and levels (D65)
+        level, data = found.level, found.data
+        events.append(
+            _note(state, phase, found.code, found.message, level=level, data=data)
+        )
+    for note in (*result.notes, *notes):
+        events.append(_note(state, phase, "generate_note", note))
+    return _Generated(kept, delta, events)
+
+
+_SOFT_MATCH = (BudgetExceeded, LLMConfigError, *_SOFT_DISCOVERY)
+"""Matcher outcomes that continue blind (spec 4.1): a note, charged. Wider
+than the generator's: matching is optional, so even a refused key is soft."""
+
+
+@dataclass(frozen=True)
+class _Matched:
+    """One research turn: the techniques for the generator, state keys, events."""
+
+    techniques: list[Technique]
+    delta: NodeDelta
+    events: list[EngineEvent]
+
+
+def _match_spend(state: EngineState, budget: Budget) -> NodeDelta:
+    """D7's totals after a matcher turn; a match is no generator call."""
+    spend = _discovery_spend(state, budget, called=False)
+    del spend["generator_calls"]
+    return spend
+
+
+def _kept_matches(
+    playbook: Sequence[Technique], matches: Sequence[TechniqueMatchRecord], k: int
+) -> tuple[list[TechniqueMatchRecord], list[str]]:
+    """The first ``k`` matches naming a playbook card, first of each slug, and
+    a note per drop (or one saying nothing matched)."""
+    known = {technique.slug for technique in playbook}
+    kept: dict[str, TechniqueMatchRecord] = {}
+    notes: list[str] = []
+    for match in matches:
+        named = shown(match.slug)
+        if match.slug not in known:
+            notes.append(f"dropped match {named}: not a playbook technique")
+        elif match.slug in kept:
+            notes.append(f"dropped repeated match {named}")
+        else:
+            kept[match.slug] = match
+    usable = list(kept.values())
+    if len(usable) > k:
+        notes.append(f"dropped {len(usable) - k} match(es) beyond k={k}")
+    if not usable:
+        notes.append("no playbook technique matched; generating without cards")
+    return usable[:k], notes
+
+
+def _match(ctx: NodeContext, state: EngineState) -> _Matched:
+    """``matched`` retrieval: one matcher request on D7's narrowed budget; the
+    caller's techniques (blind) when it is off, unaffordable or soft-fails."""
+    phase, cost, warn = RunPhase.research, state["cost_usd"], EventLevel.warning
+    blind, code = list(ctx.techniques), "research_unavailable"
+    d = _discovery_cap(ctx, state)
+    if ctx.matcher is None or not ctx.playbook:
+        message = "matched retrieval has no matcher or no playbook; continuing blind"
+        return _Matched(blind, {}, [_note(state, phase, code, message, level=warn)])
+    if d <= cost:  # never a Budget: a negative cap is a ValueError (D7)
+        message = f"no request: discovery may spend up to {d:.6f} USD; continuing blind"
+        event = _note(state, phase, code, message, level=warn)
+        return _Matched(blind, {"discovery_exhausted": True}, [event])
+    budget = Budget(cap_usd=d, spent_usd=cost, tokens=state["tokens_used"])
+    try:
+        result = ctx.matcher.match(
+            understanding=state["understanding"],
+            hotspots=state["hotspots"],
+            techniques=ctx.playbook,
+            k=ctx.matcher_k,
+            budget=budget,
+        )
+    except _SOFT_MATCH as exc:
+        message = f"{type(exc).__name__}: {str(exc)[:300]}; continuing blind"
+        event = _note(state, phase, code, message, level=warn)
+        return _Matched(blind, _match_spend(state, budget), [event])
+    except Exception as exc:  # any other EngineError or a bug: the run ends (D18)
+        keep_progress(exc, _match_spend(state, budget))
+        raise
+    kept, dropped = _kept_matches(ctx.playbook, result.matches, ctx.matcher_k)
+    by_slug: dict[str, Technique] = {}
+    for technique in ctx.playbook:  # the first card of a slug, as the prompt shows
+        by_slug.setdefault(technique.slug, technique)
+    delta = {**_match_spend(state, budget), "technique_matches": kept}
+    notes = [*result.notes, *dropped]
+    events = [_note(state, phase, "research_note", note) for note in notes]
+    return _Matched([by_slug[m.slug] for m in kept], delta, events)
+
+
 def _named(names: Mapping[str, str], workload_ids: Iterable[str]) -> str:
     return ", ".join(dict.fromkeys(names.get(w, w) for w in workload_ids))
 
@@ -652,13 +1132,14 @@ def _require_trustworthy_baseline(
 ) -> None:
     """Fail closed before any trial when the guardrails could never be judged.
 
-    With ``output_equivalence`` every objective measurement needs the output
-    fingerprint all its runs agreed on; with ``tests_pass`` the suite must
-    already pass at the base. Raises ``EngineError``.
+    With ``output_equivalence`` or a quality bound (D35, one score per
+    measurement) every objective measurement needs the output fingerprint all
+    its runs agreed on; with ``tests_pass`` the suite must already pass at
+    the base. Raises ``EngineError``.
     """
     kinds = {guardrail.kind for guardrail in guardrails}
     metrics = set(_objective_metrics(objectives))
-    if GuardrailKind.output_equivalence in kinds:
+    if GuardrailKind.output_equivalence in kinds or _quality_mode(guardrails):
         unseeded = _named(
             names,
             (
@@ -669,8 +1150,9 @@ def _require_trustworthy_baseline(
         )
         if unseeded:
             raise EngineError(
-                "nondeterministic or missing output: add a seed or `output_file` "
-                f"(the runs did not agree on one output on workload(s) {unseeded})"
+                "nondeterministic or missing output: add a seed, an `output_file`, "
+                "an output tolerance or a quality check (the runs did not agree on "
+                f"one output on workload(s) {unseeded})"
             )
     if GuardrailKind.tests_pass in kinds:
         failing = _named(
@@ -687,6 +1169,145 @@ def _require_trustworthy_baseline(
                 "the test suite already fails at the base commit (workload(s) "
                 f"{failing}): fix it or the test command before optimising"
             )
+
+
+def _quality_mode(guardrails: Iterable[Guardrail]) -> bool:
+    return any(
+        g.kind is GuardrailKind.metric_bound
+        and (g.metric or "").startswith(QUALITY_METRIC_PREFIX)
+        for g in guardrails
+    )
+
+
+def _output_check(
+    ctx: NodeContext, project_id: str, guardrails: list[Guardrail]
+) -> tuple[list[Guardrail], tuple[str, ...], str]:
+    """Define's one output mode (D40): the guardrails, the frozen paths to
+    protect (glob-escaped: literal names reach pattern matchers) and the
+    mode's name. Only ``ctx.quality``, the caller's confirmation, sets the
+    quality mode; understand's proposal never does."""
+    exact = any(g.kind is GuardrailKind.output_equivalence for g in guardrails)
+    check = ctx.quality
+    confirmed = None if check is None else check.metric
+    if any(_quality_mode((g,)) and g.metric != confirmed for g in guardrails):
+        raise EngineError(
+            "a quality guardrail is set only through the confirmed check "
+            "(NodeContext.quality, D40)"
+        )
+    if check is not None:
+        if exact:
+            raise EngineError(
+                "a quality check replaces the exact output check (D40): pass the "
+                "quality check or an output_equivalence guardrail, not both"
+            )
+        allowed = drop_text(
+            check.max_drop, check.drop_unit, points=is_point_measure(check.measure)
+        )
+        bound = Guardrail(
+            project_id=project_id,
+            kind=GuardrailKind.metric_bound,
+            metric=check.metric,
+            max_drop=check.max_drop,
+            direction=check.direction,
+            drop_unit=check.drop_unit,
+            description=f"quality check {check.name} may drop at most {allowed}",
+        )
+        frozen = tuple(glob.escape(path) for path in check.frozen_paths)
+        return [*guardrails, bound], frozen, check.metric
+    if ctx.default_output_check and not exact:
+        same = Guardrail(
+            project_id=project_id,
+            kind=GuardrailKind.output_equivalence,
+            description="outputs must stay identical (default output check)",
+        )
+        return [*guardrails, same], (), "exact"
+    return guardrails, (), "exact" if exact else "off"
+
+
+def _require_defining_check(ctx: NodeContext, baseline: Baseline) -> None:
+    """A run defined in quality mode resumes only with that check (D40):
+    without it the editor's read-deny and the masks would be gone."""
+    if not _quality_mode(baseline.guardrails):
+        return
+    metrics = {g.metric for g in baseline.guardrails}
+    if ctx.quality is None or ctx.quality.metric not in metrics:
+        raise EngineError("resume with the quality check that defined this run")
+
+
+def _empty_outputs(
+    measurements: Sequence[Measurement], objectives: Sequence[Objective]
+) -> list[str]:
+    """Workloads whose agreed output is empty stdout and no file (D40)."""
+    metrics = set(_objective_metrics(objectives))
+    return [
+        m.workload_id
+        for m in measurements
+        if m.metric in metrics
+        and EMPTY_OUTPUT in (m.raw_fingerprint, m.output_fingerprint)
+    ]
+
+
+def _compares_nothing(names: str) -> str:
+    return (
+        f"the output check compares nothing on workload {names}: print the result "
+        "or declare `output_file`"
+    )
+
+
+def _frozen_files(ctx: NodeContext) -> tuple[tuple[FrozenFile, ...], tuple[str, ...]]:
+    """The runner's frozen files and label leaks; in quality mode exactly the
+    check's frozen paths must have been recorded (D37), else ``EngineError``."""
+    runner = ctx.baseline_runner
+    files, leaks = (
+        (runner.quality_files, runner.label_leaks)
+        if isinstance(runner, _Freezing)
+        else ((), ())
+    )
+    check = ctx.quality
+    if check is not None:
+        froze = sorted(f.path for f in files)
+        if froze != sorted(check.frozen_paths):
+            raise EngineError(
+                f"the baseline froze {froze or 'nothing'} but quality check "
+                f"{check.name} names {sorted(check.frozen_paths)}: the scorer may "
+                "read only files recorded at the base commit (D37)"
+            )
+    return files, leaks
+
+
+def _baseline_checks(
+    ctx: NodeContext, state: EngineState, empty: str, leaks: Sequence[str]
+) -> list[EngineEvent]:
+    """The baseline's warnings for the run conditions: an exact check that
+    compares nothing (D40) and an input carrying the labels (D37)."""
+    exact = any(g.kind is GuardrailKind.output_equivalence for g in state["guardrails"])
+    found: list[EngineEvent] = []
+    if empty and exact:
+        found.append(
+            _note(
+                state,
+                RunPhase.baseline,
+                "output_compares_nothing",
+                _compares_nothing(empty),
+                level=EventLevel.warning,
+                data={"workloads": empty},
+            )  # fmt: skip
+        )
+    if leaks and ctx.quality is not None:
+        where = "; ".join(leaks)
+        found.append(
+            _note(
+                state,
+                RunPhase.baseline,
+                "label_leak",
+                f"quality check {ctx.quality.name}: the labels also appear in "
+                f"{_cell(where)}; the check is sound only if no workload reads "
+                "them there",
+                level=EventLevel.warning,
+                data={"leaks": where},
+            )  # fmt: skip
+        )
+    return found
 
 
 _NOISY_FLOOR = 0.10
@@ -778,6 +1399,85 @@ def _noisy_host(state: EngineState, noise: _Noise, name: str) -> EngineEvent:
             "cv": noise.cv,
             "smallest_provable_gain": noise.floor,
         },
+    )
+
+
+def _calibrated(
+    ctx: NodeContext, state: EngineState, objectives: tuple[Objective, ...]
+) -> tuple[tuple[Objective, ...], NoiseCalibration | None, float | None]:
+    """The objectives under the per-project noise floor, its calibration and
+    the floor applied (D41 c); with no blocks asked, Step 2's objectives and
+    ``None`` twice.
+
+    The raise is keyed by metric name, and only when calibrated: a
+    ``wall_time_s`` objective gets ``max(user value, NOISE_FLOOR_MIN,
+    calibrated floor)``; a ``cpu_time_s`` objective, not calibrated (U20),
+    gets ``max(user value, NOISE_FLOOR_MIN)``; every other metric (memory
+    among them) keeps the user's value. Fewer blocks than asked, or a floor no
+    gain can clear (100 % or more), stops the run with ``EngineError``.
+    """
+    if ctx.calibrator is None or not ctx.calibration_blocks:
+        return objectives, None, None
+    blocks = ctx.calibration_blocks
+    calibration = ctx.calibrator.calibrate(
+        state["workloads"],
+        run_id=state["run_id"],
+        commit=_require_commit(state, "the noise calibration"),
+        blocks=blocks,
+    )
+    if calibration.blocks != blocks:
+        raise EngineError(
+            f"the noise calibration ran {calibration.blocks} block(s), "
+            f"{blocks} were asked"
+        )
+    floor = max(NOISE_FLOOR_MIN, calibration.floor)
+    if not floor < 1:
+        raise EngineError(
+            f"the noise floor is {floor:.0%}: no gain can be proven on this host"
+        )
+    least = {METRIC_WALL_TIME_S: floor, METRIC_CPU_TIME_S: NOISE_FLOOR_MIN}
+    raised = tuple(
+        o.model_copy(
+            update={"min_relative_gain": max(o.min_relative_gain, least[o.metric])}
+        )
+        if o.metric in least
+        else o
+        for o in objectives
+    )
+    return raised, calibration, floor
+
+
+def _judged(
+    trial: Trial,
+    baseline: Baseline,
+    judges: Sequence[Judge],
+    completeness: Callable[[Sequence[Measurement]], tuple[Violation, ...]],
+) -> Trial:
+    """``trial`` judged against its paired A rows when it has them (D41 a: the
+    run baseline's objectives, guardrails and calibration over the twin's
+    rows), else against the run baseline (Step 2).
+
+    A measured trial's incomplete A rows become ``paired base:`` violations in
+    ``trial.violations`` (each once, so judging again adds none), as combine's
+    interleaved baseline does; the trial's
+    own rows are checked by the verdicts node, so both sides are complete
+    before a verdict. A failed trial is rejected for failing (rule 2).
+    """
+    reference = baseline
+    found: tuple[Violation, ...] = ()
+    if trial.base_measurements:
+        reference = baseline.model_copy(
+            update={"measurements": trial.base_measurements}
+        )
+        if trial.status is not TrialStatus.failed:
+            labelled = (
+                v.model_copy(update={"message": f"paired base: {v.message}"})
+                for v in completeness(trial.base_measurements)
+            )
+            found = tuple(v for v in labelled if v not in trial.violations)
+    results = tuple(judge.evaluate(reference, trial) for judge in judges)
+    return trial.model_copy(
+        update={"judge_results": results, "violations": (*trial.violations, *found)}
     )
 
 
@@ -1041,22 +1741,75 @@ def _test_count_text(state: EngineState) -> str:
     )
 
 
-def _noise_floor_text(state: EngineState) -> str:
+def _noise_floor_text(state: EngineState, *, confirm: bool = False) -> str:
+    """Each workload's smallest provable gain, the calibration (D41 c) and
+    whether winners get a second look (D41 b, ``CONFIRM_WINNERS``)."""
     baseline = state["baseline"]
     noise = (
         [] if baseline is None else _noise(baseline.measurements, baseline.objectives)
     )
-    if not noise:
+    if baseline is None or not noise:
         return "not measured"
     names = {workload.id: workload.name for workload in state["workloads"]}
-    return "smallest provable gain " + ", ".join(
+    floors = "smallest provable gain " + ", ".join(
         f"{_cell(names.get(n.workload_id, n.workload_id))} "
         + ("unprovable (mean 0)" if n.floor is None else f"{n.floor:.1%}")
         for n in noise
     )
+    calibration = baseline.calibration
+    calibrated = (
+        "not calibrated"
+        if calibration is None
+        else f"calibrated over {calibration.blocks} A/A block(s): project floor "
+        f"{calibration.floor:.1%}, largest gap "
+        f"{max(calibration.gaps.values(), default=0.0):.1%}"
+    )
+    looks = "winners confirmed on a second look" if confirm else "confirmation off"
+    return f"{floors}; {calibrated}; {looks}"
 
 
-def _run_conditions(state: EngineState, prefix: str) -> list[str]:
+def _output_conditions(state: EngineState, quality: QualityCheck | None) -> list[str]:
+    """The output mode (D40), what it compares nothing on, and the quality
+    check's precondition and label leaks (D37); none without a check."""
+    baseline = state["baseline"]
+    guardrails = state["guardrails"] if baseline is None else baseline.guardrails
+    if quality is not None:
+        what = (
+            f"{quality.measure} over {quality.labels}"
+            if quality.measure is not None
+            else f"the scorer {quality.scorer[1]}"
+        )
+        allowed = drop_text(
+            quality.max_drop,
+            quality.drop_unit,
+            points=is_point_measure(quality.measure),
+        )
+        mode = (
+            f"quality check {_cell(quality.name)}, {_cell(what)}, may drop at most "
+            f"{allowed}; sound only if no readable project file other than the "
+            "frozen ones determines the labels"
+        )
+    elif any(g.kind is GuardrailKind.output_equivalence for g in guardrails):
+        mode = "exact"
+    else:
+        return []
+    for event in state["events"]:
+        if event.data.get("code") == "output_compares_nothing":
+            mode += "; " + _compares_nothing(_cell(str(event.data.get("workloads"))))
+    lines = [f"- Output check: {mode}"]
+    leak = _latest(state["events"], "label_leak")
+    if leak is not None:
+        lines.append(f"- Labels also in: {_cell(str(leak.data.get('leaks')))}")
+    return lines
+
+
+def _run_conditions(
+    state: EngineState,
+    prefix: str,
+    *,
+    confirm: bool = False,
+    quality: QualityCheck | None = None,
+) -> list[str]:
     """What the numbers above were measured under, and how to remove trial refs.
 
     Every value goes through ``_cell``. The cleanup command
@@ -1078,7 +1831,7 @@ def _run_conditions(state: EngineState, prefix: str) -> list[str]:
         else f"- Isolation: network {_cell(str(isolation.data.get('network')))}, "
         f"filesystem {_cell(str(isolation.data.get('fs')))}"
     )
-    lines.append(f"- Noise floor: {_noise_floor_text(state)}")
+    lines.append(f"- Noise floor: {_noise_floor_text(state, confirm=confirm)}")
     lines.append(f"- Test count: {_cell(_test_count_text(state))}")
     ignored = [_cell(w.name) for w in state["workloads"] if w.inputs]
     lines.append("- Workload inputs ignored: " + (", ".join(ignored) or "none"))
@@ -1091,6 +1844,7 @@ def _run_conditions(state: EngineState, prefix: str) -> list[str]:
             else _cell(combination.summary, limit=_SUMMARY_LIMIT)
         )
     )
+    lines += [*_step3_conditions(state), *_output_conditions(state, quality)]
     lines.append(f"- Peak RSS: {_RSS_DEFINITION}")
     refs = list(
         dict.fromkeys(
@@ -1114,23 +1868,400 @@ def _run_conditions(state: EngineState, prefix: str) -> list[str]:
     return lines
 
 
-def _report(state: EngineState, prefix: str) -> str:
-    """The markdown report: title, baseline, one row per verdict, kept, conditions."""
-    project = state["project"]
+_NOTES_LIMIT = 500
+"""Longest combiner-notes text in an event or a report line (U23 risk)."""
+
+_RETRY_NOTE_LIMIT = 200
+_RETRY_NOTES_SHOWN = 3
+"""Retry notes are raw-ish text (a stderr line, editor errors): each is cut
+to the limit and at most this many are shown per trial, in the report only."""
+
+
+def _capped(text: str, limit: int = _NOTES_LIMIT) -> str:
+    """``text`` on one line, cut to ``limit`` characters with an ellipsis."""
+    flat = _LINE_BREAKS.sub(" ", text)
+    return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+
+
+def _combiner_notes(ctx: NodeContext) -> tuple[str, ...]:
+    """The latest combine call's notes (``GitCombiner.last_notes``), if any."""
+    return tuple(dict.fromkeys(map(str, getattr(ctx.combiner, "last_notes", ()))))
+
+
+def _project_floor(baseline: Baseline | None) -> float:
+    """The primary objective's raised ``min_relative_gain`` (D41 c, D42)."""
+    objectives = () if baseline is None else baseline.objectives
+    primary = primary_metric(objectives)
+    return next(
+        (o.min_relative_gain for o in objectives if o.metric == primary),
+        NOISE_FLOOR_MIN,
+    )
+
+
+def _gain_text(verdict: Verdict, floor: float) -> str:
+    """D42's line: mean of the looks, margin, confirmations and label."""
+    reported = reported_gain(verdict, floor=floor)
+    return "no gain measured" if reported is None else reported.text()
+
+
+def _score(value: float, check: QualityCheck) -> str:
+    points = is_point_measure(check.measure)
+    return f"{value * 100:.1f} %" if points else f"{value:.4g}"
+
+
+def _quality_drop(
+    check: QualityCheck, base: Sequence[Measurement], trial: Sequence[Measurement]
+) -> tuple[float, float, float] | None:
+    """(signed drop, base, trial) on the workload losing most, in the check's
+    unit (negative: an improvement); ``None`` with nothing to compare."""
+    after = {m.workload_id: m.stats for m in trial if m.metric == check.metric}
+    sign = 1.0 if check.direction is Direction.maximize else -1.0
+    found: list[tuple[float, float, float]] = []
+    for row in base:
+        stats = after.get(row.workload_id)
+        scale = abs(row.stats.mean) if check.drop_unit is DropUnit.relative else 1.0
+        if row.metric != check.metric or stats is None or scale == 0:
+            continue  # a relative drop over a zero mean is undefined
+        drop = sign * (row.stats.mean - stats.mean) / scale
+        found.append((drop, row.stats.mean, stats.mean))
+    return max(found, default=None)
+
+
+def _result_text(
+    verdict: Verdict,
+    trial: Trial | None,
+    base: Sequence[Measurement],
+    check: QualityCheck | None,
+) -> str:
+    """D38's result part of a review label."""
+    if not _output_changed(verdict):
+        return f"{verdict.change_class} change, outputs identical"
+    found = (
+        None
+        if check is None or trial is None
+        else _quality_drop(check, base, trial.measurements)
+    )
+    if check is None or found is None:
+        return "output changed, no quality number to compare"
+    drop, before, after = found
+    if math.isclose(drop, 0.0, abs_tol=1e-12):
+        return "result kept, output changed"
+    if drop < 0:
+        return (
+            f"changes results: {check.name} {_score(before, check)} → "
+            f"{_score(after, check)} (result improvement)"
+        )
+    points = is_point_measure(check.measure)
+    used = drop_text(drop, check.drop_unit, points=points).removesuffix(" points")
+    allowed = drop_text(check.max_drop, check.drop_unit, points=points)
+    return f"result drop within your limit: −{used} of {allowed} allowed"
+
+
+def _change_label(
+    verdict: Verdict,
+    trial: Trial | None,
+    base: Sequence[Measurement],
+    check: QualityCheck | None,
+    floor: float,
+) -> str:
+    """One review change's D38 label: the result part, then D42's gain."""
+    return f"{_result_text(verdict, trial, base, check)}, {_gain_text(verdict, floor)}"
+
+
+def _tolerance_text(tolerance: OutputTolerance) -> str:
+    """D39's report sentence for a workload's tolerance."""
+    digits = tolerance.float_digits
+    parts = [] if digits is None else [f"{digits} significant digits"]
+    if tolerance.unordered_lines:
+        parts.append("line order ignored, except an unterminated last line")
+    said = ", ".join(parts)
+    if digits is not None:
+        said += f"; counts printed as decimals compared to {digits} digits only"
+    return f"equal within tolerance ({said})"
+
+
+def _within_tolerance(
+    state: EngineState, trial: Trial | None, base: Sequence[Measurement]
+) -> list[str]:
+    """D39: one sentence per toleranced workload whose exact bytes differ."""
+
+    def raws(rows: Sequence[Measurement], workload_id: str) -> set[str | None]:
+        return {
+            m.raw_fingerprint
+            for m in rows
+            if m.workload_id == workload_id and m.output_fingerprint is not None
+        }
+
+    said: list[str] = []
+    for workload in state["workloads"]:
+        tolerance = workload.output_tolerance
+        before = raws(base, workload.id)
+        after = raws(() if trial is None else trial.measurements, workload.id)
+        if tolerance is None or not before or not after:
+            continue
+        if None in before or before != after:
+            said.append(f"{_cell(workload.name)} {_tolerance_text(tolerance)}")
+    return said
+
+
+@dataclass(frozen=True)
+class _Change:
+    """A delivered (or deliverable) verdict with its trial and paired base."""
+
+    verdict: Verdict
+    title: str
+    trial: Trial | None
+    base: tuple[Measurement, ...]
+
+
+def _changes(state: EngineState, verdicts: Iterable[Verdict]) -> list[_Change]:
     hypotheses = _by_id(state["hypotheses"])
-    decided = decided_verdicts(state["verdicts"], state["approval"])
-    decided_by_id = {verdict.id: verdict for verdict in decided}
+    trials = {trial.id: trial for trial in state["trials"]}
+    baseline = state["baseline"]
+    run_rows = () if baseline is None else baseline.measurements
+    changes: list[_Change] = []
+    for verdict in verdicts:
+        trial = trials.get(verdict.trial_id)
+        paired = () if trial is None else trial.base_measurements
+        changes.append(
+            _Change(
+                verdict,
+                _cell(_title_for(hypotheses, verdict)),
+                trial,
+                paired or run_rows,
+            )
+        )
+    return changes
+
+
+def _change_lines(
+    state: EngineState,
+    changes: Sequence[_Change],
+    check: QualityCheck | None,
+    *,
+    labelled: bool,
+) -> list[str]:
+    """One line per change: D38 label (review) or D42 gain (run), plus D39."""
+    floor = _project_floor(state["baseline"])
+    lines: list[str] = []
+    for change in changes:
+        text = (
+            _change_label(change.verdict, change.trial, change.base, check, floor)
+            if labelled
+            else _gain_text(change.verdict, floor)
+        )
+        said = _within_tolerance(state, change.trial, change.base)
+        lines.append(f"- {change.title}: {text}" + "".join(f"; {s}" for s in said))
+    return lines
+
+
+def _output_changed(verdict: Verdict) -> bool:
+    return any(r.output_changed is True for r in verdict.judge_results)
+
+
+def _delivery_sets(
+    decided: Iterable[Verdict],
+) -> tuple[list[Verdict], list[Verdict]]:
+    """The run set and the review set of the decided verdicts (D10, D35).
+
+    The run set is every ``keep`` whose output did not change. The review set
+    is every ``review`` plus any ``keep`` whose output changed: an approved
+    novel change (approval turns it into a keep) that altered output still
+    goes to review, so no output change ever reaches ``engine/run-<id>``,
+    with or without a combiner. Everything else is in neither.
+    """
+    run: list[Verdict] = []
+    review: list[Verdict] = []
+    for verdict in decided:
+        if verdict.outcome is VerdictOutcome.review or (
+            verdict.outcome is VerdictOutcome.keep and _output_changed(verdict)
+        ):
+            review.append(verdict)
+        elif verdict.outcome is VerdictOutcome.keep:
+            run.append(verdict)
+    return run, review
+
+
+def _review_verdicts(state: EngineState) -> list[Verdict]:
+    """The review set (:func:`_delivery_sets`), in order."""
+    return _delivery_sets(decided_verdicts(state["verdicts"], state["approval"]))[1]
+
+
+def _delivered_review(state: EngineState) -> list[Verdict]:
+    """The review verdicts the held review combination applied, in order."""
+    combination = state["review_combination"]
+    if combination is None or not combination.holds:
+        return []
+    applied = set(combination.applied_trial_ids)
+    return [v for v in _review_verdicts(state) if v.trial_id in applied]
+
+
+def _review_sentence(
+    state: EngineState, prefix: str, delivered: Sequence[Verdict]
+) -> str:
+    """The sentence both reports carry about the review branch (§4.5, 3)."""
+    run_branch = _cell(f"{prefix}run-{state['run_id']}")
+    confirmed = (
+        "each change was confirmed (D41)"
+        if delivered and all(v.confirmations >= 2 for v in delivered)
+        else "not every change was confirmed (confirmation off)"
+    )
+    return (
+        f"Every judge passed and {confirmed}; outputs compared as stated (D35, "
+        "D39); re-tested together; review before merging; not merged into "
+        f"{run_branch}, never pushed. Not re-tested together with {run_branch}; "
+        "merging both is unproven."
+    )
+
+
+def _review_section(
+    state: EngineState, prefix: str, check: QualityCheck | None
+) -> list[str]:
+    """The main report's review branch: where it is or why there is none."""
+    if not _review_verdicts(state):
+        return []
+    combination = state["review_combination"]
+    delivered = _delivered_review(state)
+    branch = _cell(f"{prefix}review-{state['run_id']}")
+    if combination is None:
+        where = "not created: the review set was not re-tested (no combiner)"
+    elif not combination.holds:
+        where = "not created: the review re-test did not hold: " + _cell(
+            combination.summary, limit=_SUMMARY_LIMIT
+        )
+    else:
+        where = f"{branch} ({len(delivered)} change(s))"
+    lines = ["**Review branch**", "", f"- Branch: {where}"]
+    lines += _change_lines(state, _changes(state, delivered), check, labelled=True)
+    if delivered:
+        lines.append(f"- {_review_sentence(state, prefix, delivered)}")
+    return [*lines, ""]
+
+
+def _total_time(state: EngineState, now: datetime) -> str:
+    """§4.5, 5: first event to the report, any pause included; retries."""
+    retried = len({t.id for t in state["trials"] if t.attempts > 1})
+    if not state["events"]:
+        return "Total time: not recorded (no event)"
+    elapsed = (now - min(e.at for e in state["events"])).total_seconds()
+    minutes = max(0, int(elapsed // 60))  # a clock stepped back reads 0:00
+    return (
+        f"Total time: {minutes // 60}:{minutes % 60:02d}, first event to delivery, "
+        f"any approval pause included; {retried} trial(s) retried"
+    )
+
+
+def _retry_section(state: EngineState) -> list[str]:
+    """Each trial's ``retry_notes``: the report only, cut, never a prompt."""
+    hypotheses = _by_id(state["hypotheses"])
+    lines: list[str] = []
+    for trial in dict((t.id, t) for t in state["trials"]).values():
+        if not trial.retry_notes:
+            continue
+        shown = [_cell(n, limit=_RETRY_NOTE_LIMIT) for n in trial.retry_notes]
+        more = len(shown) - _RETRY_NOTES_SHOWN
+        title = hypotheses.get(trial.hypothesis_id)
+        name = _cell(trial.hypothesis_id if title is None else title.title)
+        lines.append(
+            f"- {name} (trial {_cell(trial.id[:8])}, {trial.attempts} attempt(s)): "
+            + "; ".join(shown[:_RETRY_NOTES_SHOWN])
+            + (f"; and {more} more" if more > 0 else "")
+        )
+    return ["**Retry notes**", "", *lines, ""] if lines else []
+
+
+def _ideas_section(state: EngineState) -> list[str]:
+    """Parked ideas and understand's quality proposal (never active, D40)."""
+    lines = [
+        f"- {_cell(h.title)}: {_cell(h.parked_reason or 'parked')}"
+        for h in state["parked"]
+    ]
+    understanding = state["understanding"]
+    proposal = None if understanding is None else understanding.quality_proposal
+    if proposal is not None:
+        what = (
+            f"{proposal.measure} over {proposal.labels}"
+            if proposal.measure is not None
+            else f"the script {proposal.scorer_path}"
+        )
+        lines.append(f"- Suggested quality check (not active): {_cell(what)}")
+    return ["**Parked ideas and suggestions**", "", *lines, ""] if lines else []
+
+
+def _step3_conditions(state: EngineState) -> list[str]:
+    """Run-condition lines Step 3 adds: quality files and combiner notes."""
+    baseline = state["baseline"]
+    files = () if baseline is None else baseline.quality_files
+    lines = (
+        [
+            "- Quality files: "
+            + ", ".join(
+                f"{_cell(f.path)} sha256 {f.sha256} ({f.size} bytes)" for f in files
+            )
+        ]
+        if files
+        else []
+    )
+    notes = [e for e in state["events"] if e.data.get("code") == "combiner_notes"]
+    if notes:
+        said = "; ".join(str(e.data.get("notes")) for e in notes)
+        lines.append(f"- Combiner notes: {_cell(said, limit=_NOTES_LIMIT)}")
+    return lines
+
+
+def _combination_line(state: EngineState, prefix: str) -> list[str]:
+    """D42: the run branch's re-tested gain is its own line."""
+    combination, baseline = state["combination"], state["baseline"]
+    primary = None if baseline is None else primary_metric(baseline.objectives)
+    if combination is None or not combination.holds:
+        return []
+    gain = next(
+        (
+            r.gain
+            for r in combination.judge_results
+            if r.metric == primary
+            and r.gain is not None
+            and r.outcome is JudgeOutcome.passed
+        ),
+        None,
+    )
+    if gain is None:
+        return []
+    branch = _cell(f"{prefix}run-{state['run_id']}")
+    return [f"- Re-tested together on {branch}: {gain:.1%} better"]
+
+
+def _head(state: EngineState, title: str, now: datetime) -> list[str]:
     baseline = state["baseline"]
     baseline_line = (
         "Baseline: not measured"
         if baseline is None
         else _summarize_primary(baseline.measurements, baseline.objectives).line()
     )
+    return [title, "", baseline_line, _total_time(state, now), ""]
+
+
+def _report(
+    state: EngineState,
+    prefix: str,
+    *,
+    confirm: bool = False,
+    quality: QualityCheck | None = None,
+    now: datetime | None = None,
+) -> str:
+    """The markdown report: title, baseline, total time, one row per verdict,
+    kept with each gain (D42), the review branch, retry notes, parked ideas,
+    conditions."""
+    project = state["project"]
+    hypotheses = _by_id(state["hypotheses"])
+    decided = decided_verdicts(state["verdicts"], state["approval"])
+    decided_by_id = {verdict.id: verdict for verdict in decided}
     lines = [
-        f"# Engine run {state['run_id'][:8]}: {_cell(project.name)}",
-        "",
-        baseline_line,
-        "",
+        *_head(
+            state,
+            f"# Engine run {state['run_id'][:8]}: {_cell(project.name)}",
+            now or utc_now(),
+        ),
         "| Hypothesis | Outcome | Gain | Summary |",
         "| --- | --- | --- | --- |",
     ]
@@ -1140,13 +2271,46 @@ def _report(state: EngineState, prefix: str) -> str:
             f"| {_cell(_title_for(hypotheses, verdict))} | {verdict.outcome.value} "
             f"| {gain} | {_cell(verdict.summary)} |"
         )
-    kept = [
-        _cell(_title_for(hypotheses, decided_by_id[verdict_id]))
+    kept_verdicts = [
+        decided_by_id[verdict_id]
         for verdict_id in state["kept_verdict_ids"]
         if verdict_id in decided_by_id
     ]
-    lines += ["", "Kept: " + (", ".join(kept) if kept else "nothing"), ""]
-    lines += [*_run_conditions(state, prefix), ""]
+    kept = [_cell(_title_for(hypotheses, verdict)) for verdict in kept_verdicts]
+    lines += ["", "Kept: " + (", ".join(kept) if kept else "nothing")]
+    lines += _change_lines(
+        state, _changes(state, kept_verdicts), quality, labelled=False
+    )
+    lines += [*_combination_line(state, prefix), ""]
+    lines += _review_section(state, prefix, quality)
+    lines += [*_retry_section(state), *_ideas_section(state)]
+    lines += [*_run_conditions(state, prefix, confirm=confirm, quality=quality), ""]
+    return "\n".join(lines)
+
+
+def _review_report(
+    state: EngineState,
+    prefix: str,
+    *,
+    confirm: bool,
+    quality: QualityCheck | None,
+    now: datetime | None = None,
+) -> str:
+    """The review branch's report: one D38 label per change, the sentence."""
+    delivered = _delivered_review(state)
+    title = f"# Engine run {state['run_id'][:8]} review: {_cell(state['project'].name)}"
+    lines = [
+        title,
+        "",
+        *_change_lines(state, _changes(state, delivered), quality, labelled=True),
+        "",
+        _review_sentence(state, prefix, delivered),
+        "",
+        *_head(state, "**Run**", now or utc_now())[2:],
+        *_retry_section(state),
+        *_run_conditions(state, prefix, confirm=confirm, quality=quality),
+        "",
+    ]
     return "\n".join(lines)
 
 
@@ -1202,6 +2366,90 @@ def _combine_rules(ctx: NodeContext, baseline: Baseline) -> CombineRules:
         completeness=completeness,
         baseline_count=baseline_test_count(baseline.measurements),
     )
+
+
+def _confirmer(
+    ctx: NodeContext,
+    state: EngineState,
+    measured: Baseline,
+    known: Mapping[str, Hypothesis],
+    notes: list[str],
+) -> Callable[[Trial, Verdict], Verdict] | None:
+    """The verdicts node's second look (D41 b), or ``None`` with no combiner.
+
+    Judged as combine judges, under the run baseline's objectives (the raised
+    floor), never ``state["objectives"]``, scored against its quality files.
+    Each look's combiner notes (``last_notes``, when it has them) go to
+    ``notes``.
+    """
+    combiner = ctx.combiner
+    if combiner is None or not ctx.confirm_winners:
+        return None
+    rules = _combine_rules(ctx, measured)
+
+    def confirm(trial: Trial, verdict: Verdict) -> Verdict:
+        (change,) = kept_changes([verdict], {trial.id: trial}, known)
+        target = CombineTarget(
+            run_id=state["run_id"],
+            project=state["project"],
+            base_commit=_require_commit(state, "the confirmation"),
+            workloads=tuple(state["workloads"]),
+            branch=f"{ctx.branch_prefix}run-{state['run_id']}",
+            round=max(1, state["round"]),
+            quality_files=measured.quality_files,
+        )
+        confirmed = confirm_one(combiner, verdict, change, rules, target)
+        for note in map(str, getattr(combiner, "last_notes", ())):
+            if note not in notes:
+                notes.append(note)
+        return confirmed
+
+    return confirm
+
+
+def _confirmation_notes(
+    state: EngineState, looks: Sequence[Verdict], confirmed: bool, notes: Sequence[str]
+) -> list[EngineEvent]:
+    """One note on the round's winners: how many confirmed, or that none
+    could; with the combiner's notes appended."""
+    if not looks:
+        return []
+    if not confirmed:
+        return [
+            _note(
+                state,
+                RunPhase.verdicts,
+                "confirmation_skipped",
+                f"{len(looks)} winner(s) stand on one look: no combiner to "
+                "re-test them",
+                level=EventLevel.warning,
+                data={"winners": len(looks)},
+            )
+        ]
+    held = sum(1 for v in looks if v.outcome in CONFIRMABLE)
+    data: ScalarDict = {"confirmed": held, "unconfirmed": len(looks) - held}
+    said = ""
+    if notes:
+        data["notes"] = _capped("; ".join(notes))
+        said = f"; combiner notes: {data['notes']}"
+    return [
+        _note(
+            state,
+            RunPhase.verdicts,
+            "confirmation",
+            f"{held} of {len(looks)} winner(s) confirmed on a second look{said}",
+            data=data,
+        )
+    ]
+
+
+def _two_look_gain(verdict: Verdict) -> Verdict:
+    """A confirmed verdict as learned: D42's mean of both looks, not the
+    selection-biased first look (U23 review N6); others unchanged."""
+    reported = reported_gain(verdict, floor=0.0)
+    if verdict.confirmed_gain is None or reported is None:
+        return verdict
+    return verdict.model_copy(update={"gain": reported.gain})
 
 
 def _publishable(state: EngineState) -> tuple[str, str]:
@@ -1312,21 +2560,34 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                     f"{DEFAULT_RSS_MAX_GROWTH:.0%} (default)",
                 )
             )
+        guardrails, frozen, mode = _output_check(ctx, project.id, guardrails)
         metrics = ", ".join(objective.metric for objective in objectives)
         kinds = ", ".join(guardrail.kind.value for guardrail in guardrails)
-        event = _announce(
-            state,
-            RunPhase.define,
-            f"objectives: {metrics}; guardrails: {kinds or 'none'}",
-            data={"objectives": metrics, "guardrails": kinds, "min_runs": ctx.min_runs},
-        )
+        message = f"objectives: {metrics}; guardrails: {kinds or 'none'}"
+        data: ScalarDict = {
+            "objectives": metrics,
+            "guardrails": kinds,
+            "min_runs": ctx.min_runs,
+        }
+        if mode != "off":  # Step 2's event stays as it was
+            message += f"; output check: {mode}" + "".join(
+                f"; {_cell(w.name)} {_tolerance_text(w.output_tolerance)}"
+                for w in state["workloads"]
+                if w.output_tolerance is not None
+            )
+            data["output_check"] = mode
+        event = _announce(state, RunPhase.define, message, data=data)
         delta: NodeDelta = {
             "phase": RunPhase.define,
             "objectives": objectives,
             "events": [event],
         }
-        if leaner:
+        if len(guardrails) != len(state["guardrails"]):
             delta["guardrails"] = guardrails
+        if frozen:
+            delta["extra_protected"] = list(
+                dict.fromkeys((*state["extra_protected"], *frozen))
+            )
         return delta
 
     def baseline(state: EngineState) -> NodeDelta:
@@ -1334,6 +2595,13 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             state["workloads"], run_id=state["run_id"], commit=state["base_commit"]
         )
         objectives = tuple(state["objectives"])
+        names = {workload.id: workload.name for workload in state["workloads"]}
+        empty = _named(names, _empty_outputs(measurements, objectives))
+        if empty and ctx.quality is not None:
+            raise EngineError(
+                f"quality check {ctx.quality.name}: {_compares_nothing(empty)}; an "
+                "empty output cannot be scored (D40)"
+            )
         violations = measurement_violations(
             measurements,
             [workload.id for workload in state["workloads"]],
@@ -1346,38 +2614,41 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                 "baseline is not trustworthy: "
                 + "; ".join(f"{v.rule}: {v.message}" for v in violations)
             )
-        names = {workload.id: workload.name for workload in state["workloads"]}
         _require_trustworthy_baseline(
             measurements, objectives, state["guardrails"], names
         )
+        files, leaks = _frozen_files(ctx)
+        objectives, calibration, floor = _calibrated(ctx, state, objectives)
         measured = Baseline(
             commit=state["base_commit"],
             measurements=measurements,
             objectives=objectives,
             guardrails=tuple(state["guardrails"]),
+            calibration=calibration,
+            quality_files=files,
         )
         summary = _summarize_primary(measurements, objectives)
         noise = _noise(measurements, objectives)
-        event = _announce(
-            state,
-            RunPhase.baseline,
-            summary.line(),
-            data={
-                "metric": summary.metric,
-                "n": summary.n,
-                "mean": summary.mean,
-                "workloads": summary.workloads,
-                "smallest_provable_gain": _worst_floor(noise),
-            },
-        )
+        data: ScalarDict = {
+            "metric": summary.metric,
+            "n": summary.n,
+            "mean": summary.mean,
+            "workloads": summary.workloads,
+            "smallest_provable_gain": _worst_floor(noise),
+        }
+        if calibration is not None:
+            data["noise_floor"] = floor
+            data["calibration_blocks"] = calibration.blocks
+        event = _announce(state, RunPhase.baseline, summary.line(), data=data)
         notes = [
             _noisy_host(state, n, names.get(n.workload_id, n.workload_id))
             for n in noise
         ]
+        checks = _baseline_checks(ctx, state, empty, leaks)
         return {
             "phase": RunPhase.baseline,
             "baseline": measured,
-            "events": [event, *notes],
+            "events": [event, *notes, *checks],
         }
 
     def profile(state: EngineState) -> NodeDelta:
@@ -1411,62 +2682,83 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
         }
 
     def research(state: EngineState) -> NodeDelta:
-        techniques = list(ctx.techniques)
-        papers: list[Paper] = []
+        # Blind (the default, D1) sends nothing and keeps Step 2's delta;
+        # matched adds keys only for what it changes (spec 4.1). No paper
+        # intake in Step 3 (D1), so papers stay empty.
+        turn = _Matched(list(ctx.techniques), {}, [])
+        if ctx.retrieval == "matched":
+            turn = _match(ctx, state)
+        techniques, papers = turn.techniques, list[Paper]()
         event = _announce(
             state,
             RunPhase.research,
-            f"research: {len(techniques)} technique(s), {len(papers)} paper(s) (stub)",
+            f"research ({ctx.retrieval}): {len(techniques)} technique(s), "
+            f"{len(papers)} paper(s)",
             data={"techniques": len(techniques), "papers": len(papers)},
         )
         return {
+            **turn.delta,
             "phase": RunPhase.research,
             "techniques": techniques,
             "papers": papers,
-            "events": [event],
+            "events": [*turn.events, event],
         }
 
     def hypotheses(state: EngineState) -> NodeDelta:
         round_number = state["round"] + 1
-        # A candidate is new when no trial ran it and no earlier round holds
-        # it; earlier rounds' hypotheses stay (with their statuses) so the
-        # report and the lessons see every idea the run tried.
-        seen = {trial.hypothesis_id for trial in state["trials"]} | {
-            hypothesis.id for hypothesis in state["hypotheses"]
-        }
-        candidates = [h for h in ctx.candidates if h.id not in seen]
+        # An idea is new when no trial ran it and no earlier round holds it;
+        # earlier rounds' hypotheses stay (with their statuses) so the report
+        # and the lessons see every idea the run tried. Generated ideas wait
+        # in the pool; the generator runs only once nothing is left (spec 4.2).
+        candidates, pool = _untried(ctx, state)
         lessons = ctx.repository.list_lessons(state["project"].id)
+        turn = _Generated([], {}, [])
+        live = None if candidates or pool else _live_generator(ctx, state, priced=False)
+        if live is not None:
+            turn = _generate(ctx, state, live, lessons)
+            pool = turn.hypotheses
+        # The pool keeps the model's order and is re-ranked every round with
+        # the current lessons, as caller candidates are (D8).
+        generated = rank_generated(pool, lessons)
+        ordered = [*rank_hypotheses(candidates, lessons), *generated]
+        limit = ctx.max_hypotheses_per_round
         ranked = [
             h.model_copy(update={"status": HypothesisStatus.proposed})
-            for h in rank_hypotheses(candidates, lessons)[
-                : ctx.max_hypotheses_per_round
-            ]
+            for h in ordered[:limit]
         ]
+        sliced = {h.id for h in ranked}
+        rest = [h for h in pool if h.id not in sliced]  # callers stay in ctx
         event = _announce(
             state,
             RunPhase.hypotheses,
-            f"round {round_number}: ranked {len(ranked)} of {len(candidates)} candidates",
+            f"round {round_number}: ranked {len(ranked)} of {len(ordered)} candidates",
             data={
                 "round": round_number,
                 "ranked": len(ranked),
-                "candidates": len(candidates),
+                "candidates": len(ordered),
             },
         )
-        return {
+        delta: NodeDelta = {
+            **turn.delta,
             "phase": RunPhase.hypotheses,
             "round": round_number,
             "hypotheses": [*state["hypotheses"], *ranked],
-            "events": [event],
+            "events": [*turn.events, event],
         }
+        if state["candidate_pool"] or rest:
+            delta["candidate_pool"] = rest
+        return delta
 
     def run_one(
         state: EngineState,
         hypothesis: Hypothesis,
         measured: Baseline,
         remaining: float,
+        fix_retries_left: int,
     ) -> Trial:
-        """One trial offered ``remaining``; ``EngineError`` when the runner's
-        Trial cannot be trusted (charged at most ``remaining`` as progress)."""
+        """One trial offered ``remaining`` and ``fix_retries_left``;
+        ``EngineError`` when the runner's Trial cannot be trusted, more
+        attempts than allowed included (charged at most ``remaining``)."""
         branch = f"{ctx.branch_prefix}trial-{state['run_id']}-{hypothesis.id}"
         assert_safe_branch(branch, state["project"], ctx.branch_prefix)
         trial = ctx.runner.run(
@@ -1480,9 +2772,13 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                 understanding=state["understanding"],
                 hotspots=_brief_hotspots(hypothesis, state["hotspots"]),
                 protected=(*ctx.protected_patterns, *state["extra_protected"]),
+                read_deny=() if ctx.quality is None else ctx.quality.frozen_paths,
+                fix_retries_left=fix_retries_left,
             ),
         )
-        problems = _runner_trial_problems(trial, hypothesis, state["round"], remaining)
+        problems = _runner_trial_problems(
+            trial, hypothesis, state["round"], remaining, fix_retries_left
+        )
         if problems:
             error = EngineError(
                 f"runner returned an untrustworthy trial {trial.id} for "
@@ -1494,6 +2790,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
 
     def trials(state: EngineState) -> NodeDelta:
         measured = _require_baseline(state)
+        _require_defining_check(ctx, measured)
         run_id = state["run_id"]
         round_number = state["round"]
         # The running total (decision 10): each trial is offered only what the
@@ -1504,6 +2801,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
         ]
         new_trials: list[Trial] = []
         stopped: list[EngineEvent] = []
+        records, warned = _recorded_fix_retries(ctx, state)
         for index, hypothesis in enumerate(proposed):
             remaining = state["max_cost_usd"] - cost_usd
             if remaining <= 0 or remaining < ctx.min_trial_budget_usd:
@@ -1516,8 +2814,18 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                     )
                 )
                 break
+            # The run cap (D12, O8), one trial at a time, over the checkpoint,
+            # the repository (read once; this round's saves are new_trials) and
+            # this round, so no resume grants a spent retry again; max(0, ...)
+            # if the cap fell on resume; none if the repository cannot say.
+            left = 0
+            if records is not None:
+                spent = _fix_retries_spent(
+                    state["trials"], records.values(), new_trials
+                )
+                left = max(0, ctx.fix_retries_per_run - spent)
             try:
-                trial = run_one(state, hypothesis, measured, remaining)
+                trial = run_one(state, hypothesis, measured, remaining, left)
             except TrialUnaffordable as exc:  # its first request alone passes the cap
                 stopped.append(
                     _budget_exhausted(
@@ -1541,11 +2849,19 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                     ),
                 )
                 raise
-            ctx.repository.save_trial(run_id, trial)
-            new_trials.append(trial)
+            # run_one checked the runner's own attempts; only now carry forward
+            trial = _carried(trial, (records or {}).get(trial.id))
             # trial.cost_usd <= remaining, so only rounding could pass the cap
             cost_usd = min(state["max_cost_usd"], cost_usd + trial.cost_usd)
             tokens_used += trial.tokens_used
+            try:
+                ctx.repository.save_trial(run_id, trial)
+            except Exception as exc:  # spent but not recorded: keep the money
+                keep_progress(
+                    exc, _trials_progress(state, new_trials, cost_usd, tokens_used)
+                )
+                raise
+            new_trials.append(trial)
         ran = {trial.hypothesis_id: HypothesisStatus.trialled for trial in new_trials}
         failed = sum(1 for t in new_trials if t.status is TrialStatus.failed)
         event = _announce(
@@ -1566,7 +2882,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             "hypotheses": _with_statuses(state["hypotheses"], ran),
             "cost_usd": cost_usd,
             "tokens_used": tokens_used,
-            "events": [*stopped, event],
+            "events": [*warned, *stopped, event],
         }
         if stopped:
             delta["budget_exhausted"] = True
@@ -1574,30 +2890,27 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
 
     def judges(state: EngineState) -> NodeDelta:
         measured = _require_baseline(state)
-        active = _active_judges(ctx.judges, measured.objectives)
+        rules = _combine_rules(ctx, measured)
         judged = [
-            trial.model_copy(
-                update={
-                    "judge_results": tuple(
-                        judge.evaluate(measured, trial) for judge in active
-                    )
-                }
-            )
+            _judged(trial, measured, rules.judges, rules.completeness)
             for trial in state["round_trials"]
         ]
         for trial in judged:
             ctx.repository.save_trial(state["run_id"], trial)
-        event = _announce(
-            state,
-            RunPhase.judges,
+        paired = sum(1 for trial in judged if trial.base_measurements)
+        message = (
             f"round {state['round']}: judged {len(judged)} trial(s) "
-            f"with {len(active)} judge(s)",
-            data={
-                "round": state["round"],
-                "trials": len(judged),
-                "judges": ", ".join(judge.name for judge in active),
-            },
+            f"with {len(rules.judges)} judge(s)"
         )
+        data: ScalarDict = {
+            "round": state["round"],
+            "trials": len(judged),
+            "judges": ", ".join(judge.name for judge in rules.judges),
+        }
+        if paired:
+            message += f", {paired} against a paired base"
+            data["paired"] = paired
+        event = _announce(state, RunPhase.judges, message, data=data)
         return {
             "phase": RunPhase.judges,
             "trials": judged,
@@ -1613,7 +2926,10 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
         workload_ids = _baseline_workload_ids(measured, objective_metrics)
         primary = primary_metric(measured.objectives)
         protected = (*ctx.protected_patterns, *state["extra_protected"])
+        notes: list[str] = []
+        confirm = _confirmer(ctx, state, measured, known, notes)
         new_verdicts: list[Verdict] = []
+        looks: list[Verdict] = []
         for trial in state["round_trials"]:
             hypothesis = known.get(trial.hypothesis_id)
             if hypothesis is None:
@@ -1649,6 +2965,9 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                 violations,
                 primary_metric=primary,
             )
+            if ctx.confirm_winners and verdict.outcome in CONFIRMABLE:
+                verdict = verdict if confirm is None else confirm(trial, verdict)
+                looks.append(verdict)
             ctx.repository.save_verdict(run_id, verdict)
             new_verdicts.append(verdict)
         status_for = {
@@ -1664,7 +2983,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             f"round {state['round']}: {len(new_verdicts)} verdict(s): "
             f"{counts['keep']} keep, {counts['reject']} reject, "
             f"{counts['inconclusive']} inconclusive, "
-            f"{counts['needs_approval']} need approval",
+            f"{counts['needs_approval']} need approval, {counts['review']} to review",
             data={"round": state["round"], "verdicts": len(new_verdicts), **counts},
         )
         return {
@@ -1674,7 +2993,10 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             "pending_approval_ids": [
                 v.id for v in new_verdicts if v.outcome is VerdictOutcome.needs_approval
             ],
-            "events": [event],
+            "events": [
+                *_confirmation_notes(state, looks, confirm is not None, notes),
+                event,
+            ],
         }
 
     def approval_gate(state: EngineState) -> NodeDelta:
@@ -1738,81 +3060,125 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
         }
 
     def combine(state: EngineState) -> NodeDelta:
-        kept = [
-            verdict
-            for verdict in decided_verdicts(state["verdicts"], state["approval"])
-            if verdict.outcome is VerdictOutcome.keep
-        ]
-        if ctx.combiner is None:
+        # An approved novel change whose output changed is in the review set,
+        # never the run set (D35, _delivery_sets), with or without a combiner.
+        kept, review = _delivery_sets(
+            decided_verdicts(state["verdicts"], state["approval"])
+        )
+        combiner = ctx.combiner
+        if combiner is None:
+            data: ScalarDict = {"kept": len(kept)}
+            unsent = ""
+            if review:
+                data["review"] = len(review)
+                unsent = (
+                    f"; {len(review)} review change(s) not re-tested, no review branch"
+                )
             event = _announce(
                 state,
                 RunPhase.combine,
                 f"combined {len(kept)} kept change(s) "
-                "(re-testing the combination is Step 2)",
-                data={"kept": len(kept)},
+                f"(re-testing the combination is Step 2){unsent}",
+                data=data,
             )
             return {
                 "phase": RunPhase.combine,
                 "kept_verdict_ids": [verdict.id for verdict in kept],
                 "events": [event],
             }
+        delta: NodeDelta = {"phase": RunPhase.combine, "kept_verdict_ids": []}
+        events: list[EngineEvent] = []
         if not kept:
-            event = _announce(
-                state,
-                RunPhase.combine,
-                "nothing kept: nothing to combine",
-                data={"kept": 0},
+            events.append(
+                _announce(
+                    state,
+                    RunPhase.combine,
+                    "nothing kept: nothing to combine",
+                    data={"kept": 0},
+                )
             )
-            return {
-                "phase": RunPhase.combine,
-                "kept_verdict_ids": [],
-                "events": [event],
-            }
+        else:
+            outcome = _combine_set(state, combiner, kept, "run", events)
+            delta["kept_verdict_ids"] = list(outcome.kept_verdict_ids)
+            delta["combination"] = outcome.combination
+        if review:
+            delta["review_combination"] = _combine_set(
+                state, combiner, review, "review", events
+            ).combination
+        return {**delta, "events": events}
+
+    def _combine_set(
+        state: EngineState,
+        combiner: Combiner,
+        verdicts: Sequence[Verdict],
+        kind: Literal["run", "review"],
+        events: list[EngineEvent],
+    ) -> CombineOutcome:
+        """Re-test one set from the base (D10): the run set accepts ``keep``,
+        the review set ``keep`` or ``review``, on its own branch."""
         measured = _require_baseline(state)
+        branch = f"{ctx.branch_prefix}{kind}-{state['run_id']}"
         target = CombineTarget(
             run_id=state["run_id"],
             project=state["project"],
             base_commit=_require_commit(state, "combine"),
             workloads=tuple(state["workloads"]),
-            branch=f"{ctx.branch_prefix}run-{state['run_id']}",
+            branch=branch,
             round=max(1, state["round"]),
+            quality_files=measured.quality_files,
         )
         changes = kept_changes(
-            kept,
+            verdicts,
             {trial.id: trial for trial in state["trials"]},
             _by_id(state["hypotheses"]),
         )
-        outcome = combine_kept(
-            ctx.combiner, changes, _combine_rules(ctx, measured), target
-        )
+        rules = _combine_rules(ctx, measured)
+        if kind == "review":
+            rules = replace(rules, accept=CONFIRMABLE)
+        outcome = combine_kept(combiner, changes, rules, target)
         combination = outcome.combination
-        event = _announce(
-            state,
-            RunPhase.combine,
-            f"combination {'held' if combination.holds else 'did not hold'}: "
-            f"delivering {len(outcome.kept_verdict_ids)} of {len(changes)} kept "
-            "change(s)",
-            level=EventLevel.info if combination.holds else EventLevel.warning,
-            data={
-                "kept": len(changes),
-                "applied": len(combination.applied_trial_ids),
-                "skipped": len(combination.skipped),
-                "holds": combination.holds,
-                "fallback": combination.fallback_trial_id is not None,
-                "delivered": len(outcome.kept_verdict_ids),
-            },
+        held = "held" if combination.holds else "did not hold"
+        events.append(
+            _announce(
+                state,
+                RunPhase.combine,
+                f"combination {held}: delivering {len(outcome.kept_verdict_ids)} "
+                f"of {len(changes)} kept change(s)"
+                if kind == "run"
+                else f"review combination {held}: delivering "
+                f"{len(outcome.kept_verdict_ids)} of {len(changes)} review "
+                f"change(s) on {branch}",
+                level=EventLevel.info if combination.holds else EventLevel.warning,
+                data={
+                    **({} if kind == "run" else {"set": kind}),
+                    "kept": len(changes),
+                    "applied": len(combination.applied_trial_ids),
+                    "skipped": len(combination.skipped),
+                    "holds": combination.holds,
+                    "fallback": combination.fallback_trial_id is not None,
+                    "delivered": len(outcome.kept_verdict_ids),
+                },
+            )
         )
-        return {
-            "phase": RunPhase.combine,
-            "kept_verdict_ids": list(outcome.kept_verdict_ids),
-            "combination": combination,
-            "events": [event],
-        }
+        notes = _combiner_notes(ctx)
+        if notes:
+            events.append(
+                _note(
+                    state,
+                    RunPhase.combine,
+                    "combiner_notes",
+                    f"{kind} set: {_capped('; '.join(notes))}",
+                    data={"set": kind, "notes": _capped("; ".join(notes))},
+                )
+            )
+        return outcome
 
     def deliver(state: EngineState) -> NodeDelta:
         project = state["project"]
         kept = tuple(state["kept_verdict_ids"])
-        report = _report(state, ctx.branch_prefix)
+        report = _report(
+            state, ctx.branch_prefix, confirm=ctx.confirm_winners, quality=ctx.quality
+        )
         data: ScalarDict = {"kind": DeliveryKind.report_only.value, "kept": len(kept)}
         if not kept:
             delivery = Delivery(
@@ -1857,14 +3223,74 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                 data["commit"] = commit
             message = f"delivering {len(kept)} change(s) on branch {branch}"
         event = _announce(state, RunPhase.deliver, message, data=data)
-        return {"phase": RunPhase.deliver, "delivery": delivery, "events": [event]}
+        delta: NodeDelta = {
+            "phase": RunPhase.deliver,
+            "delivery": delivery,
+            "events": [event],
+        }
+        review = _deliver_review(state)
+        if review is not None:
+            delta["review_delivery"], review_event = review
+            delta["events"] = [event, review_event]
+        return delta
+
+    def _deliver_review(state: EngineState) -> tuple[Delivery, EngineEvent] | None:
+        """The held review combination, create-only on its own branch (D10):
+        never the run branch, never merged, never pushed. Without a
+        publisher it is ``kind=branch`` with ``commit=None`` and the joined
+        trial diffs, as on the run path."""
+        delivered = _delivered_review(state)
+        combination = state["review_combination"]
+        if combination is None or not delivered:
+            return None
+        project, base = state["project"], _require_commit(state, "deliver")
+        tip = combination.tip_commit
+        if tip is None:
+            raise EngineError("refusing to publish the review set: it has no tip")
+        branch = f"{ctx.branch_prefix}review-{state['run_id']}"
+        assert_safe_branch(branch, project, ctx.branch_prefix)
+        commit: str | None = None
+        if ctx.publisher is None:
+            trials = {trial.id: trial for trial in state["trials"]}
+            diff = "\n".join(
+                trials[v.trial_id].diff for v in delivered if v.trial_id in trials
+            )
+        else:
+            commit = tip
+            diff = ctx.publisher.publish(project, branch, tip=tip, base=base)
+        delivery = Delivery(
+            project_id=project.id,
+            kind=DeliveryKind.branch,
+            branch=branch,
+            commit=commit,
+            verdict_ids=tuple(v.id for v in delivered),
+            combined_diff=diff,
+            report_markdown=_review_report(
+                state,
+                ctx.branch_prefix,
+                confirm=ctx.confirm_winners,
+                quality=ctx.quality,
+            ),
+        )
+        data: ScalarDict = {
+            "kind": "branch",
+            "review": len(delivered),
+            "branch": branch,
+        }
+        if commit is not None:
+            data["commit"] = commit
+        message = f"delivering {len(delivered)} change(s) for review on branch {branch}"
+        return delivery, _announce(state, RunPhase.deliver, message, data=data)
 
     def learn(state: EngineState) -> NodeDelta:
         known = _by_id(state["hypotheses"])
         decided = decided_verdicts(state["verdicts"], state["approval"])
         context = tuple(sorted({tag for hs in state["hotspots"] for tag in hs.tags}))
         lessons = lessons_from_verdicts(
-            decided, known, project_id=state["project"].id, context=context
+            [_two_look_gain(v) for v in decided],
+            known,
+            project_id=state["project"].id,
+            context=context,
         )
         for lesson in lessons:
             ctx.repository.save_lesson(lesson)
@@ -1924,13 +3350,14 @@ def make_router(ctx: NodeContext) -> RouterFn:
             return "approval_gate"
         if state["budget_exhausted"]:
             return "combine"
-        if any(v.outcome is VerdictOutcome.keep for v in state["verdicts"]):
+        kept = any(v.outcome is VerdictOutcome.keep for v in state["verdicts"])
+        if kept and state["round"] >= ctx.portfolio_rounds:  # D54: after the rounds
             return "combine"
         if state["round"] >= state["max_rounds"]:
             return "combine"
-        trialled = {trial.hypothesis_id for trial in state["trials"]}
-        if all(candidate.id in trialled for candidate in ctx.candidates):
-            return "combine"
-        return "hypotheses"
+        candidates, pool = _untried(ctx, state)  # a review verdict never routes
+        if candidates or pool or _live_generator(ctx, state, priced=True) is not None:
+            return "hypotheses"
+        return "combine"
 
     return after_verdicts

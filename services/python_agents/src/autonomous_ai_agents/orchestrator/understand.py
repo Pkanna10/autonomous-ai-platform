@@ -7,6 +7,8 @@ uncommitted edits and untracked files never reach the API. Names matching
 or non-UTF-8 names, binary and non-UTF-8 files are skipped, files and the
 listing are capped (git hands over only a blob's head, ``read_blob(limit=)``,
 so a huge tracked file is never held whole), and every skip becomes a note.
+The read rules and ``RepoReader`` live in ``common/repo_read.py`` (shared with
+the idea pipeline, D44) and are re-exported here.
 
 Repository-derived text goes inside ``<untrusted_repo_content boundary=T>``
 with a fresh ``secrets.token_hex(8)`` per request; any piece holding ``T`` is
@@ -20,14 +22,18 @@ adds.
 The reply is validated strictly (exactly the schema's keys and types, lengths
 capped) before anything is built; then each entrypoint and candidate module
 that is not a tracked blob, and each note for an unknown workload id, is
-dropped with a note. ``BudgetExceeded`` and ``LLMConfigError`` propagate; every
+dropped with a note. The optional ``quality_proposal`` (D40) is model output:
+an unknown measure, a path that is not a literal tracked blob, or a shape
+``QualityProposal`` refuses drops it alone, with a note; a valid one is only
+a suggestion (``NodeContext.quality`` is the confirmation), annotated when
+its labels also sit in a column of a file a workload names (D37).
+``BudgetExceeded`` and ``LLMConfigError`` propagate; every
 other failure gives ``understanding=None`` with a note. ``cost_usd`` and
 ``tokens_used`` are what this call recorded in the budget (lost attempts too).
 """
 
 from __future__ import annotations
 
-import codecs
 import json
 import posixpath
 import re
@@ -36,7 +42,7 @@ import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated, Final, Protocol
+from typing import Annotated, Final
 
 from anthropic.types.beta import BetaMessage, BetaOutputConfigParam, BetaTextBlock
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError
@@ -51,18 +57,28 @@ from autonomous_ai_agents.clients.transport import (
 from autonomous_ai_agents.common.config import Effort, Settings, settings
 from autonomous_ai_agents.common.errors import LLMRequestError, LLMUnavailable
 from autonomous_ai_agents.common.models import (
+    BuiltinMeasure,
     CandidateModule,
     Project,
     ProjectUnderstanding,
+    QualityProposal,
     Workload,
 )
 from autonomous_ai_agents.common.paths import (
     READ_DENY_PATTERNS,
+    literal_project_file,
     matches_pattern,
     normalize_path,
 )
+from autonomous_ai_agents.common.repo_read import (
+    BINARY_SNIFF_BYTES as BINARY_SNIFF_BYTES,
+)
+from autonomous_ai_agents.common.repo_read import RepoReader as RepoReader
+from autonomous_ai_agents.common.repo_read import read_text
+from autonomous_ai_agents.common.repo_read import unprintable as _unprintable
 from autonomous_ai_agents.execution.git import GitError, GitWorkspace
 from autonomous_ai_agents.execution.protocols import UnderstandResult
+from autonomous_ai_agents.execution.quality import label_column_leaks
 from autonomous_ai_agents.optimization.anticheat import DEFAULT_PROTECTED_PATTERNS
 
 PROMPT_ALLOWANCE_TOKENS: Final = 2000
@@ -76,11 +92,8 @@ MAX_MODULES: Final = 10  # ProjectUnderstanding.candidate_modules
 MAX_WORKLOAD_NOTES: Final = 100
 MAX_PATH_CHARS: Final = 1024
 MAX_TEXT_CHARS: Final = 500  # one workload note or one module reason
-BINARY_SNIFF_BYTES: Final = 8000  # git's rule: a NUL in the first 8000 bytes
 
 _WORD = re.compile(r"[a-z_]{1,40}")
-# C0, DEL, C1 (NEL), the line and paragraph separators and the bidi controls.
-_UNPRINTABLE = re.compile(r"[\x00-\x1f\x7f-\x9f\u200e\u200f\u2028-\u202e\u2066-\u2069]")
 _SHOWN_NAMES = 5
 _SHOWN_CHARS = 80
 
@@ -98,13 +111,25 @@ def _object(**properties: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _nullable(schema: dict[str, object]) -> dict[str, object]:
+    return {"anyOf": [schema, {"type": "null"}]}
+
+
 _STRING: Final[dict[str, object]] = {"type": "string"}
+_MEASURES: Final = tuple(measure.value for measure in BuiltinMeasure)
 RESPONSE_SCHEMA: Final = _object(
     language=_STRING,
     summary=_STRING,
     entrypoints=_array(_STRING),
     workload_notes=_array(_object(workload_id=_STRING, note=_STRING)),
     candidate_modules=_array(_object(path=_STRING, reason=_STRING)),
+    quality_proposal=_nullable(
+        _object(
+            measure=_nullable(_STRING),
+            labels=_nullable(_STRING),
+            scorer_path=_nullable(_STRING),
+        )
+    ),
 )
 """Structured outputs take no length keywords: ``_Reply`` enforces the caps."""
 
@@ -124,6 +149,9 @@ at most {MAX_TEXT_CHARS} characters on what that workload runs.
 - candidate_modules: at most {MAX_MODULES} source files likely to dominate the \
 workloads' run time or memory, each with a reason of at most \
 {MAX_TEXT_CHARS} characters.
+- quality_proposal: null, or a quality check to suggest: measure (one of \
+{", ".join(_MEASURES)}) with labels, a tracked file of expected outputs one per \
+line; or scorer_path, an existing scoring script. Unused fields null.
 Every path is repository-relative, exactly as the file listing shows it, with \
 no leading slash. Name only files tracked at the base commit (the listing may \
 be cut short); anything else is discarded. Use no control characters; line \
@@ -179,6 +207,12 @@ class _Module(_Strict):
     reason: _Text
 
 
+class _Proposal(_Strict):
+    measure: Annotated[str, Field(max_length=MAX_LANGUAGE_CHARS)] | None
+    labels: _Path | None
+    scorer_path: _Path | None
+
+
 class _Reply(_Strict):
     """The reply exactly as ``RESPONSE_SCHEMA`` shapes it, with the caps."""
 
@@ -191,6 +225,7 @@ class _Reply(_Strict):
     entrypoints: list[_Path] = Field(max_length=MAX_ENTRYPOINT_ITEMS)
     workload_notes: list[_WorkloadNote] = Field(max_length=MAX_WORKLOAD_NOTES)
     candidate_modules: list[_Module] = Field(max_length=MAX_MODULES)
+    quality_proposal: _Proposal | None = None  # absent in older reply shapes
 
 
 @dataclass(frozen=True)
@@ -208,16 +243,6 @@ class ReadLimits:
         for name, value in vars(self).items():
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(f"{name} must be a whole number >= 1, got {value!r}")
-
-
-class RepoReader(Protocol):
-    """Git objects at a commit; ``GitWorkspace`` is the real one."""
-
-    def ls_tree(self, commit: str) -> tuple[str, ...]: ...
-
-    def read_blob(
-        self, commit: str, path: str, *, limit: int | None = None
-    ) -> bytes: ...
 
 
 class ClaudeUnderstander:
@@ -298,12 +323,97 @@ class ClaudeUnderstander:
             notes.extend(_served_notes(result))
             ids = frozenset(w.id for w in workloads)
             understanding = _understanding(result, snap.tracked, ids, notes)
+            proposal = None if understanding is None else understanding.quality_proposal
+            if proposal is not None and proposal.labels is not None:
+                notes.extend(
+                    self._leaks(reader, commit, proposal.labels, snap, workloads)
+                )
         return UnderstandResult(
             understanding,
             tuple(notes),
             max(0.0, budget.spent_usd - start_usd),
             max(0, budget.tokens - start_tokens),
         )
+
+    def _leaks(
+        self,
+        reader: RepoReader,
+        commit: str,
+        labels: str,
+        snap: _Snapshot,
+        workloads: Sequence[Workload],
+    ) -> list[str]:
+        """D37's precondition on the proposal: a tracked file a workload's argv
+        names (each argument from its working dir, the labels file itself
+        skipped) that carries the labels column. Read locally, never sent."""
+        cap = self._config.QUALITY_MAX_FROZEN_BYTES
+        wanted = dict.fromkeys(
+            path
+            for w in workloads
+            for arg in w.command
+            for path in _tracked_arg(arg, w.working_dir, snap.tracked)
+            if path != labels
+        )
+        try:
+            files = {p: reader.read_blob(commit, p, limit=cap + 1) for p in wanted}
+            truth = reader.read_blob(commit, labels, limit=cap + 1)
+        except GitError:
+            return []
+        files = {p: data for p, data in files.items() if len(data) <= cap}
+        leaks = label_column_leaks(truth, files)
+        if not leaks:
+            return []
+        return [
+            f"the suggested quality check's labels also appear in "
+            f"{_names(list(leaks))}: a workload can read them there, so that check "
+            "would be sound only if none does"
+        ]
+
+
+def _tracked_arg(arg: str, working_dir: str, tracked: frozenset[str]) -> list[str]:
+    """``arg`` as a tracked path from ``working_dir``, or nothing."""
+    try:
+        path = normalize_path(posixpath.join(working_dir, arg))
+    except ValueError:
+        return []
+    return [path] if path in tracked else []
+
+
+def _proposal(
+    raw: _Proposal | None, tracked: frozenset[str], notes: list[str]
+) -> QualityProposal | None:
+    """The validated proposal (D40), or ``None`` with a note on why not."""
+    if raw is None:
+        return None
+    what = "the quality proposal (never active by itself)"
+    if raw.measure is not None and raw.measure not in _MEASURES:
+        notes.append(f"dropped {what}: unknown measure {_shown(raw.measure)}")
+        return None
+    paths: dict[str, str | None] = {"labels": None, "scorer_path": None}
+    for key, value in (("labels", raw.labels), ("scorer_path", raw.scorer_path)):
+        if value is None:
+            continue
+        path = _kept(f"quality proposal {key}", value, tracked, set(), notes)
+        if path is None:
+            return None
+        try:
+            paths[key] = literal_project_file(key, path)
+        except ValueError:
+            notes.append(
+                f"dropped {what}: {key} {_shown(value)} is not a literal file name"
+            )
+            return None
+    try:
+        return QualityProposal(
+            measure=None if raw.measure is None else BuiltinMeasure(raw.measure),
+            labels=paths["labels"],
+            scorer_path=paths["scorer_path"],
+        )
+    except ValidationError:
+        notes.append(
+            f"dropped {what}: it must be a measure with labels or a scorer path"
+        )
+        return None
 
 
 def _failed(what: str, exc: Exception, charged: bool) -> str:
@@ -404,20 +514,12 @@ class _Snapshot:
             return f"not read (read limit {cap.max_read_attempts} files)"
         self.attempts += 1
         try:
-            # One byte past the cap shows a cut; never less than the sniff.
-            limit = max(cap.max_file_bytes + 1, BINARY_SNIFF_BYTES)
-            data = reader.read_blob(commit, path, limit=limit)
+            found = read_text(reader, commit, path, cap=cap.max_file_bytes)
         except GitError:
             return "unreadable in git"
-        if b"\0" in data[:BINARY_SNIFF_BYTES]:
-            return "not sent (binary)"
-        cut = len(data) > cap.max_file_bytes
-        try:  # only the head is decoded; a character split by the cut is left out
-            text = codecs.getincrementaldecoder("utf-8")().decode(
-                data[: cap.max_file_bytes], final=not cut
-            )
-        except UnicodeDecodeError:
-            return "not sent (not UTF-8)"
+        if isinstance(found, str):  # binary or not UTF-8 (denied: never listed)
+            return f"not sent ({found})"
+        text, cut = found.text, found.cut
         if _holds(text, self.token):
             return "not sent (they hold the boundary token)"
         size = len(text.encode())
@@ -576,6 +678,7 @@ def _understanding(
         workload_notes=workload_notes,
         candidate_modules=tuple(modules),
         served_by_model=result.served_model,
+        quality_proposal=_proposal(reply.quality_proposal, tracked, notes),
     )
 
 
@@ -649,15 +752,6 @@ def _no_constant(name: str) -> object:
 
 def _holds(text: str, token: str) -> bool:
     return token.casefold() in text.casefold()
-
-
-def _unprintable(text: str) -> bool:
-    """Controls, separators, bidi overrides (forged lines or markers), no UTF-8."""
-    try:
-        text.encode("utf-8")
-    except UnicodeEncodeError:
-        return True
-    return _UNPRINTABLE.search(text) is not None
 
 
 def _shorten(text: str) -> str:

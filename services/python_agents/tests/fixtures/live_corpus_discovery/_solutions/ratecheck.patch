@@ -1,0 +1,37 @@
+diff --git a/ratecheck/ledger.py b/ratecheck/ledger.py
+index ab5deda..71f7084 100644
+--- a/ratecheck/ledger.py
++++ b/ratecheck/ledger.py
+@@ -1,13 +1,29 @@
+ """The fingerprints of a day's conversions."""
+ 
+-from ratecheck.field import MODULUS, fraction
++from ratecheck.field import MODULUS, inverse
+ 
+ Conversion = tuple[str, int, int]
+ 
+ 
+ def fingerprints(day: list[Conversion]) -> list[int]:
+-    """Each conversion's rate as an element of the field, in order."""
+-    return [fraction(numerator, denominator) for _, numerator, denominator in day]
++    """Each conversion's rate as an element of the field, in order.
++
++    One inverse for the whole day: the inverse of the product of every
++    denominator, unwound from the last conversion to the first."""
++    if not day:
++        return []
++    running = 1
++    products: list[int] = []
++    for _, _, denominator in day:
++        products.append(running)
++        running = running * denominator % MODULUS
++    rest = inverse(running)
++    prints = [0] * len(day)
++    for index in range(len(day) - 1, -1, -1):
++        _, numerator, denominator = day[index]
++        prints[index] = numerator * rest * products[index] % MODULUS
++        rest = rest * denominator % MODULUS
++    return prints
+ 
+ 
+ def by_pair(day: list[Conversion], prints: list[int]) -> dict[str, tuple[int, int]]:

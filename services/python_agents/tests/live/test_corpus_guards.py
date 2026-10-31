@@ -71,6 +71,7 @@ from .conftest import (
     restore_host_key,
 )
 from .corpus import (
+    ALL_MODES,
     ATTACK_CORPUS,
     ATTACK_RUN_CAP_USD,
     CORPUS,
@@ -190,10 +191,40 @@ def _stdout(root: Path, repo: CorpusRepo) -> tuple[str, float]:
     return proc.stdout, seconds
 
 
+def _in_turn(
+    base: Path, fixed: Path, repo: CorpusRepo, count: int
+) -> tuple[list[tuple[str, float]], list[tuple[str, float]]]:
+    """``count`` runs of each copy, alternating, so contention hits both alike."""
+    before: list[tuple[str, float]] = []
+    after: list[tuple[str, float]] = []
+    for _ in range(count):
+        before.append(_stdout(base, repo))
+        after.append(_stdout(fixed, repo))
+    return before, after
+
+
 def _suite_passes(root: Path) -> None:
     proc, _ = _run(root, TEST_COMMAND)
     assert proc.returncode == 0, proc.stderr
     assert re.search(r"^Ran [1-9]\d* tests?", proc.stderr, re.MULTILINE), proc.stderr
+
+
+def test_the_two_copies_are_timed_in_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Base, fixed, base, fixed ...: a burst of contention lands on both
+    copies alike instead of on one block of runs."""
+    order: list[str] = []
+
+    def fake(root: Path, repo: CorpusRepo) -> tuple[str, float]:
+        order.append(root.name)
+        return "same\n", float(len(order))
+
+    monkeypatch.setattr(sys.modules[__name__], "_stdout", fake)
+    base, fixed = _in_turn(tmp_path / "base", tmp_path / "fixed", CORPUS[0], 3)
+    assert order == ["base", "fixed"] * 3
+    assert [s for _, s in base] == [1.0, 3.0, 5.0]
+    assert [s for _, s in fixed] == [2.0, 4.0, 6.0]
 
 
 # ---------------------------------------------------------------------------
@@ -336,13 +367,12 @@ def test_reference_fix_keeps_output_and_tests_and_is_faster(
     )
     assert proc.returncode == 0, proc.stderr
     assert _files(fixed) == [fixed / p.relative_to(base) for p in _files(base)]
-    before = [_stdout(base, repo) for _ in range(3)]
-    after = [_stdout(fixed, repo) for _ in range(3)]
+    before, after = _in_turn(base, fixed, repo, 3)
     outputs = {out for out, _ in before + after}
     assert len(outputs) == 1, "the output changed between runs or with the fix"
     _suite_passes(fixed)
-    slow = statistics.median(seconds for _, seconds in before)
-    quick = statistics.median(seconds for _, seconds in after)
+    slow = min(seconds for _, seconds in before)  # best of each: noise only adds
+    quick = min(seconds for _, seconds in after)
     assert slow >= BASELINE_FLOOR_S, f"{repo.name}: baseline {slow:.2f}s"
     gain = 1 - quick / slow
     assert gain >= MIN_FIX_GAIN, f"{repo.name}: {slow:.2f}s -> {quick:.2f}s"
@@ -781,7 +811,7 @@ def test_an_unknown_mode_refuses_before_any_run_spends(tmp_path: Path) -> None:
     recorder = mode_recorder("Benchmark corpus", {MODE_ENV: "blind"})
     assert recorder.mode == "blind" and recorder.outcomes == []
     assert CorpusRecorder("Attack corpus", {MODE_ENV: "blind"}).mode == "aimed"
-    for stem in ("test_corpus_live", "test_hard_corpus_live"):
+    for stem in ("test_corpus_live", "test_hard_corpus_live", "test_oss_live"):
         source = (TESTS_DIR / "live" / f"{stem}.py").read_text(encoding="utf-8")
         assert '@pytest.fixture(scope="module")' in source, stem
         assert "mode_recorder(" in source and "mode=recorder.mode" in source, stem
@@ -1026,6 +1056,8 @@ SUITES = (
     "sweep-fable",
     "sweep-record",
     "ab",
+    "ab-v2-p",  # V8 (E3): arm P beside arm A on corpus v2
+    "ab-v2",  # V10 (L5a, L5b): the retrieval re-test on all of corpus v2
     "escalation",
     "acquire",
     "noise",
@@ -1033,8 +1065,18 @@ SUITES = (
     "oss-ab",
     "evolve",
     "evolve-more",
+    "evolve-p",  # V8 (E4): arm P beside blind, one library a dispatch
     "heal-hard",
     "build",
+    "grader",
+    "upstream-verify",
+    "upstream",
+    "agent-probes",
+    "heal-agent",  # P1 (A1): the heal agent vs single shot
+    "research-agent",
+    "watch",
+    "watch-cleanup",
+    "ideas-probe",  # V7: E0b, E1, E1b, idea-only
 )
 DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_sweep_live.py",
@@ -1044,8 +1086,15 @@ DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_oss_ab_live.py",
     "tests/live/test_evolution_live.py",
     "tests/live/test_build_live.py",
+    "tests/live/test_grader_agreement_live.py",  # L3 (V5): the grader suite
+    "tests/live/test_upstream_verify_live.py",  # V9c: the upstream corpus
+    "tests/live/test_upstream_live.py",
+    "tests/live/test_ideas_probe_live.py",  # V7: the ideas probe
 )
 EXPERIMENT_MINUTES = {
+    # the sweeps on 37 repositories (v1 + hard + v2), from the Window 0 jobs on
+    # 25: sweep 39 min, sweep-fable 16, sweep-record 10, so about 58, 24 and 15
+    # at 37, each under half its timeout
     "sweep": 240,
     "sweep-fable": 180,
     "sweep-record": 150,
@@ -1054,11 +1103,19 @@ EXPERIMENT_MINUTES = {
     "oss-ab": 120,  # one library, 2 reps x 2 arms x 10 trials
     "evolve": 300,
     "evolve-more": 300,
+    "ab-v2-p": 300,  # 24 loops (2 reps x 6 repos x 2 arms) and 12 pipelines
+    "ab-v2": 300,  # discovery_ab.AB_V2_JOB_MINUTES: >= 3 x L5b's 48 at E5's pace
+    "evolve-p": 300,  # one library, 2 arms x up to 6 rounds (evolve: 30)
     "build": 120,
     "escalation": 90,
     "triage": 90,
     "papers": 60,
     "web": 90,
+    "upstream-verify": 150,  # upstream_verify.VERIFY_JOB_MINUTES, a batch of 10
+    "heal-agent": 120,  # 28 bugs, arm B up to 12 turns each
+    "research-agent": 45,  # research_agent.JOB_MINUTES: 11 runs
+    "watch": 90,  # watch_managed.JOB_MINUTES: one watched hosted run
+    "ideas-probe": 240,  # ideas_probe.JOB_MINUTES: E1 four libraries a dispatch
 }  # batch wait; 5 papers; 18 web runs
 SWEEP_FABLE_ENV = {  # Fable 5.1 beside the one arm whose run phase 1 shares
     "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
@@ -1066,7 +1123,14 @@ SWEEP_FABLE_ENV = {  # Fable 5.1 beside the one arm whose run phase 1 shares
 }
 HEAL_HARD_ENV = {"LIVE_HEAL_SET": "hard"}
 EVOLVE_MORE_ENV = {"LIVE_EVOLVE_REPOS": "idna,mistune,sqlparse,pycparser"}
+EVOLVE_P_ARMS_ENV = {"LIVE_EVOLVE_ARMS": "blind,P", "LIVE_EVOLVE_ROUNDS": "6"}
+EVOLVE_P_REPO = "sqlparse"  # evolve-p runs one library a dispatch (E4: 3)
+AB_V2_P_ENV = {"LIVE_AB_SET": "v2-p"}
+AB_V2_ENV = {"LIVE_AB_SET": "v2", "LIVE_AB_ARMS": "A,B"}  # L5b, ab_arms A,B
+AB_V2_BLIND_ENV = {"LIVE_AB_SET": "v2", "LIVE_AB_ARMS": "A", "LIVE_AB_REPS": "1"}
 OSS_AB_DISPATCH_REPO = "tabulate"  # oss-ab runs one library a dispatch
+# E1: four a dispatch (4 x 56 of ideas_probe.JOB_MINUTES' 240)
+IDEAS_E1_DISPATCH = {"LIVE_IDEAS_REPOS": "pyparsing,tomli,mistune,idna"}
 SWEEP_RECORD_ENV = {  # one arm, recorded for hand labels and offline replay
     "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
     "LIVE_SWEEP_RECORD": "1",
@@ -1076,6 +1140,7 @@ CAP_CEILING_USD = 150  # the most suite_cap_usd may be
 OSS_LIVE = "tests/live/test_oss_live.py"  # U24's suite, built in parallel
 OSS_MAX_REPOS = 10  # U24: at most 10 repositories ...
 OSS_RUN_CAP_USD = 5.0  # ... at 5 USD each
+UPSTREAM_BATCH = 10  # upstream.BATCH_SIZE: wired loops an upstream dispatch runs
 
 
 def _choice_options(block: str) -> tuple[str, ...]:
@@ -1110,11 +1175,11 @@ def test_every_suite_choice_names_existing_test_paths() -> None:
 def test_the_mode_input_is_a_strict_choice() -> None:
     inputs = _ci_block("      mode:", "      engine_model:")
     assert "type: choice" in inputs
-    assert f"options: [{', '.join(MODES)}]" in inputs
+    assert f"options: [{', '.join(ALL_MODES)}]" in inputs
     assert "default: aimed" in inputs
     step = _ci_block("      - name: Run live tests", "      - name: Upload live corpus")
     assert "INPUT_MODE: ${{ inputs.mode }}" in step
-    for mode in MODES:
+    for mode in ALL_MODES:
         assert f"            {mode}) ;;" in step, mode
     assert 'export LIVE_CORPUS_MODE="${INPUT_MODE}"' in step
 
@@ -1536,6 +1601,64 @@ def test_check_loop_guards_pass_a_clean_whole_loop(
     check_loop_guards(loop, run, result, Isolation("required", None))
 
 
+@pytest.mark.parametrize("ref", ["created", "missing"])
+def test_check_loop_guards_read_titles_from_the_engine_not_the_candidates(
+    ref: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A wired run's trials test ideas the engine generated, which are not
+    the loop's candidates (L1a, run 40241616564: KeyError on every repo);
+    the trial refs are still checked."""
+    loop, run = _loop(CORPUS[0], tmp_path, monkeypatch)
+    _send(run, [{"role": "user", "content": "understand"}], cost_usd=0.2)
+    _sandboxed(loop, "preflight", "baseline", "profile", "trial-x")
+    generated = loop.candidates[0].model_copy(
+        update={"id": "wired-0", "title": "an idea the engine generated"}
+    )
+    sha = _commit(loop.user, {"README.md": "x\n"}, tmp_path / "t")
+    trial = Trial(hypothesis_id=generated.id, round=1, status=TrialStatus.measured)
+    trial = trial.model_copy(update={"commit": sha})
+    result = _scripted(
+        loop, run, tmp_path / "s", Delivered(("# tidy",)), trials=(trial,)
+    )
+    result.state["hypotheses"].append(generated)
+    if ref == "created":
+        check_loop_guards(loop, run, result, Isolation("required", None))
+        return
+    git(loop.user.path, "update-ref", "-d", f"refs/heads/engine/trial-{result.run_id}-wired-0")  # fmt: skip
+    with pytest.raises(AssertionError):
+        check_loop_guards(loop, run, result, Isolation("required", None))
+
+
+@pytest.mark.parametrize("ref", ["created", "missing", "unannounced"])
+def test_check_loop_guards_expect_the_review_branch_of_a_review_delivery(
+    ref: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Step 3's review delivery adds ``engine/review-<id>`` (D10): expected
+    when the state holds one, and only then."""
+    loop, run = _loop(CORPUS[0], tmp_path, monkeypatch)
+    _send(run, [{"role": "user", "content": "understand"}], cost_usd=0.2)
+    _sandboxed(loop, "preflight", "baseline", "profile", "trial-x")
+    result = _scripted(loop, run, tmp_path / "s", Delivered(("# tidy",)))
+    branch = f"engine/review-{result.run_id}"
+    sha = _commit(loop.user, {"README.md": "x\n"}, tmp_path / "t")
+    if ref != "missing":
+        git(loop.user.path, "update-ref", f"refs/heads/{branch}", sha)
+    if ref != "unannounced":
+        result.state["review_delivery"] = Delivery(
+            project_id=loop.project.id,
+            kind=DeliveryKind.branch,
+            branch=branch,
+            commit=sha,
+            combined_diff="",
+            report_markdown="review",
+        )
+    if ref == "created":
+        check_loop_guards(loop, run, result, Isolation("required", None))
+        return
+    with pytest.raises(AssertionError):
+        check_loop_guards(loop, run, result, Isolation("required", None))
+
+
 def _violating(loop: Loop, commit: str | None) -> tuple[Trial, Verdict]:
     hypothesis = loop.candidates[1].id
     trial = Trial(
@@ -1670,6 +1793,16 @@ def _suite_needs() -> dict[str, float]:
     oss_ab = importlib.import_module(f"{__package__}.discovery_oss")
     evolve = importlib.import_module(f"{__package__}.evolution")
     build = importlib.import_module(f"{__package__}.build_improve")
+    grader = importlib.import_module(f"{__package__}.test_grader_agreement_live")
+    agents = importlib.import_module(
+        f"{__package__}.experiments.test_agent_probes_live"
+    )
+    heal_agent = importlib.import_module(f"{__package__}.experiments.heal_agent")
+    research = importlib.import_module(f"{__package__}.experiments.research_agent")
+    watch = importlib.import_module(f"{__package__}.experiments.watch_managed")
+    upstream = importlib.import_module(f"{__package__}.upstream")
+    upstream_verify = importlib.import_module(f"{__package__}.upstream_verify")
+    ideas = importlib.import_module(f"{__package__}.ideas_probe")
     one_library = {oss_ab.REPOS_ENV: OSS_AB_DISPATCH_REPO}
     return {
         "noise": noise.noise_need(noise.noise_plan({})),
@@ -1677,8 +1810,22 @@ def _suite_needs() -> dict[str, float]:
         "oss-ab": oss_ab.oss_ab_need(oss_ab.oss_ab_plan(one_library)),
         "evolve": evolve.evolve_need(evolve.evolve_plan({})),
         "evolve-more": evolve.evolve_need(evolve.evolve_plan(EVOLVE_MORE_ENV)),
+        "evolve-p": evolve.evolve_need(
+            evolve.evolve_plan({**EVOLVE_P_ARMS_ENV, evolve.REPOS_ENV: EVOLVE_P_REPO})
+        ),
+        "ab-v2-p": ab.ab_need(ab.ab_plan(AB_V2_P_ENV)),
+        "ab-v2": ab.ab_need(ab.ab_plan(AB_V2_ENV)),
         "heal-hard": heal.heal_need(heal.heal_plan(HEAL_HARD_ENV)),
         "build": build.build_need(build.build_plan({})),
+        "grader": grader.agreement_cap(grader.load_groups()),
+        "upstream-verify": upstream_verify.verify_need(),
+        "upstream": upstream.live_need(),
+        "agent-probes": agents.a0_need(),
+        "heal-agent": heal_agent.agent_need(),
+        "research-agent": research.research_need(),
+        "watch": watch.watch_need(),
+        "watch-cleanup": watch.cleanup_need(),
+        "ideas-probe": ideas.probe_need(ideas.probe_plan(IDEAS_E1_DISPATCH)),
         "sweep": sweep.sweep_need(sweep.sweep_plan({})),
         "sweep-fable": sweep.sweep_need(sweep.sweep_plan(SWEEP_FABLE_ENV)),
         "sweep-record": sweep.sweep_need(sweep.sweep_plan(SWEEP_RECORD_ENV)),
@@ -1742,6 +1889,7 @@ def test_the_job_timeout_fits_every_suite() -> None:
         "attack": len(ATTACK_CORPUS),
         "hard": hard,
         "oss": oss,
+        "upstream": UPSTREAM_BATCH,  # one batch of verified candidates
     }
     # stage-a, probes and prescreen take the fallback; the other experiments
     # are no loops but have their own timeouts
@@ -1760,8 +1908,14 @@ def _dispatch(
     cap: str,
     mode: str = "aimed",
     oss_repo: str = "",
+    editor_model: str = "default",
+    upstream_batch: str = "1",
+    ab_arms: str | None = None,
 ) -> tuple[int, str, str]:
-    """The run step under bash -e with a fake ``uv`` that records its call."""
+    """The run step under bash -e with a fake ``uv`` that records its call
+    (and, in ``rule.txt``, the noise rule, the editor and the noise path; in
+    ``ab.txt`` the A/B set, arms and repetitions). ``ab_arms`` ``None``
+    leaves ``INPUT_AB_ARMS`` unset (an older caller)."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     called = tmp_path / "called.txt"
@@ -1770,7 +1924,14 @@ def _dispatch(
         "#!/bin/sh\n"
         f'printf "%s\\n" "$*" "$ENGINE_MODEL" "${{ENGINE_FALLBACKS:-on}}" '
         f'"$LIVE_SUITE_CAP_USD" "$LIVE_CORPUS_MODE" > "{called}"\n'
-        f'printf "%s" "${{LIVE_OSS_AB_REPOS-unset}}" > "{tmp_path / "repos.txt"}"\n',
+        f'printf "%s" "${{LIVE_OSS_AB_REPOS-unset}}" > "{tmp_path / "repos.txt"}"\n'
+        f'printf "%s " "${{PAIRED_TRIALS-unset}}" "${{CONFIRM_WINNERS-unset}}" '
+        f'"${{NOISE_CALIBRATION_BLOCKS-unset}}" "${{EDITOR_MODEL-unset}}" '
+        f'"${{EDITOR_EFFORT-unset}}" "${{LIVE_NOISE_PATH-unset}}" '
+        f'> "{tmp_path / "rule.txt"}"\n'
+        f'printf "%s" "${{LIVE_UPSTREAM_BATCH-unset}}" > "{tmp_path / "batch.txt"}"\n'
+        f'printf "%s " "${{LIVE_AB_SET-unset}}" "${{LIVE_AB_ARMS-unset}}" '
+        f'"${{LIVE_AB_REPS-unset}}" > "{tmp_path / "ab.txt"}"\n',
         encoding="utf-8",
     )
     fake.chmod(0o755)
@@ -1785,8 +1946,12 @@ def _dispatch(
         "INPUT_SUITE_CAP_USD": cap,
         "INPUT_MODE": mode,
         "INPUT_OSS_REPO": oss_repo,
+        "INPUT_EDITOR_MODEL": editor_model,
+        "INPUT_UPSTREAM_BATCH": upstream_batch,
         "LIVE_RESULTS_PATH": str(tmp_path / "results.jsonl"),
     }
+    if ab_arms is not None:
+        env["INPUT_AB_ARMS"] = ab_arms
     proc = subprocess.run(
         ["bash", "-e", str(script)],
         env=env,
@@ -1812,8 +1977,9 @@ def _dispatch(
         ("papers", "9.99"),
         ("web", "51.99"),
         ("prescreen", "2.99"),
-        ("sweep", "76.99"),
+        ("sweep", "111.99"),  # v1 + hard + v2: 37 repositories
         ("ab", "139.99"),
+        ("ab-v2", "67.99"),
         ("escalation", "42.99"),
     ],
 )
@@ -2033,7 +2199,7 @@ def test_oss_ab_runs_exactly_the_one_library_its_input_names(tmp_path: Path) -> 
     code, output, calls = _dispatch(
         tmp_path, "heal", "claude-sonnet-5-5", "6", oss_repo="tabulate"
     )
-    assert (code, calls) == (1, "") and "only for the oss-ab suite" in output
+    assert (code, calls) == (1, "") and "only for the oss-ab and evolve-p" in output
     (tmp_path / "repos.txt").unlink()
     code, output, calls = _dispatch(tmp_path, "heal", "claude-sonnet-5-5", "6")
     assert code == 0 and calls, output
@@ -2063,7 +2229,123 @@ def test_evolve_more_exports_its_four_libraries_only_for_its_own_suite() -> None
         script,
     )
     assert guarded is not None, script
-    assert script.count(name) == 1
+    assert script.count(name) == 2  # evolve-p exports its one library too
+
+
+def test_evolve_p_runs_both_arms_on_the_one_library_its_input_names(
+    tmp_path: Path,
+) -> None:
+    """``evolve-p`` (V8, E4) needs ``oss_repo`` and exports it with both arms
+    and 6 rounds; no other suite sets ``LIVE_EVOLVE_ARMS``."""
+    exports = {"LIVE_EVOLVE_REPOS": "${INPUT_OSS_REPO}", **EVOLVE_P_ARMS_ENV}
+    line = " ".join(
+        f'{k}="{v}"' if "$" in v else f"{k}={v}" for k, v in exports.items()
+    )
+    script = _run_script()
+    assert f"export {line}\n" in script and script.count("LIVE_EVOLVE_ARMS") == 1
+    code, output, calls = _dispatch(
+        tmp_path, "evolve-p", "claude-sonnet-5-5", "56", oss_repo=EVOLVE_P_REPO
+    )
+    assert code == 0 and calls, output
+    for bad in ("", "sqlparse,tomli", "Sqlparse", "a;id"):
+        (tmp_path / "called.txt").unlink(missing_ok=True)
+        code, output, calls = _dispatch(
+            tmp_path, "evolve-p", "claude-sonnet-5-5", "56", oss_repo=bad
+        )
+        assert (code, calls) == (1, ""), (bad, output)
+        assert "::error::evolve-p needs oss_repo" in output
+    (tmp_path / "called.txt").unlink(missing_ok=True)
+    code, output, calls = _dispatch(
+        tmp_path, "evolve-p", "claude-sonnet-5-5", "55", oss_repo=EVOLVE_P_REPO
+    )
+    assert (code, calls) == (1, "") and "below the 56 USD suite evolve-p" in output
+
+
+def test_ab_v2_p_exports_its_set_only_for_its_own_suite() -> None:
+    """``ab-v2-p`` (V8, E3) is the A/B module with arm P on corpus v2."""
+    script = _run_script()
+    ((name, value),) = AB_V2_P_ENV.items()
+    guarded = re.search(
+        r'if \[ "\$\{INPUT_SUITE\}" = ab-v2-p \]; then\n'
+        rf"(?:  #.*\n)*  export {re.escape(name)}={re.escape(value)}\nfi\n",
+        script,
+    )
+    assert guarded is not None, script
+    # the only other export of the set is ab-v2's (V10), in its own branch
+    assert re.findall(rf"{name}=\S+", script) == [f"{name}={value}", f"{name}=v2"]
+
+
+def _ab_exports(tmp_path: Path) -> dict[str, str]:
+    """What the A/B module reads, as the fake ``uv`` saw it (unset dropped)."""
+    found = (tmp_path / "ab.txt").read_text(encoding="utf-8").split()
+    names = ("LIVE_AB_SET", "LIVE_AB_ARMS", "LIVE_AB_REPS")
+    return {k: v for k, v in zip(names, found, strict=True) if v != "unset"}
+
+
+def test_the_ab_arms_input_is_a_strict_choice_reaching_the_run_via_env() -> None:
+    """``ab_arms`` (V10): ``A,B`` (L5b) or ``A`` (L5a), quoted, through env
+    only; the dispatch form stays under GitHub's 25 inputs."""
+    block = _ci_block("      ab_arms:", "\n\n")
+    assert "type: choice" in block and "default: 'A,B'" in block
+    assert "options: ['A,B', A]" in block
+    assert "ab-v2 only" in block and "need 68" in block and "need 17" in block
+    step = _ci_block("      - name: Run live tests", "      - name: Upload live corpus")
+    assert "INPUT_AB_ARMS: ${{ inputs.ab_arms }}" in step
+    inputs = _ci_block("    inputs:\n", "\n\n")
+    names = re.findall(r"^      (\w+):$", inputs, re.MULTILINE)
+    assert names[-1] == "ab_arms" and len(names) == len(set(names)) == 13 <= 25
+
+
+@pytest.mark.parametrize(
+    ("arms", "cap", "env"),
+    [(None, "68", AB_V2_ENV), ("A,B", "68", AB_V2_ENV), ("A", "17", AB_V2_BLIND_ENV)],
+)
+def test_ab_v2_exports_its_set_and_arms_and_needs_their_caps(
+    tmp_path: Path, arms: str | None, cap: str, env: dict[str, str]
+) -> None:
+    """``ab-v2`` exports ``LIVE_AB_SET=v2`` and the arms; arm A alone is L5a's
+    one repetition, need 17; both arms L5b's two, need 68. The exports parse
+    to the plan whose need the cap covers, and a cent less is refused."""
+    ab = importlib.import_module(f"{__package__}.discovery_ab")
+    code, output, calls = _dispatch(
+        tmp_path, "ab-v2", "claude-sonnet-5-5", cap, ab_arms=arms
+    )
+    assert code == 0 and calls, output
+    assert _ab_exports(tmp_path) == env
+    need = ab.ab_need(ab.ab_plan(env))
+    assert need <= float(cap) < need + 1
+    assert "noise rule step2" in output
+    below = tmp_path / "below"
+    below.mkdir()
+    code, output, calls = _dispatch(
+        below, "ab-v2", "claude-sonnet-5-5", f"{int(cap) - 1}.99", ab_arms=arms
+    )
+    assert (code, calls) == (1, "") and "is below the" in output
+
+
+def test_ab_arms_refuses_bad_values_and_other_suites(tmp_path: Path) -> None:
+    for index, bad in enumerate(("", "B", "A,B,", "a", "A;id", "A,P", "B,A")):
+        fresh = tmp_path / f"bad-{index}"
+        fresh.mkdir()
+        code, output, calls = _dispatch(
+            fresh, "ab-v2", "claude-sonnet-5-5", "68", ab_arms=bad
+        )
+        assert (code, calls) == (1, "") and "unknown ab_arms" in output, bad
+    for index, suite in enumerate(("ab", "ab-v2-p")):
+        fresh = tmp_path / f"other-{index}"
+        fresh.mkdir()
+        code, output, calls = _dispatch(
+            fresh, suite, "claude-sonnet-5-5", "150", ab_arms="A"
+        )
+        assert (code, calls) == (1, "") and "ab_arms is only for" in output, suite
+    for suite, env in (("ab", {}), ("ab-v2-p", AB_V2_P_ENV)):
+        fresh = tmp_path / f"default-{suite}"
+        fresh.mkdir()
+        code, output, calls = _dispatch(
+            fresh, suite, "claude-sonnet-5-5", "150", ab_arms="A,B"
+        )
+        assert code == 0 and calls, output
+        assert _ab_exports(fresh) == env  # E5 and E3 unchanged
 
 
 def test_heal_hard_exports_its_set_only_for_its_own_suite() -> None:
@@ -2078,3 +2360,130 @@ def test_heal_hard_exports_its_set_only_for_its_own_suite() -> None:
     )
     assert guarded is not None, script
     assert script.count(name) == 1
+
+
+# ---------------------------------------------------------------------------
+# The python job's workload interpreters and pip-audit (spec D13, D19)
+# ---------------------------------------------------------------------------
+
+SECURITY_WORKFLOW = CI_WORKFLOW.with_name("security.yml")
+STAGE_GATE = SERVICE_DIR.parents[1] / "scripts" / "stage-gate.sh"
+WORKLOAD_VERSIONS = " ".join(f"3.{minor}" for minor in range(8, 15))  # 3.8-3.14
+PIP_AUDIT = "uv run pip-audit --progress-spinner off"
+SYNC = "uv sync --frozen --extra dev --extra database --extra experiments"
+
+
+def _step_names(block: str) -> list[str]:
+    return re.findall(r"^      - name: (.+)$", block, flags=re.MULTILINE)
+
+
+def _step(block: str, name: str) -> str:
+    begin = block.index(f"      - name: {name}\n")
+    after = block.find("\n      - name: ", begin + 1)
+    return block[begin : len(block) if after < 0 else after]
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "tests_step"),
+    [
+        ("  python:\n", "  python-macos:\n", "Run tests with parallelization"),
+        ("  python-macos:\n", "  live-smoke:\n", "Run execution tests"),
+    ],
+    ids=["linux", "macos"],
+)
+def test_each_python_job_installs_and_checks_every_workload_interpreter(
+    start: str, end: str, tests_step: str
+) -> None:
+    """D13's live templates run under every ``python3.N`` on PATH and must
+    not skip in CI: each job that runs them installs 3.8-3.14 before its
+    tests and fails if one is missing."""
+    job = _ci_block(start, end)
+    names = _step_names(job)
+    install_name = "Install workload interpreters 3.8 to 3.14"
+    check_name = "Workload interpreters are on PATH"
+    assert names.index(install_name) + 1 == names.index(check_name)
+    assert names.index(check_name) < names.index(tests_step)
+    install = _step(job, install_name)
+    assert f"uv python install {WORKLOAD_VERSIONS}\n" in install
+    assert 'uv python dir --bin >> "$GITHUB_PATH"' in install
+    check = _step(job, check_name)
+    assert f"for version in {WORKLOAD_VERSIONS}; do\n" in check
+    assert "              status=1\n" in check  # a missing one fails the job
+    assert "::error::python${version} is not on PATH" in check
+    assert 'exit "${status}"' in check
+
+
+def test_the_python_job_audits_the_lock_after_mypy_as_the_gate_does() -> None:
+    """D19: a vulnerable lock fails the PR; the command is the gate's."""
+    job = _ci_block("  python:\n", "  python-macos:\n")
+    names = _step_names(job)
+    audit = "Audit dependencies with pip-audit"
+    assert names.index("Type check with Mypy") + 1 == names.index(audit)
+    step = _step(job, audit)
+    assert f"run: {PIP_AUDIT}\n" in step
+    assert "continue-on-error" not in step and "|| true" not in step
+    assert "\n        if:" not in step  # never skipped
+    assert PIP_AUDIT in STAGE_GATE.read_text(encoding="utf-8")
+
+
+def test_security_audits_the_unchanged_lock_every_week() -> None:
+    """D19: a new advisory against an unchanged lock turns the weekly run red;
+    the job syncs what the python job syncs and runs the gate's command."""
+    text = SECURITY_WORKFLOW.read_text(encoding="utf-8")
+    assert "  schedule:\n    # Run security scans every Monday at 9am UTC\n" in text
+    begin = text.index("  pip-audit:\n")
+    after = re.search(r"^  [\w-]+:\n", text[begin + 1 :], flags=re.MULTILINE)
+    job = text[begin : len(text) if after is None else begin + 1 + after.start()]
+    assert (
+        "if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'"
+        in job
+    )
+    assert "working-directory: ./services/python_agents" in job
+    assert f"run: {SYNC}\n" in job
+    assert SYNC in CI_WORKFLOW.read_text(encoding="utf-8")
+    step = _step(job, "Audit dependencies with pip-audit")
+    assert f"run: {PIP_AUDIT}\n" in step
+    assert "continue-on-error" not in job and "|| true" not in job
+    locked = _step(job, "Audit every locked package with pip-audit")
+    assert "uv export --frozen --all-extras --no-emit-project" in locked
+    assert "--disable-pip --require-hashes -r" in locked
+    for audit in (step, locked):
+        assert "\n        if:" not in audit  # never skipped
+
+
+def test_the_upstream_suites_take_a_batch_and_upstream_runs_wired_only(
+    tmp_path: Path,
+) -> None:
+    """V9c: both upstream suites export ``LIVE_UPSTREAM_BATCH`` (1-3) and
+    install the hash-pinned wheels; ``upstream`` refuses any mode but
+    ``wired``; every other suite leaves the batch unset."""
+    for suite, cap, mode in (
+        ("upstream-verify", "1", "aimed"),
+        ("upstream", "50", "wired"),
+    ):
+        code, output, calls = _dispatch(
+            tmp_path, suite, "claude-opus-5-5", cap, mode, upstream_batch="2"
+        )
+        assert code == 0, output
+        path = f"tests/live/test_{suite.replace('-', '_')}_live.py"
+        assert calls.splitlines()[0] == f"run pytest {path} -m live --no-cov -n 0 -rA"
+        assert (tmp_path / "batch.txt").read_text(encoding="utf-8") == "2"
+    for bad in ("", "0", "4", "1;id"):
+        (tmp_path / "called.txt").unlink(missing_ok=True)
+        code, output, calls = _dispatch(
+            tmp_path, "upstream-verify", "claude-opus-5-5", "1", upstream_batch=bad
+        )
+        assert (code, calls) == (1, ""), (bad, output)
+        assert "::error::upstream_batch must be 1, 2 or 3" in output
+    (tmp_path / "called.txt").unlink(missing_ok=True)
+    code, output, calls = _dispatch(tmp_path, "upstream", "claude-opus-5-5", "50")
+    assert (code, calls) == (1, "") and "runs wired only" in output
+    (tmp_path / "batch.txt").unlink()
+    code, output, calls = _dispatch(tmp_path, "heal", "claude-sonnet-5-5", "6")
+    assert code == 0 and calls, output
+    assert (tmp_path / "batch.txt").read_text(encoding="utf-8") == "unset"
+    step = _ci_block("      - name: Run live tests", "      - name: Upload live corpus")
+    assert (
+        "uv pip install --no-deps --require-hashes --only-binary :all: -r"
+        " tests/fixtures/upstream_corpus/requirements.txt" in step
+    )

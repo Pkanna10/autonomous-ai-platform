@@ -1,0 +1,27 @@
+diff --git a/booklist/links.py b/booklist/links.py
+index bac63e0..50dc7f8 100644
+--- a/booklist/links.py
++++ b/booklist/links.py
+@@ -1,17 +1,11 @@
+ """Link slugs for titles."""
+ 
++import re
++
++_WORD = re.compile("[a-z0-9]+")
++
+ 
+ def slug(title: str) -> str:
+     """The title in lower case, each run of other characters as one dash,
+     none at either end."""
+-    out = ""
+-    pending = False
+-    for char in title.lower():
+-        if "a" <= char <= "z" or "0" <= char <= "9":
+-            if pending and out:
+-                out += "-"
+-            out += char
+-            pending = False
+-        else:
+-            pending = True
+-    return out
++    return "-".join(_WORD.findall(title.lower()))

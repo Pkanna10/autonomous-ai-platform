@@ -55,7 +55,26 @@ self-check are Linux-only.
 Under ``required`` a failed isolation step writes ``error`` and exits 125
 without exec; ``best_effort`` records the flag as false; ``off`` skips. Then
 fork/exec, ``wait4``, and one JSON ``LaunchReport`` on the fd with raw
-``ru_maxrss`` (the engine scales it). After the report is written the launcher
+``ru_maxrss`` (the engine scales it).
+
+The child-process tripwire (D62, N0c), Linux only: before the fork the
+launcher becomes the child subreaper (a failure refuses), so every orphaned
+descendant is reparented to it with or without a PID namespace. It waits for
+the workload with ``WNOWAIT``, reads its ``cutime + cstime`` from
+``/proc/<pid>/stat`` (children it waited for, in clock ticks), then reaps it.
+It then drains the strays: each exited one is reaped and counted, and a live
+one gets every child the launcher can name (``ppid`` in ``/proc/*/stat``)
+SIGKILLed before one blocking wait, so it never blocks on a child it has not
+killed. ``child_cpu`` (seconds, the strays' CPU added) and ``strays`` go in
+the report; both are null on darwin, and ``child_cpu`` is null when the stat
+read fails (the engine refuses such a Linux run). Known gap: a workload that
+sets SIGCHLD to SIG_IGN (or SA_NOCLDWAIT) before it spawns hides its children
+from both signals: the kernel auto-reaps them, so their time never reaches
+``cutime``/``cstime`` and they are gone before the drain. The static spawn
+rule (N0) is the defence there; ``test_child_tripwire`` pins the gap. A PID
+namespace's ``ns_last_pid`` delta would see them but counts threads too, so a
+thread-pool trial would read as spawning (an open Lead decision, D62).
+After the report is written the launcher
 exits with the workload's own status (128+signal for a signal), so the outer
 wrapper's exit status is ground truth for the process runner's cross-check. A
 refusal is a report whose ``error`` is set with both flags false (and exit 125
@@ -95,7 +114,9 @@ _SPEC_KEYS = frozenset(
     {"version", "platform", "fs", "net", "writable", "probe_dir", "probe_port"}
 )
 _USAGE = "usage: launcher.py <fd> <spec-json> -- argv..."
-_REFUSED = {"wall_ns": 0, "utime": 0.0, "stime": 0.0, "maxrss": 0, "exit": EXIT_REFUSED}
+_REFUSED: dict[str, object] = {"wall_ns": 0, "utime": 0.0, "stime": 0.0, "maxrss": 0}
+_REFUSED |= {"exit": EXIT_REFUSED, "child_cpu": None, "strays": None}
+STRAYS_MAX = 4096  # the drain stops here; the count already flags the run
 
 # netdevice(7): bring up lo inside the fresh network namespace.
 _SIOCGIFFLAGS, _SIOCSIFFLAGS, _IFF_UP = 0x8913, 0x8914, 0x1
@@ -109,6 +130,7 @@ _PR_CAPBSET_DROP = 24
 _PR_CAP_AMBIENT = 47
 _PR_CAP_AMBIENT_CLEAR_ALL = 4
 _PR_SET_SECUREBITS = 28
+_PR_SET_CHILD_SUBREAPER = 36
 # NOROOT | NOROOT_LOCKED | NO_SETUID_FIXUP | NO_SETUID_FIXUP_LOCKED | KEEP_CAPS_LOCKED
 _SECUREBITS = 0x2F
 # capset(2) with _LINUX_CAPABILITY_VERSION_3 and two zeroed 32-bit data words.
@@ -339,6 +361,10 @@ class Ops:
         fork: Callable[[], int],
         execvp: Callable[[str, list[str]], NoReturn],
         wait4: Callable[[int, int], tuple[int, int, resource.struct_rusage]],
+        waitid: Callable[[int], None],
+        child_cpu: Callable[[int], float],
+        children: Callable[[], list[int]],
+        kill: Callable[[int, int], None],
         exit: Callable[[int], NoReturn],
         reset_signals: Callable[[], None],
         clear_handlers: Callable[[], None],
@@ -358,6 +384,8 @@ class Ops:
         self.fork = fork
         self.execvp = execvp
         self.wait4 = wait4
+        self.waitid, self.child_cpu = waitid, child_cpu
+        self.children, self.kill = children, kill
         self.exit = exit
         self.reset_signals = reset_signals
         self.clear_handlers = clear_handlers
@@ -441,6 +469,46 @@ def real_connect(host: str, port: int) -> None:
     socket.create_connection((host, port), timeout=PROBE_TIMEOUT_S).close()
 
 
+def real_waitid(pid: int) -> None:
+    """Block until ``pid`` exits, leaving it unreaped (its ``/proc`` entry stays)."""
+    os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
+
+
+def _stat_fields(data: bytes) -> list[bytes]:
+    """``/proc/<pid>/stat`` from field 3 on: past the last ")", as comm may hold one."""
+    return data[data.rindex(b")") + 2 :].split()
+
+
+def stat_child_cpu(data: bytes, ticks: int) -> float:
+    """``cutime + cstime`` (stat fields 16 and 17) in seconds; ``ValueError``."""
+    fields = _stat_fields(data)
+    if len(fields) < 15 or ticks < 1:
+        raise ValueError("not a /proc stat line")
+    return (int(fields[13]) + int(fields[14])) / ticks
+
+
+def real_child_cpu(pid: int) -> float:
+    with open(f"/proc/{pid}/stat", "rb") as handle:
+        return stat_child_cpu(handle.read(), os.sysconf("SC_CLK_TCK"))
+
+
+def real_children() -> list[int]:
+    """This process's children: each ``/proc/<pid>/stat`` whose ppid is ours.
+
+    ``/proc/<pid>/task/*/children`` needs ``CONFIG_PROC_CHILDREN``, which not
+    every kernel has; the scan runs only when a live stray exists."""
+    me, found = os.getpid(), []
+    for name in filter(str.isdigit, os.listdir("/proc")):
+        try:
+            with open(f"/proc/{name}/stat", "rb") as handle:
+                data = handle.read()
+        except OSError:  # it exited meanwhile
+            continue
+        if int(_stat_fields(data)[1]) == me:
+            found.append(int(name))
+    return found
+
+
 def restore_signals(
     set_handler: Callable[[int, signal.Handlers], object] = signal.signal,
 ) -> None:
@@ -483,6 +551,10 @@ def default_ops() -> Ops:
         fork=os.fork,
         execvp=os.execvp,
         wait4=os.wait4,
+        waitid=real_waitid,
+        child_cpu=real_child_cpu,
+        children=real_children,
+        kill=os.kill,
         exit=os._exit,
         reset_signals=restore_signals,
         clear_handlers=clear_signal_handlers,
@@ -724,6 +796,40 @@ def _read_child_error(read_fd: int) -> bytes:
     return b"".join(chunks)
 
 
+def drain_strays(ops: Ops) -> tuple[int, float]:
+    """Reap every descendant left behind: ``(count, their CPU seconds)``.
+
+    ECHILD ends it, an exited stray is counted, and a live one (``wait4``
+    gives 0) gets every child the launcher can name SIGKILLed, then one
+    blocking wait. A live stray it cannot name counts once more and ends the
+    drain, as ``STRAYS_MAX`` does; the namespace or procrun's group kill does
+    the rest."""
+    count, cpu, options = 0, 0.0, os.WNOHANG
+    while count < STRAYS_MAX:
+        try:
+            pid, _, usage = ops.wait4(-1, options)
+        except ChildProcessError:
+            break
+        options = os.WNOHANG
+        if pid:
+            count, cpu = count + 1, cpu + usage.ru_utime + usage.ru_stime
+            continue
+        try:
+            live = ops.children()
+        except (OSError, ValueError, IndexError):
+            live = []
+        if not live:
+            count += 1
+            break
+        for child in live:
+            try:
+                ops.kill(child, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        options = 0
+    return count, cpu
+
+
 def run_workload(
     argv: list[str],
     ops: Ops,
@@ -741,6 +847,14 @@ def run_workload(
     outer wrapper carries the workload's status.
     """
     ops.clear_handlers()
+    linux = ops.platform == "linux"
+    if linux:
+        try:
+            ops.prctl(_PR_SET_CHILD_SUBREAPER, 1)
+        except OSError as failed:
+            raise RefusedError(
+                f"becoming the child subreaper failed: {_describe(failed)}"
+            ) from None
     read_fd, write_fd = ops.pipe()
     start = time.perf_counter_ns()
     pid = ops.fork()
@@ -751,8 +865,19 @@ def run_workload(
         records = _read_child_error(read_fd).split(_RECORD_END)
     finally:
         os.close(read_fd)
+    child_cpu: float | None = None
+    if linux:
+        try:
+            ops.waitid(pid)
+            child_cpu = ops.child_cpu(pid)
+        except (OSError, ValueError) as problem:
+            _say(f"cannot read the workload's child CPU: {_describe(problem)}")
     _, status, usage = ops.wait4(pid, 0)
     wall_ns = time.perf_counter_ns() - start
+    strays: int | None = None
+    if linux:
+        strays, stray_cpu = drain_strays(ops)
+        child_cpu = None if child_cpu is None else child_cpu + stray_cpu
     exit_code = os.waitstatus_to_exitcode(status)
     error: str | None = None
     for record in records:
@@ -773,6 +898,8 @@ def run_workload(
         "fs_isolated": fs_isolated,
         "net_isolated": net_isolated,
         "error": error,
+        "child_cpu": child_cpu,
+        "strays": strays,
     }
     process_code = exit_code if exit_code >= 0 else 128 - exit_code
     return report, process_code

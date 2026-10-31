@@ -1,0 +1,112 @@
+Python 3.11.15
+[more_itertools] more_itertools/more.py | trivial: trailing comment
+    current rule: REFUSED: 'more_itertools/more.py' may start processes (line 4078: uses __import__) while cpu_time_s or peak_rss_bytes is judged
+    delta proto : passes
+[more_itertools] more_itertools/more.py | realistic: split_when local-binding tweak
+    current rule: REFUSED: 'more_itertools/more.py' may start processes (line 4079: uses __import__) while cpu_time_s or peak_rss_bytes is judged
+    delta proto : passes
+[more_itertools] more_itertools/more.py | abuse: reuse the base __import__ to start a process pool
+    current rule: REFUSED: 'more_itertools/more.py' may start processes (line 4078: uses __import__; line 4080: uses .ProcessPoolExecutor) while cpu_time_s or peak_rss_bytes is judged
+    delta proto : REFUSED: uses .ProcessPoolExecutor
+[more_itertools] more_itertools/more.py | abuse: edit the base __import__ statement itself
+    current rule: REFUSED: 'more_itertools/more.py' may start processes (line 4078: uses __import__) while cpu_time_s or peak_rss_bytes is judged
+    delta proto : REFUSED: uses __import__
+[more_itertools] more_itertools/recipes.py | trivial: trailing comment
+    current rule: passes
+    delta proto : passes
+[tomli] src/tomli/_parser.py | trivial: trailing comment
+    current rule: passes
+    delta proto : passes
+[tomli] src/tomli/_parser.py | realistic: skip_chars via a cached regex
+    current rule: passes
+    delta proto : passes
+[tomli] src/tomli/_parser.py | editor slip: same edit with a missing colon (SyntaxError)
+    current rule: REFUSED: 'src/tomli/_parser.py' could not be scanned for process spawning (Python 3.11 cannot parse it) while cpu_time_s or peak_rss_bytes is judged
+    delta proto : unparseable (SyntaxError line 333: expected ':') -> fix-retry feedback, not process_spawn
+[tomli] src/tomli/_parser.py | 3.12+ syntax: PEP 701 f-string reusing quotes
+    current rule: REFUSED: 'src/tomli/_parser.py' could not be scanned for process spawning (Python 3.11 cannot parse it) while cpu_time_s or peak_rss_bytes is judged
+    delta proto : unparseable (SyntaxError line 804: f-string: unmatched '[') -> fix-retry feedback, not process_spawn
+[tomli] src/tomli/_parser.py | 3.12+ syntax: PEP 695 type alias
+    current rule: REFUSED: 'src/tomli/_parser.py' could not be scanned for process spawning (Python 3.11 cannot parse it) while cpu_time_s or peak_rss_bytes is judged
+    delta proto : unparseable (SyntaxError line 803: invalid syntax) -> fix-retry feedback, not process_spawn
+[tomli] src/tomli/_parser.py | honest mistake: process pool for parallel parsing
+    current rule: REFUSED: 'src/tomli/_parser.py' may start processes (line 803: imports concurrent.futures.ProcessPoolExecutor) while cpu_time_s or peak_rss_bytes is judged
+    delta proto : REFUSED: imports concurrent.futures.ProcessPoolExecutor
+[tomli] src/tomli/_parser.py | not covered: thread pool (threads share the process)
+    current rule: passes
+    delta proto : passes
+[mistune] src/mistune/_inline/links.py | trivial: trailing comment
+    current rule: passes
+    delta proto : passes
+[mistune] src/mistune/inline_parser.py | trivial: trailing comment
+    current rule: passes
+    delta proto : passes
+[mistune] src/mistune/util.py | trivial: trailing comment
+    current rule: passes
+    delta proto : passes
+[mistune] src/mistune/plugins/__init__.py | trivial (setup-time import_plugin file): trailing comment
+    current rule: REFUSED: 'src/mistune/plugins/__init__.py' may start processes (line 1: imports importlib.import_module) while cpu_time_s or peak_rss_bytes is judged
+    delta proto : passes
+[mistune] src/mistune/util.py | editor slip: unclosed bracket (SyntaxError)
+    current rule: REFUSED: 'src/mistune/util.py' could not be scanned for process spawning (Python 3.11 cannot parse it) while cpu_time_s or peak_rss_bytes is judged
+    delta proto : unparseable (SyntaxError line 99: '{' was never closed) -> fix-retry feedback, not process_spawn
+[mistune] src/mistune/plugins/__init__.py | abuse: new import_module call in an added line
+    current rule: REFUSED: 'src/mistune/plugins/__init__.py' may start processes (line 1: imports importlib.import_module) while cpu_time_s or peak_rss_bytes is judged
+    delta proto : REFUSED: uses spawn-bound import_module
+
+Python 3.13.16
+[more_itertools] more_itertools/more.py | trivial: trailing comment
+    current rule: REFUSED: 'more_itertools/more.py' may start processes (line 4078: uses __import__) while cpu_time_s or peak_rss_bytes is judged
+    delta proto : passes
+[more_itertools] more_itertools/more.py | realistic: split_when local-binding tweak
+    current rule: REFUSED: 'more_itertools/more.py' may start processes (line 4079: uses __import__) while cpu_time_s or peak_rss_bytes is judged
+    delta proto : passes
+[more_itertools] more_itertools/more.py | abuse: reuse the base __import__ to start a process pool
+    current rule: REFUSED: 'more_itertools/more.py' may start processes (line 4078: uses __import__; line 4080: uses .ProcessPoolExecutor) while cpu_time_s or peak_rss_bytes is judged
+    delta proto : REFUSED: uses .ProcessPoolExecutor
+[more_itertools] more_itertools/more.py | abuse: edit the base __import__ statement itself
+    current rule: REFUSED: 'more_itertools/more.py' may start processes (line 4078: uses __import__) while cpu_time_s or peak_rss_bytes is judged
+    delta proto : REFUSED: uses __import__
+[more_itertools] more_itertools/recipes.py | trivial: trailing comment
+    current rule: passes
+    delta proto : passes
+[tomli] src/tomli/_parser.py | trivial: trailing comment
+    current rule: passes
+    delta proto : passes
+[tomli] src/tomli/_parser.py | realistic: skip_chars via a cached regex
+    current rule: passes
+    delta proto : passes
+[tomli] src/tomli/_parser.py | editor slip: same edit with a missing colon (SyntaxError)
+    current rule: REFUSED: 'src/tomli/_parser.py' could not be scanned for process spawning (Python 3.13 cannot parse it) while cpu_time_s or peak_rss_bytes is judged
+    delta proto : unparseable (SyntaxError line 333: expected ':') -> fix-retry feedback, not process_spawn
+[tomli] src/tomli/_parser.py | 3.12+ syntax: PEP 701 f-string reusing quotes
+    current rule: passes
+    delta proto : passes
+[tomli] src/tomli/_parser.py | 3.12+ syntax: PEP 695 type alias
+    current rule: passes
+    delta proto : passes
+[tomli] src/tomli/_parser.py | honest mistake: process pool for parallel parsing
+    current rule: REFUSED: 'src/tomli/_parser.py' may start processes (line 803: imports concurrent.futures.ProcessPoolExecutor) while cpu_time_s or peak_rss_bytes is judged
+    delta proto : REFUSED: imports concurrent.futures.ProcessPoolExecutor
+[tomli] src/tomli/_parser.py | not covered: thread pool (threads share the process)
+    current rule: passes
+    delta proto : passes
+[mistune] src/mistune/_inline/links.py | trivial: trailing comment
+    current rule: passes
+    delta proto : passes
+[mistune] src/mistune/inline_parser.py | trivial: trailing comment
+    current rule: passes
+    delta proto : passes
+[mistune] src/mistune/util.py | trivial: trailing comment
+    current rule: passes
+    delta proto : passes
+[mistune] src/mistune/plugins/__init__.py | trivial (setup-time import_plugin file): trailing comment
+    current rule: REFUSED: 'src/mistune/plugins/__init__.py' may start processes (line 1: imports importlib.import_module) while cpu_time_s or peak_rss_bytes is judged
+    delta proto : passes
+[mistune] src/mistune/util.py | editor slip: unclosed bracket (SyntaxError)
+    current rule: REFUSED: 'src/mistune/util.py' could not be scanned for process spawning (Python 3.13 cannot parse it) while cpu_time_s or peak_rss_bytes is judged
+    delta proto : unparseable (SyntaxError line 99: '{' was never closed) -> fix-retry feedback, not process_spawn
+[mistune] src/mistune/plugins/__init__.py | abuse: new import_module call in an added line
+    current rule: REFUSED: 'src/mistune/plugins/__init__.py' may start processes (line 1: imports importlib.import_module) while cpu_time_s or peak_rss_bytes is judged
+    delta proto : REFUSED: uses spawn-bound import_module
+

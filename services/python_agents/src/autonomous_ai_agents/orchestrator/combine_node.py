@@ -9,12 +9,15 @@ The combine node (``nodes.py``) delegates here when a ``Combiner`` is wired:
    guardrails copied from the run's baseline), the B runs a transient
    ``Trial`` of a synthetic efficiency ``Hypothesis``, and the completeness
    rule runs on both sides. The combination holds iff ``derive_verdict``
-   returns ``keep`` (verdict rules 1 to 6 unchanged) and something was
-   applied.
+   returns an outcome in ``CombineRules.accept`` (``keep``; the review set
+   also takes ``review``, D10) and something was applied.
 3. When it does not hold, the single best kept change (highest gain, then
    hypothesis id) is re-tested once, never the set that just failed.
 4. The applied changes' verdict ids are kept only if a re-test held; the
    ``Combination`` records the greedy result, any fallback and the outcome.
+
+``retest_one`` is the same re-test on one change, with no fallback: the
+confirmation's second look (``confirm.py``, D41 b).
 
 Nothing here is stored: neither the transient trial nor the synthetic
 hypothesis reaches the repository, and lessons stay as the verdicts made them.
@@ -34,6 +37,7 @@ from autonomous_ai_agents.common.models import (
     ChangeClass,
     Combination,
     CombineSkip,
+    FrozenFile,
     Guardrail,
     Hypothesis,
     HypothesisSource,
@@ -73,7 +77,9 @@ class CombineRules:
     guardrail metric measured exactly once per workload, objectives over
     enough runs), applied to the B runs and the A runs alike.
     ``baseline_count`` is the baseline suite's passing-test count: the tip's
-    suite must reach it, as every trial's must.
+    suite must reach it, as every trial's must. ``accept`` holds the
+    outcomes a re-test may end in and still hold: ``keep`` alone for the run
+    branch, ``keep`` or ``review`` for the review set (D10).
     """
 
     judges: tuple[Judge, ...]
@@ -82,11 +88,14 @@ class CombineRules:
     primary: str | None
     completeness: Callable[[Sequence[Measurement]], tuple[Violation, ...]]
     baseline_count: int | None = None
+    accept: frozenset[VerdictOutcome] = frozenset({VerdictOutcome.keep})
 
 
 @dataclass(frozen=True)
 class CombineTarget:
-    """Where the combiner works: the run, the project, the base and the branch."""
+    """Where the combiner works: the run, the project, the base and the branch;
+    ``quality_files`` are the baseline's frozen files the re-test scores
+    against (``Baseline.quality_files``, D37)."""
 
     run_id: str
     project: Project
@@ -94,6 +103,7 @@ class CombineTarget:
     workloads: tuple[Workload, ...]
     branch: str
     round: int
+    quality_files: tuple[FrozenFile, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -105,15 +115,22 @@ class CombineOutcome:
 
 
 @dataclass(frozen=True)
-class _Retest:
+class Retest:
+    """One re-test: what the combiner measured, its verdict, and whether it
+    holds (something applied, the outcome in ``accept``)."""
+
     measured: CombineMeasured
     verdict: Verdict
+    accept: frozenset[VerdictOutcome]
 
     @property
     def holds(self) -> bool:
-        return bool(self.measured.applied) and (
-            self.verdict.outcome is VerdictOutcome.keep
-        )
+        return bool(self.measured.applied) and self.verdict.outcome in self.accept
+
+    @property
+    def reason(self) -> str:
+        """Why it held or not (:func:`_why`)."""
+        return _why(self)
 
 
 def kept_changes(
@@ -188,19 +205,32 @@ def combine_kept(
     )
 
 
+def retest_one(
+    combiner: Combiner, change: KeptChange, rules: CombineRules, target: CombineTarget
+) -> Retest:
+    """Re-test ``change`` alone, ABAB from the base, judged as combine judges."""
+    return _retest(combiner, (change,), rules, target)
+
+
 def _retest(
     combiner: Combiner,
     offered: Sequence[KeptChange],
     rules: CombineRules,
     target: CombineTarget,
-) -> _Retest:
-    measured = combiner.combine(
-        target.run_id,
-        target.project,
-        target.base_commit,
-        offered,
-        target.workloads,
-        baseline_count=rules.baseline_count,
+) -> Retest:
+    args = (target.run_id, target.project, target.base_commit, offered)
+    # Step 2 combiners need not know the keyword: pass it only with files.
+    measured = (
+        combiner.combine(
+            *args,
+            target.workloads,
+            baseline_count=rules.baseline_count,
+            quality_files=target.quality_files,
+        )
+        if target.quality_files
+        else combiner.combine(
+            *args, target.workloads, baseline_count=rules.baseline_count
+        )
     )
     _check_measured(measured, offered)
     baseline = Baseline(
@@ -242,7 +272,7 @@ def _retest(
     verdict = derive_verdict(
         trial, hypothesis, results, found, primary_metric=rules.primary
     )
-    return _Retest(measured, verdict)
+    return Retest(measured, verdict, rules.accept)
 
 
 def _check_measured(measured: CombineMeasured, offered: Sequence[KeptChange]) -> None:
@@ -274,17 +304,23 @@ def _fallback_candidate(
     )
 
 
-def _why(retest: _Retest) -> str:
+def _why(retest: Retest) -> str:
     """Why a re-test held or not: its verdict, or that nothing was applied.
 
     An empty application never holds, whatever the B runs say (the tip is
     the base), so the verdict would be the wrong reason to give. Otherwise
     the verdict summary, plus the first violation's message (rules alone are
-    terse).
+    terse). Applied changes with no rows on either side mean the combiner
+    caught a run failure: a crash, not an anti-cheating violation.
     """
-    verdict = retest.verdict
-    if not retest.measured.applied:
+    verdict, measured = retest.verdict, retest.measured
+    if not measured.applied:
         return "nothing was applied (tip is the base)"
+    if not measured.baseline and not measured.combined:
+        return (
+            "the re-test produced no measurements (a workload or the suite "
+            "failed on the second look)"
+        )
     if not verdict.violations:
         return verdict.summary
     return f"{verdict.summary} ({verdict.violations[0].message})"
@@ -297,9 +333,9 @@ def _skip_text(skip: CombineSkip) -> str:
 
 def _summary(
     changes: Sequence[KeptChange],
-    greedy: _Retest,
+    greedy: Retest,
     fallback: KeptChange | None,
-    final: _Retest,
+    final: Retest,
     kept_ids: Sequence[str],
 ) -> str:
     applied = len(greedy.measured.applied)

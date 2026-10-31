@@ -1,0 +1,9 @@
+The nightly price import fails at what looks like random: loading
+eu_prices.csv (semicolon-separated) raises TableError ("eu_prices.csv line 1
+has 1 field(s), expected 3"). Loading the same file on its own, in a fresh
+interpreter, works every time. It fails only when the night's batch loaded
+us_prices.csv (comma-separated) earlier in the same run, which depends on
+the order the files arrive in.
+
+    load_table("us_prices.csv", "sku,price,stock\nA1,1.50,3\n", ["sku", "price", "stock"])
+    load_table("eu_prices.csv", "sku;price;stock\nA1;1,50;3\n", ["sku", "price", "stock"])

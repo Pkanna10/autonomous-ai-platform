@@ -1,0 +1,12 @@
+diff --git a/stockbook/checks.py b/stockbook/checks.py
+index f3039cf..0edeac6 100644
+--- a/stockbook/checks.py
++++ b/stockbook/checks.py
+@@ -7,5 +7,5 @@ def line_digest(line: str) -> int:
+     """A rolling check value of one movement line."""
+     total = 7
+     for byte in line.encode("ascii"):
+-        total = (total * 131 + byte) % MODULUS
+-    return total
++        total = total * 131 + byte
++    return total % MODULUS

@@ -531,6 +531,21 @@ def test_ls_tree_lists_blob_paths_and_read_blob_returns_their_bytes(
     assert ws.read_blob(base, "core.py") == CORE_V1.encode()
 
 
+def test_blob_modes_reports_each_blob_entrys_mode(
+    ws: GitWorkspace, repo: Path, base: str
+) -> None:
+    write(repo / "deep" / "tool.sh", "echo\n")
+    (repo / "deep" / "tool.sh").chmod(0o755)
+    os.symlink("core.py", repo / "alias.py")
+    run_git(repo, "add", "-A")
+    run_git(repo, "update-index", "--add", "--cacheinfo", f"160000,{base},vendored")
+    run_git(repo, "commit", "-q", "-m", "modes")
+    modes = ws.blob_modes(out(repo, "rev-parse", "HEAD"))
+    assert set(modes) == set(ws.ls_tree(out(repo, "rev-parse", "HEAD")))
+    assert (modes["core.py"], modes["deep/tool.sh"]) == ("100644", "100755")
+    assert modes["alias.py"] == "120000" and "vendored" not in modes
+
+
 @pytest.mark.skipif(sys.platform == "darwin", reason="APFS refuses non-UTF-8 names")
 def test_a_non_utf8_file_name_round_trips(ws: GitWorkspace, repo: Path) -> None:
     name = os.fsdecode(b"caf\xe9.txt")
@@ -1033,6 +1048,24 @@ def test_commit_is_reproducible_with_the_engine_identity_and_base_dates(
     assert f"author {ENGINE_NAME} <{ENGINE_EMAIL}> 1700000000 +0100" in lines
     assert f"committer {ENGINE_NAME} <{ENGINE_EMAIL}> 1700003600 -0500" in lines
     assert not any(line.startswith("gpgsig") for line in lines)
+
+
+def test_commit_with_a_parent_is_a_child_of_it_and_moves_head_from_the_last(
+    ws: GitWorkspace, root: Path, base: str
+) -> None:
+    """D15: a retried trial's second commit sits on the base, not on commit 1."""
+    handle = ws.add_worktree(root / "run1" / "trial-h1", base)
+    write(handle.path / "core.py", "v2\n")
+    ws.stage_all(handle)
+    first = ws.commit(handle, "one\n", base=base)
+    write(handle.path / "core.py", "v3\n")
+    ws.stage_all(handle)
+    second = ws.commit(handle, "two\n", base=base, parent=base)
+    assert out(handle.path, "rev-parse", "HEAD") == second != first
+    parents = out(handle.path, "rev-list", "--parents", "-n", "1", second)
+    assert parents.split() == [second, base]
+    with pytest.raises(ValueError, match="full object id"):
+        ws.commit(handle, "m", base=base, parent="HEAD")
 
 
 def test_commit_refuses_a_nul_in_the_message_or_a_bad_base(

@@ -1,8 +1,8 @@
 # Autonomous AI Platform - Claude Code Configuration
 
-**Version:** 4.3.0 **Last Updated:** 2026-10-24 **Status:** Engine rebuild, Step
-2 (core loop) closed out on PR #12 (gate passed, awaiting merge); Step 3 in
-design on `claude/step3-research`
+**Version:** 4.5.0 **Last Updated:** 2026-10-26 **Status:** Engine rebuild, Step
+3 Wave 1 built on `claude/step3-research` (draft PR #22); its E2E and live runs
+next
 
 ---
 
@@ -44,20 +44,29 @@ a hypothesis whose judge is "the failing case now passes, nothing regresses".
 ```
 
 - **Define "better".** Default objective: minimize runtime and peak memory;
-  outputs and quality must not change. The user can override it in plain English
-  ("accuracy may drop <= 0.5%"), which becomes an `Objective` plus `Guardrail`s.
+  outputs must not change (the output check is on by default). With a quality
+  number the user confirms once (a frozen scorer over frozen evaluation data), a
+  change that alters output may pass when the number stays within the drop the
+  user allows ("accuracy may drop at most 0.5 points"); it then goes to review,
+  labelled. Plain-English goals become an `Objective` plus `Guardrail`s (Step
+  4).
 - **Research** draws on two sources: a curated **playbook** of known techniques
   with preconditions, and **papers** (arXiv, Semantic Scholar) with claims and
   preconditions extracted by Claude.
 - **Judges** are frozen evaluators: speed, memory, output equivalence, a
   guardrail metric, the existing test suite. A trial diff that touches
   benchmark, test or judge files is rejected automatically (anti reward
-  hacking). Results need N >= 5 runs and a gain larger than the measured noise.
-- **Autonomy is proportional to verifiability.** Efficiency wins are delivered
-  automatically; changes that alter model or algorithm behaviour are flagged;
-  novel changes are proposals that need human approval. Autonomy comes from
-  automatic checks, not from a human: the user is asked when a check fails or
-  cannot run. The engine never pushes to the default branch.
+  hacking). Results need N >= 5 runs and a gain larger than the measured noise:
+  each trial is measured alternately against an unchanged copy of the base,
+  against a per-project floor (never below 2 %), and every winner is confirmed
+  on a second look before it stands.
+- **Autonomy is proportional to verifiability.** Efficiency wins with identical
+  outputs are delivered automatically (`engine/run-<id>`); changes that alter
+  behaviour or output go to a separate review branch (`engine/review-<id>`) with
+  a label, never merged into the run branch and with no pause; novel changes are
+  proposals that need human approval. Autonomy comes from automatic checks, not
+  from a human: the user is asked when a check fails or cannot run. The engine
+  never pushes to the default branch.
 - **Acquire capabilities automatically** (vision update 2026-10-24). When a
   hypothesis needs a dependency, an engine-owned capability step finds, vets,
   pins and installs it into the trial's own environment, never the user's:
@@ -74,59 +83,75 @@ a hypothesis whose judge is "the failing case now passes, nothing regresses".
 - **Self-healing.** The user's code: a failing test, a crash or an error report
   becomes a hypothesis judged by "the failing case passes, and the full suite
   and the other judges show no regression"; a fix changes behaviour, so it is
-  delivered as a flagged branch. The engine itself: a trial that fails for a
-  fixable reason (syntax, import or type error) gets a bounded retry with that
-  error fed back, inside the cost cap.
+  delivered on the review branch. The engine itself: a trial that fails for a
+  fixable reason (syntax, import, name, type or attribute error) gets one retry
+  per run with that error fed back through a closure check (only interpreter
+  text and names the API has already seen), inside the cost cap.
 - **Learn.** Every verdict becomes a lesson ("frozen encoder + repeated epochs
   -> cache embeddings") that feeds the next hypothesis ranking.
 
 ### The 7 layers and where they live
 
-| Layer                     | Repo home                                                                                   | Decision                                                                                                                                                                                                            |
-| ------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| L1 Interfaces             | `services/python_agents` CLI (planned), `apps/` (later)                                     | Integrate: CLI first, then web console, GitHub App, plugin                                                                                                                                                          |
-| L2 Orchestrator           | `services/python_agents/.../orchestrator/`                                                  | Build on LangGraph 1.x (checkpointing, interrupts, retries)                                                                                                                                                         |
-| L3 Capability acquisition | `capabilities/` (planned) + `packages` table                                                | **Build**: automatic package acquisition under an automatic policy (user asked only on a failed check); MCP server and API discovery, auto-connect only read-only and credential-free                               |
-| L4 Research               | `services/python_agents/.../research/`                                                      | **Build**: playbook, paper search, claim extraction, matcher                                                                                                                                                        |
-| L5 Execution              | `services/python_agents/.../execution/` (built, Step 2)                                     | Local runner on the user's hardware; cloud sandbox later; per-trial environments with offline installs; bounded self-retry on fixable trial errors                                                                  |
-| L6 Optimization           | `services/python_agents/.../optimization/` (Steps 1-2)                                      | **Build**: hypotheses, trials, judges, verdicts, combine                                                                                                                                                            |
-| L7 Self-improvement       | `services/python_agents/.../learning/` + `lessons` table (`user_feedback` table unused yet) | **Build**: lessons store; evaluator-gated, no fine-tuning; self-healing of the user's code (failing case -> hypothesis -> flagged branch); production error intake and gradual rollout later (Steps 4-5 interfaces) |
-| Persistence               | `infrastructure/schema/` (Postgres + pgvector), Redis, Qdrant                               | Existing tables reused and extended via new migrations                                                                                                                                                              |
+| Layer                     | Repo home                                                                                   | Decision                                                                                                                                                                                                           |
+| ------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| L1 Interfaces             | `services/python_agents` CLI (planned), `apps/` (later)                                     | Integrate: CLI first, then web console, GitHub App, plugin                                                                                                                                                         |
+| L2 Orchestrator           | `services/python_agents/.../orchestrator/`                                                  | Build on LangGraph 1.x (checkpointing, interrupts, retries)                                                                                                                                                        |
+| L3 Capability acquisition | `capabilities/` (planned) + `packages` table                                                | **Build**: automatic package acquisition under an automatic policy (user asked only on a failed check); MCP server and API discovery, auto-connect only read-only and credential-free                              |
+| L4 Research               | `services/python_agents/.../research/`                                                      | **Build**: a generator wired into the hypotheses node (Step 3); playbook and matcher built, off by default; paper search and claim extraction only if the retrieval re-test calls for them                         |
+| L5 Execution              | `services/python_agents/.../execution/` (built, Step 2)                                     | Local runner on the user's hardware; cloud sandbox later; per-trial environments with offline installs; bounded self-retry on fixable trial errors                                                                 |
+| L6 Optimization           | `services/python_agents/.../optimization/` (Steps 1-3)                                      | **Build**: hypotheses, trials, judges, verdicts, combine                                                                                                                                                           |
+| L7 Self-improvement       | `services/python_agents/.../learning/` + `lessons` table (`user_feedback` table unused yet) | **Build**: lessons store; evaluator-gated, no fine-tuning; self-healing of the user's code (failing case -> hypothesis -> review branch); production error intake and gradual rollout later (Steps 4-5 interfaces) |
+| Persistence               | `infrastructure/schema/` (Postgres + pgvector), Redis, Qdrant                               | Existing tables reused and extended via new migrations                                                                                                                                                             |
 
 ---
 
 ## Project Status and Build Order
 
-**Reality check (2026-10-24, Step 2 closed out, PR #12 awaiting merge):** the
+**Reality check (2026-10-25, Step 3 Wave 1 built, E2E and live runs next):** the
 repository contains working infrastructure (Docker, CI with a Postgres service,
-a sandbox probe, a macOS job and a manual live smoke test, security scanning,
-schema 001-004), a working TypeScript Claude client, and the engine's core loop
-in `services/python_agents`, running for real on CPU-bound Python workloads:
-preflight at connect, one Claude understand request, baseline, cProfile profile
-and Claude-edited trials in sandboxed git worktrees (network and write
-isolation, checked on every run), git-side anti-cheating, the frozen judges, a
-combine re-tested ABAB with the test suite on its tip, delivery to a local
-`engine/run-<id>` branch, and a Postgres repository, all under a hard per-run
-cost cap. Research, the CLI, the live log and hardware detection do not exist
-yet; hypotheses are supplied by the caller. Treat anything else described in
-older docs as a plan, not a feature.
+a sandbox probe, a blocking macOS job, pip-audit, a manual live smoke test,
+security scanning, schema 001-006), a working TypeScript Claude client, and the
+engine's loop in `services/python_agents`, running for real on CPU-bound Python
+workloads: preflight at connect, one Claude understand request, baseline,
+cProfile profile and Claude-edited trials in sandboxed git worktrees (network
+and write isolation, checked on every run), git-side anti-cheating, the frozen
+judges, a combine re-tested ABAB with the test suite on its tip, delivery to a
+local `engine/run-<id>` branch, and a Postgres repository, all under a hard
+per-run cost cap. Step 3 Wave 1 adds (committed on its branch, not on `master`
+yet; offline-tested, no live run yet): hypotheses generated by Claude when the
+caller hands none over (novel ones parked); one fenced, closure-checked fix
+retry per run; the `engine/review-<id>` branch for changes that alter behaviour
+or output; the output check on by default, or a quality check the caller
+confirms (`build_context(quality=...)`) with frozen, masked evaluation files;
+and the noise rule (paired ABBA trials against a base twin, a calibrated
+per-project floor of at least 2 %, a second look before any keep). Paper intake,
+the CLI, the live log and hardware detection do not exist; the playbook matcher
+is built and off. Treat anything else described in older docs as a plan, not a
+feature.
 
 | Step | Deliverable                                                                                                                                                                                                     | Model / setting to select               |
 | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
 | 0    | Repair & upgrade: DB init fix, dependency bumps, current model IDs, truthful docs (PR #11)                                                                                                                      | Opus 5.5, High                          |
 | 1    | Engine design: typed state, data models, judges, anti-cheating, migration 003 (PR #11)                                                                                                                          | Fable 5.1, Extra                        |
 | 2    | Core loop end to end on CPU Python workloads, with an E2E fixture test (done 2026-10-24, PR #12)                                                                                                                | Opus 5.5, Ultracode                     |
-| 3    | Research: generator and matcher wired into the hypotheses node, playbook, PDF parser, claim/precondition extraction, arXiv monitor (off GitHub runners); bounded engine self-retry on fixable trial errors      | Opus 5.5, Ultracode (Fable for matcher) |
+| 3    | Generator wired, engine self-retry, review delivery, quality check, noise rule, hard corpus v2 and the retrieval re-test, lessons and evolution; paper intake conditional (Wave 1 built, PR #22)                | Opus 5.5, Ultracode (Fable 5.1 reviews) |
+| 3c   | Self-healing of the user's code: failing test or crash -> hypothesis, engine-written reproducer frozen with the judges, "now passes, nothing regresses" judge, review-branch delivery (before 3b)               | Opus 5.5, High                          |
 | 3b   | Capability acquisition: automatic package policy, network-on fetch into a hash-pinned wheelhouse, offline per-trial installs, engine-owned lockfile commit, drop a package with no proven gain                  | Opus 5.5, Ultracode                     |
-| 3c   | Self-healing of the user's code: failing test or crash -> hypothesis, engine-written reproducer frozen with the judges, "now passes, nothing regresses" judge, flagged delivery                                 | Opus 5.5, High                          |
 | 4    | Interfaces + runner: live CLI log, hardware detection (CPU/CUDA/MPS), `--goal` English parsing; MCP server and API discovery (auto-connect read-only, credential-free only); error-report intake for the healer | Opus 5.5, Ultracode                     |
 | 5    | Dogfood on fixtures, OSS repos, then the user's VLM bridge on an M4 Pro                                                                                                                                         | Opus 5.5, High                          |
 | 6    | Production loop: error monitoring into the healer, gradual rollout through the user's deployment (the engine never deploys)                                                                                     | Opus 5.5, High                          |
 
+3c comes before 3b (the owner, O5): it has no network boundary, while 3b needs a
+security review of a network-on fetch. Wave 3 of Step 3 is held until Wave 1's
+live runs report.
+
 Runtime models called by the engine itself (`services/python_agents` settings):
-`ENGINE_MODEL=claude-opus-5-5` for understanding, extraction and trial edits;
-`TRIAGE_MODEL=claude-haiku-5-5` for high-volume paper triage. Every run carries
-a `--max-cost` cap and logs its token cost.
+`ENGINE_MODEL=claude-opus-5-5` for understanding and trial edits (`EDITOR_MODEL`
+unset keeps the editor on it); `GENERATOR_MODEL` and `MATCHER_MODEL`
+`claude-sonnet-5-5` at medium effort for discovery (the matcher runs only under
+`RESEARCH_RETRIEVAL=matched`, off); `TRIAGE_MODEL=claude-haiku-5-5` for paper
+triage, if paper intake is built. Every run carries a hard cost cap
+(`max_cost_usd`; `--max-cost` with the Step 4 CLI) and logs its token cost.
 
 **Decision tree: "Should I implement this feature?"**
 
@@ -275,7 +300,7 @@ documentation_guide/       Original 2025 vision documents
 User (product owner): vision, priorities, approvals, merges
 └─ Lead (main session): design, briefings and reports, integration,
    review routing, commits, PRs, CI
-   ├─ Builders: one unit each (<= ~400 lines, disjoint files), tests
+   ├─ Builders: one unit each (<= ~400 source lines, disjoint files), tests
    │  first, report with evidence
    ├─ Reviewer: fresh context, read-only, a different model from the
    │  author; reports correctness, spec, security and weakened-test
@@ -293,6 +318,26 @@ root vs non-root, what only CI, macOS or a live run proves; `STATUS.md` Lessons,
 Step 2), and review effort follows risk: one correctness Reviewer per unit, a
 security Reviewer only at trust boundaries, scoped to the diff and its callers.
 Every design decision gets a first-principles "why" in `STATUS.md`.
+
+**Setter, attempter, marker (owner, 2026-10-26, O19).** No result counts if the
+same context set the exam and sat it. For every test set, eval, label file,
+corpus, pilot or live experiment, name the three roles and keep them apart:
+
+- **Setter:** a different context from whoever built the thing under test, and a
+  different model where possible; best of all, human-authored material (real
+  open-source code, fixes that maintainers merged). Exams are tiered: basic
+  checks, hard cases, and adversarial "god mode" cases. Answer keys are sealed
+  (committed, with their hash recorded) before any attempt.
+- **Attempter:** sees only what a real run would see, never the keys, rubric or
+  labels.
+- **Marker:** deterministic where possible (the frozen judges); where judgement
+  is needed, a different model from the attempter with an adversarial rubric, a
+  second marker on disagreement, and a small sample for the owner to spot-check.
+
+A result whose setter and attempter share a context is reported as a smoke test,
+not as evidence. Builders still write tests first, but high-risk units (judges,
+anti-cheating, budget, security, the idea portfolio) also get acceptance tests
+written from the spec by a separate agent that never sees the implementation.
 
 ### Process
 
@@ -313,6 +358,31 @@ Shape Up for bets, Kanban for flow, XP for engineering, DORA for measurement.
   this file or the hooks when needed.
 - DORA-style tracking per step in `STATUS.md`: lead time, CI-red pushes, rework
   commits, reverts.
+
+### Builders in a shared worktree (Step 3 lessons, `STATUS.md`)
+
+Parallel Builders share one worktree on disjoint files. Each brief carries these
+rules:
+
+- **Size by source.** A unit row states source and test lines separately; the
+  ~400-line cap is on source. A Builder stops and reports when its source passes
+  1.5x its row.
+- **Reds that prove something.** Every red run shows at least one assertion
+  failure, not only a missing module, and every fix round shows its own red. A
+  security unit shows a red per protection: remove it, and the named test fails.
+- **Private coverage data.** Each Builder sets its own `COVERAGE_FILE` (in the
+  scratchpad, named for the unit); a shared `.coverage` mixes runs.
+- **Format only your files** (`ruff format <files>`); run the repo-wide check
+  with `--check` only.
+- **Mutations on scratch copies only**, run with `-o pythonpath=<copy>/src`
+  (`pyproject.toml`'s `pythonpath` beats `PYTHONPATH`) plus a canary mutation
+  that must be killed; a mutation claim without its canary is not evidence.
+- **Timing guards keep about 2x margin, measured on CI**: a fixture's baseline
+  sits at about twice the guard's floor on a CI runner, not only locally. A
+  timing failure under concurrent Builders' load is reported as such; the Lead's
+  sequential gate on a clean copy and CI decide.
+- **Every spec rule has a unit.** Before a build, the Lead maps each decision,
+  failure mode and security control in the spec to the unit row that builds it.
 
 ### Standing permissions for PRs and branches (user, 2026-10-24)
 
@@ -369,8 +439,9 @@ After each merge, report the PR number, the merge commit and the CI result on
 - **Python 3.11+** with `uv`, Hatchling, Ruff, mypy strict, pytest
 - **LangGraph 1.x** for the orchestrator loop; **anthropic 1.x** SDK
 - **Node.js 22.12+**, TypeScript 5.9, pnpm 10, Vitest, ESLint, Prettier
-- **Claude** via the Messages API: `claude-opus-5-5` (engine),
-  `claude-haiku-5-5` (triage)
+- **Claude** via the Messages API: `claude-opus-5-5` (engine and editor),
+  `claude-sonnet-5-5` (hypothesis generator, matcher), `claude-haiku-5-5`
+  (triage)
 - **PostgreSQL 16 + pgvector**, Redis 7, Qdrant (Docker Compose)
 - **CI:** GitHub Actions with Trivy, Docker Scout, OSV, pip-audit, SBOM and
   provenance attestations
@@ -432,6 +503,16 @@ directory:
 
 ## Changelog
 
+- **4.5.0 (2026-10-26):** The setter/attempter/marker rule (O19) under
+  Development Workflow: no result counts if one context set the exam and sat it.
+- **4.4.0 (2026-10-25):** Step 3 Wave 1 built: the reality check (generated
+  hypotheses, one fix retry per run, the review branch, the default output check
+  and the quality check, the noise rule; schema 001-006); the Step 3 build-order
+  row in the owner's wording (O1) and 3c before 3b (O5); "flagged" replaced by
+  the `engine/review-<id>` branch in the vision, L7 and 3c (D10); the quality
+  check (O7), the default output check (O9), one retry per run (O8) and the
+  noise rule (O10) in the vision; Sonnet 5.5 as the discovery model; a new
+  "Builders in a shared worktree" section from the Step 3 Wave 1 lessons.
 - **4.3.0 (2026-10-24):** Vision update from the user: automatic package
   acquisition (an automatic policy replaces the approval gate), self-healing of
   the user's code and of the engine's own trials, and MCP server and API

@@ -1,18 +1,26 @@
 diff --git a/ledgerclose/settle.py b/ledgerclose/settle.py
-index 9895467..442f892 100644
+index 2e5c0b8..cad5e6d 100644
 --- a/ledgerclose/settle.py
 +++ b/ledgerclose/settle.py
-@@ -7,12 +7,10 @@ def settle(pending: list[tuple[str, int]]) -> tuple[dict[str, int], list[int]]:
-     Returns the final balance per account (accounts in sorted order) and,
+@@ -7,18 +7,11 @@ def settle(pending: list[tuple[int, int]]) -> tuple[dict[int, int], list[int]]:
+     Returns the final balance per account (accounts in ascending order) and,
      for each transfer, the total held across all accounts once it settled.
      """
--    queue = list(pending)
-     balances: dict[str, int] = {}
+-    accounts: list[int] = []
+-    balances: list[int] = []
++    balances: dict[int, int] = {}
      held: list[int] = []
      total = 0
--    while queue:
--        account, amount = queue.pop(0)
-+    for account, amount in pending:
-         balances[account] = balances.get(account, 0) + amount
+     for account, amount in pending:
+-        try:
+-            slot = accounts.index(account)
+-        except ValueError:
+-            slot = len(accounts)
+-            accounts.append(account)
+-            balances.append(0)
+-        balances[slot] += amount
++        balances[account] = balances.get(account, 0) + amount
          total += amount
          held.append(total)
+-    return dict(sorted(zip(accounts, balances, strict=True))), held
++    return dict(sorted(balances.items())), held

@@ -25,6 +25,13 @@ checkpointed state and never from the repository.
 checkpoint and resume. ``budget_exhausted`` is set when the trials node stops
 for lack of money, and the router then goes straight to combine.
 
+Step 3 (U2) adds the discovery keys: ``candidate_pool`` (generated ideas not
+yet sliced into a round), ``parked`` (ideas held back, each with its
+``parked_reason``), ``technique_matches``, ``generator_calls``,
+``discovery_cost_usd`` (also counted in ``cost_usd``) and
+``discovery_exhausted`` (discovery can no longer be afforded, D7); and the
+review branch's ``review_combination`` and ``review_delivery`` (D10).
+
 ``AgentState`` is a transitional alias for the placeholder nodes and tests
 that still import the old name; it goes away with the node rewrite.
 """
@@ -52,6 +59,7 @@ from autonomous_ai_agents.common.models import (
     ProjectUnderstanding,
     RunPhase,
     Technique,
+    TechniqueMatchRecord,
     Trial,
     Verdict,
     Workload,
@@ -119,6 +127,14 @@ class EngineState(TypedDict):
     combination: Combination | None
     budget_exhausted: bool
     extra_protected: list[str]
+    candidate_pool: list[Hypothesis]
+    parked: list[Hypothesis]
+    technique_matches: list[TechniqueMatchRecord]
+    generator_calls: int
+    discovery_cost_usd: float
+    discovery_exhausted: bool
+    review_combination: Combination | None
+    review_delivery: Delivery | None
 
 
 AgentState = EngineState
@@ -182,4 +198,12 @@ def initial_state(
         combination=None,
         budget_exhausted=False,
         extra_protected=[],
+        candidate_pool=[],
+        parked=[],
+        technique_matches=[],
+        generator_calls=0,
+        discovery_cost_usd=0.0,
+        discovery_exhausted=False,
+        review_combination=None,
+        review_delivery=None,
     )

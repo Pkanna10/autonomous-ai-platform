@@ -6,8 +6,10 @@ repository is cloned at its pin into the test's tmp dir by ``oss.py`` (a
 depth-1 fetch of the tag over https from GitHub, refused unless it is the
 pin), its benchmark committed as ``benchmarks/bench_<name>.py``, then exactly
 as the corpus: ``build_context`` on the captured real transport with the
-``required`` sandbox, the manifest's two efficiency candidates (one aimed
-at the profiled hot spot, one neutral), the library's own test subset as
+``required`` sandbox, the candidates of ``LIVE_CORPUS_MODE`` (``aimed``, the
+default: the manifest's two efficiency candidates, one aimed at the
+profiled hot spot, one neutral; ``wired``: none, the engine's generator on
+its own captured transport), the library's own test subset as
 the ``tests_pass`` guardrail, and ``Orchestrator.run`` capped at
 ``OSS_RUN_CAP_USD`` (5 USD).
 
@@ -30,7 +32,7 @@ import pytest
 from e2e.conftest import Isolation
 
 from .conftest import StartLive
-from .corpus import CorpusRecorder, check_loop_guards
+from .corpus import CorpusRecorder, check_loop_guards, mode_recorder
 from .oss import OSS_CORPUS, OSS_RUN_CAP_USD, OssRepo, start_oss_loop
 
 pytestmark = pytest.mark.live
@@ -38,8 +40,10 @@ pytestmark = pytest.mark.live
 
 @pytest.fixture(scope="module")
 def recorder() -> Iterator[CorpusRecorder]:
-    """The module's outcomes; the summary is written once, at the end."""
-    corpus = CorpusRecorder("OSS corpus", os.environ)
+    """The module's outcomes in the environment's mode (``$LIVE_CORPUS_MODE``,
+    refused here before any run spends); the summary is written once, at the
+    end."""
+    corpus = mode_recorder("OSS corpus", os.environ)
     yield corpus
     corpus.finish(print)
 
@@ -53,7 +57,7 @@ def test_oss_whole_loop(
     recorder: CorpusRecorder,
 ) -> None:
     run = live(OSS_RUN_CAP_USD)
-    loop = start_oss_loop(repo, run, live_root, live_isolation)
+    loop = start_oss_loop(repo, run, live_root, live_isolation, mode=recorder.mode)
     with recorder.recording(loop.repo, run) as slot:
         slot.result = loop.run()
         check_loop_guards(loop, run, slot.result, live_isolation)

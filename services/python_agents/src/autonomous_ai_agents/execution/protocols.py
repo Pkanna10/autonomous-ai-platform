@@ -26,6 +26,7 @@ from autonomous_ai_agents.clients.budget import Budget
 from autonomous_ai_agents.common.config import IsolationMode
 from autonomous_ai_agents.common.models import (
     CombineSkip,
+    FrozenFile,
     Guardrail,
     Hotspot,
     Hypothesis,
@@ -34,7 +35,7 @@ from autonomous_ai_agents.common.models import (
     ProjectUnderstanding,
     Workload,
 )
-from autonomous_ai_agents.common.paths import normalize_path
+from autonomous_ai_agents.common.paths import literal_project_file, normalize_path
 
 CHANGE_STATUSES: frozenset[str] = frozenset({"A", "M", "D", "T"})
 """``git diff --raw --no-renames`` letters: added, modified, deleted, type change."""
@@ -74,11 +75,34 @@ def _require_git_path(path: str) -> None:
 
 @dataclass(frozen=True)
 class TrialBrief:
-    """What a trial's editor is told: the understanding, its hotspots, the rules."""
+    """What a trial's editor is told: the understanding, its hotspots, the rules.
+
+    ``fix_retries_left`` is the run's fix retries still unspent (D12): the
+    trials node computes it, the runner retries only below it, and the editor
+    prompt never shows it. A field, not a ``run()`` keyword, so every
+    ``TrialRunner`` keeps its signature; the default 0 fails closed.
+    ``read_deny`` lists the quality check's frozen files (D37), literal
+    project files the editor's tools refuse to read and never list.
+    """
 
     understanding: ProjectUnderstanding | None
     hotspots: tuple[Hotspot, ...]
     protected: tuple[str, ...]
+    fix_retries_left: int = 0
+    read_deny: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.fix_retries_left < 0:
+            raise ValueError(
+                f"fix_retries_left must be at least 0, got {self.fix_retries_left}"
+            )
+        for path in self.read_deny:
+            try:
+                literal = literal_project_file("read_deny", path) == path
+            except ValueError as error:
+                raise ValueError(f"read_deny {path!r}: {error}") from None
+            if not literal:
+                raise ValueError(f"read_deny {path!r} must be a normalised file path")
 
 
 @dataclass(frozen=True)
@@ -135,15 +159,23 @@ class PreflightReport:
 
 @dataclass(frozen=True)
 class EditTask:
-    """One hypothesis to implement, with its brief and the per-trial boundary."""
+    """One hypothesis to implement, with its brief and the per-trial boundary.
+
+    ``feedback`` is set on a fix retry only: ``TrialFeedback.render()`` of the
+    first attempt's crash and nothing else (D13), a string so no withheld
+    reason or raw run output can reach the editor through it.
+    """
 
     hypothesis: Hypothesis
     brief: TrialBrief
     boundary: str
+    feedback: str | None = None
 
     def __post_init__(self) -> None:
         if not self.boundary:
             raise ValueError("boundary must be a non-empty token")
+        if self.feedback is not None and not self.feedback:
+            raise ValueError("feedback must be non-empty when given")
 
 
 @dataclass(frozen=True)
@@ -225,7 +257,10 @@ class CombineMeasured:
 
 
 class LaunchReport(TypedDict):
-    """The launcher's JSON report for one run (``maxrss`` in platform units)."""
+    """The launcher's JSON report for one run (``maxrss`` in platform units).
+
+    ``child_cpu`` (seconds) and ``strays`` are the child-process tripwire's
+    signals (D62, N0c), null on darwin."""
 
     wall_ns: int
     utime: float
@@ -235,6 +270,8 @@ class LaunchReport(TypedDict):
     fs_isolated: bool
     net_isolated: bool
     error: str | None
+    child_cpu: float | None
+    strays: int | None
 
 
 @runtime_checkable
@@ -281,7 +318,8 @@ class ProjectUnderstander(Protocol):
 
 @runtime_checkable
 class Combiner(Protocol):
-    """Merges the kept changes onto ``base_commit`` and re-tests the tip."""
+    """Merges the kept changes onto ``base_commit`` and re-tests the tip;
+    ``quality_files`` (``Baseline.quality_files``) re-check the frozen files."""
 
     def combine(
         self,
@@ -292,6 +330,7 @@ class Combiner(Protocol):
         workloads: Sequence[Workload],
         *,
         baseline_count: int | None = None,
+        quality_files: Sequence[FrozenFile] = (),
     ) -> CombineMeasured: ...
 
 
