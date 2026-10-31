@@ -2474,6 +2474,11 @@ worktree", 4.4.0) or in the builder rules every brief carries.
 
 ## Technical Debt
 
+- E3-A (`tests/e2e/test_step3.py`) once delivered report only on CI (`181f1ef`,
+  CPython 3.11: kept and confirmed twice, then the combine re-test did not
+  hold). It did not reproduce in three E2E runs and two full 3.11 suites under
+  load, and passed on the next commit. The assertion now prints the combine
+  summary, so a repeat says why.
 - Wave 2 batch 3 reviewers' open nits: N2's line-by-line fallback (a hot
   function that no longer tokenizes) can let a docstring-only quote ground an
   idea, against D50 (b); N0b's re-edit reuses the D14 notice that says the

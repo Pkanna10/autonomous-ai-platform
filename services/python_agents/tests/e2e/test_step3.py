@@ -284,8 +284,11 @@ def _core_at(scene: Scene, commit: str) -> str:
 
 def _check_delivered(scene: Scene, state: EngineState, body: str) -> Trial:
     """The run branch is the base plus one trial whose core.py is ``body``."""
-    delivery = state["delivery"]
-    assert delivery is not None and delivery.kind is DeliveryKind.branch
+    delivery, combination = state["delivery"], state["combination"]
+    # A rare CI miss (181f1ef, 3.11) shipped report_only and did not reproduce
+    # locally: the combine summary says why the re-test did not hold.
+    why = None if combination is None else combination.summary
+    assert delivery is not None and delivery.kind is DeliveryKind.branch, why
     assert delivery.branch == f"engine/run-{state['run_id']}"
     tip, base = str(delivery.commit), scene.repo.base
     assert scene.repo.refs()[f"refs/heads/engine/run-{state['run_id']}"] == tip
