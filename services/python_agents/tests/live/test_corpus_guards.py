@@ -1073,6 +1073,7 @@ SUITES = (
     "research-agent",
     "watch",
     "watch-cleanup",
+    "ideas-probe",  # V7: E0b, E1, E1b, idea-only
 )
 DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_sweep_live.py",
@@ -1085,6 +1086,7 @@ DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_grader_agreement_live.py",  # L3 (V5): the grader suite
     "tests/live/test_upstream_verify_live.py",  # V9c: the upstream corpus
     "tests/live/test_upstream_live.py",
+    "tests/live/test_ideas_probe_live.py",  # V7: the ideas probe
 )
 EXPERIMENT_MINUTES = {
     # the sweeps on 37 repositories (v1 + hard + v2), from the Window 0 jobs on
@@ -1107,6 +1109,7 @@ EXPERIMENT_MINUTES = {
     "heal-agent": 120,  # 28 bugs, arm B up to 12 turns each
     "research-agent": 45,  # research_agent.JOB_MINUTES: 11 runs
     "watch": 90,  # watch_managed.JOB_MINUTES: one watched hosted run
+    "ideas-probe": 120,  # ideas_probe.JOB_MINUTES: E1 two libraries a dispatch
 }  # batch wait; 5 papers; 18 web runs
 SWEEP_FABLE_ENV = {  # Fable 5.1 beside the one arm whose run phase 1 shares
     "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
@@ -1115,6 +1118,7 @@ SWEEP_FABLE_ENV = {  # Fable 5.1 beside the one arm whose run phase 1 shares
 HEAL_HARD_ENV = {"LIVE_HEAL_SET": "hard"}
 EVOLVE_MORE_ENV = {"LIVE_EVOLVE_REPOS": "idna,mistune,sqlparse,pycparser"}
 OSS_AB_DISPATCH_REPO = "tabulate"  # oss-ab runs one library a dispatch
+IDEAS_E1_DISPATCH = {"LIVE_IDEAS_REPOS": "pyparsing,tomli"}  # E1: two a dispatch
 SWEEP_RECORD_ENV = {  # one arm, recorded for hand labels and offline replay
     "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
     "LIVE_SWEEP_RECORD": "1",
@@ -1786,6 +1790,7 @@ def _suite_needs() -> dict[str, float]:
     watch = importlib.import_module(f"{__package__}.experiments.watch_managed")
     upstream = importlib.import_module(f"{__package__}.upstream")
     upstream_verify = importlib.import_module(f"{__package__}.upstream_verify")
+    ideas = importlib.import_module(f"{__package__}.ideas_probe")
     one_library = {oss_ab.REPOS_ENV: OSS_AB_DISPATCH_REPO}
     return {
         "noise": noise.noise_need(noise.noise_plan({})),
@@ -1803,6 +1808,7 @@ def _suite_needs() -> dict[str, float]:
         "research-agent": research.research_need(),
         "watch": watch.watch_need(),
         "watch-cleanup": watch.cleanup_need(),
+        "ideas-probe": ideas.probe_need(ideas.probe_plan(IDEAS_E1_DISPATCH)),
         "sweep": sweep.sweep_need(sweep.sweep_plan({})),
         "sweep-fable": sweep.sweep_need(sweep.sweep_plan(SWEEP_FABLE_ENV)),
         "sweep-record": sweep.sweep_need(sweep.sweep_plan(SWEEP_RECORD_ENV)),

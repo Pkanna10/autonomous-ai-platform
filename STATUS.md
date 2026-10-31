@@ -499,7 +499,15 @@ Postgres at 100 % under CPython 3.13 and 3.11, prettier):
   one more reason not to tighten the gate. D44's caller hit rate needs a caller
   graph and waits for the measured E0b re-run. Scripts and table: the Lead's
   scratchpad, `e0r/`.
-- **Next:** V7 and V8, then the live order (E0b first).
+- **V7 (`ideas-probe`), Lead decisions:** accepted as one module at about 850
+  code lines against a ~400 row (the auditor, facts and count mode were in the
+  row; a split moves lines without shrinking the review). E1 runs as four
+  dispatches of two libraries (`ideas_repos`, need 22 each): an estimated 60
+  minutes a library cannot fit eight into one 120-minute job, and a killed job
+  loses its remaining facts. The minutes estimate is re-pinned from E0b's
+  recorded seconds. Arm A's cap is 0.27, not 0.18 (the measured 41,000-token OSS
+  prompt); E0b needs 8, not 5 (it still runs phase 1).
+- **Next:** V8, then the live order (E0b first).
 - **Owner's plan, for the record (2026-10-30):** after Wave 2's idea experiments
   (E1/E2) report, an "Improvement Wave 3" pilot: a multi-model developer team
   that studies, proposes and proves engine improvements. The owner sends its
