@@ -611,6 +611,28 @@ numbers that decide anything are copied into the ledger).
 
 ## Decisions
 
+### 2026-10-31 (recorded before computing it: E1's duplicate re-score)
+
+Written after E1's raw counts and the auditor's reason codes were read, before
+any corrected count was computed.
+
+- **The flaw.** E1's auditor reviews all arms' ideas in one pooled list with the
+  reviewer prompt, which marks an idea that repeats an earlier one `infeasible`
+  with reason `duplicate_of`. `ideas_probe.scores` treats every `infeasible` as
+  not good, so an arm loses an idea whenever another arm proposed it first. Of
+  the auditor's 225 `infeasible` verdicts on the counted libraries, 220 are
+  `duplicate_of`; 5 are real (4 `precondition_false`, 1 `outside_hot_path`). The
+  pre-registered definition ("does not mark it infeasible") meant feasibility,
+  not first-come order across arms.
+- **The corrected rule.** As pre-registered, except a duplicate inherits the
+  verdict of the idea it repeats (followed to the first one) when that idea is
+  another arm's; a duplicate of the same arm's own idea still does not count.
+  Every other check, the gate (one arm with 3 or more good ideas on 5 of the 7
+  counted libraries), the arm-P choice and arm D's exclusion are unchanged.
+- **Who decides.** The corrected reading is reported beside the original. The
+  original, as coded, said E2 is not paid for; whether the corrected reading
+  governs E2 is the owner's call.
+
 ### 2026-10-31 (recorded before L5a: how V10 counts the re-test)
 
 Written before any L5a data, beside the 2026-10-25 pooled rule it serves.
