@@ -535,9 +535,10 @@ Postgres at 100 % under CPython 3.13 and 3.11, prettier):
   library, scored without the non-obvious and ceiling checks, so it is a
   baseline, not a rival. **As pre-registered (D61): E2 is not paid for, so E2c,
   E3 and E4 do not run, and the idea pipeline stays opt-in** (`IDEA_PIPELINE`
-  off). Why the lanes' 4-9 ideas mostly failed the good definition (grounding,
-  the ceiling, the non-obvious check or the auditor) is in the two artifacts,
-  not yet read: their storage hosts are blocked here.
+  off). **Superseded pending the owner:** the artifacts show the auditor's
+  pooled list marked repeats of another arm's idea infeasible (220 of 225);
+  under the correction recorded before it was computed (Decisions, 2026-10-31)
+  the gate is met with arm P = B.
 - **V10 (`ab-v2`):** the suite L5a and L5b need, planned in Wave 1's V4 row and
   never built after Wave 2 re-scoped V4: `LIVE_AB_SET=v2` runs arms A and B on
   the twelve v2 repositories (10 slowdowns, 2 decoy controls); the `ab_arms`
@@ -632,6 +633,17 @@ any corrected count was computed.
 - **Who decides.** The corrected reading is reported beside the original. The
   original, as coded, said E2 is not paid for; whether the corrected reading
   governs E2 is the owner's call.
+- **Result (computed after the rule above was committed, `14036a4`).** The
+  reconstruction from the artifacts reproduces all 40 logged counts exactly.
+  Corrected good ideas per counted library, arms B / C / D / E: more_itertools
+  3/4/3/3, pyparsing 3/3/3/3, tomli 3/4/3/3, mistune 3/2/2/3, sqlparse 4/3/3/4,
+  markdown 3/3/3/4, idna 3/3/3/3; libraries with 3 or more: 7 / 6 / 6 / 7; means
+  3.14 / 3.14 / 2.86 / 3.29. **The gate is met under the correction.** Arm P by
+  the pre-registered choice (the cheapest within 1 of the best mean, never D):
+  B, all-Sonnet, 0.433 USD a pipeline call (E 0.436). Other E1 checks: no
+  request stopped at `max_tokens` and no reviewer refused, so no budget is
+  re-derived; caching held on every lane; the arms' own reviewers agreed with
+  the auditor on most removals (B 32 of 33).
 
 ### 2026-10-31 (recorded before L5a: how V10 counts the re-test)
 
