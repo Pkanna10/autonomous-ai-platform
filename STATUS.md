@@ -515,9 +515,10 @@ Postgres at 100 % under CPython 3.13 and 3.11, prettier):
   unit adds it before L5a. E4 fits its row (54.3 a library).
 - **Next:** the live order (E0b first).
 - **Owner's plan, for the record (2026-10-30):** after Wave 2's idea experiments
-  (E1/E2) report, an "Improvement Wave 3" pilot: a multi-model developer team
-  that studies, proposes and proves engine improvements. The owner sends its
-  brief then; nothing is built for it before.
+  (E1/E2) report, the **Improvement pilot** (label I; renamed by the owner on
+  2026-10-31 from "Improvement Wave 3", which clashed with Step 3's Wave 3,
+  W1-W6): a multi-model developer team that studies, proposes and proves engine
+  improvements. The owner sends its brief then; nothing is built for it before.
 
 ---
 
@@ -563,7 +564,7 @@ the order, the small letter a variant or a re-test (L1a, L1b; E0b after E0a).
 | arm A-E                | the configurations an experiment compares                                                                  | the experiment's row                                                                       |
 | L3b, VC, A1s/A2s       | independent exams under O19 (setter, attempter and marker kept apart)                                      | spec-wave2 §6                                                                              |
 | D + number; O + number | a spec's decisions (numbered per step); the owner's decisions                                              | the step's spec; Decisions (dated)                                                         |
-| I + number (reserved)  | the owner's improvement pilot                                                                              | its brief, when sent                                                                       |
+| I + number             | the Improvement pilot (the owner's)                                                                        | its brief, when sent                                                                       |
 
 **Trace:** unit → spec row → commit (`git log --grep`) → build record; run →
 ledger row → CI run → results artifact (artifacts expire after 90 days, so the
@@ -2300,7 +2301,7 @@ advisories, fixed in `0bca456`; `181f1ef`, the E3-A miss, Technical Debt);
 rework: N0c built twice (re-scoped) and six Lead follow-ups (`7b970bf`,
 `71940d0`, `a724611`, `2dd55cc`, `e6c2799`, `1c43097`); 0 reverts.
 
-### Step 3 Wave 2 build record (the baseline for the owner's improvement pilot)
+### Step 3 Wave 2 build record (the baseline for the Improvement pilot, I)
 
 Each unit: an Opus 5.5 Builder (tests first), a Fable 5.1 Reviewer, an Opus 5.5
 fixer when the review had a blocker or should-fix finding, then the Lead's gate
