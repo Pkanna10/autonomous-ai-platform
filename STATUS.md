@@ -518,6 +518,52 @@ Postgres at 100 % under CPython 3.13 and 3.11, prettier):
 
 ## Decisions
 
+### 2026-10-31 (pre-registered before E0b: the idea experiments' rules, D61)
+
+Recorded before any idea-experiment run, as D2's rule was before L5a, so no rule
+can be fitted to its result. Full table: spec-wave2-ideas §6.
+
+- **Good idea (E1, every arm alike).** It passes the deterministic checks
+  (grounded and anchored, ceiling ≥ multiplier × the run's own floor,
+  non-obvious against that arm's S1) **and** one fixed auditor (Opus 5.5 `high`,
+  the reviewer prompt over all arms' pooled ideas, ≤ 48 per library, once per
+  library) does not mark it `infeasible`. An arm's own reviewer does not score
+  it. Arm A (today's generator) is a cost and unique-signature baseline only.
+- **E0-R (offline):** the Amdahl multiplier becomes 1.5 only if no kept trial of
+  L2a/L2b would have been dropped at 1.5 × its run's floor; else it stays 1.0.
+- **E0b (`ideas-probe`, count mode, cap 5):** D55's bounds stand if every
+  library's lane prompt is ≤ 34,000 and reviewer prompt ≤ 40,000 counted tokens,
+  and the lens lane reads at least the data block's tokens from cache; else the
+  caps are re-derived before E1.
+- **E1 (cap 90):** go to E2 only if the best arm gives ≥ 3 good ideas on ≥ 5 of
+  the 7 counted libraries (`sortedcontainers` is a reported control;
+  `more_itertools` counts because N0 is in). E2's arm P is the cheapest arm
+  within 1 good idea per library of the best; arm D (Fable) is never the
+  default. A role above 10 % `max_tokens` stops, or a reviewer refused on more
+  than 1 of 8 libraries, gets a re-derived `max_tokens` first.
+- **E1b (cap 20):** lanes stay `medium` unless `low` or `high` gives ≥ 2 more
+  unique grounded mechanisms per library on average with a grounding pass rate
+  within 10 points; a tie keeps `medium`.
+- **E2 (cap 230, six dispatches ≤ 50):** over 20 paired (library, rep) tasks, P
+  vs A, `c − b ≥ 3` (`c`: P delivered and A did not, or P's confirmed gain beats
+  A's by more than the project floor; `b` the reverse) **and** no control false
+  win for P. Met → `IDEA_PIPELINE=True`, `PORTFOLIO_ROUNDS=2` by default (after
+  the N0c-4 decision with the owner). Not met → the pipeline stays opt-in.
+- **E2c (cap 50):** P against today's generator at `GENERATOR_N=10`,
+  `PORTFOLIO_ROUNDS=2`, on E2's rep-1 tasks. `c' − b' ≤ 1` → E2's win is "more
+  trials": those two settings change for today's generator and the pipeline
+  stays opt-in. `c' − b' ≥ 2` → it is "better ideas".
+- **E3, E4:** only on a positive or neutral E2; informational, no flip.
+- **Spend rule (binding).** Before each dispatch: Window 1's remaining credit
+  minus that dispatch's cap must stay ≥ the expected cost of every remaining
+  unconditional run (E1b ~4, E2 ~48-58, E2c ~9, L3-L5/W1 ~11); otherwise the
+  Lead stops and asks the owner. E2's expected cost is re-derived from E1's
+  measured cost per pipeline call before E2. Today: 181.78 USD remain; E1's cap
+  of 90 leaves 91.78 against ~82 expected, so the order holds.
+- **Why:** caps bound one bad run; the spend rule keeps the whole sequence
+  inside the credit, and fixing every threshold now means a borderline result is
+  reported as borderline, not argued into a flip.
+
 ### 2026-10-30 (owner: V9's two medium keys and the mpmath control)
 
 - **O21.** The owner took the Lead's recommended defaults for V9.
