@@ -12,3 +12,13 @@ packages:
 # minimumReleaseAgeExclude for that install. Dependabot's version updates use
 # the same seven-day cooldown (its security updates open immediately).
 minimumReleaseAge: 10080
+
+# Audit exception (Step 3 stage gate, 2026-11-01): GHSA-g3hv-75wg-m249,
+# minimatch < 11.0.1, a DoS via crafted glob patterns. Reached only through
+# ESLint and typescript-eslint (dev tooling), whose patterns come from our own
+# config. The only fix is minimatch 11, a major released 2026-10-27 that no
+# version of ESLint or typescript-eslint accepts yet. Remove this entry when
+# Dependabot brings in a release of either that depends on minimatch >= 11.0.1.
+auditConfig:
+  ignoreGhsas:
+    - GHSA-g3hv-75wg-m249
