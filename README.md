@@ -155,7 +155,7 @@ pnpm install
 
 # Python (the database extra installs psycopg for the Postgres repository)
 cd services/python_agents
-uv sync --extra dev --extra database
+uv sync --extra dev --extra database --extra experiments
 cd ../..
 
 # Environment

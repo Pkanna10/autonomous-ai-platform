@@ -456,7 +456,7 @@ cp .env.example .env                              # add ANTHROPIC_API_KEY
 
 # Python
 cd services/python_agents
-uv sync --extra dev
+uv sync --extra dev --extra database --extra experiments
 uv run ruff check . && uv run ruff format --check .
 uv run mypy src tests
 uv run pytest

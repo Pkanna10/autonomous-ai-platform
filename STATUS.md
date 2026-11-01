@@ -443,9 +443,9 @@ confirmations and final combine in one run.
   `pnpm-workspace.yaml`); security review of the whole Step 3 diff (a fresh
   Sonnet 5.5 Reviewer, every trust boundary): no finding at the bar, two notes
   in Technical Debt; `pnpm stage-gate`: passed (2 warnings: outdated majors and
-  cooldown-held minors), 8,503 passed, 100 % coverage. The first run failed
-  pip-audit on a stale venv (pypdf 6.21.2, locked 6.21.4): the gate now audits
-  every locked package, as `security.yml` does.
+  cooldown-held minors), 8,503 passed and 67 skipped (8,570 collected), 100 %
+  coverage. The first run failed pip-audit on a stale venv (pypdf 6.21.2, locked
+  6.21.4): the gate now audits every locked package, as `security.yml` does.
 - **Built:** the idea pipeline (N0-N5: spawn delta, contracts, code context,
   lanes, reviewer, portfolio, the pipeline, wiring, the child-process tripwire,
   E2E), corpus v2 and the upstream-fixes corpus (V1-V3, V9), the experiment
@@ -2913,11 +2913,28 @@ worktree", 4.4.0) or in the builder rules every brief carries.
   run on a real repository); with `unordered_lines` and a builtin line-aligned
   measure, the score is read from the first timed run's bytes only (later runs
   need only the same canonical fingerprint).
-- E3-A (`tests/e2e/test_step3.py`) once delivered report only on CI (`181f1ef`,
-  CPython 3.11: kept and confirmed twice, then the combine re-test did not
-  hold). It did not reproduce in three E2E runs and two full 3.11 suites under
-  load, and passed on the next commit. The assertion now prints the combine
-  summary, so a repeat says why.
+- `test_reference_fix_reaches_its_gain_and_the_textbook_falls_short[auditchain]`
+  (a `small` case: 9 runs a copy, best CPU, 5 % bar) failed twice in the
+  2026-11-01 test audit on a shared 4-vCPU cloud container (3.13): 4.2 % (base
+  0.667 s, fixed 0.639 s CPU) under xdist contention, and once unattributed with
+  `-n 0` on an idle box; it passed on the next run. Here it measured 8.3-16.4 %
+  in 10 readings (CPU burners, a gate running, with and without `--cov`;
+  coverage is not the cause). The fix removes about 0.1 s of CPU here but 0.03 s
+  there, which points at the measurement (CPU seconds vary with the vCPU's clock
+  and steal) rather than the fixture. Left unchanged (the owner agreed); if CI
+  repeats it, compare against these numbers before widening the slowdown.
+- The combine re-test misses on CI, twice, both on CPython 3.11: E3-A
+  (`tests/e2e/test_step3.py`, `181f1ef`) delivered report only, and E3-J
+  (`tests/e2e/test_step3_ideas.py`, master `8b32afe` after the PR #22 merge,
+  same tree as the green `668165e`) delivered one of its two keeps: the stacked
+  re-test did not hold and the fallback shipped the best single change, as
+  designed. Neither reproduced: E3-J held 10 of 10 locally (3.13 quiet, 3.13 at
+  2x CPU oversubscription, 3.11 with Postgres under load). Each idea gains about
+  96 % against a 4 % noise floor and peak RSS moves under 1 % of its 10 %
+  allowance, so the speed and memory judges are not the margin; the workload and
+  suite timeouts (600 s, 900 s) are not either. Both assertions now print the
+  combine summary, which names the failing judge, so a third miss is diagnosable
+  rather than another unknown.
 - Wave 2 batch 3 reviewers' open nits: N2's line-by-line fallback (a hot
   function that no longer tokenizes) can let a docstring-only quote ground an
   idea, against D50 (b); N0b's re-edit reuses the D14 notice that says the
