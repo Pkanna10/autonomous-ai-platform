@@ -669,15 +669,18 @@ build units), X (exploratory rounds), K (confirmatory runs).
   the grader labels first). (3) Held-out OSS libraries, chosen and sealed now.
   (4) V9's sealed maintainer fixes. (5) The Python tasks of SWE-Perf, GSO and
   SWE-fficiency, scored their way, later, as its own unit.
-- **O28. Security scope: defensive only.** The engine looks for security
-  weaknesses as well as improvement opportunities. Fixes, not exploits: a proof
-  of weakness may only be a small reproducer test run inside the sandbox against
-  the target's own code. Only code the owner owns or is authorised to test,
-  never third-party or live systems. Every security fix goes to the review
-  branch, never automatic delivery. Judges: a frozen reproducer that fails
-  before and passes after, static analysers, and the full test suite with no
-  regression. Lanes are prompted as defensive review; refusal categories are
-  logged.
+- **O28. Security scope: defensive only (owner's words, 2026-11-01).** Like the
+  researchers who caught the PHP backdoors: the engine finds weaknesses and
+  sounds the alarm for a human to fix; it never exploits anything. It inspects
+  the code, builds a replica of the setup inside its own sandbox, and tests it
+  with dummy values only (no real data or credentials). Only code the owner owns
+  or is authorised to test; never a public codebase, website, third-party or
+  live system. The deliverable is the finding: a small reproducer test that
+  shows the weakness on the replica, a plain report, and a proposed fix when
+  there is one, all on the review branch, never automatic delivery. Judges: the
+  frozen reproducer fails before a fix and passes after, static analysers, and
+  the full suite with no regression. Lanes are prompted as defensive review;
+  refusal categories are logged.
 - **O29. Two new judges, shadow mode.** A scaling judge (2-3 input sizes, fit
   the growth) and an operation-count judge (deterministic counts, a second
   signal only). Each records, never decides, until A/A, controls and a gaming
