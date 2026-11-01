@@ -43,12 +43,14 @@ other copy.
 
 Recorded, never asserted (``$LIVE_RESULTS_PATH``): per library the facts
 (``ideas-facts``, chunked JSON, keys redacted), per (library, arm) a row
-(``ideas-probe``: ideas, non-obvious, good, auditor and own-reviewer counts,
-the auditor's error (then no arm's good count is known), cost, ``IdeaStats``,
-``stop_reason``, cache reads and counted tokens per request), every request's
-reply (``ideas-reply``, redacted, chunked, with its shown ideas and seconds) and
-every pooled idea's verdicts (``ideas-audit``); a cost-table note per
-library and a summary table.
+(``ideas-probe``: ideas, non-obvious, good as coded, good corrected for the
+pooled auditor's cross-arm duplicates and good strict (STATUS 2026-10-31),
+auditor and own-reviewer counts, the auditor's error (then no arm's good
+count is known), cost, ``IdeaStats``, ``stop_reason``, cache reads and
+counted tokens per request), every request's reply (``ideas-reply``,
+redacted, chunked, with its shown ideas and seconds) and every pooled idea's
+review (``ideas-audit``: its id, the auditor's verdict, reason and
+``duplicate_of``); a cost-table note per library and a summary table.
 """
 
 from __future__ import annotations
@@ -753,14 +755,33 @@ def padded_review(request: LLMRequest, n: int) -> LLMRequest | None:
     return dataclasses.replace(request, messages=(message,))
 
 
-def own_verdicts(reply: str) -> dict[str, str]:
-    """Each id reviewed once and its verdict; an unreadable reply gives none."""
+@dataclass(frozen=True)
+class AuditReview:
+    """One idea's single review: its verdict, reason and the earlier id it
+    repeats (``duplicate_of``, as the reply names it, unchecked)."""
+
+    verdict: str
+    reason: str
+    duplicate_of: str | None
+
+
+def audit_reviews(reply: str) -> dict[str, AuditReview]:
+    """Each id reviewed once and its review; an unreadable reply gives none."""
     try:
         reviews = _Reviews.model_validate_json(reply).reviews
     except ValidationError:
         return {}
     seen = Counter(r.idea for r in reviews)
-    return {r.idea: r.verdict.value for r in reviews if seen[r.idea] == 1}
+    return {
+        r.idea: AuditReview(r.verdict.value, r.reason, r.duplicate_of)
+        for r in reviews
+        if seen[r.idea] == 1
+    }
+
+
+def own_verdicts(reply: str) -> dict[str, str]:
+    """Each id reviewed once and its verdict; an unreadable reply gives none."""
+    return {i: r.verdict for i, r in audit_reviews(reply).items()}
 
 
 def _lane(h: Hypothesis) -> str:
@@ -846,6 +867,32 @@ class Audit:
     cost_usd: float
     error: str | None
     exchanges: tuple[Exchange, ...]
+    reviews: tuple[AuditReview | None, ...] = ()  # per pooled idea, as verdicts
+
+
+def pool_ids(n: int) -> list[str]:
+    """The auditor's neutral ids of ``n`` pooled ideas, in pool order."""
+    return [f"i{k:02d}" for k in range(1, n + 1)]
+
+
+def audit_of(
+    reply: str,
+    n: int,
+    *,
+    shown: Sequence[str] | None = None,
+    cost_usd: float = 0.0,
+    error: str | None = None,
+    exchanges: tuple[Exchange, ...] = (),
+) -> Audit:
+    """The audit of ``n`` pooled ideas from the auditor's reply: per idea its
+    single review, ``None`` for one not shown (``shown``: the ids the request
+    showed; all by default), not reviewed or reviewed twice."""
+    found = audit_reviews(reply)
+    reviews = tuple(
+        found.get(i) if shown is None or i in shown else None for i in pool_ids(n)
+    )
+    verdicts = tuple(None if r is None else r.verdict for r in reviews)
+    return Audit(verdicts, cost_usd, error, exchanges, reviews)
 
 
 def run_audit(
@@ -870,7 +917,7 @@ def run_audit(
         context, project=f.project, objective=f.objective,
         understanding=f.understanding, hotspots=f.hotspots, fence=fence, notes=notes,
     )  # fmt: skip
-    ids = [f"i{k:02d}" for k in range(1, len(pooled) + 1)]
+    ids = pool_ids(len(pooled))
     request, shown = review_request(
         [candidate(p.idea, i) for p, i in zip(pooled, ids, strict=True)],
         prefix=prefix, fence=fence, reviewer_fence=Fence.new(others=(fence.token,)),
@@ -880,31 +927,73 @@ def run_audit(
     cfg = model_settings(base, OPUS)
     tap = Tap(run.transport(cfg), "auditor", ("auditor",))
     first = len(run.records)
-    verdicts: dict[str, str] = {}
+    reply = ""
     error: str | None = None
     try:
         result = call(tap, request, Budget(AUDIT_USD), sleep=time.sleep,
                       max_retries=cfg.LLM_MAX_RETRIES)  # fmt: skip
         read_review(result)  # strict: a stop or refusal is the audit's error
-        verdicts = own_verdicts(reply_text(result.message))
+        reply = reply_text(result.message)
     except ARM_ERRORS as exc:
         error = f"{type(exc).__name__}: {exc}"
-    return Audit(
-        tuple(verdicts.get(i) if i in shown else None for i in ids),
-        math.fsum(r.cost_usd for r in run.records[first:]),
-        error,
-        tuple(tap.exchanges),
-    )
+    return audit_of(
+        reply, len(pooled), shown=tuple(shown),
+        cost_usd=math.fsum(r.cost_usd for r in run.records[first:]),
+        error=error, exchanges=tuple(tap.exchanges),
+    )  # fmt: skip
 
 
 @dataclass(frozen=True)
 class Score:
     non_obvious: int
-    good: int | None  # None: not audited
+    good: int | None  # None: not audited; as pre-registered and coded
     audited: int
     auditor_infeasible: int
     own_removed: int  # pooled ideas its own reviewer marked infeasible
     agreed: int  # of those, infeasible for the auditor too
+    good_corrected: int | None = None  # STATUS 2026-10-31: duplicates inherit
+    good_strict: int | None = None  # corrected, less roots of arm A (A: None)
+
+
+_BAD: Final = ReviewVerdict.infeasible.value
+_DUPLICATE: Final = "duplicate_of"
+
+
+def _root(
+    k: int, reviews: Sequence[AuditReview | None], index: Mapping[str, int]
+) -> int | None:
+    """The pooled idea that idea ``k`` repeats, followed to the first one: ``k``
+    itself unless the auditor marked it a duplicate; ``None`` when a link names
+    no pooled id (or none) or the links loop."""
+    seen = {k}
+    while (r := reviews[k]) is not None and (r.verdict, r.reason) == (_BAD, _DUPLICATE):
+        target = index.get(r.duplicate_of or "")
+        if target is None or target in seen:
+            return None
+        seen.add(target)
+        k = target
+    return k
+
+
+def _inherited(
+    pooled: Sequence[Pooled], audit: Audit
+) -> list[tuple[str | None, str | None]]:
+    """Per pooled idea, the corrected rule (STATUS 2026-10-31): its verdict and
+    the arm of the idea it was decided on. A duplicate whose root is another
+    arm's takes the root's verdict; one of the same arm's own idea, or with no
+    root, keeps its own (``infeasible``)."""
+    n = len(pooled)
+    reviews = [*audit.reviews, *[None] * n][:n]
+    verdicts = [*audit.verdicts, *[None] * n][:n]
+    index = {i: k for k, i in enumerate(pool_ids(n))}
+    out: list[tuple[str | None, str | None]] = []
+    for k, p in enumerate(pooled):
+        root = _root(k, reviews, index)
+        if root is None or pooled[root].arm == p.arm:
+            out.append((verdicts[k], p.arm))
+        else:
+            out.append((verdicts[root], pooled[root].arm))
+    return out
 
 
 def scores(
@@ -912,28 +1001,42 @@ def scores(
 ) -> dict[str, Score]:
     """Per arm: good = returned non-obvious ideas (arm A: distinct titles)
     the auditor answered once and did not mark infeasible; unknown with no
-    audit or a failed one."""
+    audit or a failed one. ``good_corrected``: the same, a duplicate taking
+    the verdict of the other arm's idea it repeats (``_inherited``);
+    ``good_strict``: of those, none decided on an arm-A idea (unknown for A,
+    the baseline it is read against)."""
     out: dict[str, Score] = {}
     verdicts = () if audit is None else audit.verdicts
+    fixed = [] if audit is None else _inherited(pooled, audit)
     audited_ok = audit is not None and audit.error is None
     for run in arms:
         mine = [
-            (p, v)
-            for p, v in zip(pooled, verdicts, strict=False)
+            (p, v, *f)
+            for p, v, f in zip(pooled, verdicts, fixed, strict=False)
             if p.arm == run.arm.key
         ]
-        audited = [(p, v) for p, v in mine if v is not None]
-        bad = ReviewVerdict.infeasible.value
-        ok = {p.idea.title for p, v in audited if tier(p) == 0 and v != bad}
-        removed = [(p, v) for p, v in audited if p.own == bad]
+        audited = [(p, v) for p, v, *_ in mine if v is not None]
+        ok = {p.idea.title for p, v in audited if tier(p) == 0 and v != _BAD}
+        kept = [
+            (p.idea.title, root)
+            for p, _, w, root in mine
+            if tier(p) == 0 and w is not None and w != _BAD
+        ]
+        removed = [(p, v) for p, v in audited if p.own == _BAD]
         hypotheses = () if run.result is None else run.result.hypotheses
+        known = audited_ok and run.arm.e1
+        strict = known and run.arm.key != ARM_A.key
         out[run.arm.key] = Score(
             non_obvious=sum(_lane(h) not in ("obvious", "today") for h in hypotheses),
-            good=len(ok) if audited_ok and run.arm.e1 else None,
+            good=len(ok) if known else None,
             audited=len(audited),
-            auditor_infeasible=sum(v == bad for _, v in audited),
+            auditor_infeasible=sum(v == _BAD for _, v in audited),
             own_removed=len(removed),
-            agreed=sum(v == bad for _, v in removed),
+            agreed=sum(v == _BAD for _, v in removed),
+            good_corrected=len({t for t, _ in kept}) if known else None,
+            good_strict=(
+                len({t for t, root in kept if root != ARM_A.key}) if strict else None
+            ),
         )
     return out
 
@@ -952,6 +1055,8 @@ class ProbeRow:
     ideas: int
     non_obvious: int
     good: int | None
+    good_corrected: int | None
+    good_strict: int | None
     audited: int
     auditor_infeasible: int
     own_removed: int
@@ -1009,6 +1114,13 @@ class ProbeRecorder:
         audit: Audit | None,
         run: LiveRun,
     ) -> None:
+        n = len(pooled)
+        reviewed = (  # every pooled idea's record, or a short audit refused here
+            []
+            if audit is None
+            else list(zip(pool_ids(n), pooled, audit.verdicts,
+                          [*audit.reviews, *[None] * n][:n], strict=True))
+        )  # fmt: skip
         scored = scores(arms, pooled, audit)
         audit_error = None if audit is None else audit.error
         parts: list[str] = []
@@ -1020,7 +1132,9 @@ class ProbeRecorder:
             row = ProbeRow(
                 repo=repo, arm=a.arm.key, models=a.models, error=a.error,
                 ideas=0 if a.result is None else len(a.result.hypotheses),
-                non_obvious=s.non_obvious, good=s.good, audited=s.audited,
+                non_obvious=s.non_obvious, good=s.good,
+                good_corrected=s.good_corrected, good_strict=s.good_strict,
+                audited=s.audited,
                 auditor_infeasible=s.auditor_infeasible, own_removed=s.own_removed,
                 agreed=s.agreed, cost_usd=a.cost_usd,
                 stats=None if stats is None else stats.model_dump(mode="json"),
@@ -1038,11 +1152,13 @@ class ProbeRecorder:
                 f"{a.arm.key} {row.ideas} idea(s), good {good}, {a.cost_usd:.3f}"
             )
         if audit is not None:
-            for p, v in zip(pooled, audit.verdicts, strict=True):
+            for i, p, v, r in reviewed:
                 self.sink.write({
                     "experiment": AUDIT_EXPERIMENT, "repo": repo, "arm": p.arm,
-                    "title": p.idea.title, "lane": p.idea.lane, "tier": tier(p),
-                    "in_result": p.in_result, "own": p.own, "auditor": v,
+                    "id": i, "title": p.idea.title, "lane": p.idea.lane,
+                    "tier": tier(p), "in_result": p.in_result, "own": p.own,
+                    "auditor": v, "reason": None if r is None else r.reason,
+                    "duplicate_of": None if r is None else r.duplicate_of,
                 })  # fmt: skip
             for e in audit.exchanges:
                 self.sink.write(_reply(repo, "auditor", e))
@@ -1055,17 +1171,23 @@ class ProbeRecorder:
             return
         lines = [
             "## Ideas probe (E0b, E1, E1b: idea-only)", "",
-            "| repo | arm | ideas | non-obvious | good | audited | auditor infeasible "
-            "| own removed (agreed) | USD | error |",
-            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+            "| repo | arm | ideas | non-obvious | good | good corrected | good strict "
+            "| audited | auditor infeasible | own removed (agreed) | USD | error |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: "
+            "| ---: | --- |",
         ]  # fmt: skip
         for r in self.rows:
             lines.append(cells([
-                r.repo, r.arm, r.ideas, r.non_obvious, "-" if r.good is None else r.good,
-                r.audited, r.auditor_infeasible, f"{r.own_removed} ({r.agreed})",
+                r.repo, r.arm, r.ideas, r.non_obvious, _known(r.good),
+                _known(r.good_corrected), _known(r.good_strict), r.audited,
+                r.auditor_infeasible, f"{r.own_removed} ({r.agreed})",
                 f"{r.cost_usd:.4f}", _errors(r),
             ]))  # fmt: skip
         write_markdown("Ideas probe", "\n".join(lines), self.sink.environ, echo)
+
+
+def _known(value: int | None) -> str:
+    return "-" if value is None else str(value)
 
 
 def _errors(row: ProbeRow) -> str:

@@ -27,7 +27,8 @@ import json
 import os
 import re
 import subprocess
-from collections.abc import Sequence
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -693,6 +694,231 @@ def test_the_pool_keeps_scored_ideas_first_and_stops_at_48() -> None:
     assert [ip.tier(p) for p in kept[:12]] == [0] * 12  # 3 lens results x 4 arms
     assert [p.arm for p in kept[:4]] == list("BCDE")  # round robin
     assert [ip.tier(p) for p in kept[12:16]] == [1] * 4  # the own removals next
+
+
+# ---------------------------------------------------------------------------
+# V7c: the pooled auditor's duplicates (STATUS 2026-10-31, the corrected rule)
+# ---------------------------------------------------------------------------
+
+Verdict = tuple[str, str, str | None]  # verdict, reason, duplicate_of
+FEASIBLE: Verdict = ("feasible", "none", None)
+UNKNOWN: Verdict = ("unknown", "none", None)
+REAL_NO: Verdict = ("infeasible", "precondition_false", None)
+
+
+def _dup(of: str | None) -> Verdict:
+    return ("infeasible", "duplicate_of", of)
+
+
+def _pooled_idea(arm: str, k: int, *, returned: bool = True) -> ip.Pooled:
+    line = ip.ShownIdea(
+        id=f"far-{k:02d}", lane="far", title=f"{arm} idea {k}",
+        change_class="efficiency", anchor=f"{PATH}:slow_sum", change_summary="s",
+        precondition="p", equivalence_summary="e", depends_on_path=PATH,
+        depends_on_quote="q",
+    )  # fmt: skip
+    return ip.Pooled(arm, line, None, returned)
+
+
+def _audit_reply(verdicts: Sequence[Verdict], twice: Sequence[str] = ()) -> str:
+    reviews = [
+        {"idea": f"i{k:02d}", "verdict": v, "reason": r, "duplicate_of": d,
+         "change_plan": "" if v == "infeasible" else "Edit it."}
+        for k, (v, r, d) in enumerate(verdicts, 1)
+    ]  # fmt: skip
+    reviews += [{**reviews[int(i[1:]) - 1], "verdict": "feasible"} for i in twice]
+    return json.dumps({"reviews": reviews[::-1]})  # any order, as E1's auditor
+
+
+_E1_RUNS = [ip.ArmRun(arm, None, None, 0.0, (), (), ()) for arm in ip.E1_ARMS]
+
+
+def _scored(
+    entries: Sequence[tuple[str, Verdict]], twice: Sequence[str] = ()
+) -> dict[str, ip.Score]:
+    """Scores of the pooled ideas ``(arm, verdict)`` in pool order (ids
+    ``i01``...), every idea a returned non-obvious one, per E1 arm."""
+    seen: Counter[str] = Counter()
+    pooled = []
+    for arm, _ in entries:
+        seen[arm] += 1
+        pooled.append(_pooled_idea(arm, seen[arm]))
+    audit = ip.audit_of(_audit_reply([v for _, v in entries], twice), len(pooled))
+    return ip.scores(_E1_RUNS, pooled, audit)
+
+
+def _counts(scored: Mapping[str, ip.Score], arm: str) -> tuple[int | None, ...]:
+    s = scored[arm]
+    return (s.good, s.good_corrected, s.good_strict)
+
+
+def test_the_audit_keeps_each_ideas_reason_and_duplicate_of() -> None:
+    reply = _audit_reply([FEASIBLE, _dup("i01"), REAL_NO], twice=("i03",))
+    reviews = ip.audit_reviews(reply)
+    assert reviews == {
+        "i01": ip.AuditReview("feasible", "none", None),
+        "i02": ip.AuditReview("infeasible", "duplicate_of", "i01"),
+    }  # i03 reviewed twice: no single verdict
+    assert ip.own_verdicts(reply) == {"i01": "feasible", "i02": "infeasible"}
+    assert ip.audit_reviews("not a review") == {}
+    audit = ip.audit_of(reply, 4)
+    assert audit.verdicts == ("feasible", "infeasible", None, None)
+    assert audit.reviews == (reviews["i01"], reviews["i02"], None, None)
+    assert (audit.error, audit.cost_usd, audit.exchanges) == (None, 0.0, ())
+
+
+def test_a_cross_arm_duplicate_inherits_its_roots_feasible_verdict() -> None:
+    scored = _scored([("B", FEASIBLE), ("C", _dup("i01"))])
+    assert _counts(scored, "B") == (1, 1, 1)
+    assert _counts(scored, "C") == (0, 1, 1)  # as coded 0: B proposed it first
+
+
+def test_a_cross_arm_duplicate_inherits_a_real_infeasible() -> None:
+    scored = _scored([("B", REAL_NO), ("C", _dup("i01")), ("D", UNKNOWN)])
+    assert _counts(scored, "B") == (0, 0, 0)
+    assert _counts(scored, "C") == (0, 0, 0)
+    assert _counts(scored, "D") == (1, 1, 1)  # unknown is not infeasible
+
+
+def test_a_chain_of_duplicates_is_followed_to_its_root() -> None:
+    scored = _scored([("B", FEASIBLE), ("C", _dup("i01")), ("D", _dup("i02"))])
+    assert _counts(scored, "D") == (0, 1, 1)  # i03 -> i02 -> i01, B's
+    # the root decides, not the link: D's idea repeats C's, which repeats D's own
+    scored = _scored([("D", FEASIBLE), ("C", _dup("i01")), ("D", _dup("i02"))])
+    assert _counts(scored, "D") == (1, 1, 1)  # D idea 1 only
+    assert _counts(scored, "C") == (0, 1, 1)
+    # a chain ending on a real removal inherits it
+    scored = _scored([("B", REAL_NO), ("C", _dup("i01")), ("E", _dup("i02"))])
+    assert _counts(scored, "E") == (0, 0, 0)
+
+
+def test_a_duplicate_of_the_same_arms_own_idea_does_not_count() -> None:
+    scored = _scored([("B", FEASIBLE), ("B", _dup("i01")), ("C", FEASIBLE)])
+    assert _counts(scored, "B") == (1, 1, 1)
+    assert _counts(scored, "C") == (1, 1, 1)
+
+
+def test_a_root_from_arm_a_counts_when_corrected_but_not_strict() -> None:
+    scored = _scored([
+        ("A", FEASIBLE), ("B", _dup("i01")), ("C", _dup("i02")), ("D", FEASIBLE),
+        ("A", _dup("i01")),
+    ])  # fmt: skip
+    assert _counts(scored, "B") == (0, 1, 0)
+    assert _counts(scored, "C") == (0, 1, 0)  # via B's duplicate, root A's
+    assert _counts(scored, "D") == (1, 1, 1)
+    # arm A is the baseline the strict count is read against: none of its own
+    assert _counts(scored, "A") == (1, 1, None)
+
+
+def test_a_duplicate_with_no_resolvable_root_does_not_count() -> None:
+    scored = _scored(
+        [
+            ("B", _dup("i99")),  # names no pooled id
+            ("C", _dup(None)),  # names none
+            ("D", _dup("i04")), ("E", _dup("i03")),  # a cycle
+            ("B", FEASIBLE), ("C", _dup("i05")),  # i05 reviewed twice: no verdict
+        ],
+        twice=("i05",),
+    )  # fmt: skip
+    assert {arm: _counts(scored, arm) for arm in "BCDE"} == {
+        arm: (0, 0, 0) for arm in "BCDE"
+    }
+    assert (scored["B"].audited, scored["C"].audited) == (1, 2)
+
+
+def test_only_returned_non_obvious_ideas_count_and_no_audit_scores_none() -> None:
+    pooled = [
+        _pooled_idea("B", 1), _pooled_idea("C", 1, returned=False), _pooled_idea("C", 2)
+    ]  # fmt: skip
+    audit = ip.audit_of(_audit_reply([FEASIBLE, FEASIBLE, _dup("i01")]), 3)
+    scored = ip.scores(_E1_RUNS, pooled, audit)
+    assert _counts(scored, "C") == (0, 1, 1)  # C idea 1 is not in its result
+    failed = dataclasses.replace(audit, error="UnusableReplyError: x")
+    for unknown in (ip.scores(_E1_RUNS, pooled, failed),
+                    ip.scores(_E1_RUNS, pooled, None)):  # fmt: skip
+        assert {_counts(unknown, k) for k in unknown} == {(None, None, None)}
+    low = ip.scores([dataclasses.replace(_E1_RUNS[2], arm=ip.ARM_C_LOW)], pooled, audit)
+    assert _counts(low, "C-low") == (None, None, None)  # not an E1 arm
+    # an audit read without its reviews corrects nothing
+    bare = dataclasses.replace(audit, reviews=())
+    assert _counts(ip.scores(_E1_RUNS, pooled, bare), "C") == (0, 0, 0)
+
+
+def test_rows_audit_records_and_the_summary_carry_the_corrected_counts(
+    tmp_path: Path,
+) -> None:
+    entries = [("A", FEASIBLE), ("B", _dup("i01")), ("C", FEASIBLE), ("C", _dup("i03"))]
+    pooled = [_pooled_idea(arm, k) for k, (arm, _) in enumerate(entries, 1)]
+    audit = ip.audit_of(_audit_reply([v for _, v in entries]), len(pooled))
+    arms = (ip.ARM_A, ip.ARM_B, ip.ARM_C)
+    runs = [ip.ArmRun(arm, None, None, 0.0, (), (), ()) for arm in arms]
+    results = tmp_path / "r.jsonl"
+    sink = ResultsSink({"LIVE_RESULTS_PATH": str(results)})
+    recorder = ip.ProbeRecorder(ip.ProbePlan(arms, _repos(("tomli",))), sink)
+    run = dg.Wire(_Answers()).run()
+    recorder.record("tomli", runs, pooled, audit, run)
+    expected = [(1, 1, None), (0, 1, 0), (1, 1, 1)]
+    good = [(r.good, r.good_corrected, r.good_strict) for r in recorder.rows]
+    assert good == expected
+    lines = [json.loads(x) for x in results.read_text("utf-8").splitlines()]
+    rows = [x for x in lines if x["experiment"] == ip.ROW_EXPERIMENT]
+    counts = ("good", "good_corrected", "good_strict")
+    assert [tuple(r[k] for k in counts) for r in rows] == expected
+    audits = [x for x in lines if x["experiment"] == ip.AUDIT_EXPERIMENT]
+    review = ("id", "auditor", "reason", "duplicate_of")
+    assert [tuple(a[k] for k in review) for a in audits] == [
+        ("i01", "feasible", "none", None),
+        ("i02", "infeasible", "duplicate_of", "i01"),
+        ("i03", "feasible", "none", None),
+        ("i04", "infeasible", "duplicate_of", "i03"),
+    ]
+    # the note stays the cost note it was (it is cut at NOTE_CHARS)
+    assert "; B 0 idea(s), good 0, 0.000; " in run.notes[-1]
+    echoed: list[str] = []
+    recorder.finish(echoed.append)
+    header = next(line for line in echoed if line.startswith("| repo"))
+    assert "| good | good corrected | good strict |" in header
+    assert any(line.startswith("| tomli | B | 0 | 0 | 0 | 1 | 0 |") for line in echoed)
+    assert any(line.startswith("| tomli | A | 0 | 0 | 1 | 1 | - |") for line in echoed)
+
+
+def test_an_audit_shorter_than_its_pool_is_refused_not_cut(tmp_path: Path) -> None:
+    """Every pooled idea gets its ``ideas-audit`` record: a verdict per
+    idea is required (a short tuple raises), a missing review is ``None``."""
+    pooled = [_pooled_idea("B", 1), _pooled_idea("C", 1), _pooled_idea("C", 2)]
+    audit = ip.audit_of(_audit_reply([FEASIBLE, _dup("i01"), FEASIBLE]), 3)
+    arms = (ip.ARM_B, ip.ARM_C)
+    runs = [ip.ArmRun(arm, None, None, 0.0, (), (), ()) for arm in arms]
+    results = tmp_path / "r.jsonl"
+    recorder = ip.ProbeRecorder(
+        ip.ProbePlan(arms, _repos(("tomli",))),
+        ResultsSink({"LIVE_RESULTS_PATH": str(results)}),
+    )
+    run = dg.Wire(_Answers()).run()
+    short = dataclasses.replace(audit, verdicts=audit.verdicts[:2])
+    with pytest.raises(ValueError, match="zip"):
+        recorder.record("tomli", runs, pooled, short, run)
+    assert recorder.rows == [] and not results.exists()  # before any write
+    bare = dataclasses.replace(audit, reviews=())  # no reviews: all rows, no reason
+    recorder.record("tomli", runs, pooled, bare, run)
+    lines = [json.loads(x) for x in results.read_text("utf-8").splitlines()]
+    audits = [x for x in lines if x["experiment"] == ip.AUDIT_EXPERIMENT]
+    assert [(a["id"], a["auditor"], a["reason"]) for a in audits] == [
+        ("i01", "feasible", None), ("i02", "infeasible", None),
+        ("i03", "feasible", None),
+    ]  # fmt: skip
+
+
+def test_the_auditor_run_carries_each_reason_and_duplicate_of(dry: Path) -> None:
+    pooled = [_pooled_idea("B", 1), _pooled_idea("C", 1)]
+    wire = dg.Wire(lambda _body: _audit_reply([FEASIBLE, _dup("i01")]))
+    audit = ip.run_audit(pooled, wire.run(), _facts(), base=_base(), reader=_reader)
+    assert audit.error is None and audit.verdicts == ("feasible", "infeasible")
+    assert audit.reviews == (
+        ip.AuditReview("feasible", "none", None),
+        ip.AuditReview("infeasible", "duplicate_of", "i01"),
+    )
+    assert _counts(ip.scores(_E1_RUNS, pooled, audit), "C") == (0, 1, 1)
 
 
 # ---------------------------------------------------------------------------
