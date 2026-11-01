@@ -102,6 +102,18 @@ improved in each later round, the cost per extra percentage point after
 round 1 and how many final re-tests held. Notes reach the cost table (the
 log), each within one cell: ``EVOLVE <repo> r<k>: ...`` per round,
 ``EVOLVE <repo> final: ...`` per repository, and the running summary.
+
+**Arm P** (V8, E4; ``$LIVE_EVOLVE_ARMS``, a comma list of ``blind`` and
+``P``, default ``blind``): with ``LiveSteps.pipeline`` on, step 2 is
+``discovery_ab.pipeline_arm`` instead of the blind request: the engine's
+idea pipeline on the round's facts (the same history in the objective's
+description), the code at the round's base commit, withholding what the
+engine's generate call withholds (``discovery_ab.withheld``: the loop's
+protected patterns, phase 1's ``extra_protected`` and the quality check's
+frozen paths), ``EVOLVE_N`` obvious ideas plus its portfolio, its generation run
+capped at ``EVOLVE_P_GEN_CAP_USD`` (phase 1 and every pipeline request at
+its worst). Each arm evolves its own clone; P's rows are named
+``<repo>/P`` (``evolve_name``), so the summary keeps the arms apart.
 """
 
 from __future__ import annotations
@@ -175,7 +187,15 @@ from .discovery import (
     run_engine,
     worst_usd,
 )
-from .discovery_ab import AB_ARM, ab_settings
+from .discovery_ab import (
+    AB_ARM,
+    ab_settings,
+    check_arm_calls,
+    pipeline_arm,
+    pipeline_settings,
+    pipeline_worst_usd,
+    withheld,
+)
 from .discovery_io import (
     ResultsSink,
     cells,
@@ -200,6 +220,8 @@ from .oss import (
 ROUNDS_ENV: Final = "LIVE_EVOLVE_ROUNDS"
 REPOS_ENV: Final = "LIVE_EVOLVE_REPOS"
 RUN_CAP_ENV: Final = "LIVE_EVOLVE_RUN_CAP_USD"
+ARMS_ENV: Final = "LIVE_EVOLVE_ARMS"
+EVOLVE_ARMS: Final = ("blind", "P")
 EVOLVE_ROUNDS: Final = 10
 EVOLVE_MAX_ROUNDS: Final = 10
 EVOLVE_EMPTY_STOP: Final = 2
@@ -237,6 +259,10 @@ EVOLVE_GEN_CAP_USD: Final = ceil_usd(
     + worst_usd(EVOLVE_PROMPT_BOUND, EVOLVE_GENERATE_MAX_TOKENS, EVOLVE_ARM.model)
 )
 """Phase 1's understand request and the round's generation, at their worst."""
+EVOLVE_P_GEN_CAP_USD: Final = ceil_usd(
+    PHASE_ONE_WORST_USD + pipeline_worst_usd(pipeline_settings(ab_settings(settings)))
+)
+"""Phase 1's understand request and arm P's every pipeline request."""
 NOTE_MAX_CHARS: Final = 200  # one cost-table cell (conftest._CELL_MAX)
 
 # ---------------------------------------------------------------------------
@@ -268,11 +294,35 @@ def evolve_repos(environ: Mapping[str, str]) -> tuple[OssRepo, ...]:
     return _by_name(names)
 
 
+def evolve_arms(environ: Mapping[str, str]) -> tuple[str, ...]:
+    """``$LIVE_EVOLVE_ARMS``: unset is blind alone; else distinct arms of
+    ``EVOLVE_ARMS`` separated by commas, in the order given."""
+    if ARMS_ENV not in environ:
+        return ("blind",)
+    names = environ[ARMS_ENV].split(",")
+    if any(n not in EVOLVE_ARMS for n in names) or len(set(names)) != len(names):
+        raise ValueError(
+            f"{ARMS_ENV} must list distinct arms out of {', '.join(EVOLVE_ARMS)}, "
+            f"got {environ[ARMS_ENV]!r}"
+        )
+    return tuple(names)
+
+
+def evolve_name(repo: str, arm: str) -> str:
+    """The rows' name of ``repo`` under ``arm`` (blind keeps the bare name)."""
+    return repo if arm == "blind" else f"{repo}/{arm}"
+
+
+def evolve_gen_cap(arm: str) -> float:
+    return EVOLVE_P_GEN_CAP_USD if arm == "P" else EVOLVE_GEN_CAP_USD
+
+
 @dataclass(frozen=True)
 class EvolvePlan:
     rounds: int
     run_cap: float
     repos: tuple[OssRepo, ...] = EVOLVE_REPOS
+    arms: tuple[str, ...] = ("blind",)
 
 
 def evolve_plan(environ: Mapping[str, str]) -> EvolvePlan:
@@ -285,14 +335,16 @@ def evolve_plan(environ: Mapping[str, str]) -> EvolvePlan:
             environ, RUN_CAP_ENV, EVOLVE_RUN_CAP_USD, high=OSS_RUN_CAP_USD
         ),
         repos=evolve_repos(environ),
+        arms=evolve_arms(environ),
     )
 
 
 def evolve_need(plan: EvolvePlan) -> float:
     """The sum of the caps the suite may ask the ledger for: every round of
-    every repository, each a generation run and an engine run (the final
-    re-test sends no request)."""
-    return len(plan.repos) * plan.rounds * (EVOLVE_GEN_CAP_USD + plan.run_cap)
+    every repository under every arm, each a generation run and an engine
+    run (the final re-test sends no request)."""
+    per_round = sum(evolve_gen_cap(arm) + plan.run_cap for arm in plan.arms)
+    return len(plan.repos) * plan.rounds * per_round
 
 
 def check_suite_cap(plan: EvolvePlan, environ: Mapping[str, str]) -> None:
@@ -302,7 +354,8 @@ def check_suite_cap(plan: EvolvePlan, environ: Mapping[str, str]) -> None:
     if need > cap:
         raise ValueError(
             f"the evolution plan ({len(plan.repos)} repo(s) x {plan.rounds} "
-            f"round(s), {plan.run_cap:g} USD an engine run) needs {need:.2f} USD "
+            f"round(s) x {len(plan.arms)} arm(s), {plan.run_cap:g} USD an engine "
+            f"run) needs {need:.2f} USD "
             f"of caps; {SUITE_CAP_ENV} is {cap:.2f}"
         )
 
@@ -796,6 +849,7 @@ class LiveSteps:
     cfg: Settings
     policy: GitPolicy = PRODUCTION
     measure: AbabMeasure = measure_abab
+    pipeline: bool = False  # arm P: the idea pipeline instead of the blind request
 
     def generate(
         self,
@@ -819,10 +873,36 @@ class LiveSteps:
         check_loop_guards(loop, run, result, self.isolation)
         phase = read_phase_one(loop, run, result)
         budget = Budget(run.cap_usd, run.spent_usd)
-        produced = generate_round(run, budget, with_history(phase.facts, history))
-        check_calls(run, budget, [produced])
+        facts = with_history(phase.facts, history)
+        protected, deny = withheld(loop.context, result.state["extra_protected"])
+        produced = self.produce(
+            run, budget, facts, commit=user.base, protected=protected, read_deny=deny
+        )
         check_untouched(phase)
         return Generated(phase.cost_usd, produced)
+
+    def produce(
+        self,
+        run: LiveRun,
+        budget: Budget,
+        facts: RepoFacts,
+        *,
+        commit: str,
+        protected: Sequence[str],
+        read_deny: Sequence[str] = (),
+    ) -> ArmResult:
+        """The round's generation and its guard: arm P on the code at
+        ``commit`` (``protected`` and ``read_deny`` unread), else the one
+        blind request."""
+        if self.pipeline:
+            produced = pipeline_arm(run, budget, facts, commit=commit,
+                                    protected=protected, read_deny=read_deny,
+                                    n=EVOLVE_N, base=self.cfg)  # fmt: skip
+            check_arm_calls(run, budget, {"P": produced})
+            return produced
+        produced = generate_round(run, budget, facts)
+        check_calls(run, budget, [produced])
+        return produced
 
     def improve(
         self, run: LiveRun, user: UserRepo, candidates: Sequence[Hypothesis]
@@ -1140,6 +1220,11 @@ def render_evolve(
         f"moves the clone to its commit; {EVOLVE_EMPTY_STOP} empty rounds in a "
         "row end the repository.",
     ]
+    if any(r.repo.endswith("/P") for r in rows):
+        lines.append(
+            "Arm P: rows named <repo>/P generate with the idea pipeline (arm P) "
+            f"instead, {EVOLVE_N} obvious ideas plus its portfolio, on their own clone."
+        )
     return "\n".join(lines)
 
 

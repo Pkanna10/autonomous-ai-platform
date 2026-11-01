@@ -1,0 +1,21 @@
+diff --git a/auditchain/main.py b/auditchain/main.py
+index ad5b515..439eff8 100644
+--- a/auditchain/main.py
++++ b/auditchain/main.py
+@@ -1,6 +1,6 @@
+ """Workload: ``python -m auditchain.main``."""
+ 
+-from auditchain.chain import seal_after, seals
++from auditchain.chain import seals
+ from auditchain.entries import week
+ 
+ ENTRIES = 72000
+@@ -10,7 +10,7 @@ DAYS = 6
+ def main() -> None:
+     chained = seals(week(ENTRIES))
+     per_day = ENTRIES // DAYS
+-    print(f"first day\t{seal_after(week(ENTRIES), per_day).hex()}")
++    print(f"first day\t{chained[per_day - 1].hex()}")
+     for day in range(1, DAYS + 1):
+         print(f"day {day}\t{chained[day * per_day - 1].hex()}")
+     print(f"week\t{len(chained)}\t{chained[-1].hex()}")

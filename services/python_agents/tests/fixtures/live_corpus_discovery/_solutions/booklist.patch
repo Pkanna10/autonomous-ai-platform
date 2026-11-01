@@ -1,0 +1,26 @@
+diff --git a/booklist/catalogue.py b/booklist/catalogue.py
+index 8487227..072ff46 100644
+--- a/booklist/catalogue.py
++++ b/booklist/catalogue.py
+@@ -1,16 +1,18 @@
+ """The catalogue of titles on sale."""
+ 
++from bisect import insort
++
+ 
+ class Catalogue:
+     def __init__(self, titles: list[str]) -> None:
+-        self._titles = list(titles)
++        self._titles = sorted(titles)
+ 
+     def add(self, title: str) -> None:
+-        self._titles.append(title)
++        insort(self._titles, title)
+ 
+     def ordered(self) -> list[str]:
+         """Every title, in alphabetical order."""
+-        return sorted(self._titles)
++        return list(self._titles)
+ 
+     def __len__(self) -> int:
+         return len(self._titles)

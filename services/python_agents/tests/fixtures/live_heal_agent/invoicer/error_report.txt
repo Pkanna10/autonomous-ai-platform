@@ -1,0 +1,15 @@
+Invoices for German customers crash since the shop passes the country code as
+it stores it ("DE"). The invoice in question has two copies of BK-1001 (a
+book: 7% VAT in Germany) at 10.00 each with a 2.00 discount on the line, so
+its gross total should be 19.26 (18.00 plus 1.26 VAT).
+
+    invoice_total([parse_line("2 x BK-1001 @ 10.00 - 2.00")], "DE")
+
+Traceback (most recent call last):
+  File "/srv/billing/run.py", line 31, in bill
+    total = invoice_total(lines, customer.country)
+  File "/srv/billing/vendor/invoicer/invoicer/totals.py", line 12, in invoice_total
+    rate = rate_for(category_of(line.sku), country)
+  File "/srv/billing/vendor/invoicer/invoicer/tax.py", line 20, in rate_for
+    raise TaxRateError(f"no rate for {category!r} in {country!r}") from None
+invoicer.tax.TaxRateError: no rate for 'books' in 'DE'

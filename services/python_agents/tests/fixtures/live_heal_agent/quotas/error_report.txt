@@ -1,0 +1,6 @@
+Since the API's rate limit moved to quotas.Limiter(5, "1m"), a client that
+makes five quick requests stays locked out. Five requests from "acme" at
+t = 0, 1, 2, 3 and 4 seconds, then a sixth at t = 130 seconds, more than two
+minutes later: the sixth is refused with QuotaExceededError ("client 'acme'
+made 5 requests in the last 1m"). It should be admitted, the window is one
+minute.

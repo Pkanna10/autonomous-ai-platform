@@ -1,0 +1,218 @@
+{
+  "repos": [
+    {
+      "name": "booklist",
+      "package": "booklist",
+      "category": "deep",
+      "fix_gain": 0.6,
+      "hypotheses": [
+        {
+          "title": "keep-the-catalogue-sorted",
+          "aimed": true,
+          "rationale": "Every browse in booklist/shop.py lists titles through Catalogue.ordered in booklist/catalogue.py, which sorts the whole catalogue again although only one title arrives at a time. Keep the titles in alphabetical order as they are added, inserting each new title at its sorted position, and hand that order out instead of sorting on every browse; the listings must not change."
+        },
+        {
+          "title": "slug-with-a-pattern",
+          "aimed": false,
+          "rationale": "slug in booklist/links.py builds each slug one character at a time; find the runs of letters and digits with one regular expression and join them with dashes instead."
+        }
+      ]
+    },
+    {
+      "name": "stockbook",
+      "package": "stockbook",
+      "category": "deep",
+      "fix_gain": 0.45,
+      "hypotheses": [
+        {
+          "title": "row-number-map",
+          "aimed": true,
+          "rationale": "Every movement posted by stockbook/book.py asks Registry.row in stockbook/registry.py for its stock code's row, and row finds it by searching the list of every code seen so far. Keep a mapping from code to row number beside the list, assigned in first-seen order, so each lookup is constant time; the rows and the output must not change."
+        },
+        {
+          "title": "digest-modulo-once",
+          "aimed": false,
+          "rationale": "line_digest in stockbook/checks.py reduces the running check value modulo the prime after every byte; reduce it once at the end of the line instead."
+        }
+      ]
+    },
+    {
+      "name": "examboard",
+      "package": "examboard",
+      "category": "spread",
+      "fix_gain": 0.45,
+      "hypotheses": [
+        {
+          "title": "rank-each-paper-once",
+          "aimed": true,
+          "rationale": "Each published figure in examboard/stats.py (top candidate, median, upper quartile, boundaries, top-decile mean, trimmed mean, widest gap) sorts the same results of an exam paper again. Rank the results once per paper in exam_report and hand the ranked list to every figure; the figures must not change."
+        },
+        {
+          "title": "top-candidate-by-max",
+          "aimed": false,
+          "rationale": "top_candidate in examboard/stats.py sorts every result to take the first; take the largest result directly instead."
+        }
+      ]
+    },
+    {
+      "name": "tripsheet",
+      "package": "tripsheet",
+      "category": "spread",
+      "fix_gain": 0.4,
+      "hypotheses": [
+        {
+          "title": "decode-the-records-once",
+          "aimed": true,
+          "rationale": "Every figure in tripsheet/report.py (distance, fares by region, busiest mode, longest trip, fare per kilometre, crowding, late-night travel, short-hop fares) decodes every JSON line of the month again. Decode the lines once in main and hand the decoded records to each figure; the summary must not change."
+        },
+        {
+          "title": "count-modes-with-counter",
+          "aimed": false,
+          "rationale": "busiest_mode in tripsheet/report.py totals the riders per mode in a plain dictionary; total them with collections.Counter instead."
+        }
+      ]
+    },
+    {
+      "name": "clubroster",
+      "package": "clubroster",
+      "category": "misleading",
+      "fix_gain": 0.6,
+      "hypotheses": [
+        {
+          "title": "rank-the-roster-once",
+          "aimed": true,
+          "rationale": "pages in clubroster/roster.py asks page for each page of the roster, and page ranks every member again to cut out its 25 members. Rank the members once by the standing key and slice the pages from that one ranking; the pages and their order must not change."
+        },
+        {
+          "title": "fold-names-once",
+          "aimed": false,
+          "rationale": "standing_key in clubroster/roster.py casefolds the surname and the given name of a member on every call; remember the casefolded form of each name instead of folding it again."
+        }
+      ]
+    },
+    {
+      "name": "statementrun",
+      "package": "statementrun",
+      "category": "misleading",
+      "fix_gain": 0.6,
+      "hypotheses": [
+        {
+          "title": "column-widths-once",
+          "aimed": true,
+          "rationale": "statement_lines in statementrun/printer.py asks Bank.column_widths in statementrun/bank.py for the shared layout once per statement, and column_widths formats every transaction of every account to measure it. Work the widths out once per bank and reuse them for every statement; the booklet must not change."
+        },
+        {
+          "title": "money-by-format-spec",
+          "aimed": false,
+          "rationale": "money in statementrun/layout.py splits the cents with divmod before formatting; format the amount in one step with a format specification instead."
+        }
+      ]
+    },
+    {
+      "name": "ratecheck",
+      "package": "ratecheck",
+      "category": "uncommon",
+      "fix_gain": 0.55,
+      "hypotheses": [
+        {
+          "title": "one-inverse-per-day",
+          "aimed": true,
+          "rationale": "fingerprints in ratecheck/ledger.py inverts every denominator of the day separately with the extended Euclidean algorithm of ratecheck/field.py. Invert the product of all the denominators once and recover each conversion's inverse from running products, walking back from the last conversion to the first, so each conversion costs a few multiplications; the fingerprints must not change."
+        },
+        {
+          "title": "builtin-modular-inverse",
+          "aimed": false,
+          "rationale": "inverse in ratecheck/field.py runs the extended Euclidean algorithm in Python; compute the modular inverse with the built-in pow and an exponent of -1 instead."
+        }
+      ]
+    },
+    {
+      "name": "parcelindex",
+      "package": "parcelindex",
+      "category": "uncommon",
+      "fix_gain": 0.3,
+      "hypotheses": [
+        {
+          "title": "no-collections-while-loading",
+          "aimed": true,
+          "rationale": "load in parcelindex/registry.py creates several hundred thousand small lists and objects, and the cyclic garbage collector keeps re-examining them while they are created and afterwards, although the registry holds no reference cycles. Pause the collector while the registry loads, move the loaded objects out of its reach before turning it back on, and restore its previous state; the answers must not change."
+        },
+        {
+          "title": "build-corners-inline",
+          "aimed": false,
+          "rationale": "load in parcelindex/registry.py builds each parcel's corners through intermediate variables; compute the far corner once and build the corner list in the Parcel call instead."
+        }
+      ]
+    },
+    {
+      "name": "auditchain",
+      "package": "auditchain",
+      "category": "small",
+      "fix_gain": 0.05,
+      "hypotheses": [
+        {
+          "title": "first-day-from-the-chain",
+          "aimed": true,
+          "rationale": "main in auditchain/main.py prints the seal at the end of the first day by generating and sealing the first day's entries a second time with seal_after, although seals has already produced that seal. Take it from the chain already computed; the seals must not change."
+        },
+        {
+          "title": "seal-without-joining",
+          "aimed": false,
+          "rationale": "seal in auditchain/chain.py joins the previous seal and the entry into one new bytes object before hashing; feed both to the hash object in turn instead."
+        }
+      ]
+    },
+    {
+      "name": "meterlog",
+      "package": "meterlog",
+      "category": "small",
+      "fix_gain": 0.05,
+      "hypotheses": [
+        {
+          "title": "review-sample-from-the-readings",
+          "aimed": true,
+          "rationale": "under_review in meterlog/summary.py decodes every third JSON line again for the meter-review sample, although main in meterlog/main.py has already decoded every line. Take the sample from the decoded readings; the figures must not change."
+        },
+        {
+          "title": "count-limits-with-sum",
+          "aimed": false,
+          "rationale": "out_of_limits in meterlog/summary.py counts with a generator of ones; sum the boolean comparisons directly instead."
+        }
+      ]
+    },
+    {
+      "name": "logarchive",
+      "package": "logarchive",
+      "category": "decoy",
+      "hypotheses": [
+        {
+          "title": "feed-pieces-from-a-view",
+          "aimed": true,
+          "rationale": "pack in logarchive/archive.py copies every 4 KiB piece of the log out of the bytes before compressing it, and grows its checkpoint list by concatenation; feed the compressor slices of a memoryview and append each checkpoint instead."
+        },
+        {
+          "title": "one-join-for-the-log",
+          "aimed": false,
+          "rationale": "day_log in logarchive/data.py maps every drawn byte to its word through a bound method; build the log with a translation table instead."
+        }
+      ]
+    },
+    {
+      "name": "sitebackup",
+      "package": "sitebackup",
+      "category": "decoy",
+      "hypotheses": [
+        {
+          "title": "join-pages-once",
+          "aimed": true,
+          "rationale": "page in sitebackup/site.py and bundle in sitebackup/backup.py build their text by repeated string concatenation; collect the parts in lists and join each once instead."
+        },
+        {
+          "title": "encode-pages-separately",
+          "aimed": false,
+          "rationale": "bundle in sitebackup/backup.py encodes the whole document at the end; encode each page as it is added and join the bytes instead."
+        }
+      ]
+    }
+  ]
+}

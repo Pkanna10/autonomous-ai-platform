@@ -555,9 +555,9 @@ def test_the_system_prompt_is_constant_and_explains_the_rules(repo: Path) -> Non
 # --------------------------------------------------------------------------
 
 
-def test_the_brief_is_inside_the_boundary_and_the_hypothesis_outside(
-    repo: Path,
-) -> None:
+def test_the_hypothesis_and_the_brief_are_inside_the_boundary(repo: Path) -> None:
+    """D11: the hypothesis is fenced for every source (a generated title is
+    derived from repository text and can relay an injection)."""
     run = _run(repo, [_reply("refusal")])
     text = _first_text(run.transport.requests[0])
     assert text.count(OPEN) == 1 and text.count(CLOSE) == 1
@@ -574,11 +574,12 @@ def test_the_brief_is_inside_the_boundary_and_the_hypothesis_outside(
         "93.0%",
         "4096 bytes",
         "**/tests/**",
+        "<hypothesis>",
+        "Membership tests against a list",
     ):
         assert needle in inside, needle
     assert UNDERSTANDING.summary not in outside
-    assert "<hypothesis>" in outside
-    assert "h1" in outside and "Membership tests against a list" in outside
+    assert "<hypothesis>" not in outside and "Membership tests" not in outside
     assert NOTICE in outside
     assert str(repo) not in text
 
@@ -592,7 +593,6 @@ def test_every_engine_line_of_the_first_message_is_a_notice(repo: Path) -> None:
     run = _run(repo, [_reply("refusal")])
     text = _first_text(run.transport.requests[0])
     rest = text.replace(text[text.index(OPEN) : text.index(CLOSE) + len(CLOSE)], "")
-    rest = re.sub(r"<hypothesis>\n.*?\n</hypothesis>", "", rest, flags=re.DOTALL)
     notices = NOTICE_BLOCK.findall(rest)
     assert NOTICE_BLOCK.sub("", rest).strip() == ""
     assert len(notices) == 2

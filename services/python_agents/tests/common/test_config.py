@@ -480,7 +480,8 @@ def test_settings_pricing_and_fallbacks_can_be_overridden(
     """
     # ARRANGE
     rate = {"input": 1.0, "output": 2.0, "cache_write": 1.25, "cache_read": 0.1}
-    table = {name: rate for name in ("m-engine", "m-fallback", "m-triage")}
+    names = ("m-engine", "m-fallback", "m-triage", "claude-sonnet-5-5")
+    table = {name: rate for name in names}
     monkeypatch.setenv("MODEL_PRICING", json.dumps(table))
     monkeypatch.setenv("ENGINE_MODEL", "m-engine")
     monkeypatch.setenv("TRIAGE_MODEL", "m-triage")
@@ -806,8 +807,10 @@ RATE = {"input": 1.0, "output": 2.0, "cache_write": 1.25, "cache_read": 0.1}
 
 
 def _priced_for(*models: str) -> str:
-    """A MODEL_PRICING table that prices ``models`` and the triage model."""
-    return json.dumps({name: RATE for name in (*models, "claude-haiku-5-5")})
+    """A MODEL_PRICING table that prices ``models``, the triage model and the
+    Step 3 generator and matcher default (Sonnet 5.5)."""
+    roles = ("claude-haiku-5-5", "claude-sonnet-5-5")
+    return json.dumps({name: RATE for name in (*models, *roles)})
 
 
 def test_effort_is_unset_by_default(clean_env: Path) -> None:
@@ -995,6 +998,7 @@ def test_max_is_accepted_on_the_other_current_engine_models(
     """
     monkeypatch.setenv("MODEL_PRICING", _priced_for(engine, "claude-opus-4-8"))
     monkeypatch.setenv("ENGINE_MODEL", engine)
+    monkeypatch.setenv("ALLOW_RETENTION_MODELS", "1")  # D63: Fable 5.1 needs it
     monkeypatch.setenv("UNDERSTAND_EFFORT", "max")
     monkeypatch.setenv("EDITOR_EFFORT", "max")
 
@@ -1022,6 +1026,7 @@ def test_a_long_context_tier_can_be_overridden_as_json(
     table = {
         "claude-opus-5-5": RATE,
         "claude-opus-4-8": RATE,
+        "claude-sonnet-5-5": RATE,
         "claude-haiku-5-5": {**RATE, "long_context": long},
     }
     monkeypatch.setenv("MODEL_PRICING", json.dumps(table))

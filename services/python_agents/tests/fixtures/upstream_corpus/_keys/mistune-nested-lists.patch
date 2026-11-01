@@ -1,0 +1,160 @@
+diff --git a/src/mistune/block_parser.py b/src/mistune/block_parser.py
+index f3cdf0a..67b7039 100644
+--- a/src/mistune/block_parser.py
++++ b/src/mistune/block_parser.py
+@@ -439,9 +439,17 @@ class BlockParser(Parser[BlockState]):
+         return None
+ 
+     def parse(self, state: BlockState, rules: Optional[List[str]] = None) -> None:
++        if rules is None:
++            rules = self.rules
+         sc = self.compile_sc(rules)
+ 
+         while state.cursor < state.cursor_max:
++            if "indent_code" in rules:
++                end_pos = self._parse_indent_code_fast(state)
++                if end_pos is not None:
++                    state.cursor = end_pos
++                    continue
++
+             m = sc.match(state.src, state.cursor)
+             if not m and self._parse_plain_paragraph(state, sc):
+                 continue
+@@ -471,6 +479,23 @@ class BlockParser(Parser[BlockState]):
+             state.add_paragraph(text)
+             state.cursor = state.cursor_max
+ 
++    def _parse_indent_code_fast(self, state: BlockState) -> Optional[int]:
++        line_end = state.find_line_end()
++        line = state.get_text(line_end)
++        if not _is_indent_code_line(line):
++            return None
++
++        if state.last_token() and state.last_token()["type"] == "paragraph":
++            return state.append_paragraph()
++
++        end_pos = _find_indent_code_end(state.src, line_end, state.cursor_max)
++        code = state.get_text(end_pos)
++        code = expand_leading_tab(code)
++        code = _INDENT_CODE_TRIM.sub("", code)
++        code = code.strip("\n")
++        state.append_token({"type": "block_code", "raw": code, "style": "indent"})
++        return end_pos
++
+     def _parse_plain_paragraph(self, state: BlockState, sc: Pattern[str]) -> bool:
+         if not _is_plain_paragraph_start(state.src, state.cursor):
+             return False
+@@ -554,6 +579,32 @@ def _trim_partial_next_line_indent(text: str, end_pos: int) -> int:
+     return end_pos
+ 
+ 
++def _is_indent_code_line(line: str) -> bool:
++    if line.endswith("\n"):
++        line = line[:-1]
++
++    if len(line) > 4 and line.startswith("    "):
++        return True
++
++    index = 0
++    while index < len(line) and line[index] == " ":
++        index += 1
++    return index + 1 < len(line) and line[index] == "\t"
++
++
++def _find_indent_code_end(src: str, start: int, end: int) -> int:
++    pos = start
++    while pos < end:
++        newline = src.find("\n", pos, end)
++        line_end = end if newline < 0 else newline + 1
++        line = src[pos:line_end]
++        if _is_indent_code_line(line) or not line.strip():
++            pos = line_end
++            continue
++        break
++    return pos
++
++
+ def _is_plain_paragraph_start(src: str, pos: int) -> bool:
+     if pos >= len(src):
+         return False
+diff --git a/src/mistune/core.py b/src/mistune/core.py
+index 1f6f067..b501c36 100644
+--- a/src/mistune/core.py
++++ b/src/mistune/core.py
+@@ -25,9 +25,6 @@ if sys.version_info >= (3, 11):
+ else:
+     from typing_extensions import Self
+ 
+-_LINE_END = re.compile(r"\n|$")
+-
+-
+ class BlockState:
+     """The state to save block parser's cursor and tokens."""
+ 
+@@ -74,9 +71,10 @@ class BlockState:
+         return self.find_line_end_at(self.cursor)
+ 
+     def find_line_end_at(self, pos: int) -> int:
+-        m = _LINE_END.search(self.src, pos)
+-        assert m is not None
+-        return m.end()
++        end = self.src.find("\n", pos)
++        if end < 0:
++            return len(self.src)
++        return end + 1
+ 
+     def get_text(self, end_pos: int) -> str:
+         return self.src[self.cursor : end_pos]
+diff --git a/src/mistune/list_parser.py b/src/mistune/list_parser.py
+index eff71e7..6d07703 100644
+--- a/src/mistune/list_parser.py
++++ b/src/mistune/list_parser.py
+@@ -337,14 +337,43 @@ def _clean_list_item_text(src: str, continue_width: int) -> str:
+ 
+ 
+ def _has_continuation_indent(line: str, columns: int) -> bool:
+-    return _count_indent(line) >= columns
++    width = 0
++    for char in line:
++        if char == " ":
++            width += 1
++        elif char == "\t":
++            width += 4 - width % 4
++        else:
++            break
++        if width >= columns:
++            return True
++    return False
+ 
+ 
+ def _strip_continuation_indent(line: str, columns: int) -> str:
+-    expanded = _expand_leading_tabs(line)
+-    if len(expanded) >= columns:
+-        return expanded[columns:]
+-    return ""
++    width = 0
++    index = 0
++    while index < len(line) and width < columns:
++        char = line[index]
++        if char == " ":
++            width += 1
++        elif char == "\t":
++            width += 4 - width % 4
++        else:
++            break
++        index += 1
++
++    if width < columns:
++        return ""
++
++    prefix = " " * (width - columns)
++    if index < len(line) and line[index] == " ":
++        if "\t" not in line[index:]:
++            return prefix + line[index:]
++    elif index == len(line) or line[index] != "\t":
++        return prefix + line[index:]
++
++    return prefix + _expand_leading_tabs(line[index:], width)
+ 
+ 
+ def _expand_leading_tabs(line: str, start_column: int = 0) -> str:

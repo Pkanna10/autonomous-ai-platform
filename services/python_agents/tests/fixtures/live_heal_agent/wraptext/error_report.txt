@@ -1,0 +1,13 @@
+The newsletter's text edition no longer builds: a paragraph with a long link
+crashes the wrapping. The link must stay in the text, whole.
+
+    paragraph("Read the report at https://example.org/reports/2026/annual-summary today", 30)
+
+Traceback (most recent call last):
+  File "/srv/news/build_text.py", line 52, in render
+    body = paragraph(item.text, 30)
+  File "/srv/news/vendor/wraptext/wraptext/layout.py", line 9, in paragraph
+    return "\n".join(indent + line for line in wrap(text, width - len(indent)))
+  File "/srv/news/vendor/wraptext/wraptext/wrap.py", line 18, in wrap
+    raise WrapError(f"the word {word[:20]!r} is longer than the width {width}")
+wraptext.wrap.WrapError: the word 'https://example.org/' is longer than the width 30

@@ -1,0 +1,4 @@
+added lines: ["    subprocess.Popen(['python', '-c', 'work()'])"]
+naive added-lines-only AST scan: passes  <-- the reused import spawns unseen
+current whole-blob rule: may start processes (line 1: imports subprocess)
+delta prototype: REFUSED: uses spawn-bound subprocess

@@ -1,0 +1,21 @@
+diff --git a/parcelindex/registry.py b/parcelindex/registry.py
+index 77fc08c..235eb6c 100644
+--- a/parcelindex/registry.py
++++ b/parcelindex/registry.py
+@@ -32,10 +32,13 @@ def load(count: int) -> dict[str, Parcel]:
+         bits = rng.getrandbits(64)
+         x, y = bits % 90000, bits >> 20 & 0xFFFF
+         width, depth = 5 + (bits >> 36 & 0xFF), 5 + (bits >> 44 & 0xFF)
+-        corners = [[x, y], [x + width, y], [x + width, y + depth], [x, y + depth]]
+-        owners = [SURNAMES[bits >> 52 & 31], SURNAMES[32 + (bits >> 57 & 15)]]
++        right, top = x + width, y + depth
++        first = SURNAMES[bits >> 52 & 31]
++        owners = (
++            [first, SURNAMES[32 + (bits >> 57 & 15)]] if bits >> 62 & 1 else [first]
++        )
+         ident = f"LR{number:07d}"
+         parcels[ident] = Parcel(
+-            ident, number % 40, owners[: 1 + (bits >> 62 & 1)], corners
++            ident, number % 40, owners, [[x, y], [right, y], [right, top], [x, top]]
+         )
+     return parcels

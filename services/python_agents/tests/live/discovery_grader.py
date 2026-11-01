@@ -10,7 +10,8 @@ against the others. It sees:
   (``reference_patches``): a ``multi`` repository of the hard corpus has one
   ``<name>.part<k>.patch`` per hot spot, each a separate root cause; any
   other repository its ``<name>.patch``. A trap's ``<name>.naive.patch`` is
-  the wrong fix and is never shown;
+  the wrong fix, and a v2 ``<name>.textbook.patch`` the first idea; neither
+  is ever shown;
 - the arm's hypotheses (title and rationale only) shuffled with a fixed
   seed per repository (``shuffled``), named ``H1``..``Hn`` and scrubbed of
   model names (``scrub``), so nothing in the request names the arm.
@@ -23,6 +24,10 @@ trace: a billed ``reasoning_extraction`` refusal, platform.claude.com,
 refusals and fallback). The reply is untrusted: an unknown or repeated id
 is ignored, a ``root_cause`` that names no shown part is recorded as null,
 and a hypothesis it does not grade stays unknown (``None``).
+``grade_with`` sends that request through any transport (the offline eval
+replays a recorded reply on a ``ScriptedTransport``) and keeps the reply text
+in ``Grade.reply``, which the recorded sweep stores; ``grade`` runs it on the
+run's own one-model transport (``grader_settings``).
 Controls have no fix and are not graded (``discovery_sweep`` records a big
 claimed gain instead).
 """
@@ -34,11 +39,12 @@ import os
 import random
 import re
 import time
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final
 
+from anthropic.types.beta import BetaMessage, BetaTextBlock
 from pydantic import Field
 
 from autonomous_ai_agents.clients.budget import Budget
@@ -53,13 +59,19 @@ from autonomous_ai_agents.clients.structured import (
     send,
     structured_request,
 )
-from autonomous_ai_agents.clients.transport import LLMRequest
-from autonomous_ai_agents.common.config import Effort, Settings, settings
+from autonomous_ai_agents.clients.transport import LLMRequest, LLMTransport
+from autonomous_ai_agents.common.config import (
+    Effort,
+    Settings,
+    role_settings,
+    settings,
+)
 from autonomous_ai_agents.common.models import Hypothesis
 
 from .conftest import LiveRun
 from .corpus import HARD_SOLUTIONS_DIR, SOLUTIONS_DIR, CorpusRepo
-from .discovery import ARM_ERRORS, UsageTap, model_settings, worst_usd
+from .discovery import ARM_ERRORS, UsageTap, worst_usd
+from .discovery_corpus import DISCOVERY_SOLUTIONS_DIR
 
 GRADER_MODEL: Final = "claude-opus-4-8"
 GRADER_EFFORT: Final[Effort] = "low"
@@ -67,7 +79,7 @@ GRADER_MAX_TOKENS: Final = 4000
 GRADER_PROMPT_BOUND: Final = 18_000  # the widest patches and 5 widest ideas
 GRADER_SEED: Final = 20261023
 MAX_PATCH_BYTES: Final = 64 * 1024
-SOLUTION_DIRS: Final = (SOLUTIONS_DIR, HARD_SOLUTIONS_DIR)
+SOLUTION_DIRS: Final = (SOLUTIONS_DIR, HARD_SOLUTIONS_DIR, DISCOVERY_SOLUTIONS_DIR)
 _MODEL_NAMES: Final = re.compile(
     r"claude|opus|sonnet|fable|haiku|mythos", re.IGNORECASE
 )
@@ -176,6 +188,7 @@ class Grade:
     sent: bool = True  # False: nothing to grade, no request
     causes: tuple[int | None, ...] = ()  # per hypothesis: the part it targets
     parts: int = 0  # how many root causes were shown
+    reply: str | None = None  # the grader's reply text (None: no answer)
 
     def hit_at(self, k: int) -> bool | None:
         """Any of the first ``k`` targets the fix; ``None`` when the grader
@@ -233,13 +246,12 @@ def _text(
     )
 
 
-def grader_request(
-    repo: CorpusRepo,
+def _request(
+    key: str,
     patches: Sequence[ReferencePatch],
     hypotheses: Sequence[Hypothesis],
 ) -> LLMRequest:
-    """The one grader request: the fix, then the shuffled, scrubbed ideas."""
-    order = shuffled(len(hypotheses), repo.name)
+    order = shuffled(len(hypotheses), key)
     return structured_request(
         GRADER_SYSTEM,
         _text(patches, hypotheses, order, Fence.new()),
@@ -247,6 +259,81 @@ def grader_request(
         max_tokens=GRADER_MAX_TOKENS,
         effort=GRADER_EFFORT,
         cache=False,
+    )
+
+
+def grader_request(
+    repo: CorpusRepo,
+    patches: Sequence[ReferencePatch],
+    hypotheses: Sequence[Hypothesis],
+) -> LLMRequest:
+    """The one grader request: the fix, then the shuffled, scrubbed ideas."""
+    return _request(repo.name, patches, hypotheses)
+
+
+def grader_settings(base: Settings = settings) -> Settings:
+    """``base`` on the grader's model alone (``role_settings``, engine role)."""
+    return role_settings(
+        base, "engine", ENGINE_MODEL=GRADER_MODEL, ENGINE_FALLBACKS=False
+    )
+
+
+def reply_text(message: BetaMessage) -> str:
+    """Every text block of ``message``, joined (no fallback: what
+    ``read_reply`` reads)."""
+    return "".join(b.text for b in message.content if isinstance(b, BetaTextBlock))
+
+
+def grade_with(
+    transport: LLMTransport,
+    budget: Budget,
+    key: str,
+    patches: Sequence[ReferencePatch],
+    hypotheses: Sequence[Hypothesis],
+    *,
+    config: Settings,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Grade:
+    """The grader request for ``hypotheses`` (shuffled by ``key``, the
+    repository) through ``transport``; none: no request. ``answered`` is
+    whether the transport returned any answer, ``cost_usd`` what the call
+    recorded in ``budget`` (an answer priced past the cap included); the
+    models are the parsed answer's (``grade`` takes all three from the run's
+    records)."""
+    if not hypotheses:
+        return Grade(hits=(), cost_usd=0.0, answered=False, error=None, sent=False)
+    order = shuffled(len(hypotheses), key)
+    hits: list[bool | None] = [None] * len(hypotheses)
+    causes: list[int | None] = [None] * len(hypotheses)
+    error: str | None = None
+    text: str | None = None
+    models: tuple[str, ...] = ()
+    request = _request(key, patches, hypotheses)
+    tap = UsageTap(transport)
+    spent = budget.spent_usd
+    try:
+        result = send(tap, request, budget, sleep=sleep, config=config, notes=[])
+        text, models = reply_text(result.message), (result.served_model,)
+        reply = read_reply(result, _Reply, what="grade hypotheses")
+    except ARM_ERRORS as exc:
+        error = f"{type(exc).__name__}: {exc}"
+    else:
+        positions = {f"H{p + 1}": index for p, index in enumerate(order)}
+        for item in reply.grades:
+            index = positions.pop(item.hypothesis_id, None)
+            if index is not None:
+                hits[index] = item.targets_reference_root_cause
+                cause = item.root_cause
+                causes[index] = cause if cause in range(1, len(patches) + 1) else None
+    return Grade(
+        hits=tuple(hits),
+        cost_usd=budget.spent_usd - spent,
+        answered=bool(tap.usages),
+        error=error,
+        models=models,
+        causes=tuple(causes),
+        parts=len(patches),
+        reply=text,
     )
 
 
@@ -262,36 +349,16 @@ def grade(
     """One grader request for ``hypotheses`` (none: no request)."""
     if not hypotheses:
         return Grade(hits=(), cost_usd=0.0, answered=False, error=None, sent=False)
-    order = shuffled(len(hypotheses), repo.name)
-    cfg = model_settings(base, GRADER_MODEL)
+    cfg = grader_settings(base)
     tap = UsageTap(run.transport(cfg))
     first = len(run.records)
-    request = grader_request(repo, patches, hypotheses)
-    hits: list[bool | None] = [None] * len(hypotheses)
-    causes: list[int | None] = [None] * len(hypotheses)
-    error: str | None = None
-    try:
-        result = send(tap, request, budget, sleep=time.sleep, config=cfg, notes=[])
-        reply = read_reply(result, _Reply, what="grade hypotheses")
-    except ARM_ERRORS as exc:
-        error = f"{type(exc).__name__}: {exc}"
-    else:
-        positions = {f"H{p + 1}": index for p, index in enumerate(order)}
-        for item in reply.grades:
-            index = positions.pop(item.hypothesis_id, None)
-            if index is not None:
-                hits[index] = item.targets_reference_root_cause
-                cause = item.root_cause
-                causes[index] = cause if cause in range(1, len(patches) + 1) else None
+    graded = grade_with(tap, budget, repo.name, patches, hypotheses, config=cfg)
     records = run.records[first:]
-    return Grade(
-        hits=tuple(hits),
+    return replace(
+        graded,
         cost_usd=math.fsum(r.cost_usd for r in records),
         answered=bool(tap.usages),
-        error=error,
         models=tuple(dict.fromkeys(r.model for r in records)),
-        causes=tuple(causes),
-        parts=len(patches),
     )
 
 

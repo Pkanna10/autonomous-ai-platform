@@ -1,0 +1,125 @@
+{
+  "source": "Hand labels for L3 (Wave 2, V5), drafted for the Lead to verify: each idea was written fresh against the reference fix in the corpus _solutions dir, never graded before, without reading any recorded grader verdict; near misses touch the hot code or its module but leave the reference root cause in place.",
+  "labels": [
+    {
+      "id": "tagfilter-set-once",
+      "repo": "tagfilter",
+      "title": "Test tags against a set built from the allowlist once",
+      "rationale": "count_by_kind hands the allowlist list to matches, and every `tag in allowed` scans that list from its start. Turn the allowlist into a set once at the top of count_by_kind and pass the set, so each membership test is a hash lookup; the counts stay identical.",
+      "label": "hit",
+      "part": 1,
+      "near_miss": false,
+      "why": "The reference fix's cost: list membership in matches, replaced by a set built once per count_by_kind call."
+    },
+    {
+      "id": "tagfilter-inline-matches",
+      "repo": "tagfilter",
+      "title": "Inline matches into the count_by_kind loop",
+      "rationale": "count_by_kind calls matches once per record and pays a Python function call each time. Inline the tag loop into count_by_kind so no call is made per record; the counts stay identical.",
+      "label": "miss",
+      "part": null,
+      "near_miss": true,
+      "why": "Same hot code, wrong cost: it saves the call overhead, but each tag is still tested by scanning the allowlist list, which is what the reference removes."
+    },
+    {
+      "id": "keywordscan-pattern-once",
+      "repo": "keywordscan",
+      "title": "Compile the whole-word keyword pattern once per scan",
+      "rationale": "hits_by_level calls mentions for every log line, and mentions sorts, escapes and joins the keywords and compiles the regular expression again each time. Build the compiled pattern once in hits_by_level and search every line with it; whole-word matching and the counts do not change.",
+      "label": "hit",
+      "part": 1,
+      "near_miss": false,
+      "why": "Exactly the reference fix: the per-line pattern build and compile hoisted to one per hits_by_level call."
+    },
+    {
+      "id": "keywordscan-longest-first",
+      "repo": "keywordscan",
+      "title": "Order the keyword alternatives longest first",
+      "rationale": "mentions joins the sorted keywords into one alternation. Ordering the alternatives by descending length lets the regular expression engine settle on a whole-word match with less backtracking; the matched lines stay the same.",
+      "label": "miss",
+      "part": null,
+      "near_miss": true,
+      "why": "Changes what the pattern holds, but the pattern is still rebuilt and compiled for every line, the cost the reference hoists."
+    },
+    {
+      "id": "graphwalk-local-hops",
+      "repo": "graphwalk",
+      "title": "Read the current hop count once per dequeued node",
+      "rationale": "hops reads distance[node] again for every neighbour it discovers. Read it once into a local after taking the node off the pending list and reuse it for every target, saving a dictionary lookup per edge; the distances do not change.",
+      "label": "miss",
+      "part": null,
+      "near_miss": true,
+      "why": "A per-edge saving inside the same loop; the pending list still pays pop(0), which shifts every element, the cost the reference removes with a deque."
+    },
+    {
+      "id": "wordcount-one-pass",
+      "repo": "wordcount",
+      "title": "Tally word frequencies in a single pass",
+      "rationale": "frequencies calls words.count for each distinct word, so the whole word list is walked once per distinct word. Walk the list once, adding one to a per-word counter in a dict (or a collections.Counter), then return the entries in sorted word order; the mapping is the same.",
+      "label": "hit",
+      "part": 1,
+      "near_miss": false,
+      "why": "The reference fix: one counting pass instead of a list.count scan per distinct word."
+    },
+    {
+      "id": "wordcount-heap-top",
+      "repo": "wordcount",
+      "title": "Select the most common words with a heap",
+      "rationale": "most_common sorts every distinct word only to keep the first limit of them. Use heapq.nsmallest(limit, ...) with the same (-count, word) key so only the top entries are ordered; ties stay in alphabetical order.",
+      "label": "miss",
+      "part": null,
+      "near_miss": true,
+      "why": "Same module, other function: most_common's sort is not the cost; frequencies' repeated words.count scans stay in place."
+    },
+    {
+      "id": "shipmerge-ordered-skus",
+      "repo": "shipmerge",
+      "title": "Track seen SKUs with an insertion-ordered dict",
+      "rationale": "distinct_skus checks `line.sku not in seen` against a growing list for every shipment line. Keep the first-seen order with dict.fromkeys over the SKUs (or a set beside the list) so each check takes constant time; the SKUs come out in the same order.",
+      "label": "hit",
+      "part": 1,
+      "near_miss": false,
+      "why": "Root cause 1 (catalog.py): the list membership scan in distinct_skus, removed as the part1 patch does."
+    },
+    {
+      "id": "shipmerge-rank-map",
+      "repo": "shipmerge",
+      "title": "Map each order number to its rank once",
+      "rationale": "arrival_ranks calls numbers.index(line.order_id) for every line, a linear search of the sorted order numbers. Build a dict from order number to its position once and look every line up in it; the ranks do not change.",
+      "label": "hit",
+      "part": 2,
+      "near_miss": false,
+      "why": "Root cause 2 (orders.py): list.index per line replaced by a rank dict, as the part2 patch does."
+    },
+    {
+      "id": "shipmerge-defaultdict-units",
+      "repo": "shipmerge",
+      "title": "Total warehouse units with a defaultdict",
+      "rationale": "units_by_warehouse calls totals.get with a default for every shipment line. A collections.defaultdict(int) avoids the get call per line; the totals and their sorted order do not change.",
+      "label": "miss",
+      "part": null,
+      "near_miss": true,
+      "why": "Same module as root cause 1 but a linear function that is not a hot spot; neither the SKU list scan nor the index search is touched."
+    },
+    {
+      "id": "deliveryround-sorted-insert",
+      "repo": "deliveryround",
+      "title": "Insert each pickup offer at its sorted place",
+      "rationale": "pending_views copies and re-sorts the whole pending list every time one offer arrives. Find the new offer's position with a binary search and insert it there, keeping the list in ascending order without sorting it again; the recorded views do not change.",
+      "label": "hit",
+      "part": 3,
+      "near_miss": false,
+      "why": "Root cause 3 (pickups.py): the full re-sort per offer replaced by a sorted insert, as the part3 patch does with insort."
+    },
+    {
+      "id": "deliveryround-memo-legs",
+      "repo": "deliveryround",
+      "title": "Memoise leg_length per pair of stops",
+      "rationale": "leg_length is called once per leg of the round. Cache its result per (from, to) pair with functools.lru_cache so no pair of stops is measured twice; every length stays the same.",
+      "label": "miss",
+      "part": null,
+      "near_miss": true,
+      "why": "Same module as root cause 2 but its constant-time distance, not distance_so_far's re-summing of every prefix; the stop scan and the re-sort stay too."
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+# The upstream corpus's packages beyond each checkout (V9c): exact versions,
+# wheels only, hash-pinned, installed with --no-deps into the live job's
+# environment only (ci.yml, the upstream suites). The workloads time the
+# checkout's own package, never these. beautifulsoup4: soupsieve's tests and
+# workload; numpy: networkx's small-world tests, one wheel hash each for
+# CPython 3.11 and 3.12 (the upstream suites run 3.12: upstream.UPSTREAM_PYTHON).
+# mdurl (markdown-it-py) is in the lock already.
+beautifulsoup4==4.15.0 --hash=sha256:d6f88de62e1d4e38ecb1077eb9724cd0eff29d2a08ca16a401e9b9e93f117cf9
+numpy==2.4.6 --hash=sha256:89cd468399cfd2504718f0ba50e410dca55a170b61a02ad92bb18c8a65186e93 --hash=sha256:90f9849678c75fe7afa2d348ac842c168b0a4d3d61919687216dfc547976d853

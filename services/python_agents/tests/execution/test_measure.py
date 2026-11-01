@@ -85,6 +85,8 @@ def sample(
     size: int = 2,
     stderr: bytes = b"",
     notes: tuple[str, ...] = (),
+    child: float | None = None,
+    strays: int | None = None,
 ) -> RunSample:
     return RunSample(
         wall_ns=wall_ns,
@@ -99,6 +101,8 @@ def sample(
         stdout_bytes=size,
         stderr_tail=stderr,
         notes=notes,
+        child_cpu_s=child,
+        strays=strays,
     )
 
 
@@ -529,11 +533,63 @@ def test_hardware_records_the_host_the_modes_and_the_isolated_runs(
         "runs": 5,
         "fs_isolated_runs": 3,
         "net_isolated_runs": 4,
+        "child_cpu_s": None,
+        "strays": None,
     }
     assert [m.hardware for m in measured.measurements] == [expected] * 3
     for row in measured.measurements:
         assert type(row.hardware["fs_isolated_runs"]) is int
         assert type(row.hardware["net_isolated_runs"]) is int
+
+
+@pytest.mark.parametrize(
+    ("last", "child", "strays"),
+    [(sample(child=0.0, strays=0), 0.3, 2), (sample(), None, None)],
+    ids=["every-run", "one-run-unreported"],
+)
+def test_hardware_records_the_worst_runs_child_cpu_and_strays(
+    area: Area,
+    events: list[str],
+    last: RunSample,
+    child: float | None,
+    strays: int | None,
+) -> None:
+    """
+    GIVEN a warm-up with 0.3 s of child CPU and 2 strays, timed runs with
+        less, and a last run that reports them or not (D62, N0c)
+    WHEN the workload is measured
+    THEN every row's hardware carries the worst launch's child CPU and
+        strays, warm-ups included, or null once a launch did not report them
+    """
+    run = FakeRun(
+        events,
+        scripted(
+            sample(child=0.3, strays=2),
+            sample(child=0.25, strays=1),
+            sample(child=0.0, strays=0),
+            last,
+        ),
+    )
+
+    measured = measure_workload(area.phase(run), workload())
+
+    for row in measured.measurements:
+        assert (row.hardware["child_cpu_s"], row.hardware["strays"]) == (child, strays)
+
+
+def test_the_suite_rows_carry_no_child_signals(area: Area, events: list[str]) -> None:
+    """
+    GIVEN a test suite run that reported child CPU and a stray
+    WHEN the suite is measured
+    THEN its rows carry neither: the tripwire watches workload runs only
+    """
+    stderr = b"Ran 3 tests in 0.010s\n\nOK\n"
+    run = FakeRun(events, scripted(sample(stderr=stderr, child=0.5, strays=1)))
+
+    result = run_tests(area.phase(run), project(), [workload()], trial_id="t1")
+
+    [row] = result.measurements
+    assert {"child_cpu_s", "strays"}.isdisjoint(row.hardware)
 
 
 # ---------------------------------------------------------------------------
@@ -542,10 +598,12 @@ def test_hardware_records_the_host_the_modes_and_the_isolated_runs(
 
 
 @pytest.mark.parametrize(
-    ("code", "says"), [(3, "exit status 3"), (-9, "signal 9")], ids=["exit", "signal"]
+    ("code", "says", "kind"),
+    [(3, "exit status 3", "exit"), (-9, "signal 9", "signal")],
+    ids=["exit", "signal"],
 )
 def test_a_non_zero_exit_is_a_run_failure_with_the_last_stderr_line(
-    area: Area, events: list[str], code: int, says: str
+    area: Area, events: list[str], code: int, says: str, kind: str
 ) -> None:
     """
     GIVEN a third timed run that exits non-zero after a run that left a note
@@ -564,12 +622,15 @@ def test_a_non_zero_exit_is_a_run_failure_with_the_last_stderr_line(
         ),
     )
 
+    measured = workload()
     with pytest.raises(RunFailure) as caught:
-        measure_workload(area.phase(run), workload())
+        measure_workload(area.phase(run), measured)
 
     assert caught.value.reason == (
         f"workload 'bench' run 3/5: the command ended with {says}: ValueError: bad?[0m"
     )
+    assert (caught.value.kind, caught.value.workload_id) == (kind, measured.id)
+    assert caught.value.exit_tail == b"Traceback\nValueError: bad\x1b[0m\n"
     assert caught.value.notes == (
         "workload 'bench' run 1/5: process group still alive after 3 s",
     )
@@ -605,6 +666,8 @@ def test_a_run_failure_keeps_its_reason_and_every_note(
         measure_workload(area.phase(run), workload())
 
     assert caught.value.reason == "workload 'bench' run 2/5: timeout after 42 s"
+    assert (caught.value.kind, caught.value.exit_tail) == ("other", b"")
+    assert caught.value.workload_id is None
     assert caught.value.notes == (
         "workload 'bench' warm-up 1/1: fs isolation was not applied (best_effort)",
         "workload 'bench' run 2/5: an output pipe was still open",
@@ -895,7 +958,8 @@ def test_abab_interleaves_the_two_phases_with_a_reset_before_each_run(
     """
     GIVEN phase A (base) and phase B (combined tip) and one warm-up
     WHEN a workload is measured ABAB
-    THEN warm-ups and timed runs alternate A, B, each after its own phase's
+    THEN warm-ups and timed runs share one counter that leads with A on even
+        indices and B on odd ones (ABBA), each run after its own phase's
         reset; each side gets its own rows, fingerprint and trial id, and
         the notes name the side
     """
@@ -911,7 +975,8 @@ def test_abab_interleaves_the_two_phases_with_a_reset_before_each_run(
     result = measure_abab(a, b, load, trial_id_b="combined")
 
     assert isinstance(result, AbabMeasured)
-    assert events == ["reset A", "A", "reset B", "B"] * 6
+    ab, ba = ["reset A", "A", "reset B", "B"], ["reset B", "B", "reset A", "A"]
+    assert events == [*ab, *ba] * 3  # warm-up 1, then timed runs 1-5
     assert {c.cwd for c in a_run.calls} == {a_area.wt}
     assert {c.cwd for c in b_run.calls} == {b_area.wt}
     a_rows, b_rows = by_metric(result.a), by_metric(result.b)

@@ -1,0 +1,591 @@
+[
+ {
+  "repo": "tagfilter",
+  "rank": 1,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "Names the list-membership allowlist in count_by_kind/matches and the set fix."
+ },
+ {
+  "repo": "tagfilter",
+  "rank": 2,
+  "label": "miss",
+  "parts": [],
+  "reason": "data.py generation is not the planted part."
+ },
+ {
+  "repo": "keywordscan",
+  "rank": 1,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "Hoisting the sort/dedup/compile out of the per-line mentions loop is exactly the planted part and fix."
+ },
+ {
+  "repo": "keywordscan",
+  "rank": 2,
+  "label": "miss",
+  "parts": [],
+  "reason": "Replaces the regex with a set lookup: same loop but a different algorithm, not the hoist-the-compile fix."
+ },
+ {
+  "repo": "keywordscan",
+  "rank": 3,
+  "label": "miss",
+  "parts": [],
+  "reason": "Log line generation is not the planted part."
+ },
+ {
+  "repo": "reportbuild",
+  "rank": 1,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "Quadratic string += in Report with list accumulation and join is the planted part and fix."
+ },
+ {
+  "repo": "reportbuild",
+  "rank": 2,
+  "label": "miss",
+  "parts": [],
+  "reason": "render's per-row formatting is not the planted part."
+ },
+ {
+  "repo": "reportbuild",
+  "rank": 3,
+  "label": "miss",
+  "parts": [],
+  "reason": "main's CRC/line count is not the planted part."
+ },
+ {
+  "repo": "scorenorm",
+  "rank": 1,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "Hoisting min/max out of the per-value loop in rescale is the planted part and fix."
+ },
+ {
+  "repo": "scorenorm",
+  "rank": 2,
+  "label": "miss",
+  "parts": [],
+  "reason": "The named change is a list comprehension; hoisting is assumed done, not proposed."
+ },
+ {
+  "repo": "leaderboard",
+  "rank": 1,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "Per-result full board sort replaced by a running best is the planted part and the reference fix."
+ },
+ {
+  "repo": "leaderboard",
+  "rank": 2,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "Names re-sorting the board each result and maintains the order incrementally (insort) instead."
+ },
+ {
+  "repo": "leaderboard",
+  "rank": 3,
+  "label": "miss",
+  "parts": [],
+  "reason": "data.results generation is not the planted part."
+ },
+ {
+  "repo": "orderlookup",
+  "rank": 1,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "customer_id dict index replacing the linear find_customer join is the planted part and fix."
+ },
+ {
+  "repo": "orderlookup",
+  "rank": 2,
+  "label": "miss",
+  "parts": [],
+  "reason": "Generator object creation is not the planted part."
+ },
+ {
+  "repo": "inventorysim",
+  "rank": 1,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "Removing the per-day deepcopy in simulate and valuing the live warehouse is the planted part and fix."
+ },
+ {
+  "repo": "inventorysim",
+  "rank": 2,
+  "label": "miss",
+  "parts": [],
+  "reason": "stock_value's generator sum is not the planted part."
+ },
+ {
+  "repo": "inventorysim",
+  "rank": 3,
+  "label": "miss",
+  "parts": [],
+  "reason": "run_day micro-optimisation is not the planted part."
+ },
+ {
+  "repo": "tokenparse",
+  "rank": 1,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "Exception-driven int() in tally replaced by a cheap pre-check is the planted part and fix."
+ },
+ {
+  "repo": "tokenparse",
+  "rank": 2,
+  "label": "miss",
+  "parts": [],
+  "reason": "Stream generation is not the planted part."
+ },
+ {
+  "repo": "tokenparse",
+  "rank": 3,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "'Parsing integers only when needed' in the token pass is the pre-check-before-int idea on the tally path."
+ },
+ {
+  "repo": "wordcount",
+  "rank": 1,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "Per-word list.count replaced by a single-pass counter in frequencies is the planted part and fix."
+ },
+ {
+  "repo": "wordcount",
+  "rank": 2,
+  "label": "miss",
+  "parts": [],
+  "reason": "words() generation is not the planted part."
+ },
+ {
+  "repo": "wordcount",
+  "rank": 3,
+  "label": "miss",
+  "parts": [],
+  "reason": "most_common top-N is not the planted part."
+ },
+ {
+  "repo": "configlookup",
+  "rank": 1,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "Caching the parsed rules so json.loads runs once is the planted part and fix."
+ },
+ {
+  "repo": "configlookup",
+  "rank": 2,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "A pre-parsed rules dict used by core is the same parse-once fix, placed in rules.py."
+ },
+ {
+  "repo": "configlookup",
+  "rank": 3,
+  "label": "miss",
+  "parts": [],
+  "reason": "price arithmetic micro-optimisation is not the planted part."
+ },
+ {
+  "repo": "stairways",
+  "rank": 1,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "Memoizing ways() is the planted part and the reference fix."
+ },
+ {
+  "repo": "stairways",
+  "rank": 2,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "Bottom-up DP on ways() removes the same exponential recomputation; tabulation form of the memo fix."
+ },
+ {
+  "repo": "graphwalk",
+  "rank": 1,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "list.pop(0) BFS queue replaced by a deque is the planted part and fix."
+ },
+ {
+  "repo": "graphwalk",
+  "rank": 2,
+  "label": "miss",
+  "parts": [],
+  "reason": "Framed as inner-loop micro-optimisation; does not name the pop(0) queue mechanism."
+ },
+ {
+  "repo": "graphwalk",
+  "rank": 3,
+  "label": "miss",
+  "parts": [],
+  "reason": "data.graph generation is not the planted part."
+ },
+ {
+  "repo": "graphwalk",
+  "rank": 4,
+  "label": "miss",
+  "parts": [],
+  "reason": "main's max/sum pass is not the planted part."
+ },
+ {
+  "repo": "blockhash",
+  "rank": 1,
+  "label": "control-none",
+  "parts": [],
+  "reason": "SHA-256 over 750 MiB dominates; memoryview/local binding of C calls gains nothing measurable."
+ },
+ {
+  "repo": "blockhash",
+  "rank": 2,
+  "label": "control-none",
+  "parts": [],
+  "reason": "750 four-byte updates are negligible next to the 1 MiB block hashing."
+ },
+ {
+  "repo": "sortstats",
+  "rank": 1,
+  "label": "control-none",
+  "parts": [],
+  "reason": "The list->array conversion is small next to sorting 1.2M ints; no stdlib compact sort exists."
+ },
+ {
+  "repo": "sortstats",
+  "rank": 2,
+  "label": "control-none",
+  "parts": [],
+  "reason": "array has no in-place sort; sorting still goes through a list, so no real gain."
+ },
+ {
+  "repo": "sortstats",
+  "rank": 3,
+  "label": "control-none",
+  "parts": [],
+  "reason": "randbytes is already a single bulk draw; nothing cheaper yields the same values."
+ },
+ {
+  "repo": "lettertally",
+  "rank": 1,
+  "label": "control-none",
+  "parts": [],
+  "reason": "Chunked choices+Counter does the same Python-level work; memory drops but runtime does not."
+ },
+ {
+  "repo": "lettertally",
+  "rank": 2,
+  "label": "control-none",
+  "parts": [],
+  "reason": "Index sampling then mapping is the same choices cost plus a mapping step; no real speedup."
+ },
+ {
+  "repo": "shipmerge",
+  "rank": 1,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "Set-backed membership in distinct_skus is the planted part 1 and fix."
+ },
+ {
+  "repo": "shipmerge",
+  "rank": 2,
+  "label": "hit",
+  "parts": [
+   2
+  ],
+  "reason": "Order-to-rank dict replacing list.index in arrival_ranks is the planted part 2 and fix."
+ },
+ {
+  "repo": "shipmerge",
+  "rank": 3,
+  "label": "miss",
+  "parts": [],
+  "reason": "Shipment generation is not a planted part."
+ },
+ {
+  "repo": "ledgerclose",
+  "rank": 1,
+  "label": "hit",
+  "parts": [
+   2
+  ],
+  "reason": "Monotonic deque replacing per-position slice+max in window_peaks is the planted part 2 and fix."
+ },
+ {
+  "repo": "ledgerclose",
+  "rank": 2,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "Removing list.pop(0) in settle is the planted part 1 and fix."
+ },
+ {
+  "repo": "ledgerclose",
+  "rank": 3,
+  "label": "miss",
+  "parts": [],
+  "reason": "data.py generation is not a planted part."
+ },
+ {
+  "repo": "deliveryround",
+  "rank": 1,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "Code-to-stop dict replacing the linear find_stop scan is the planted part 1 and fix."
+ },
+ {
+  "repo": "deliveryround",
+  "rank": 2,
+  "label": "hit",
+  "parts": [
+   2
+  ],
+  "reason": "Linear running totals (accumulate) replacing sum-of-prefix-slices in distance_so_far is part 2 and fix."
+ },
+ {
+  "repo": "deliveryround",
+  "rank": 3,
+  "label": "hit",
+  "parts": [
+   3
+  ],
+  "reason": "Incremental pending maintenance instead of re-sorting per offer is the planted part 3 and fix."
+ },
+ {
+  "repo": "invoicekit",
+  "rank": 1,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "Caching the parsed tax schedule instead of re-parsing on every tax_rate call is the planted part and fix."
+ },
+ {
+  "repo": "invoicekit",
+  "rank": 2,
+  "label": "miss",
+  "parts": [],
+  "reason": "money.py Fraction arithmetic is not the planted part."
+ },
+ {
+  "repo": "invoicekit",
+  "rank": 3,
+  "label": "miss",
+  "parts": [],
+  "reason": "export digest/quote is not the planted part."
+ },
+ {
+  "repo": "invoicekit",
+  "rank": 4,
+  "label": "miss",
+  "parts": [],
+  "reason": "days.py calendar work is not the planted part."
+ },
+ {
+  "repo": "fleetsim",
+  "rank": 1,
+  "label": "miss",
+  "parts": [],
+  "reason": "geometry helpers are not the planted part."
+ },
+ {
+  "repo": "fleetsim",
+  "rank": 2,
+  "label": "miss",
+  "parts": [],
+  "reason": "dispatch.choose caching is not the planted part."
+ },
+ {
+  "repo": "fleetsim",
+  "rank": 3,
+  "label": "miss",
+  "parts": [],
+  "reason": "energy_for/can_reach memoisation is not the planted part."
+ },
+ {
+  "repo": "fleetsim",
+  "rank": 4,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "Sorting past waits once in service.per_job instead of per job (share_at_most) is the planted part and fix."
+ },
+ {
+  "repo": "textindex",
+  "rank": 1,
+  "label": "miss",
+  "parts": [],
+  "reason": "Caching tokenisation/stemming is a different code path from is_stopword."
+ },
+ {
+  "repo": "textindex",
+  "rank": 2,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "is_stopword as a frozenset membership with no per-call split is the planted part and fix."
+ },
+ {
+  "repo": "textindex",
+  "rank": 3,
+  "label": "miss",
+  "parts": [],
+  "reason": "duplicates/Jaccard is not the planted part."
+ },
+ {
+  "repo": "textindex",
+  "rank": 4,
+  "label": "miss",
+  "parts": [],
+  "reason": "tokens already uses a precompiled regex; not the planted part."
+ },
+ {
+  "repo": "textindex",
+  "rank": 5,
+  "label": "miss",
+  "parts": [],
+  "reason": "index build micro-optimisation is not the planted part."
+ },
+ {
+  "repo": "topicmerge",
+  "rank": 1,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "Set for the seen check in unique_topics keeping first-use order is the planted part and fix."
+ },
+ {
+  "repo": "topicmerge",
+  "rank": 2,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "Deriving unique_topics from dict order replaces the list membership scan with dict-based dedup on the same path."
+ },
+ {
+  "repo": "topicmerge",
+  "rank": 3,
+  "label": "miss",
+  "parts": [],
+  "reason": "Post generation is not the planted part."
+ },
+ {
+  "repo": "sensormean",
+  "rank": 1,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "Incremental running means replacing O(n^2) slice+fmean is the planted part and fix."
+ },
+ {
+  "repo": "sensormean",
+  "rank": 2,
+  "label": "miss",
+  "parts": [],
+  "reason": "Skipping unprinted means in main avoids work rather than fixing the quadratic running_means."
+ },
+ {
+  "repo": "sensormean",
+  "rank": 3,
+  "label": "miss",
+  "parts": [],
+  "reason": "running_extremes is already single-pass; not the planted part."
+ },
+ {
+  "repo": "eventagg",
+  "rank": 1,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "Streaming events from a generator instead of materialising 300k dicts is the planted part and fix."
+ },
+ {
+  "repo": "eventagg",
+  "rank": 2,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "Single-pass aggregation of kind, region and error share is the other half of the same streaming fix."
+ },
+ {
+  "repo": "eventagg",
+  "rank": 3,
+  "label": "miss",
+  "parts": [],
+  "reason": "Conversion/allocation micro-optimisation in totals is not the planted mechanism."
+ },
+ {
+  "repo": "eventagg",
+  "rank": 4,
+  "label": "miss",
+  "parts": [],
+  "reason": "Compact per-event records shrink each dict but keep the materialised list; different idea."
+ },
+ {
+  "repo": "distmatrix",
+  "rank": 1,
+  "label": "hit",
+  "parts": [
+   1
+  ],
+  "reason": "Streaming row summaries instead of materialising the N x N matrix is the planted part and fix."
+ },
+ {
+  "repo": "distmatrix",
+  "rank": 2,
+  "label": "miss",
+  "parts": [],
+  "reason": "summaries slice copies are not the planted part."
+ },
+ {
+  "repo": "distmatrix",
+  "rank": 3,
+  "label": "miss",
+  "parts": [],
+  "reason": "Compact array rows keep the full matrix; different idea from streaming."
+ }
+]

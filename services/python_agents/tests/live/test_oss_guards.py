@@ -73,7 +73,15 @@ from autonomous_ai_agents.orchestrator.factory import build_context
 from autonomous_ai_agents.orchestrator.main import Orchestrator
 
 from .conftest import LiveRun, check_sandboxed, guardrails, restore_host_key
-from .corpus import CorpusRecorder, HypothesisSpec, check_loop_guards
+from .corpus import (
+    ALL_MODES,
+    MODE_ENV,
+    CorpusRecorder,
+    HypothesisSpec,
+    check_loop_guards,
+    mode_hypotheses,
+    mode_recorder,
+)
 from .oss import (
     BENCH_AUTHOR,
     GITHUB_URL,
@@ -917,6 +925,37 @@ def test_start_oss_loop_takes_generated_candidates_instead_of_the_manifest(
     assert [h.title for h in loop.candidates] == ["generated-idea"]
     assert all(h.project_id == loop.project.id for h in loop.candidates)
     assert tuple(loop.context.candidates) == loop.candidates
+
+
+@pytest.mark.parametrize("mode", ALL_MODES)
+def test_start_oss_loop_hands_the_engine_the_mode_the_live_module_reads(
+    mode: str, upstream: Upstream, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """As ``test_oss_live.py`` builds it: the recorder from
+    ``$LIVE_CORPUS_MODE``, its mode into ``start_oss_loop``; under ``wired``
+    no candidate is handed over and the generator is on."""
+    url, commit = upstream()
+    repo = _local_repo(url, commit)
+    root = Path(os.path.realpath(tmp_path))
+    monkeypatch.setattr(settings, "WORKTREE_ROOT", root / "wt-root")
+    restore_host_key(monkeypatch, "dry-run-key")
+    recorder = mode_recorder("OSS corpus", {MODE_ENV: mode})
+    run = LiveRun("dry", OSS_RUN_CAP_USD, wire=httpx2.MockTransport(_no_wire))
+    loop = start_oss_loop(
+        repo, run, root, Isolation("required", None), policy=LOCAL,
+        mode=recorder.mode,
+    )  # fmt: skip
+    assert loop.mode == recorder.mode == mode
+    titles = [h.title for h in loop.candidates]
+    assert titles == [s.title for s in mode_hypotheses(repo.corpus, recorder.mode)]
+    assert tuple(loop.context.candidates) == loop.candidates
+    assert (loop.context.generator is not None) is (mode == "wired")
+    if mode == "wired":
+        assert loop.candidates == ()
+    source = (Path(__file__).parent / "test_oss_live.py").read_text(encoding="utf-8")
+    assert 'mode_recorder("OSS corpus", os.environ)' in source
+    assert "mode=recorder.mode" in source
+    assert run.capture.exchanges == [] and run.records == []
 
 
 def _unauthorized(request: httpx2.Request) -> httpx2.Response:

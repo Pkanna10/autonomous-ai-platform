@@ -1,0 +1,13 @@
+diff --git a/examboard/stats.py b/examboard/stats.py
+index 280beb5..0983f80 100644
+--- a/examboard/stats.py
++++ b/examboard/stats.py
+@@ -7,7 +7,7 @@ Result = tuple[int, str]
+ 
+ 
+ def top_candidate(results: list[Result]) -> str:
+-    mark, name = sorted(results, reverse=True)[0]
++    mark, name = max(results)
+     return f"{name} {mark}"
+ 
+ 

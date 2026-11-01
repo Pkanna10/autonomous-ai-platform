@@ -1,0 +1,22 @@
+diff --git a/meterlog/main.py b/meterlog/main.py
+index 439a7c7..204f3fe 100644
+--- a/meterlog/main.py
++++ b/meterlog/main.py
+@@ -1,7 +1,7 @@
+ """Workload: ``python -m meterlog.main``."""
+ 
+ from meterlog.readings import month
+-from meterlog.summary import by_band, out_of_limits, parse, top_meters, under_review
++from meterlog.summary import by_band, out_of_limits, parse, top_meters
+ 
+ 
+ def main() -> None:
+@@ -12,7 +12,7 @@ def main() -> None:
+     for meter, kwh in top_meters(readings, 5):
+         print(f"top\t{meter}\t{kwh}")
+     print(f"outside limits\t{out_of_limits(readings)}")
+-    sample = under_review(lines, 3)
++    sample = readings[::3]
+     estimated = sum(r["status"] == "estimated" for r in sample)
+     print(f"review\t{len(sample)}\t{estimated}\t{sum(r['kwh'] for r in sample)}")
+ 

@@ -102,7 +102,7 @@ def test_initial_state_sets_every_annotated_key() -> None:
     state = _state()
 
     assert set(EngineState.__annotations__) == set(state)
-    assert len(state) == 31
+    assert len(state) == 39  # 31 through Step 2, 8 Step 3 keys (U2)
     assert "round_trials" in state
 
 

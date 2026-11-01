@@ -1,7 +1,7 @@
 """PostgreSQL ``Repository``: runs, trials, verdicts and lessons (Step 2).
 
-Storage, from ``infrastructure/schema/003_engine.sql`` and
-``004_engine_repository.sql``:
+Storage, from ``infrastructure/schema/003_engine.sql``,
+``004_engine_repository.sql`` and ``005_lesson_ids.sql``:
 
 | Calls                          | Where                                          |
 | ------------------------------ | ---------------------------------------------- |
@@ -19,11 +19,14 @@ Rules:
 
 - One short connection and one transaction per call; literal SQL only, every
   value a ``%(name)s`` parameter (JSON as ``Jsonb``). No ORM.
-- Every id bound for a UUID column (project, objective, workload, trial,
-  verdict, hypothesis, technique, lesson) must be a canonical uuid string,
-  and every run id must pass ``validate_run_id``. Both are checked before
-  connecting; a failure raises ``InvalidRecordIdError`` naming the field and
-  the value, and nothing is written. Reads accept any id and find nothing.
+- Every engine-made id (project, objective, workload, trial, verdict,
+  lesson) must be a canonical uuid string. Every run id, and every caller id
+  (a hypothesis id such as ``h1``, a technique id such as a playbook slug),
+  must pass ``validate_run_id``; the lesson columns for the caller ids are
+  ``VARCHAR(64)`` with a ``CHECK`` encoding the same rule (005). All are
+  checked before connecting; a failure raises ``InvalidRecordIdError`` naming
+  the field and the value, and nothing is written. Reads accept any id and
+  find nothing.
 - ``save_run`` never writes the trials or verdicts columns; a trial saved
   before its run creates a placeholder row without state, so ``get_run`` keeps
   returning ``None`` until the run is saved.
@@ -205,6 +208,29 @@ def _optional_uuid(field: str, value: str | None) -> uuid.UUID | None:
     return None if value is None else _uuid(field, value)
 
 
+def _caller_id(field: str, value: str) -> str:
+    """``value`` when it passes the engine's id rule (``validate_run_id``), or
+    ``InvalidRecordIdError`` naming ``field``.
+
+    For ids the caller or the playbook chooses (hypothesis ids, technique
+    slugs), not the engine: they are kept as the caller's text, because
+    ranking matches them by equality, and migration 005's ``CHECK`` holds the
+    lesson columns to the same rule.
+    """
+    try:
+        return validate_run_id(value)
+    except ValueError as exc:
+        raise InvalidRecordIdError(
+            f"{field} {value!r} is not a valid id: it must be 1-64 letters, "
+            "digits, '.', '_' or '-', start with a letter or digit, and contain "
+            "no '..', '.lock' or trailing '.' (the engine's id rule)"
+        ) from exc
+
+
+def _optional_caller_id(field: str, value: str | None) -> str | None:
+    return None if value is None else _caller_id(field, value)
+
+
 def _run_key(run_id: str) -> str:
     """``run_id`` for the ``thread_id`` column, or ``InvalidRecordIdError``."""
     try:
@@ -265,7 +291,7 @@ def _user_intent(state: EngineState) -> str:
 
 
 class PostgresRepository:
-    """``Repository`` on PostgreSQL 16 through psycopg 3, schema 001-004.
+    """``Repository`` on PostgreSQL 16 through psycopg 3, schema 001-005.
 
     ``dsn`` is a libpq connection string or URL; it is kept private and never
     put into an error message. ``connect_timeout`` bounds each connection
@@ -365,7 +391,7 @@ class PostgresRepository:
         """Store ``trial`` in the run's trials array, replacing one with its id."""
         key = _run_key(run_id)
         _uuid("trial.id", trial.id)
-        _uuid("trial.hypothesis_id", trial.hypothesis_id)
+        _caller_id("trial.hypothesis_id", trial.hypothesis_id)
         self._upsert_item(_UPSERT_TRIAL, key, trial.id, trial.model_dump(mode="json"))
 
     def save_verdict(self, run_id: str, verdict: Verdict) -> None:
@@ -373,7 +399,7 @@ class PostgresRepository:
         key = _run_key(run_id)
         _uuid("verdict.id", verdict.id)
         _uuid("verdict.trial_id", verdict.trial_id)
-        _uuid("verdict.hypothesis_id", verdict.hypothesis_id)
+        _caller_id("verdict.hypothesis_id", verdict.hypothesis_id)
         item = verdict.model_dump(mode="json")
         self._upsert_item(_UPSERT_VERDICT, key, verdict.id, item)
 
@@ -405,10 +431,12 @@ class PostgresRepository:
             "id": _uuid("lesson.id", lesson.id),
             "project_id": _optional_uuid("lesson.project_id", lesson.project_id),
             "verdict_id": _optional_uuid("lesson.verdict_id", lesson.verdict_id),
-            "hypothesis_id": _optional_uuid(
+            "hypothesis_id": _optional_caller_id(
                 "lesson.hypothesis_id", lesson.hypothesis_id
             ),
-            "technique_id": _optional_uuid("lesson.technique_id", lesson.technique_id),
+            "technique_id": _optional_caller_id(
+                "lesson.technique_id", lesson.technique_id
+            ),
             "context": [_store_text(tag) for tag in lesson.context],
             "outcome": lesson.outcome.value,
             "gain": lesson.gain,

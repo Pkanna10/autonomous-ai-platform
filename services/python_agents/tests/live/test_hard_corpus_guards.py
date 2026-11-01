@@ -18,7 +18,10 @@ hard corpus measures what it claims before a dollar is spent on it:
   compared copies measured in turn so contention hits both; ``slow``);
 - a ``multi`` repository's full fix reaches its manifest ``fix_gain`` and every
   fix that leaves one hot spot in place falls short of it, so a delivered gain
-  that reaches it means every hot spot was removed (``slow``);
+  that reaches it means every hot spot was removed (``slow``); where the hot
+  spots are the same kind of work (``BALANCED_PARTS``), each one's part of the
+  cost stays within ``PART_COST_RATIO`` of the other's, so that holds on any
+  machine;
 - a ``trap``'s naive fix keeps the tests green and changes stdout, so only the
   equivalence judge can reject it;
 - a ``large`` repository spans ten or more modules and 800 or more lines, and
@@ -37,6 +40,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Sequence
+from itertools import permutations
 from pathlib import Path
 
 import httpx2
@@ -438,11 +442,50 @@ def _parts(repo: CorpusRepo) -> list[Path]:
 # A fix that leaves one hot spot must stay at least this many times slower
 # than the full fix, both measured in the same interleaved run. Measured on
 # 2026-10-24: 5.0-7.4x for shipmerge and deliveryround, and 3.2x and 35x for
-# ledgerclose's two partials in the Lead's container, where pop(0) is
-# memory-bound and the window maximum compute-bound. A ratio within one run
-# cancels the machine; the absolute ``fix_gain`` bar did not (ledgerclose's
+# the first ledgerclose's two partials in the Lead's container, where its
+# pop(0) was memory-bound and its window maximum compute-bound. A ratio within
+# one run cancels the machine; the absolute ``fix_gain`` bar did not (that
 # settle-only fix gained 0.92 there against 0.67).
 PARTIAL_OVER_FULL_MIN = 2.0
+
+# The repositories whose hot spots are the same kind of work (ledgerclose,
+# rebuilt in Step 3: both are ``list.index`` scans over int objects, C-level
+# compare loops of about the same length), so the hardware cannot shift the
+# cost from one to the other. Each hot spot's cost, what the fix that leaves
+# it in place takes beyond the full fix in the same run, stays within this
+# ratio of every other's; then no fix of one part alone reaches ``fix_gain``
+# on a machine where the other part happens to be cheap, and the guard checks
+# that too. Measured on 2026-10-26 on CPython 3.11 to 3.14: cost ratio
+# 1.00-1.14, partial gains 0.33-0.48 and full gains 0.83-0.88 against 0.67.
+BALANCED_PARTS = frozenset({"ledgerclose"})
+PART_COST_RATIO = (0.5, 2.0)
+
+
+def _part_costs(partials: Sequence[float], full: float) -> list[float]:
+    """What each hot spot costs: the seconds of the fix that leaves it in
+    place minus the seconds of the full fix, measured in the same run."""
+    return [seconds - full for seconds in partials]
+
+
+def _costs_balanced(costs: Sequence[float]) -> bool:
+    """Every hot spot costs something and each cost is within
+    ``PART_COST_RATIO`` of every other."""
+    low, high = PART_COST_RATIO
+    if len(costs) < 2 or min(costs) <= 0:
+        return False
+    return all(low <= a / b <= high for a, b in permutations(costs, 2))
+
+
+def test_part_costs_are_balanced_only_within_the_ratio() -> None:
+    assert _part_costs([0.9, 0.7], 0.1) == pytest.approx([0.8, 0.6])
+    assert _costs_balanced([0.8, 0.6]) and _costs_balanced([1.0, 2.0, 1.5])
+    assert _costs_balanced([0.5, 1.0]) and _costs_balanced([2.0, 1.0])  # bounds
+    assert not _costs_balanced([1.2, 0.3])  # 4:1, the first ledgerclose's kind
+    assert not _costs_balanced([0.3, 1.2])
+    assert not _costs_balanced([1.0, 1.0, 2.5])  # one pair out of three
+    assert not _costs_balanced([0.8, 0.0]) and not _costs_balanced([0.8, -0.1])
+    assert not _costs_balanced([0.8])  # a lone part has nothing to balance
+    assert BALANCED_PARTS <= {repo.name for repo in MULTI}
 
 
 @pytest.mark.slow
@@ -453,7 +496,8 @@ def test_a_fix_that_leaves_one_hot_spot_falls_short(
     """Every hot spot matters: leaving any one unfixed keeps the workload at
     least ``PARTIAL_OVER_FULL_MIN`` times slower than the full reference fix,
     measured side by side, so a partial fix cannot pass for the full one on any
-    machine."""
+    machine. In a ``BALANCED_PARTS`` repository the hot spots also cost about
+    the same (``PART_COST_RATIO``) and no partial fix reaches ``fix_gain``."""
     parts = _parts(repo)
     assert len(parts) in (2, 3), repo.name
     roots = [_copy(repo, tmp_path / "base")]
@@ -473,6 +517,13 @@ def test_a_fix_that_leaves_one_hot_spot_falls_short(
         assert output == expected, (repo.name, parts[left].name)
         ratio = quick / quick_full
         assert ratio >= PARTIAL_OVER_FULL_MIN, (repo.name, parts[left].name, ratio)
+    if repo.name not in BALANCED_PARTS:
+        return
+    costs = _part_costs([quick for _, quick, _ in partials], quick_full)
+    assert _costs_balanced(costs), (repo.name, slow, quick_full, costs)
+    for left, (_, quick, _) in enumerate(partials):
+        gain = 1 - quick / slow
+        assert gain < repo.fix_gain, (repo.name, parts[left].name, gain)
 
 
 @pytest.mark.parametrize("repo", TRAPS, ids=_ids(TRAPS))

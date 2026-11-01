@@ -1,0 +1,15 @@
+Two guests can no longer book a room back to back: the second guest checks in
+on the morning the first one leaves, and the booking is refused.
+
+    room = Room(12, nightly_cents=8000)
+    book(room, date(2026, 5, 1), date(2026, 5, 3))
+    book(room, date(2026, 5, 3), date(2026, 5, 5))
+
+Traceback (most recent call last):
+  File "/srv/hotel/frontdesk.py", line 88, in confirm
+    price = book(room, stay.check_in, stay.check_out)
+  File "/srv/hotel/vendor/bookings/bookings/booking.py", line 10, in book
+    room.reserve(dates)
+  File "/srv/hotel/vendor/bookings/bookings/rooms.py", line 19, in reserve
+    raise OverbookedError(
+bookings.rooms.OverbookedError: room 12 is already booked on 2026-05-03

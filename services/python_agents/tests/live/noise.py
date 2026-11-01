@@ -58,6 +58,20 @@ rule are set from data:
   its baseline. Slow drift is under-sampled, so the A/A false-win rate and
   the 95th-percentile difference read optimistic: a floor set from them is
   a lower bound.
+
+The paired path (Step 3, L0; ``LIVE_NOISE_PATH=paired``, which live-smoke's
+``noise`` suite exports with the Step 3 noise rule): per target one baseline
+and its ``NOISE_CALIBRATION_BLOCKS`` calibration (``GitBaselineRunner``), the
+floor raised as the baseline node raises it (``raised_objective``), then
+``AA_BLOCKS`` (10) A/A blocks, each the base against a twin worktree ABBA
+through ``measure_abab`` (``AaRunner.aa_block``, a calibration block that
+keeps its rows), judged as a paired trial by the real judges
+(``judge_look``); a would-be keep is confirmed on a fresh block
+(``CONFIRM_WINNERS``). Recorded: the single-look false wins of the 130
+looks (the gate: at most ``GATE_MAX_WINS``), the kept count, the mean
+signed A/A gap and its sign, the floors, and whether row O's gains clear
+them. The wall model prices each launch at the profile's plain seconds
+(``MEASURED_SLOWDOWN``: the Window 0 run's measured rate was below it).
 """
 
 from __future__ import annotations
@@ -68,7 +82,7 @@ import re
 import statistics
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Final, Literal
 
@@ -79,6 +93,7 @@ from autonomous_ai_agents.common.errors import EngineError
 from autonomous_ai_agents.common.models import (
     METRIC_PEAK_RSS_BYTES,
     METRIC_WALL_TIME_S,
+    NOISE_FLOOR_MIN,
     Baseline,
     ChangeClass,
     Direction,
@@ -88,6 +103,7 @@ from autonomous_ai_agents.common.models import (
     HypothesisSource,
     JudgeOutcome,
     Measurement,
+    NoiseCalibration,
     Objective,
     ObjectiveKind,
     Project,
@@ -96,9 +112,19 @@ from autonomous_ai_agents.common.models import (
     VerdictOutcome,
     Workload,
 )
-from autonomous_ai_agents.execution.git import GitWorkspace
+from autonomous_ai_agents.execution.git import GitWorkspace, repo_fingerprint
+from autonomous_ai_agents.execution.measure import AbabMeasured, measure_abab
+from autonomous_ai_agents.execution.phase import (
+    owned_phases,
+    phase_dirs,
+    require_dir_name,
+)
 from autonomous_ai_agents.execution.preflight import GitPreflight
-from autonomous_ai_agents.execution.trial_runner import GitBaselineRunner
+from autonomous_ai_agents.execution.procrun import RunFailure
+from autonomous_ai_agents.execution.trial_runner import (
+    CALIBRATE_PHASES,
+    GitBaselineRunner,
+)
 from autonomous_ai_agents.optimization.judges import (
     MemoryJudge,
     SpeedJudge,
@@ -143,8 +169,21 @@ CONTROL_SETUP_S: Final = 5.0  # copy, commit, preflight
 CONTROL_RUN_S: Final = 0.7  # the controls ran 0.5-0.7 s locally
 QUANTILE: Final = 0.95
 _PLAIN: Final = re.compile(r"\((\d+(?:\.\d+)?) s plain\)")
+NOISE_PATH_ENV: Final = "LIVE_NOISE_PATH"
+AA_BLOCKS: Final = 10  # L0: A/A blocks a repository (spec section 6)
+AA_PHASES: Final = ("aa-block", "twin-aa-block")
+CONFIRM_ALLOWANCE: Final = 1  # confirmations planned a repository (2.8 %: 0.28)
+GATE_MAX_WINS: Final = 1  # single-look false wins allowed of the 130 looks
+MEASURED_SLOWDOWN: Final = 1.0  # Window 0: 468 launches in 7 min, setup included
+BASELINE_PHASES: Final = frozenset({"preflight", "baseline"})
+PAIRED_PHASES: Final = BASELINE_PHASES | set(CALIBRATE_PHASES) | set(AA_PHASES)
+ROW_O_GAINS: Final[Mapping[str, float]] = {  # STATUS ledger row O (aimed OSS)
+    "tabulate": 0.143, "tomli": 0.133, "markdown": 0.102, "idna": 0.101,
+    "sqlparse": 0.040, "mistune": 0.032,
+}  # fmt: skip
 
 Kind = Literal["oss", "control"]
+NoisePath = Literal["baselines", "paired"]
 
 # ---------------------------------------------------------------------------
 # Targets and the plan
@@ -220,11 +259,20 @@ class NoisePlan:
     k: int
     estimate_s: float
     budget_s: float = WALL_BUDGET_S
+    path: NoisePath = "baselines"
+    blocks: int = 0  # paired: A/A blocks a target
+    calibration_blocks: int = 0  # paired: the baseline's calibration
+    confirm: bool = False  # paired: a would-be keep re-tested
 
     @property
     def runs(self) -> int:
         """Live runs: one per target, then the summary."""
         return len(self.targets) + 1
+
+    @property
+    def comparisons(self) -> int:
+        """Paired: the single looks planned (identical code each)."""
+        return len(self.targets) * self.blocks
 
 
 def noise_need(plan: NoisePlan) -> float:
@@ -237,7 +285,13 @@ def noise_plan(
     targets: Sequence[NoiseTarget] = NOISE_TARGETS,
     budget_s: float = WALL_BUDGET_S,
 ) -> NoisePlan:
-    """``$LIVE_NOISE_K`` (2-10, default 6), scaled down to fit ``budget_s``."""
+    """``$LIVE_NOISE_K`` (2-10, default 6), scaled down to fit ``budget_s``;
+    ``$LIVE_NOISE_PATH=paired`` plans the paired path instead."""
+    path = environ.get(NOISE_PATH_ENV, "baselines")
+    if path == "paired":
+        return paired_plan(targets, budget_s)
+    if path != "baselines":
+        raise ValueError(f"{NOISE_PATH_ENV} must be baselines or paired, got {path!r}")
     requested = env_whole(
         environ, NOISE_K_ENV, NOISE_K, low=NOISE_MIN_K, high=NOISE_MAX_K
     )
@@ -253,6 +307,41 @@ def noise_plan(
         )
     k = max(fits)
     return NoisePlan(tuple(targets), requested, k, estimate_s(targets, k), budget_s)
+
+
+def paired_launches(calibration_blocks: int) -> int:
+    """One target's launches: the baseline, then calibration, A/A and the
+    planned confirmation blocks, each block both sides of a baseline."""
+    blocks = calibration_blocks + AA_BLOCKS + CONFIRM_ALLOWANCE
+    return baseline_runs() * (1 + 2 * blocks)
+
+
+def paired_estimate_s(targets: Sequence[NoiseTarget], calibration_blocks: int) -> float:
+    launches = paired_launches(calibration_blocks)
+    return math.fsum(
+        t.setup_s + launches * t.run_s * MEASURED_SLOWDOWN for t in targets
+    )
+
+
+def paired_plan(targets: Sequence[NoiseTarget], budget_s: float) -> NoisePlan:
+    """``AA_BLOCKS`` a target under the settings' Step 3 rule, refused when
+    the rule is off or the estimate is past ``budget_s``."""
+    blocks = settings.NOISE_CALIBRATION_BLOCKS
+    if not settings.PAIRED_TRIALS or blocks < 1:
+        raise ValueError(
+            "the paired path measures the Step 3 rule: PAIRED_TRIALS=true and "
+            f"NOISE_CALIBRATION_BLOCKS 1-5, got {settings.PAIRED_TRIALS} and {blocks}"
+        )
+    found = paired_estimate_s(targets, blocks)
+    if found > budget_s:
+        raise ValueError(
+            f"the paired path needs about {found / 60:.0f} min, past "
+            f"{budget_s / 60:.0f}"
+        )
+    return NoisePlan(
+        tuple(targets), 0, 0, found, budget_s, path="paired", blocks=AA_BLOCKS,
+        calibration_blocks=blocks, confirm=settings.CONFIRM_WINNERS,
+    )  # fmt: skip
 
 
 # ---------------------------------------------------------------------------
@@ -369,16 +458,35 @@ class AaCounts:
     memory_wins: int  # MemoryJudge passed under a peak-memory objective
 
 
+def judge_pair(
+    base: Baseline, trial: Trial, hypothesis: Hypothesis
+) -> tuple[bool, bool]:
+    """``trial`` against ``base``: did the real ``SpeedJudge`` pass (a false
+    win), and would the whole verdict over the active default judges keep it?"""
+    noise_rule = settings.NOISE_MULTIPLIER
+    speed = SpeedJudge(noise_multiplier=noise_rule).evaluate(base, trial)
+    active = _active_judges(default_judges(noise_rule), base.objectives)
+    metrics = _objective_metrics(base.objectives)
+    violations = measurement_violations(
+        trial.measurements,
+        _baseline_workload_ids(base, metrics),
+        metrics,
+        settings.MIN_RUNS,
+        guardrail_metrics=_guardrail_metrics(base.guardrails),
+    )
+    results = tuple(judge.evaluate(base, trial) for judge in active)
+    verdict = derive_verdict(
+        trial, hypothesis, results, violations,
+        primary_metric=primary_metric(base.objectives),
+    )  # fmt: skip
+    return speed.outcome is JudgeOutcome.passed, verdict.outcome is VerdictOutcome.keep
+
+
 def aa_counts(project_id: str, baselines: Sequence[Sequence[Measurement]]) -> AaCounts:
     """Every ordered pair (i, j): baseline j judged as a trial against i."""
     runtime, memory = runtime_objective(project_id), memory_objective(project_id)
     guards = noise_guardrails(project_id)
-    noise_rule = settings.NOISE_MULTIPLIER
-    speed, lean = (
-        SpeedJudge(noise_multiplier=noise_rule),
-        MemoryJudge(noise_multiplier=noise_rule),
-    )
-    active = _active_judges(default_judges(noise_rule), (runtime,))
+    lean = MemoryJudge(noise_multiplier=settings.NOISE_MULTIPLIER)
     hypothesis = aa_hypothesis(project_id)
     pairs = ordered_pairs(len(baselines))
     wins = keeps = memory_wins = 0
@@ -387,20 +495,9 @@ def aa_counts(project_id: str, baselines: Sequence[Sequence[Measurement]]) -> Aa
             measurements=tuple(baselines[i]), objectives=(runtime,), guardrails=guards
         )
         trial = as_trial(hypothesis, baselines[j])
-        wins += speed.evaluate(base, trial).outcome is JudgeOutcome.passed
-        violations = measurement_violations(
-            trial.measurements,
-            _baseline_workload_ids(base, _objective_metrics(base.objectives)),
-            _objective_metrics(base.objectives),
-            settings.MIN_RUNS,
-            guardrail_metrics=_guardrail_metrics(guards),
-        )
-        results = tuple(judge.evaluate(base, trial) for judge in active)
-        verdict = derive_verdict(
-            trial, hypothesis, results, violations,
-            primary_metric=primary_metric(base.objectives),
-        )  # fmt: skip
-        keeps += verdict.outcome is VerdictOutcome.keep
+        won, kept = judge_pair(base, trial, hypothesis)
+        wins += won
+        keeps += kept
         lean_base = base.model_copy(update={"objectives": (memory,)})
         memory_wins += lean.evaluate(lean_base, trial).outcome is JudgeOutcome.passed
     return AaCounts(len(pairs), wins, keeps, memory_wins)
@@ -590,6 +687,7 @@ class NoiseRecorder:
     ) -> None:
         self.plan, self.sink, self.clock = plan, sink, clock
         self.results: list[RepoNoise] = []
+        self.paired: list[PairedNoise] = []
         self.errors: list[tuple[str, str]] = []
         self.skipped: list[str] = []
         self.started = clock()
@@ -603,6 +701,11 @@ class NoiseRecorder:
         self.sink.write(found.row())
         run.note(repo_note(found))
         run.note(spread_note(found))
+
+    def record_paired(self, found: PairedNoise, run: LiveRun) -> None:
+        self.paired.append(found)
+        self.sink.write(found.row())
+        run.note(paired_note(found))
 
     def record_error(
         self,
@@ -633,7 +736,16 @@ class NoiseRecorder:
         })  # fmt: skip
         run.note(f"NOISE {name}: skipped past the wall budget ({budget_min:.0f} min)")
 
-    def summarize(self, run: LiveRun) -> NoiseSummary:
+    def summarize(self, run: LiveRun) -> NoiseSummary | PairedSummary:
+        if self.plan.path == "paired":
+            paired = summarize_paired(self.paired, self.plan.comparisons)
+            head: dict[str, object] = {"experiment": NOISE_EXPERIMENT}
+            self.sink.write(head | {"kind": "paired-summary"} | asdict(paired) | {
+                "wall_s": self.clock() - self.started, "skipped": list(self.skipped)
+            })  # fmt: skip
+            run.note(paired_summary_note(paired))
+            run.note(paired_detail_note(paired))
+            return paired
         found = summarize(self.results)
         wall = self.clock() - self.started
         row: dict[str, object] = {"experiment": NOISE_EXPERIMENT, "kind": "summary"}
@@ -644,7 +756,30 @@ class NoiseRecorder:
         run.note(detail_note(found, self.plan, wall))
         return found
 
+    def paired_markdown(self) -> str:
+        lines = [
+            "## Runner noise, paired (A/A blocks)",
+            "",
+            "| repo | kind | floor | largest gap | looks | wins | kept | mean gap "
+            "| row O | stopped |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
+        ]
+        for r in self.paired:
+            lines.append(cells([
+                r.name, r.kind, _f(r.floor), _f(r.largest_gap), len(r.looks), r.wins,
+                r.kept, _f(r.mean_gap), r.row_o_clears, r.stopped or "-",
+            ]))  # fmt: skip
+        for name, error in self.errors:
+            lines.append(cells([name, "error", error, *("-",) * 7]))
+        for name in self.skipped:
+            lines.append(cells([name, "skipped", "wall budget", *("-",) * 7]))
+        found = summarize_paired(self.paired, self.plan.comparisons)
+        notes = [paired_summary_note(found), "", paired_detail_note(found)]
+        return "\n".join([*lines, "", *notes])
+
     def markdown(self) -> str:
+        if self.plan.path == "paired":
+            return self.paired_markdown()
         lines = [
             "## Runner noise (A/A)",
             "",
@@ -691,11 +826,54 @@ class TargetRun:
     offsets_s: tuple[float, ...] = ()
 
 
-def measure_target(
-    target: NoiseTarget, root: Path, isolation: Isolation, launches: LaunchLog, k: int
-) -> TargetRun:
-    """``target`` prepared at ``root/user``, connected, measured K times."""
-    started = time.monotonic()
+class AaRunner(GitBaselineRunner):
+    """The real baseline runner plus ``aa_block``: one calibration block
+    (``calibrate``'s two fresh worktrees at ``commit``, every workload ABBA
+    through ``measure_abab``, the repository fingerprint checked) that keeps
+    its rows, in the ``AA_PHASES`` worktrees."""
+
+    def aa_block(
+        self, workloads: Sequence[Workload], *, run_id: str, commit: str
+    ) -> tuple[AbabMeasured, ...]:
+        require_dir_name("run id", run_id)
+        sides = [phase_dirs(run_id, name) for name in AA_PHASES]
+        before = repo_fingerprint(self._git)
+        found: list[AbabMeasured] = []
+        failed: RunFailure | None = None
+        with owned_phases(self._git, "an A/A block", *sides):
+            a, b = (
+                self._make_phase(self._git.add_worktree(d.worktree, commit), d)
+                for d in sides
+            )
+            try:
+                for workload in workloads:
+                    found.append(measure_abab(a, b, workload))
+                    self._note("aa", found[-1].notes)
+            except RunFailure as failure:
+                self._note("aa", failure.notes)
+                failed = failure
+            self._tampered(before, what="an A/A block")
+        if failed is not None:
+            raise EngineError(f"an A/A block could not be measured: {failed.reason}")
+        return tuple(found)
+
+
+@dataclass(frozen=True)
+class _Connected:
+    user: UserRepo
+    before: RepoSnapshot
+    project_id: str
+    workloads: tuple[Workload, ...]
+    commit: str | None
+    runner: AaRunner
+    notes: list[str]
+
+
+def _connect(
+    target: NoiseTarget, root: Path, isolation: Isolation, launches: LaunchLog
+) -> _Connected:
+    """``target`` prepared at ``root/user``, through the engine's preflight,
+    and its baseline runner."""
     user = target.prepare(root / "user")
     before = user.snapshot()
     project = Project(name=target.name, root_path=str(user.path))
@@ -710,11 +888,39 @@ def measure_target(
     git = GitWorkspace(
         user.path, executable=settings.GIT_EXECUTABLE, timeout_s=settings.GIT_TIMEOUT_S
     )
-    runner = GitBaselineRunner(
+    runner = AaRunner(
         resolved, git=git, network=mode, fs=mode, run=launches, on_note=notes.append
     )
-    objectives = (runtime_objective(project.id),)
-    names = {w.id: w.name for w in report.workloads}
+    return _Connected(
+        user, before, project.id, tuple(report.workloads), report.head_commit,
+        runner, notes,
+    )  # fmt: skip
+
+
+def _trusted(
+    found: _Connected, run_id: str, objectives: tuple[Objective, ...]
+) -> tuple[Measurement, ...]:
+    """One baseline through the baseline node's trust checks (``EngineError``)."""
+    rows = found.runner.measure(found.workloads, run_id=run_id, commit=found.commit)
+    names = {w.id: w.name for w in found.workloads}
+    violations = measurement_violations(
+        rows, list(names), (METRIC_WALL_TIME_S,), settings.MIN_RUNS,
+        guardrail_metrics=(METRIC_PEAK_RSS_BYTES,),
+    )  # fmt: skip
+    if violations:
+        raise EngineError("; ".join(v.message for v in violations))
+    guards = noise_guardrails(found.project_id)
+    _require_trustworthy_baseline(rows, objectives, guards, names)
+    return rows
+
+
+def measure_target(
+    target: NoiseTarget, root: Path, isolation: Isolation, launches: LaunchLog, k: int
+) -> TargetRun:
+    """``target`` prepared at ``root/user``, connected, measured K times."""
+    started = time.monotonic()
+    found = _connect(target, root, isolation, launches)
+    objectives = (runtime_objective(found.project_id),)
     baselines: list[tuple[Measurement, ...]] = []
     failures: list[str] = []
     offsets: list[float] = []
@@ -724,16 +930,7 @@ def measure_target(
         first = at if first is None else first
         offset = at - first
         try:
-            rows = runner.measure(
-                report.workloads, run_id=f"noise-{index}", commit=report.head_commit
-            )
-            violations = measurement_violations(
-                rows, list(names), (METRIC_WALL_TIME_S,), settings.MIN_RUNS,
-                guardrail_metrics=(METRIC_PEAK_RSS_BYTES,),
-            )  # fmt: skip
-            if violations:
-                raise EngineError("; ".join(v.message for v in violations))
-            _require_trustworthy_baseline(rows, objectives, guards, names)
+            rows = _trusted(found, f"noise-{index}", objectives)
         except EngineError as exc:
             failures.append(f"baseline {index}: {exc}")
             continue
@@ -741,8 +938,8 @@ def measure_target(
         offsets.append(offset)
     wall = time.monotonic() - started
     return TargetRun(
-        user, before, project.id, tuple(baselines), tuple(failures), tuple(notes),
-        wall, tuple(offsets),
+        found.user, found.before, found.project_id, tuple(baselines),
+        tuple(failures), tuple(found.notes), wall, tuple(offsets),
     )  # fmt: skip
 
 
@@ -754,21 +951,30 @@ def summarize_target(target: NoiseTarget, found: TargetRun, k: int) -> RepoNoise
 
 
 def check_noise_guards(
-    run: LiveRun, found: TargetRun, launches: LaunchLog, isolation: Isolation
+    run: LiveRun,
+    found: TargetRun | PairedRun,
+    launches: LaunchLog,
+    isolation: Isolation,
 ) -> None:
     """No request, spend within the cap, every launch sandboxed, only the
-    preflight and baseline phases, the user's repository untouched. Each
-    message starts with the guard's name: it reaches the error row and note."""
+    preflight and baseline phases (the paired path: and its calibration and
+    A/A blocks), the user's repository untouched. Each message starts with
+    the guard's name: it reaches the error row and note."""
     mode = (isolation.mode, isolation.missing)
     assert mode == ("required", None), f"isolation not required: {mode}"
     sent = (len(run.capture.messages()), len(run.records))
     assert sent == (0, 0), f"no request may be sent: {sent}"
     assert run.spent_usd <= run.cap_usd, f"spend over the cap: {run.spent_usd}"
     phases = launches.phases()
-    allowed = "preflight" in phases and phases <= {"preflight", "baseline"}
+    paired = isinstance(found, PairedRun)
+    allowed = "preflight" in phases and phases <= (
+        PAIRED_PHASES if paired else BASELINE_PHASES
+    )
     assert allowed, f"phases outside preflight/baseline: {sorted(phases)}"
     measured = "baseline" in phases or not found.baselines
     assert measured, f"no baseline launch: {sorted(phases)}"
+    looked = not isinstance(found, PairedRun) or not found.looks
+    assert looked or "aa-block" in phases, f"no A/A block launch: {sorted(phases)}"
     for launch in launches.launches:
         modes = (launch.network, launch.fs)
         assert modes == ("required", "required"), f"unsandboxed launch: {launch}"
@@ -786,14 +992,17 @@ def run_target(
     root: Path,
     isolation: Isolation,
     recorder: NoiseRecorder,
-) -> RepoNoise | None:
+) -> RepoNoise | PairedNoise | None:
     """One target measured, its guards, then recorded: a clean row, or an
     ``error`` row (preparation, measurement or a guard; the guard's numbers
     kept under ``measured``, out of the pooled summary) before re-raising.
-    Past the wall budget the target is not started: ``skipped``, ``None``."""
+    Past the wall budget the target is not started: ``skipped``, ``None``.
+    The plan's path picks the driver."""
     if recorder.past_budget():
         recorder.record_skip(target.name, run)
         return None
+    if recorder.plan.path == "paired":
+        return run_paired_target(target, run, root, isolation, recorder)
     launches = LaunchLog()
     try:
         found = measure_target(target, root, isolation, launches, recorder.plan.k)
@@ -807,4 +1016,277 @@ def run_target(
         recorder.record_error(target.name, run, f"guards: {exc}", result.row())
         raise
     recorder.record(result, run)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# L0: the paired path (Step 3, D41)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Look:
+    """One A/A block judged as a paired trial."""
+
+    gap: float | None  # (B - A) / A of the wall-time means: below 0, B "faster"
+    speed: bool  # SpeedJudge passed: a single-look false win
+    keep: bool  # the whole verdict would keep it: confirmation is due
+    confirmed: bool | None = None  # the fresh block's verdict; None: none ran
+
+
+def raised_objective(project_id: str, calibration: NoiseCalibration) -> Objective:
+    """The default objective under the calibrated floor, as the baseline
+    node raises it; a floor no gain can clear stops the run (``EngineError``)."""
+    floor = max(NOISE_FLOOR_MIN, calibration.floor)
+    if not floor < 1:
+        raise EngineError(f"the noise floor is {floor:.0%}: no gain can be proven")
+    base = runtime_objective(project_id)
+    least = max(base.min_relative_gain, floor)
+    return base.model_copy(update={"min_relative_gain": least})
+
+
+def judge_look(
+    project_id: str, objective: Objective, block: Sequence[AbabMeasured]
+) -> Look:
+    """B (the twin) judged against its paired A rows, as the judges node
+    judges a paired trial (D41 a)."""
+    a = tuple(m for pair in block for m in pair.a)
+    b = tuple(m for pair in block for m in pair.b)
+    base = Baseline(
+        measurements=a, objectives=(objective,), guardrails=noise_guardrails(project_id)
+    )
+    hypothesis = aa_hypothesis(project_id)
+    trial = as_trial(hypothesis, b).model_copy(update={"base_measurements": a})
+    speed, keep = judge_pair(base, trial, hypothesis)
+    mean_a, mean_b = (_metric(r, METRIC_WALL_TIME_S).stats.mean for r in (a, b))
+    gap = (mean_b - mean_a) / mean_a if mean_a else None
+    return Look(gap, speed, keep)
+
+
+def aa_looks(
+    project_id: str,
+    objective: Objective,
+    draw: Callable[[str], Sequence[AbabMeasured]],
+    blocks: int,
+    *,
+    confirm: bool,
+) -> tuple[Look, ...]:
+    """``blocks`` looks; with ``confirm`` a would-be keep is re-tested once on a
+    fresh block (D41 b) and holds only if that keeps too."""
+    looks: list[Look] = []
+    for index in range(1, blocks + 1):
+        look = judge_look(project_id, objective, draw(f"noise-aa-{index}"))
+        if look.keep and confirm:
+            again = judge_look(project_id, objective, draw(f"noise-aa-{index}-confirm"))
+            look = replace(look, confirmed=again.keep)
+        looks.append(look)
+    return tuple(looks)
+
+
+def kept_count(looks: Sequence[Look]) -> int:
+    """Keeps that would ship: confirmed, or standing with confirmation off."""
+    return sum(x.keep and x.confirmed is not False for x in looks)
+
+
+@dataclass(frozen=True)
+class PairedRun:
+    """One target's calibrated baseline and its looks; ``stopped`` says where
+    the engine would have stopped the run."""
+
+    user: UserRepo
+    before: RepoSnapshot
+    project_id: str
+    baselines: tuple[tuple[Measurement, ...], ...]
+    floor: float | None
+    largest_gap: float | None
+    looks: tuple[Look, ...]
+    stopped: str | None
+    notes: tuple[str, ...]
+    wall_s: float
+    judged_floor: float | None = None  # the min_relative_gain the looks used
+
+
+def measure_paired(
+    target: NoiseTarget,
+    root: Path,
+    isolation: Isolation,
+    launches: LaunchLog,
+    plan: NoisePlan,
+) -> PairedRun:
+    started = time.monotonic()
+    found = _connect(target, root, isolation, launches)
+    pid, commit, runner = found.project_id, found.commit, found.runner
+    rows: tuple[Measurement, ...] = ()
+    calibration: NoiseCalibration | None = None
+    looks: tuple[Look, ...] = ()
+    stopped: str | None = None
+    judged: float | None = None
+    try:
+        rows = _trusted(found, "noise-paired", (runtime_objective(pid),))
+        if commit is None:
+            raise EngineError("the noise calibration needs the pinned commit")
+        calibration = runner.calibrate(
+            found.workloads, run_id="noise-calibrate", commit=commit,
+            blocks=plan.calibration_blocks,
+        )  # fmt: skip
+        objective = raised_objective(pid, calibration)
+        judged = objective.min_relative_gain
+
+        def draw(run_id: str) -> tuple[AbabMeasured, ...]:
+            return runner.aa_block(found.workloads, run_id=run_id, commit=commit)
+
+        looks = aa_looks(pid, objective, draw, plan.blocks, confirm=plan.confirm)
+    except EngineError as exc:
+        stopped = str(exc)
+    return PairedRun(
+        found.user, found.before, pid, (rows,) if rows else (),
+        None if calibration is None else calibration.floor,
+        None if calibration is None else max(calibration.gaps.values(), default=0.0),
+        looks, stopped, tuple(found.notes), time.monotonic() - started, judged,
+    )  # fmt: skip
+
+
+@dataclass(frozen=True)
+class PairedNoise:
+    name: str
+    kind: str
+    blocks: int  # planned
+    floor: float | None
+    largest_gap: float | None
+    looks: tuple[Look, ...]
+    stopped: str | None
+    wall_s: float
+    judged_floor: float | None = None  # the looks' min_relative_gain
+
+    @property
+    def wins(self) -> int:
+        """Would-be keeps: what the gate counts (confirmation is due on them)."""
+        return sum(x.keep for x in self.looks)
+
+    @property
+    def speed_wins(self) -> int:
+        return sum(x.speed for x in self.looks)
+
+    @property
+    def kept(self) -> int:
+        return kept_count(self.looks)
+
+    @property
+    def confirmations(self) -> int:
+        return sum(x.confirmed is not None for x in self.looks)
+
+    @property
+    def mean_gap(self) -> float | None:
+        gaps = [x.gap for x in self.looks if x.gap is not None]
+        return statistics.fmean(gaps) if gaps else None
+
+    @property
+    def row_o_gain(self) -> float | None:
+        return ROW_O_GAINS.get(self.name)
+
+    @property
+    def row_o_clears(self) -> bool | None:
+        """Whether row O's gain on this library clears its calibrated floor."""
+        if self.row_o_gain is None or self.floor is None:
+            return None
+        return self.row_o_gain > max(settings.MIN_RELATIVE_GAIN, self.floor)
+
+    def row(self) -> dict[str, object]:
+        return {
+            "experiment": NOISE_EXPERIMENT, "kind": "paired", "repo": self.name,
+            "target_kind": self.kind, "blocks": self.blocks, "looks": len(self.looks),
+            "floor": self.floor, "judged_floor": self.judged_floor,
+            "largest_gap": self.largest_gap, "wins": self.wins,
+            "speed_wins": self.speed_wins, "kept": self.kept,
+            "confirmations": self.confirmations, "mean_gap": self.mean_gap,
+            "gaps": [x.gap for x in self.looks], "stopped": self.stopped,
+            "row_o_gain": self.row_o_gain, "row_o_clears": self.row_o_clears,
+            "wall_s": self.wall_s,
+        }  # fmt: skip
+
+
+def paired_note(r: PairedNoise) -> str:
+    clears = {None: "-", True: "clears", False: "below"}[r.row_o_clears]
+    stopped = "" if r.stopped is None else f" stopped {r.stopped[:40]}"
+    return (
+        f"NOISE paired {r.name}: floor {_f(r.floor)} gap {_f(r.largest_gap)} wins "
+        f"{r.wins}/{len(r.looks)} kept {r.kept} mean_gap {_f(r.mean_gap)} row_o "
+        f"{clears} wall_s {r.wall_s:.0f}{stopped}"
+    )
+
+
+@dataclass(frozen=True)
+class PairedSummary:
+    planned: int  # the single looks planned (130)
+    looks: int
+    wins: int  # single-look false wins: the would-be keeps, what the gate counts
+    speed_wins: int  # SpeedJudge passes (Window 0's 2.8 % counted these)
+    kept: int  # after confirmation
+    mean_gap: float | None  # over every look
+    faster: int  # repositories whose mean gap is below 0
+    slower: int
+    row_o_clears: int
+    row_o_total: int
+    stopped: int
+    gate: Literal["pass", "fail", "incomplete"]
+
+
+def summarize_paired(results: Sequence[PairedNoise], planned: int) -> PairedSummary:
+    gaps = [x.gap for r in results for x in r.looks if x.gap is not None]
+    means = [r.mean_gap for r in results if r.mean_gap is not None]
+    wins = sum(r.wins for r in results)
+    looks = sum(len(r.looks) for r in results)
+    row_o = [r.row_o_clears for r in results if r.row_o_clears is not None]
+    gate: Literal["pass", "fail", "incomplete"] = "fail"
+    if wins <= GATE_MAX_WINS:
+        gate = "pass" if looks >= planned else "incomplete"
+    return PairedSummary(
+        planned, looks, wins, sum(r.speed_wins for r in results),
+        sum(r.kept for r in results), statistics.fmean(gaps) if gaps else None,
+        sum(m < 0 for m in means), sum(m > 0 for m in means), sum(row_o), len(row_o),
+        sum(r.stopped is not None for r in results), gate,
+    )  # fmt: skip
+
+
+def paired_summary_note(s: PairedSummary) -> str:
+    return (
+        f"NOISE paired summary: single-look wins {s.wins}/{s.looks} (would-be "
+        f"keeps; gate <= {GATE_MAX_WINS}: {s.gate}, {s.planned} planned), speed "
+        f"passes {s.speed_wins} (Window 0's 2.8 % counted these), kept {s.kept}"
+    )
+
+
+def paired_detail_note(s: PairedSummary) -> str:
+    return (
+        f"NOISE paired detail: mean gap {_f(s.mean_gap)} (faster {s.faster}, "
+        f"slower {s.slower} repos), row O clears {s.row_o_clears}/{s.row_o_total}, "
+        f"stopped {s.stopped}"
+    )
+
+
+def run_paired_target(
+    target: NoiseTarget,
+    run: LiveRun,
+    root: Path,
+    isolation: Isolation,
+    recorder: NoiseRecorder,
+) -> PairedNoise:
+    """``run_target`` on the paired path: measured, guarded, recorded."""
+    launches = LaunchLog()
+    plan = recorder.plan
+    try:
+        found = measure_paired(target, root, isolation, launches, plan)
+    except BaseException as exc:
+        recorder.record_error(target.name, run, f"{type(exc).__name__}: {exc}")
+        raise
+    result = PairedNoise(
+        target.name, target.kind, plan.blocks, found.floor, found.largest_gap,
+        found.looks, found.stopped, found.wall_s, found.judged_floor,
+    )  # fmt: skip
+    try:
+        check_noise_guards(run, found, launches, isolation)
+    except BaseException as exc:
+        recorder.record_error(target.name, run, f"guards: {exc}", result.row())
+        raise
+    recorder.record_paired(result, run)
     return result

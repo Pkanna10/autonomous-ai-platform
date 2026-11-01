@@ -21,6 +21,18 @@ clone that fails or is refused fails its case (recorded first). A target
 that would start past the wall budget is recorded as ``skipped`` and
 skipped. The last test notes the summary. The job needs network access to
 github.com.
+
+The paired path (Step 3, L0): live-smoke's ``noise`` suite exports
+``LIVE_NOISE_PATH=paired`` with the Step 3 noise rule, and the same tests then
+run ``noise.run_paired_target`` per target: one baseline and its calibration
+(``NOISE_CALIBRATION_BLOCKS``), the floor raised as the baseline node raises
+it, ``noise.AA_BLOCKS`` (10) A/A blocks ABBA judged as paired trials by the
+real judges, each would-be keep confirmed on a fresh block
+(``CONFIRM_WINNERS``). Recorded, never asserted: the single-look false wins
+of the 130 looks (would-be keeps; the gate is at most
+``noise.GATE_MAX_WINS``), the speed passes beside them, the kept count, the
+mean signed A/A gap, the calibrated and judged floors and row O's clearance.
+Still no request, so the cap stays 0 USD.
 """
 
 from __future__ import annotations

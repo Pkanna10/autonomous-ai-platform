@@ -30,7 +30,7 @@ from autonomous_ai_agents.clients.transport import (
     LLMTransport,
     ScriptedTransport,
 )
-from autonomous_ai_agents.common.config import Settings, settings
+from autonomous_ai_agents.common.config import Settings, role_settings, settings
 from autonomous_ai_agents.common.errors import (
     DeliveryError,
     EngineError,
@@ -424,14 +424,15 @@ def test_without_a_key_or_an_editor_the_factory_refuses(project: Project) -> Non
         build_context(project, transport_factory=_no_real_transport)
 
 
-def test_with_a_key_the_transport_factory_builds_the_one_transport(
+def test_with_a_key_the_transport_factory_builds_the_engine_and_role_transports(
     project: Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """
     GIVEN a (fake) key and an injected transport factory
     WHEN the context is built
-    THEN the factory is called once with the settings and its transport
-         backs the understander
+    THEN the factory is called with the settings (its transport backs the
+         understander), then with the editor's and the generator's role
+         settings (Step 3, U10; test_factory_roles.py covers the roles)
     """
     monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", SecretStr(FAKE_KEY))
     built: list[Settings] = []
@@ -439,11 +440,16 @@ def test_with_a_key_the_transport_factory_builds_the_one_transport(
 
     def make(cfg: Settings) -> LLMTransport:
         built.append(cfg)
-        return scripted
+        return scripted if cfg is settings else ScriptedTransport([], cfg=cfg)
 
     ctx = build_context(project, transport_factory=make)
 
-    assert built == [settings]
+    assert built == [
+        settings,
+        role_settings(settings, "editor"),
+        role_settings(settings, "generator"),
+    ]
+    assert built[0] is settings
     assert isinstance(ctx.understander, ClaudeUnderstander)
     assert engine_transport(scripted, _no_real_transport) is scripted
 

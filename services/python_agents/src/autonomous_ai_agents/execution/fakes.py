@@ -22,6 +22,7 @@ from typing import NamedTuple
 
 from autonomous_ai_agents.clients.budget import Budget
 from autonomous_ai_agents.common.models import (
+    FrozenFile,
     Guardrail,
     Hotspot,
     Project,
@@ -69,6 +70,7 @@ class CombineCall(NamedTuple):
     kept: tuple[KeptChange, ...]
     workloads: tuple[Workload, ...]
     baseline_count: int | None = None
+    quality_files: tuple[FrozenFile, ...] = ()
 
 
 class PublishCall(NamedTuple):
@@ -205,6 +207,7 @@ class FakeCombiner:
         workloads: Sequence[Workload],
         *,
         baseline_count: int | None = None,
+        quality_files: Sequence[FrozenFile] = (),
     ) -> CombineMeasured:
         self.calls.append(
             CombineCall(
@@ -214,6 +217,7 @@ class FakeCombiner:
                 tuple(kept),
                 tuple(workloads),
                 baseline_count,
+                tuple(quality_files),
             )
         )
         if len(self.calls) > len(self._results):

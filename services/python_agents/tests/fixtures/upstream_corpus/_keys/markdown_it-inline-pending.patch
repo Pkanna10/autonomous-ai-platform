@@ -1,0 +1,183 @@
+diff --git a/markdown_it/common/html_re.py b/markdown_it/common/html_re.py
+index ab822c5..88cddc4 100644
+--- a/markdown_it/common/html_re.py
++++ b/markdown_it/common/html_re.py
+@@ -21,7 +21,9 @@ declaration = "<![A-Za-z][^>]*>"
+ cdata = "<!\\[CDATA\\[[\\s\\S]*?\\]\\]>"
+ 
+ HTML_TAG_RE = re.compile(
+-    "^(?:"
++    # No leading `^`: applied via `.match(src, pos)`, which anchors at `pos`
++    # without slicing `src[pos:]` (an O(len) copy per call, quadratic over a run).
++    "(?:"
+     + open_tag
+     + "|"
+     + close_tag
+diff --git a/markdown_it/parser_inline.py b/markdown_it/parser_inline.py
+index 8fabb98..af66a7f 100644
+--- a/markdown_it/parser_inline.py
++++ b/markdown_it/parser_inline.py
+@@ -197,7 +197,7 @@ class ParserInline:
+                     break
+                 continue
+ 
+-            state.pending += state.src[state.pos]
++            state.append_pending(state.src[state.pos])
+             state.pos += 1
+ 
+         if state.pending:
+diff --git a/markdown_it/rules_inline/backticks.py b/markdown_it/rules_inline/backticks.py
+index fc60d6b..67b5b5a 100644
+--- a/markdown_it/rules_inline/backticks.py
++++ b/markdown_it/rules_inline/backticks.py
+@@ -25,7 +25,7 @@ def backtick(state: StateInline, silent: bool) -> bool:
+ 
+     if state.backticksScanned and state.backticks.get(openerLength, 0) <= start:
+         if not silent:
+-            state.pending += marker
++            state.append_pending(marker)
+         state.pos += openerLength
+         return True
+ 
+@@ -67,6 +67,6 @@ def backtick(state: StateInline, silent: bool) -> bool:
+     state.backticksScanned = True
+ 
+     if not silent:
+-        state.pending += marker
++        state.append_pending(marker)
+     state.pos += openerLength
+     return True
+diff --git a/markdown_it/rules_inline/entity.py b/markdown_it/rules_inline/entity.py
+index ec9d396..313b22b 100644
+--- a/markdown_it/rules_inline/entity.py
++++ b/markdown_it/rules_inline/entity.py
+@@ -5,8 +5,11 @@ from ..common.entities import entities
+ from ..common.utils import fromCodePoint, isValidEntityCode
+ from .state_inline import StateInline
+ 
+-DIGITAL_RE = re.compile(r"^&#((?:x[a-f0-9]{1,6}|[0-9]{1,7}));", re.IGNORECASE)
+-NAMED_RE = re.compile(r"^&([a-z][a-z0-9]{1,31});", re.IGNORECASE)
++# NB: no leading `^` -- these are applied via `.match(src, pos)`, which already
++# anchors at `pos`.  Anchoring this way avoids building `src[pos:]` on every
++# `&`, which is an O(len) copy per call and makes long runs quadratic.
++DIGITAL_RE = re.compile(r"&#((?:x[a-f0-9]{1,6}|[0-9]{1,7}));", re.IGNORECASE)
++NAMED_RE = re.compile(r"&([a-z][a-z0-9]{1,31});", re.IGNORECASE)
+ 
+ 
+ def entity(state: StateInline, silent: bool) -> bool:
+@@ -20,7 +23,7 @@ def entity(state: StateInline, silent: bool) -> bool:
+         return False
+ 
+     if state.src[pos + 1] == "#":
+-        if match := DIGITAL_RE.search(state.src[pos:]):
++        if match := DIGITAL_RE.match(state.src, pos):
+             if not silent:
+                 match1 = match.group(1)
+                 code = (
+@@ -40,7 +43,7 @@ def entity(state: StateInline, silent: bool) -> bool:
+             return True
+ 
+     else:
+-        if (match := NAMED_RE.search(state.src[pos:])) and match.group(1) in entities:
++        if (match := NAMED_RE.match(state.src, pos)) and match.group(1) in entities:
+             if not silent:
+                 token = state.push("text_special", "", 0)
+                 token.content = entities[match.group(1)]
+diff --git a/markdown_it/rules_inline/html_inline.py b/markdown_it/rules_inline/html_inline.py
+index 9065e1d..5eed14a 100644
+--- a/markdown_it/rules_inline/html_inline.py
++++ b/markdown_it/rules_inline/html_inline.py
+@@ -26,7 +26,7 @@ def html_inline(state: StateInline, silent: bool) -> bool:
+     if ch not in ("!", "?", "/") and not isLetter(ord(ch)):  # /* / */
+         return False
+ 
+-    match = HTML_TAG_RE.search(state.src[pos:])
++    match = HTML_TAG_RE.match(state.src, pos)
+     if not match:
+         return False
+ 
+diff --git a/markdown_it/rules_inline/state_inline.py b/markdown_it/rules_inline/state_inline.py
+index de35287..8f0ca1e 100644
+--- a/markdown_it/rules_inline/state_inline.py
++++ b/markdown_it/rules_inline/state_inline.py
+@@ -54,7 +54,16 @@ class StateInline(StateBase):
+         self.pos = 0
+         self.posMax = len(self.src)
+         self.level = 0
+-        self.pending = ""
++        # `pending` holds literal text not yet flushed to a token.  It is
++        # exposed as a plain `str` (see the property below), but is accumulated
++        # through a list buffer so that appending one character at a time -- the
++        # inline tokenizer's fallback path -- stays amortised O(1).  Appending
++        # to a `str` *attribute* cannot use CPython's in-place concatenation
++        # optimisation (the attribute holds a second reference), so each `+=`
++        # copies the whole string, making long runs of non-markup characters
++        # quadratic.
++        self._pending = ""
++        self._pending_buffer: list[str] = []
+         self.pendingLevel = 0
+ 
+         # Stores { start: end } pairs. Useful for backtrack
+@@ -81,6 +90,49 @@ class StateInline(StateBase):
+             f"(pos=[{self.pos} of {self.posMax}], token={len(self.tokens)})"
+         )
+ 
++    @property
++    def pending(self) -> str:
++        """Literal text accumulated so far, but not yet flushed to a token."""
++        buffer = self._pending_buffer
++        if buffer:
++            # Move the string into a local and drop the instance's reference
++            # before concatenating.  With a single reference left, CPython
++            # resizes the string in place (amortised O(new chars)) rather
++            # than copying it, so a rule that reads `pending` on every
++            # character (e.g. an attribute-syntax plugin) stays linear.
++            text = self._pending
++            self._pending = ""
++            text += "".join(buffer)
++            buffer.clear()
++            self._pending = text
++        return self._pending
++
++    @pending.setter
++    def pending(self, value: str) -> None:
++        self._pending = value
++        # Assign rather than `.clear()` so the setter also works on an
++        # instance whose `__init__` has not run yet (subclasses that set
++        # `pending` before calling `super().__init__()`), and so a copied
++        # state never shares a buffer with its original.
++        self._pending_buffer = []
++
++    def __copy__(self) -> StateInline:
++        """Shallow copy that does not share the pending text buffer."""
++        text = self.pending  # materialise (and clear) our own buffer first
++        new = self.__class__.__new__(self.__class__)
++        new.__dict__.update(self.__dict__)
++        new._pending = text
++        new._pending_buffer = []
++        return new
++
++    def append_pending(self, text: str) -> None:
++        """Append literal text to `pending`, in amortised O(1) time.
++
++        Prefer this to ``state.pending += text`` on hot paths: it buffers the
++        fragment rather than rebuilding the whole ``pending`` string per call.
++        """
++        self._pending_buffer.append(text)
++
+     def pushPending(self) -> Token:
+         token = Token("text", "", 0)
+         token.content = self.pending
+diff --git a/markdown_it/rules_inline/text.py b/markdown_it/rules_inline/text.py
+index ef0cc9c..45b4143 100644
+--- a/markdown_it/rules_inline/text.py
++++ b/markdown_it/rules_inline/text.py
+@@ -16,7 +16,7 @@ def text(state: StateInline, silent: bool) -> bool:
+         return False
+ 
+     if not silent:
+-        state.pending += state.src[state.pos : pos]
++        state.append_pending(state.src[state.pos : pos])
+ 
+     state.pos = pos
+ 

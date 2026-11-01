@@ -18,10 +18,12 @@ measurement and noise rule (no Claude request; bounded by
 
 Gains are recorded (JSON lines to ``$LIVE_RESULTS_PATH``, a note per round,
 one per library and the running summary in the cost table, the summary and
-every row in the log), never asserted. The repositories are read at
-collection (a bad ``$LIVE_EVOLVE_REPOS`` fails collection, before any
-spend); the whole plan is read, and checked against
-``$LIVE_SUITE_CAP_USD``, in the module fixture, before any test spends.
+every row in the log), never asserted. The repositories and the arms are
+read at collection (a bad ``$LIVE_EVOLVE_REPOS`` or ``$LIVE_EVOLVE_ARMS``
+fails collection, before any spend); the whole plan is read, and checked
+against ``$LIVE_SUITE_CAP_USD``, in the module fixture, before any test
+spends. Arm P (V8, E4) evolves its own clone with the idea pipeline in
+place of the blind generation, its rows named ``<repo>/P``.
 """
 
 from __future__ import annotations
@@ -38,10 +40,12 @@ from autonomous_ai_agents.common.config import settings
 from .conftest import StartLive
 from .discovery_io import ResultsSink
 from .evolution import (
-    EVOLVE_GEN_CAP_USD,
     EvolveRecorder,
     LiveSteps,
     check_suite_cap,
+    evolve_arms,
+    evolve_gen_cap,
+    evolve_name,
     evolve_plan,
     evolve_repos,
     evolve_settings,
@@ -52,6 +56,7 @@ from .oss import OssRepo, prepare_repo
 pytestmark = pytest.mark.live
 
 EVOLVE_REPOS = evolve_repos(os.environ)
+EVOLVE_ARMS = evolve_arms(os.environ)
 
 
 @pytest.fixture(scope="module")
@@ -62,26 +67,31 @@ def evolve() -> Iterator[EvolveRecorder]:
     check_suite_cap(plan, os.environ)
     if plan.repos != EVOLVE_REPOS:
         raise ValueError("the plan's repositories are not the collected ones")
+    if plan.arms != EVOLVE_ARMS:
+        raise ValueError("the plan's arms are not the collected ones")
     recorder = EvolveRecorder(plan, ResultsSink(os.environ))
     yield recorder
     recorder.finish(print)
 
 
+@pytest.mark.parametrize("arm", EVOLVE_ARMS)
 @pytest.mark.parametrize("repo", EVOLVE_REPOS, ids=[r.name for r in EVOLVE_REPOS])
 def test_evolution_on_real_code(
     repo: OssRepo,
+    arm: str,
     live: StartLive,
     live_root: Path,
     live_isolation: Isolation,
     evolve: EvolveRecorder,
 ) -> None:
     user = prepare_repo(repo, live_root / "user")  # refused clones spend nothing
+    cfg = evolve_settings(settings)
     run_evolution(
-        repo.name,
+        evolve_name(repo.name, arm),
         user,
         evolve.plan,
-        LiveSteps(repo, live_isolation, evolve_settings(settings)),
-        start_gen=lambda: live(EVOLVE_GEN_CAP_USD),
+        LiveSteps(repo, live_isolation, cfg, pipeline=arm == "P"),
+        start_gen=lambda: live(evolve_gen_cap(arm)),
         start_engine=lambda: live(evolve.plan.run_cap),
         recorder=evolve,
     )

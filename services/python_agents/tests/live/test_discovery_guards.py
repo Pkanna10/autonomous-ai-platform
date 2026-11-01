@@ -10,10 +10,11 @@ from __future__ import annotations
 import ast
 import contextlib
 import json
+import math
 import os
 import re
 from collections import deque
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,7 @@ from autonomous_ai_agents.clients.transport import ScriptedTransport
 from autonomous_ai_agents.common.config import EFFORT_LEVELS, Settings, settings
 from autonomous_ai_agents.common.models import (
     METRIC_WALL_TIME_S,
+    BuiltinMeasure,
     CandidateModule,
     ChangeClass,
     Direction,
@@ -37,7 +39,9 @@ from autonomous_ai_agents.common.models import (
     HypothesisSource,
     Objective,
     ObjectiveKind,
+    Project,
     ProjectUnderstanding,
+    QualityCheck,
     Technique,
     Trial,
     TrialStatus,
@@ -105,8 +109,10 @@ from .discovery import (
     run_engine,
     start_phase_one,
 )
+from .discovery_corpus import DISCOVERY_CORPUS
 from .discovery_io import (
     ResultsSink,
+    cells,
     env_flag,
     json_line,
 )
@@ -115,16 +121,20 @@ LIVE_DIR = TESTS_DIR / "live"
 CAP_CEILING_USD = 150  # live-smoke's suite_cap_usd ceiling
 # The suite needs at the default knobs (the sum of the caps the tests ask the
 # ledger for); the Lead copies them into ci.yml.
-SWEEP_NEED = 76.15  # 22 slowdowns x 3.15 + 3 controls x 2.05 + probe 0.70
-SWEEP_FABLE_NEED = 92.95  # + 12 Fable runs x 1.40
+# The sweep covers v1, the hard corpus and corpus v2 (37 repositories: 32
+# slowdowns, 5 controls, the 2 v2 decoys among them).
+SWEEP_NEED = 111.75  # 32 slowdowns x 3.15 + 5 controls x 2.05 + probe 0.70
+SWEEP_FABLE_NEED = 128.55  # + 12 Fable runs x 1.40
 # The recorded sweep on one arm (LIVE_SWEEP_ARMS=sonnet-5-5-medium,
-# LIVE_SWEEP_RECORD=1, Fable off): 22 slowdowns x 0.65 + 3 controls x 0.40
+# LIVE_SWEEP_RECORD=1, Fable off): 32 slowdowns x 0.65 + 5 controls x 0.40
 # + probe 0.70. Recording sends no request, so it is the plain one-arm need.
-SWEEP_RECORD_NEED = 16.2
+SWEEP_RECORD_NEED = 23.5
 AB_NEED = 140.0  # 2 reps x 25 repos x (0.80 + 2 x 1.00)
 ESC_NEED = 42.9  # 15 first passes x 0.70 + 12 escalations x 2.70
 SLOWDOWNS = tuple(r for r in CORPUS if r.kind == "slowdown")
 CONTROLS = tuple(r for r in CORPUS if r.kind == "control")
+V2_SLOWDOWNS = tuple(r for r in DISCOVERY_CORPUS if r.kind == "slowdown")
+DECOYS = tuple(r for r in DISCOVERY_CORPUS if r.category == "decoy")
 REQUIRED = Isolation("required", None)
 Json = dict[str, Any]
 
@@ -1123,8 +1133,126 @@ def test_a_recorded_trace_keeps_each_idea_its_grade_and_the_redacted_reply(
     assert trace.reply_chunks == ("not json [redacted]",) and trace.hypotheses == ()
 
 
+def _grade(*hits: bool) -> grader.Grade:
+    return grader.Grade(
+        hits=hits,
+        cost_usd=0.01,
+        answered=True,
+        error=None,
+        causes=tuple(1 if h else None for h in hits),
+        parts=1,
+        reply='{"grades": []}',
+    )
+
+
+def test_corpus_v2_is_graded_on_its_reference_fix_and_a_decoy_is_a_control(
+    dry: Path,
+) -> None:
+    """L4 sweeps v1 + v2: a v2 slowdown is graded against its own reference
+    fix (never the textbook idea beside it), a decoy is a control (no grade,
+    a control's cap, its big-gain claim recorded), and both record and
+    replay as the v1 rows do."""
+    assert len(V2_SLOWDOWNS) == 10 and len(DECOYS) == 2
+    one = sweep.sweep_plan(ONE_ARM)
+    for repo in V2_SLOWDOWNS:
+        patches = grader.reference_patches(repo)
+        assert [p.name for p in patches] == [f"{repo.name}.patch"], repo.name
+        assert patches[0].text == repo.solution.read_text(encoding="utf-8")
+        assert one.cap_for(repo) == one.cap_for(SLOWDOWNS[0]), repo.name
+    for repo in DECOYS:
+        assert (repo.kind, repo.expected) == ("control", "none")
+        assert grader.reference_patches(repo) == ()
+        assert one.cap_for(repo) == one.cap_for(CONTROLS[0]), repo.name
+    produced = _generated(dry, ["a", "b"])  # each claims a 50 % gain
+    decoy = sweep.sweep_row(DECOYS[0], produced, None, 0.03)
+    assert (decoy.kind, decoy.category, decoy.big_gain_claim) == (
+        "control",
+        "decoy",
+        True,
+    )
+    assert (decoy.hit_at_1, decoy.hit_at_5, decoy.root_causes) == (None, None, 0)
+    slow = sweep.sweep_row(V2_SLOWDOWNS[0], produced, _grade(False, True), 0.03)
+    assert (slow.category, slow.hit_at_1, slow.hit_at_5) == (
+        V2_SLOWDOWNS[0].category,
+        False,
+        True,
+    )
+    # the recorded lines replay: a decoy as a control, a v2 slowdown by its grade
+    facts = _facts(dry)
+    made = _recorded(facts, json.dumps({"hypotheses": [_item("a")]}))
+    trace = sweep.sweep_trace(DECOYS[0], made, None, (), facts.hotspots)
+    assert {h.grader for h in trace.hypotheses} == {"control"}
+    assert sweep.reference_notes(DECOYS[0].name, trace.reference_parts) == [
+        f"SWEEP {DECOYS[0].name} ref: none (a control, not graded)"
+    ]
+    row = sweep.sweep_row(DECOYS[0], made.result, None, 0.0)
+    case = sweep.eval_case(json.loads(json_line({**row.record(), **trace.record()})))
+    assert (case.repo, case.kind, case.labels, case.grader_reply) == (
+        DECOYS[0].name,
+        "control",
+        {},
+        None,
+    )
+    repo = V2_SLOWDOWNS[0]
+    patches = grader.reference_patches(repo)
+    graded = _grade(True)
+    trace = sweep.sweep_trace(repo, made, graded, patches, facts.hotspots)
+    (part,) = trace.reference_parts
+    assert part.name == f"{repo.name}.patch" and part.files and part.symbols
+    row = sweep.sweep_row(repo, made.result, graded, 0.0)
+    case = sweep.eval_case(json.loads(json_line({**row.record(), **trace.record()})))
+    assert case.kind == "slowdown" and case.grader_reply == graded.reply
+    assert [(k, v.hit, v.part) for k, v in case.labels.items()] == [("a", True, 1)]
+
+
+def test_the_sweep_summary_reports_each_category_and_corpus_v2_pooled(
+    dry: Path,
+) -> None:
+    """L4's v2 pre-check is blind hit@1 on corpus v2: the summary gives each
+    arm a line per category and one for v2's slowdowns and decoys pooled."""
+    produced = _generated(dry, ["a"])
+    deep = next(r for r in V2_SLOWDOWNS if r.category == "deep")
+    small = next(r for r in V2_SLOWDOWNS if r.category == "small")
+    rows = [
+        sweep.sweep_row(SLOWDOWNS[0], produced, _grade(True), 0.0),
+        sweep.sweep_row(HARD_CORPUS[0], produced, _grade(True), 0.0),
+        sweep.sweep_row(deep, produced, _grade(True), 0.0),
+        sweep.sweep_row(small, produced, _grade(False), 0.0),
+        sweep.sweep_row(DECOYS[0], produced, None, 0.0),
+    ]
+    other = sweep.sweep_row(deep, replace(produced, arm=sweep.ARMS[1]), None, 0.0)
+    text = sweep.render_sweep([*rows, other], [])
+    lines = text.splitlines()
+    head = lines.index(
+        "| arm | set | hit at 1 rate | hit at 5 rate | cost per repo USD "
+        "| cost per hit USD | control big-gain claims | ungraded slowdowns |"
+    )
+    arm, cost = sweep.ARMS[0].label, f"{produced.cost_usd:.4f}"
+    twice = f"{2 * produced.cost_usd:.4f}"  # two graded v2 slowdowns, one hit
+    one = "1/1 (100.0%)"
+    assert lines[head + 2 : head + 9] == [
+        cells([arm, "single", one, one, cost, cost, "0/0 (n/a)", 0]),
+        cells([arm, HARD_CORPUS[0].category, one, one, cost, cost, "0/0 (n/a)", 0]),
+        cells([arm, "deep", one, one, cost, cost, "0/0 (n/a)", 0]),
+        cells([arm, "small", "0/1 (0.0%)", "0/1 (0.0%)", cost, "n/a", "0/0 (n/a)", 0]),
+        cells([arm, "decoy", "0/0 (n/a)", "0/0 (n/a)", cost, "n/a", one, 0]),
+        cells([arm, "corpus v2", "1/2 (50.0%)", "1/2 (50.0%)", cost, twice, one, 0]),
+        cells(
+            [sweep.ARMS[1].label, "deep", "0/0 (n/a)", "0/0 (n/a)", cost, "n/a"]
+            + ["0/0 (n/a)", 1]
+        ),
+    ]
+    assert lines[head + 9] == cells(
+        [sweep.ARMS[1].label, "corpus v2", "0/0 (n/a)", "0/0 (n/a)", cost, "n/a"]
+        + ["0/0 (n/a)", 1]
+    )
+    # v1 alone (no v2 row): the categories, no pooled v2 line
+    alone = sweep.render_sweep(rows[:2], [])
+    assert "corpus v2" not in alone and f"| {arm} | single |" in alone
+
+
 def test_reference_parts_summarise_every_part_the_grader_numbers() -> None:
-    for repo in (*SLOWDOWNS, *HARD_CORPUS):
+    for repo in (r for r in sweep.SWEEP_REPOS if r.kind != "control"):
         patches = grader.reference_patches(repo)
         parts = sweep.reference_parts(patches)
         assert [p.part for p in parts] == list(range(1, len(patches) + 1))
@@ -1463,9 +1591,11 @@ def test_each_suite_needs_the_sum_of_its_caps() -> None:
         "FABLE_RUN_CAP_USD",
         "CACHE_PROBE_CAP_USD",
     }
-    assert _live_args("test_ab_live") == {"AB_GEN_CAP_USD", "ab.plan.run_cap"}
+    assert _live_args("test_ab_live") == {"ab.plan.gen_cap", "ab.plan.run_cap"}
     assert _live_args("test_escalation_live") == {"cap"}
-    assert len(sweep.SWEEP_REPOS) == len(CORPUS) + len(HARD_CORPUS) == 25
+    assert sweep.SWEEP_REPOS == (*CORPUS, *HARD_CORPUS, *DISCOVERY_CORPUS)
+    assert len({r.name for r in sweep.SWEEP_REPOS}) == len(sweep.SWEEP_REPOS) == 37
+    assert sweep.FABLE_REPOS == SLOWDOWNS  # Fable stays on the 12 v1 slowdowns
     plan = sweep.sweep_plan({})
     need = sum(plan.cap_for(r) for r in sweep.SWEEP_REPOS) + sweep.CACHE_PROBE_CAP_USD
     assert sweep.sweep_need(plan) == pytest.approx(need) == pytest.approx(SWEEP_NEED)
@@ -1478,11 +1608,13 @@ def test_each_suite_needs_the_sum_of_its_caps() -> None:
     first = len(CORPUS) * esc.FIRST_CAP_USD
     worst = first + len(SLOWDOWNS) * esc.ESCALATED_CAP_USD
     assert esc.escalation_need() == pytest.approx(worst) == pytest.approx(ESC_NEED)
-    for need_usd in (SWEEP_FABLE_NEED, AB_NEED, ESC_NEED):
+    for need_usd in (SWEEP_NEED, SWEEP_FABLE_NEED, AB_NEED, ESC_NEED):
         assert need_usd <= CAP_CEILING_USD
 
 
-@pytest.mark.parametrize("repo", (*CORPUS, *HARD_CORPUS), ids=lambda r: r.name)
+@pytest.mark.parametrize(
+    "repo", (*CORPUS, *HARD_CORPUS, *DISCOVERY_CORPUS), ids=lambda r: r.name
+)
 def test_each_prompt_bound_holds_on_every_corpus_repository(
     repo: CorpusRepo, tmp_path: Path
 ) -> None:
@@ -1777,3 +1909,796 @@ def test_a_cap_bound_loss_is_told_apart_from_a_real_loss(
     none = esc.pass_record("first", outcome, None)
     assert (none["budget_exhausted"], none["trial_budget_error"]) == (None, False)
     assert "cap hit" in ab.render_ab([row])
+
+
+# ---------------------------------------------------------------------------
+# E2's pairing from two oss results artifacts (V4 amended, oss-ab
+# --from-results): ab_decision by (library, repetition)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("counts", "met"),
+    [
+        ((1, 4, 0, 0), True),  # c - b = 3
+        ((2, 4, 0, 0), False),  # c - b = 2
+        ((1, 4, 0, 1), False),  # B has more control false wins than A
+        ((1, 4, 1, 1), True),
+        ((0, 9, 2, 0), True),
+    ],
+)
+def test_ab_decision_needs_the_lead_and_no_more_b_control_wins(
+    counts: tuple[int, int, int, int], met: bool
+) -> None:
+    assert ab.ab_decision(*counts) is met
+
+
+def test_ab_decision_refuses_negative_counts() -> None:
+    for counts in ((-1, 0, 0, 0), (0, 0, 0, -1)):
+        with pytest.raises(ValueError, match=">= 0"):
+            ab.ab_decision(*counts)
+
+
+def _arm_row(
+    name: str,
+    *,
+    pipeline: bool,
+    delivered: bool = False,
+    gain: float | None = None,
+    project: float | None = 4.0,
+    floor: float | None = 4.0,
+    kind: str = "slowdown",
+    **more: Any,
+) -> CorpusOutcome:
+    """One wired run of an arm; ``project`` is the project floor
+    (E2's call), ``floor`` the combination's (shown, never called on)."""
+    return replace(
+        _outcome(CORPUS[0], delivered),
+        repo=name,
+        kind=kind,
+        mode="wired",
+        gain_pct=gain,
+        project_floor_pct=project,
+        floor_pct=floor,
+        idea_pipeline=pipeline,
+        portfolio_rounds=2,
+        **more,
+    )
+
+
+def _artifact(path: Path, rows: Sequence[CorpusOutcome]) -> Path:
+    path.write_text("".join(r.to_json() + "\n" for r in rows), encoding="utf-8")
+    return path
+
+
+def _e2_files(root: Path, *, a_n: int = 5) -> dict[str, list[Path]]:
+    """Two reps per arm: rep 1 c, c, c, b, a tie inside the project floor,
+    excluded (a breach); rep 2 c (P's gain above A's by more than the larger
+    project floor), and a library only arm A ran. Arm A runs at
+    ``GENERATOR_N=a_n`` (E2: 5 like P; E2c: 10)."""
+
+    def a_row(name: str, **more: Any) -> CorpusOutcome:
+        return _arm_row(name, pipeline=False, generator_n=a_n, **more)
+
+    a1 = [
+        a_row("tabulate"),
+        a_row("idna"),
+        a_row("pycparser"),
+        a_row("mistune", delivered=True, gain=8.0),
+        a_row("sqlparse", delivered=True, gain=10.0),
+        a_row("markdown"),
+    ]
+    p1 = [
+        _arm_row("tabulate", pipeline=True, delivered=True, gain=6.0),
+        _arm_row("idna", pipeline=True, delivered=True, gain=3.0, project=None),
+        _arm_row("pycparser", pipeline=True, delivered=True, gain=2.0),
+        _arm_row("mistune", pipeline=True),
+        _arm_row("sqlparse", pipeline=True, delivered=True, gain=13.5, project=3.0),
+        _arm_row(
+            "markdown", pipeline=True, delivered=True, gain=9.0, guard="breach: x"
+        ),
+    ]
+    a2 = [
+        a_row("tabulate", delivered=True, gain=5.0, project=2.0),
+        a_row("pyparsing"),
+    ]
+    p2 = [_arm_row("tabulate", pipeline=True, delivered=True, gain=10.0, project=4.5)]
+    controls_a = [a_row(r.name, kind="control") for r in CONTROLS]
+    controls_p = [_arm_row(r.name, pipeline=True, kind="control") for r in CONTROLS]
+    return {
+        "a": [_artifact(root / "a1.jsonl", a1), _artifact(root / "a2.jsonl", a2)],
+        "p": [_artifact(root / "p1.jsonl", p1), _artifact(root / "p2.jsonl", p2)],
+        "ca": [_artifact(root / "ca.jsonl", controls_a)],
+        "cp": [_artifact(root / "cp.jsonl", controls_p)],
+    }
+
+
+def test_from_results_pairs_by_library_and_repetition(tmp_path: Path) -> None:
+    files = _e2_files(tmp_path)
+    found = ab.pair_results(
+        files["a"], files["p"], controls_a=files["ca"], controls_p=files["cp"]
+    )
+    calls = {(t.repo, t.rep): t.call for t in found.tasks}
+    assert calls == {
+        ("tabulate", 1): "c",  # P delivered, A did not
+        ("idna", 1): "c",
+        ("pycparser", 1): "c",
+        ("mistune", 1): "b",  # the reverse
+        ("sqlparse", 1): "tie",  # 3.5 points, not above the larger project floor
+        ("markdown", 1): "excluded",  # P's run breached a guard
+        ("tabulate", 2): "c",  # 5.0 points above A's, floor max(2.0, 4.5)
+        ("pyparsing", 2): "excluded",  # arm P never ran it
+    }
+    assert (found.b, found.c) == (1, 4)
+    assert (found.false_wins_a, found.false_wins_p) == (0, 0)
+    assert found.met is True
+    text = ab.render_from_results(found)
+    assert "Paired tasks: 6 (excluded 2" in text and "b = 1, c = 4" in text
+    assert "c - b = 3" in text
+    assert "E2's rule is met" in text and "IDEA_PIPELINE" in text
+    assert "Control false wins: A 0/3, P 0/3" in text
+    assert "GENERATOR_N: A 5, P 5" in text
+
+
+def test_the_call_is_against_the_project_floor_not_the_combinations(
+    tmp_path: Path,
+) -> None:
+    """E2's pre-registered floor is the project floor (D41 c, D42): a
+    5-point lead over a 3 % project floor is P's task even when each
+    combination's own floor (its stdevs) is 8 %, and a 2-point lead under a
+    3 % project floor is no task even when the combinations' floors are 1 %."""
+    rows = {
+        "a": [
+            _arm_row(
+                "tabulate",
+                pipeline=False,
+                delivered=True,
+                gain=5.0,
+                project=3.0,
+                floor=8.0,
+            ),
+            _arm_row(
+                "idna", pipeline=False, delivered=True, gain=5.0, project=3.0, floor=1.0
+            ),
+        ],
+        "p": [
+            _arm_row(
+                "tabulate",
+                pipeline=True,
+                delivered=True,
+                gain=10.0,
+                project=3.0,
+                floor=8.0,
+            ),
+            _arm_row(
+                "idna", pipeline=True, delivered=True, gain=7.0, project=3.0, floor=1.0
+            ),
+        ],
+    }
+    a = _artifact(tmp_path / "a.jsonl", rows["a"])
+    p = _artifact(tmp_path / "p.jsonl", rows["p"])
+    found = ab.pair_results([a], [p])
+    assert {t.repo: t.call for t in found.tasks} == {"tabulate": "c", "idna": "tie"}
+    text = ab.render_from_results(found)
+    assert "| tabulate | 1 | yes | 5.0 | yes | 10.0 | 3.0 | 8.0 | c |" in text
+
+
+def test_a_tie_in_gains_without_a_floor_is_no_discordant_task(tmp_path: Path) -> None:
+    a = _artifact(
+        tmp_path / "a.jsonl",
+        [_arm_row("tabulate", pipeline=False, delivered=True, gain=1.0, project=None)],
+    )
+    p = _artifact(
+        tmp_path / "p.jsonl",
+        [_arm_row("tabulate", pipeline=True, delivered=True, gain=30.0, project=None)],
+    )
+    found = ab.pair_results([a], [p])
+    (task,) = found.tasks
+    assert task.call == "tie"  # no project floor recorded: no claim either way
+    assert (found.b, found.c) == (0, 0)
+
+
+def test_a_p_control_false_win_fails_e2_whatever_the_lead(tmp_path: Path) -> None:
+    files = _e2_files(tmp_path)
+    won = [
+        _arm_row(CONTROLS[0].name, pipeline=True, kind="control", delivered=True),
+        *(_arm_row(r.name, pipeline=True, kind="control") for r in CONTROLS[1:]),
+    ]
+    files["cp"] = [_artifact(tmp_path / "cp-won.jsonl", won)]
+    found = ab.pair_results(
+        files["a"], files["p"], controls_a=files["ca"], controls_p=files["cp"]
+    )
+    assert (found.c - found.b, found.false_wins_p, found.met) == (3, 1, False)
+    text = ab.render_from_results(found)
+    assert "Control false wins: A 0/3, P 1/3" in text and "not met" in text
+    undecided = ab.pair_results(files["a"], files["p"], controls_a=files["ca"])
+    assert undecided.met is None and undecided.false_wins_p is None
+    assert "undecided" in ab.render_from_results(undecided)
+
+
+def test_e2c_reads_the_lead_as_trial_count_or_ideas(tmp_path: Path) -> None:
+    """E2c: P's rep 1 against today's generator at ``GENERATOR_N=10``; no
+    controls; ``c' - b' <= 1`` attributes E2 to trial count."""
+    files = _e2_files(tmp_path, a_n=ab.E2C_GENERATOR_N)
+    e2c = ab.pair_results(files["a"][:1], files["p"][:1], rule="e2c")
+    assert (e2c.b, e2c.c, e2c.met) == (1, 3, None)
+    text = ab.render_from_results(e2c)
+    assert "c' - b' = 2" in text and "attributed to the ideas" in text
+    assert "GENERATOR_N: A 10, P 5" in text
+    one = ab.pair_results(files["a"][1:], files["p"][1:], rule="e2c")
+    text = ab.render_from_results(one)
+    assert "c' - b' = 1" in text and "attributed to trial count" in text
+    with pytest.raises(ValueError, match="e2c takes no controls"):
+        ab.pair_results(files["a"], files["p"], controls_p=files["cp"], rule="e2c")
+
+
+def test_e2c_refuses_arm_a_off_generator_n_10_and_a_mixed_arm_p(
+    tmp_path: Path,
+) -> None:
+    """E2's own arm-A artifacts (``GENERATOR_N=5``) are not E2c's arm A:
+    refused by file and library, as is an arm P of two GENERATOR_N values."""
+    assert ab.E2C_GENERATOR_N == 10
+    files = _e2_files(tmp_path)
+    with pytest.raises(ValueError, match="GENERATOR_N") as refused:
+        ab.pair_results(files["a"][:1], files["p"][:1], rule="e2c")
+    assert "a1.jsonl" in str(refused.value) and "tabulate" in str(refused.value)
+    files = _e2_files(tmp_path, a_n=ab.E2C_GENERATOR_N)
+    mixed = [
+        _arm_row("tabulate", pipeline=True),
+        _arm_row("idna", pipeline=True, generator_n=7),
+    ]
+    p = _artifact(tmp_path / "p-mixed.jsonl", mixed)
+    with pytest.raises(ValueError, match="GENERATOR_N") as refused:
+        ab.pair_results(files["a"][:1], [p], rule="e2c")
+    assert "p-mixed.jsonl" in str(refused.value) and "idna" in str(refused.value)
+
+
+@pytest.mark.parametrize(
+    ("side", "row", "message"),
+    [
+        ("p", {"idea_pipeline": False}, "arm P must run with IDEA_PIPELINE on"),
+        ("a", {"idea_pipeline": True}, "arm A must run with IDEA_PIPELINE off"),
+        ("p", {"portfolio_rounds": 1}, "PORTFOLIO_ROUNDS"),
+        ("a", {"mode": "aimed"}, "wired"),
+        ("p", {"engine_model": "claude-opus-5-5"}, "ENGINE_MODEL"),
+        ("a", {"generator_n": 10}, "GENERATOR_N"),
+        ("p", {"generator_n": 10}, "GENERATOR_N"),
+    ],
+)
+def test_from_results_refuses_artifacts_of_the_wrong_arm(
+    side: str, row: dict[str, Any], message: str, tmp_path: Path
+) -> None:
+    files = _e2_files(tmp_path)
+    pipeline = side == "p"
+    bad = replace(_arm_row("tabulate", pipeline=pipeline), **row)
+    files[side][0] = _artifact(tmp_path / "bad.jsonl", [bad])
+    with pytest.raises(ValueError, match=message) as refused:
+        ab.pair_results(files["a"], files["p"])
+    assert "bad.jsonl" in str(refused.value)
+
+
+def test_from_results_reads_each_line_strictly(tmp_path: Path) -> None:
+    good = json.loads(_arm_row("tabulate", pipeline=False).to_json())
+    bad_lines = {
+        "not-json": "{",
+        "not-an-object": "[1]",
+        "missing": json.dumps({k: v for k, v in good.items() if k != "floor_pct"}),
+        "no-project-floor": json.dumps(
+            {k: v for k, v in good.items() if k != "project_floor_pct"}
+        ),
+        "a-string-gain": json.dumps({**good, "gain_pct": "9"}),
+        "a-bool-rounds": json.dumps({**good, "portfolio_rounds": True}),
+        "a-number-flag": json.dumps({**good, "delivered": 1}),
+        "nan": json.dumps({**good, "gain_pct": None}).replace("null", "NaN", 1),
+        "a-duplicate": "\n".join([json.dumps(good)] * 2),
+        "empty": "",
+    }
+    for name, text in bad_lines.items():
+        path = tmp_path / f"{name}.jsonl"
+        path.write_text(text + "\n", encoding="utf-8")
+        with pytest.raises(ValueError, match=re.escape(str(path))):
+            ab.read_results(path)
+    blank = tmp_path / "blank-lines.jsonl"
+    blank.write_text("\n" + json.dumps(good) + "\n\n", encoding="utf-8")
+    (row,) = ab.read_results(blank)
+    assert (row.repo, row.idea_pipeline, row.floor_pct) == ("tabulate", False, 4.0)
+    assert row.project_floor_pct == 4.0
+
+
+def test_from_results_command_line_prints_the_pairing(tmp_path: Path) -> None:
+    files = _e2_files(tmp_path)
+    echoed: list[str] = []
+    argv = [
+        "--from-results",
+        "--arm-a",
+        *map(str, files["a"]),
+        "--arm-p",
+        *map(str, files["p"]),
+        "--controls-a",
+        str(files["ca"][0]),
+        "--controls-p",
+        str(files["cp"][0]),
+    ]
+    assert ab.from_results_main(argv, echoed.append) == 0
+    text = "\n".join(echoed)
+    assert text.startswith("## E2 pairing from results")
+    assert "| tabulate | 2 |" in text and "E2's rule is met" in text
+    for broken in (argv[1:], argv[:3], [*argv, "--rule", "e3"]):
+        with pytest.raises(SystemExit) as refused:
+            ab.from_results_main(broken, echoed.append)
+        assert refused.value.code == 2
+    missing = ["--from-results", "--arm-a", str(tmp_path / "x"), "--arm-p", "y"]
+    assert ab.from_results_main(missing, echoed.append) == 2
+    assert echoed[-1].startswith("error: ")
+
+
+# ---------------------------------------------------------------------------
+# Arm P in ab-v2 (V8, E3): the idea pipeline beside arm A on corpus v2
+# ---------------------------------------------------------------------------
+
+STEP3_IDEAS = TESTS_DIR / "fixtures" / "step3_ideas"
+IDEAS_SCRIPT: Json = json.loads((STEP3_IDEAS / "scripted.json").read_text("utf-8"))
+AB_V2_P_NEED = 58.8  # 2 reps x 6 repos x (2.90 + 2 x 1.00); E3's row says 40
+
+
+def test_the_ab_set_selects_arm_p_on_the_three_textbook_groups() -> None:
+    """``LIVE_AB_SET`` unset is E5 (arms A and B on v1 and the hard corpus,
+    unchanged); ``v2-p`` is E3: arms A and P on v2's deep, misleading and
+    uncommon slowdowns. Anything else is refused before any spend."""
+    e5 = ab.ab_plan({})
+    assert (e5.pipeline, e5.arms, e5.repos) == (False, ("A", "B"), ab.AB_REPOS)
+    assert e5.gen_cap == ab.AB_GEN_CAP_USD
+    e3 = ab.ab_plan({ab.SET_ENV: ab.P_SET})
+    assert (e3.pipeline, e3.arms, e3.reps, e3.run_cap) == (True, ("A", "P"), 2, 1.0)
+    assert e3.repos == ab.AB_V2_P_REPOS and e3.gen_cap == ab.AB_P_GEN_CAP_USD
+    assert ab.E3_GROUPS == ("deep", "misleading", "uncommon")
+    assert [r.category for r in e3.repos] == [g for g in ab.E3_GROUPS for _ in "ab"]
+    assert all(r in DISCOVERY_CORPUS and r.kind == "slowdown" for r in e3.repos)
+    for value in ("", "V2", "V2-P", " v2-p", "v2-p,", "p"):  # "v2": V10's L5
+        with pytest.raises(ValueError, match=ab.SET_ENV):
+            ab.ab_plan({ab.SET_ENV: value})
+
+
+def test_arm_ps_generation_run_holds_phase_one_arm_a_and_the_whole_pipeline() -> None:
+    """The shared run (phase 1, arm A's request, then arm P's S1, six lenses,
+    leap and reviewer) at every request's worst case, D55's prompt bounds as
+    E0b re-derived them (D61), rounded up to 0.05 USD; the pipeline's sum
+    follows its settings."""
+    cfg = ab.pipeline_settings(settings)
+    assert cfg.IDEA_PIPELINE and not settings.IDEA_PIPELINE
+    assert (ab.IDEAS_LANE_PROMPT_BOUND, ab.IDEAS_REVIEW_PROMPT_BOUND) == (
+        38_000,
+        44_000,
+    )
+    lane = _worst(38_000, cfg.IDEAS_LANE_MAX_TOKENS, (cfg.IDEAS_LANE_MODEL,))
+    leap = _worst(38_000, cfg.IDEAS_LEAP_MAX_TOKENS, (cfg.IDEAS_LEAP_MODEL,))
+    review = _worst(44_000, cfg.IDEAS_REVIEWER_MAX_TOKENS, (cfg.IDEAS_REVIEWER_MODEL,))
+    pipeline = (1 + len(cfg.IDEAS_LENSES)) * lane + leap + review
+    assert len(cfg.IDEAS_LENSES) == 6 and cfg.IDEAS_LEAP_N and cfg.IDEAS_REVIEW
+    assert ab.pipeline_worst_usd(cfg) == pytest.approx(pipeline)
+    assert 2.475 < pipeline < 2.6  # D61's 2.475, plus the margin and allowance
+    phase = _worst(UNDERSTAND_PROMPT_BOUND, settings.UNDERSTAND_MAX_TOKENS, (SONNET,))
+    blind = _worst(BLIND_PROMPT_BOUND, ab.AB_GENERATE_MAX_TOKENS, (SONNET,))
+    _rounded(phase + blind + pipeline, ab.AB_P_GEN_CAP_USD)
+    assert ab.AB_P_GEN_CAP_USD == 2.9
+    lean = cfg.model_copy(update={"IDEAS_REVIEW": False, "IDEAS_LEAP_N": 0})
+    assert ab.pipeline_worst_usd(lean) == pytest.approx(7 * lane)
+    one = cfg.model_copy(update={"IDEAS_LENSES": cfg.IDEAS_LENSES[:1]})
+    assert ab.pipeline_worst_usd(one) == pytest.approx(2 * lane + leap + review)
+
+
+def test_the_ab_v2_p_suite_needs_the_sum_of_its_caps() -> None:
+    """2 reps x 6 repositories x (the shared run + both engine runs). E3's
+    row (40 USD, ``12 x (0.8 + 2.4)``) leaves the two engine runs out."""
+    plan = ab.ab_plan({ab.SET_ENV: ab.P_SET})
+    need = plan.reps * len(plan.repos) * (ab.AB_P_GEN_CAP_USD + 2 * plan.run_cap)
+    assert ab.ab_need(plan) == pytest.approx(need) == pytest.approx(AB_V2_P_NEED)
+    assert ab.ab_need(plan) <= CAP_CEILING_USD
+    one = ab.ab_plan({ab.SET_ENV: ab.P_SET, ab.REPS_ENV: "1"})
+    assert ab.ab_need(one) == pytest.approx(AB_V2_P_NEED / 2)
+    assert ab.ab_need(one) <= 40  # one repetition fits E3's cap
+    assert ab.ab_need(ab.ab_plan({})) == pytest.approx(AB_NEED)  # E5 unchanged
+
+
+def _ideas_user(root: Path) -> tuple[RepoFacts, str]:
+    """The Step 3 ideas fixture committed on main, with phase-1-like facts."""
+    user = make_repo(STEP3_IDEAS / "repo", root / "ideas")
+    project = Project(name="dedupe", root_path=str(user.path))
+    spots = tuple(
+        Hotspot(
+            project_id=project.id,
+            workload_id="w1",
+            file_path="dedupe/core.py",
+            symbol=symbol,
+            self_time_s=share,
+            total_time_s=share,
+            share=share,
+        )
+        for symbol, share in (("unique_in_order", 0.8), ("running_totals", 0.1))
+    )
+    objective = _facts(root).objective.model_copy(update={"project_id": project.id})
+    return RepoFacts(project, None, spots, objective), user.base
+
+
+def _pipeline_answer(body: Json) -> str:
+    if "reviews" in _schema_keys(body):
+        return json.dumps({"reviews": IDEAS_SCRIPT["review"][:2]})
+    return json.dumps({"hypotheses": IDEAS_SCRIPT["obvious"]})
+
+
+def test_arm_p_runs_the_pipeline_on_the_code_at_the_base_commit(dry: Path) -> None:
+    """Arm P is the engine's ``IdeaPipelineGenerator`` on the lane, leap and
+    reviewer transports ``corpus.role_wiring`` captures on the shared run:
+    S1, six lenses and the leap read the hot code at the commit, the reviewer
+    filters, and every request bills its role's model alone."""
+    facts, commit = _ideas_user(dry)
+    wire = Wire(_pipeline_answer)
+    run = wire.run(cap=ab.AB_P_GEN_CAP_USD)
+    budget = Budget(run.cap_usd)
+    produced = ab.pipeline_arm(
+        run, budget, facts, commit=commit, protected=("**/.env",)
+    )
+    assert produced.error is None, produced.error
+    cfg = ab.pipeline_settings(settings)
+    models = [b["model"] for b in wire.bodies]
+    assert models.count(cfg.IDEAS_LANE_MODEL) == 1 + len(cfg.IDEAS_LENSES)
+    assert models.count(cfg.IDEAS_REVIEWER_MODEL) == 2  # the leap and the reviewer
+    assert len(wire.bodies) == 9 and all("fallbacks" not in b for b in wire.bodies)
+    lanes = [b for b in wire.bodies if "hypotheses" in _schema_keys(b)]
+    assert all("def unique_in_order" in json.dumps(b) for b in lanes)
+    titles = [h.title for h in produced.hypotheses]
+    assert IDEAS_SCRIPT["obvious"][0]["title"] in titles
+    assert produced.arm == ab.P_ARM and len(produced.usages) == 9
+    assert set(produced.models) == {cfg.IDEAS_LANE_MODEL, cfg.IDEAS_REVIEWER_MODEL}
+    assert produced.cost_usd == pytest.approx(run.spent_usd)
+    ab.check_arm_calls(run, budget, {"P": produced})
+    with pytest.raises(AssertionError, match="idea-pipeline"):
+        ab.check_arm_calls(run, budget, {"P": replace(produced, models=(FABLE,))})
+
+
+def test_arm_p_reads_no_protected_file_and_an_empty_arm_fails_the_guard(
+    dry: Path,
+) -> None:
+    """The run's protected patterns reach the reader: with the hot file
+    protected there is no code context, nothing is sent (no fallback to
+    today's generator), and the guard refuses the arm that never answered."""
+    facts, commit = _ideas_user(dry)
+    wire = Wire(_pipeline_answer)
+    run = wire.run(cap=ab.AB_P_GEN_CAP_USD)
+    budget = Budget(run.cap_usd)
+    produced = ab.pipeline_arm(
+        run, budget, facts, commit=commit, protected=("dedupe/core.py",)
+    )
+    assert wire.bodies == [] and produced.hypotheses == () and not produced.answered
+    assert any("no code context" in note for note in produced.notes)
+    with pytest.raises(AssertionError, match="idea-pipeline got no answer"):
+        ab.check_arm_calls(run, budget, {"P": produced})
+    short = Wire(_pipeline_answer).run(cap=0.05)  # S1 alone does not fit
+    refused = ab.pipeline_arm(
+        short, Budget(short.cap_usd), facts, commit=commit, protected=()
+    )
+    assert refused.error is not None and "BudgetExceeded" in refused.error
+    frozen = Wire(_pipeline_answer)  # a quality check's frozen file, unread
+    run = frozen.run(cap=ab.AB_P_GEN_CAP_USD)
+    denied = ab.pipeline_arm(
+        run, Budget(run.cap_usd), facts, commit=commit, protected=(),
+        read_deny=("dedupe/core.py",),
+    )  # fmt: skip
+    assert frozen.bodies == [] and not denied.answered
+
+
+def test_arm_p_withholds_what_the_engines_generate_call_withholds(dry: Path) -> None:
+    """``withheld`` is nodes.py's generate call: the context's protected
+    patterns plus the run's ``extra_protected`` (for corpus v2 the
+    ``<package>/main.py`` driver no default pattern matches), and the
+    quality check's frozen paths as ``read_deny``; phase 1 carries the run's
+    ``extra_protected`` for it (``V8-lead/discovery.py.patch``)."""
+    run = LiveRun("dry", 0.6, wire=httpx2.MockTransport(_no_wire))
+    loop = start_phase_one(
+        CORPUS[0], run, dry / "phase", REQUIRED, model_settings(settings, SONNET)
+    )
+    ctx = loop.context
+    assert ab.withheld(ctx, ["pkg/main.py"]) == (
+        (*ctx.protected_patterns, "pkg/main.py"), (),
+    )  # fmt: skip
+    quality = QualityCheck(
+        name="acc", measure=BuiltinMeasure.accuracy, labels="data/labels.txt",
+        frozen_paths=("data/labels.txt",),
+    )  # fmt: skip
+    assert ab.withheld(replace(ctx, quality=quality), ()) == (
+        tuple(ctx.protected_patterns), ("data/labels.txt",),
+    )  # fmt: skip
+    state = initial_state(loop.project, [loop.workload], [], guardrails(loop.project))
+    state["objectives"] = [_facts(dry).objective]
+    state["extra_protected"] = ["pkg/main.py"]
+    phase = read_phase_one(loop, run, EngineRunResult("r", "done", state, None))
+    assert getattr(phase, "extra_protected", None) == ("pkg/main.py",)
+
+
+def test_arm_a_beside_arm_p_keeps_its_own_guard(dry: Path) -> None:
+    run = Wire(_answer).run()
+    budget = Budget(run.cap_usd)
+    blind = ab.blind_arm(run, budget, _facts(dry))
+    ab.check_arm_calls(run, budget, {"A": blind})
+    with pytest.raises(AssertionError, match=ab.AB_ARM.label):
+        ab.check_arm_calls(run, budget, {"A": replace(blind, models=(OPUS,))})
+
+
+def test_the_e3_summary_pairs_arm_p_against_arm_a_and_decides_nothing(
+    dry: Path,
+) -> None:
+    produced = _generated(dry, ["a"])
+    rows = [
+        ab.ab_row(repo, 1, label, produced, _outcome(repo, label == "P"), ())
+        for repo in ab.AB_V2_P_REPOS[:4]
+        for label in ("A", "P")
+    ]
+    rows.append(ab.ab_row(ab.AB_V2_P_REPOS[4], 1, "A", produced, None, ()))
+    assert ab.discordant(rows, "P")[1:] == (0, 4)
+    assert ab.discordant(rows)[1:] == (0, 0)  # E5's pairing finds no B
+    assert ab.excluded_tasks(rows, "P") == 1
+    text = ab.render_ab(rows)
+    assert text.startswith("## Idea pipeline A/B (E3)")
+    assert "| P | 4/4 (100.0%) |" in text and "(rep: A win, P win)" in text
+    assert "b = 0, c = 4" in text and "excluded 1 slowdown task(s)" in text
+    assert "informational" in text and "no decision rides on it" in text
+    assert "retriev" not in text and "playbook" not in text and "| B |" not in text
+
+
+def test_the_live_ab_module_runs_arm_p_when_its_set_asks() -> None:
+    """The Lead applies ``V8-lead/test_ab_live.py.patch``: the repositories
+    are the plan's, read at collection, and arm P replaces B in its set."""
+    source = ast.unparse(_tree("test_ab_live"))
+    assert "AB_PLAN_REPOS = ab_plan(os.environ).repos" in source
+    assert "if ab.plan.pipeline:" in source
+    assert "check_arm_calls(gen, budget, arms)" in source
+    assert "commit=phase.loop.user.base" in source
+    assert (
+        "protected, read_deny = withheld(phase.loop.context, phase.extra_protected)"
+        in source
+    )
+    assert "protected=protected, read_deny=read_deny" in source
+
+
+# ---------------------------------------------------------------------------
+# ab-v2 (V10, L5a and L5b): the retrieval re-test on all of corpus v2
+# ---------------------------------------------------------------------------
+
+AB_V2_NEED = 67.2  # L5b: 2 reps x 12 repos x (0.80 + 2 x 1.00); spec 67.2, need 68
+AB_V2_BLIND_NEED = 16.2  # L5a: 1 rep x 12 x (0.35 + 1.00); spec 21.6 (B's 0.45 too)
+
+
+def test_the_ab_set_v2_runs_arms_a_and_b_on_all_twelve_v2_repositories() -> None:
+    """``LIVE_AB_SET=v2`` is L5b: arms A and B on every corpus v2 repository
+    (its ten slowdowns and two decoy controls), E5's shared run cap."""
+    plan = ab.ab_plan({ab.SET_ENV: ab.V2_SET})
+    assert ab.V2_SET == "v2" and ab.AB_V2_REPOS == DISCOVERY_CORPUS
+    assert (plan.pipeline, plan.v2, plan.arms, plan.reps, plan.run_cap) == (
+        False, True, ("A", "B"), 2, 1.0,
+    )  # fmt: skip
+    assert plan.repos == DISCOVERY_CORPUS and len(plan.repos) == 12
+    kinds = [r.kind for r in plan.repos]
+    assert (kinds.count("slowdown"), kinds.count("control")) == (10, 2)
+    assert {r.category for r in plan.repos if r.kind == "control"} == {"decoy"}
+    assert plan.gen_cap == ab.AB_GEN_CAP_USD
+    both = ab.ab_plan({ab.SET_ENV: ab.V2_SET, ab.ARMS_ENV: "A,B"})
+    assert both == plan
+    assert not ab.ab_plan({}).v2 and not ab.ab_plan({ab.SET_ENV: ab.P_SET}).v2
+
+
+def test_the_arms_knob_runs_arm_a_alone_and_only_on_v2() -> None:
+    """``LIVE_AB_ARMS`` is strict: ``A`` (L5a) or ``A,B``, with set v2 only;
+    arm A alone shares a run capped for phase 1 and A's request alone."""
+    blind = ab.ab_plan({ab.SET_ENV: ab.V2_SET, ab.ARMS_ENV: "A", ab.REPS_ENV: "1"})
+    assert (blind.arms, blind.reps, blind.repos) == (("A",), 1, DISCOVERY_CORPUS)
+    assert blind.blind_only and blind.gen_cap == ab.AB_A_GEN_CAP_USD
+    for value in ("", "B", "A,B,", "a", " A", "B,A", "A,P", "A,A", "P"):
+        with pytest.raises(ValueError, match=ab.ARMS_ENV):
+            ab.ab_plan({ab.SET_ENV: ab.V2_SET, ab.ARMS_ENV: value})
+    for other in ({}, {ab.SET_ENV: ab.P_SET}):
+        for value in ("A", "A,B"):
+            with pytest.raises(ValueError, match=f"{ab.ARMS_ENV}.*{ab.SET_ENV}"):
+                ab.ab_plan({**other, ab.ARMS_ENV: value})
+
+
+def test_arm_a_alones_shared_run_holds_phase_one_and_as_request() -> None:
+    """Phase 1 and A's generation at their worst, rounded up to 0.05 USD:
+    the cap E5's shared run would have without B's matcher and generation."""
+    phase = _worst(UNDERSTAND_PROMPT_BOUND, settings.UNDERSTAND_MAX_TOKENS, (SONNET,))
+    blind = _worst(BLIND_PROMPT_BOUND, ab.AB_GENERATE_MAX_TOKENS, (SONNET,))
+    _rounded(phase + blind, ab.AB_A_GEN_CAP_USD)
+    assert ab.AB_A_GEN_CAP_USD == 0.35 < ab.AB_GEN_CAP_USD == 0.8
+
+
+def test_the_ab_v2_needs_are_the_sum_of_their_caps() -> None:
+    """Per task the shared run plus one engine run per arm: L5b 67.2 (the
+    spec's 24 x (0.8 + 2), need 68), L5a 16.2 (the spec's 12 x (0.8 + 1) =
+    21.6 priced B's matcher and generation, which L5a never sends)."""
+    plan = ab.ab_plan({ab.SET_ENV: ab.V2_SET})
+    need = plan.reps * len(plan.repos) * (ab.AB_GEN_CAP_USD + 2 * plan.run_cap)
+    assert ab.ab_need(plan) == pytest.approx(need) == pytest.approx(AB_V2_NEED)
+    assert math.ceil(ab.ab_need(plan)) == 68
+    blind = ab.ab_plan({ab.SET_ENV: ab.V2_SET, ab.ARMS_ENV: "A", ab.REPS_ENV: "1"})
+    single = len(blind.repos) * (ab.AB_A_GEN_CAP_USD + blind.run_cap)
+    assert ab.ab_need(blind) == pytest.approx(single) == pytest.approx(AB_V2_BLIND_NEED)
+    assert math.ceil(ab.ab_need(blind)) == 17 <= 22  # under the spec's figure
+    assert ab.ab_need(ab.ab_plan({})) == pytest.approx(AB_NEED)  # E5 unchanged
+    assert ab.ab_need(ab.ab_plan({ab.SET_ENV: ab.P_SET})) == pytest.approx(
+        AB_V2_P_NEED
+    )  # E3 unchanged
+    assert ab.ab_need(plan) <= CAP_CEILING_USD
+
+
+def test_the_ab_v2_job_minutes_come_from_e5s_measured_pace() -> None:
+    """E5 (run 40063812021) took 122 minutes for 50 tasks x 2 arms; L5b's 48
+    task-arms at that pace need about 59, and the timeout is at least three
+    times it (300: v2's loops may be slower than v1's)."""
+    assert ab.AB_MINUTES_PER_TASK_ARM == pytest.approx(122 / 100)
+    plan = ab.ab_plan({ab.SET_ENV: ab.V2_SET})
+    assert ab.ab_minutes(plan) == pytest.approx(48 * 1.22)
+    blind = ab.ab_plan({ab.SET_ENV: ab.V2_SET, ab.ARMS_ENV: "A", ab.REPS_ENV: "1"})
+    assert ab.ab_minutes(blind) == pytest.approx(12 * 1.22)
+    assert 3 * ab.ab_minutes(plan) <= ab.AB_V2_JOB_MINUTES == 300 <= 360
+
+
+def _v2_rows(
+    dry: Path, wins: Mapping[str, tuple[bool, ...]], rep: int = 1
+) -> list[ab.AbRow]:
+    """One row per arm of each named v2 repository (``wins``: per arm)."""
+    produced = _generated(dry, ["a"])
+    by_name = {r.name: r for r in DISCOVERY_CORPUS}
+    rows = []
+    for name, outcomes in wins.items():
+        repo = by_name[name]
+        for label, won in zip(("A", "B"), outcomes, strict=False):
+            rows.append(ab.ab_row(repo, rep, label, produced, _outcome(repo, won), ()))
+    return rows
+
+
+V2_SLOW_NAMES = tuple(r.name for r in DISCOVERY_CORPUS if r.kind == "slowdown")
+V2_DECOY_NAMES = tuple(r.name for r in DISCOVERY_CORPUS if r.kind == "control")
+
+
+@pytest.mark.parametrize(
+    ("won", "saturated"), [(10, True), (9, True), (8, False), (0, False)]
+)
+def test_the_l5a_summary_states_the_saturation_rate_and_its_call(
+    dry: Path, won: int, saturated: bool
+) -> None:
+    """Arm A alone: blind wins over the v2 slowdowns; 90 % or more is
+    saturation (v2 is revised, B is not paid for), less runs L5b."""
+    wins = {name: (i < won,) for i, name in enumerate(V2_SLOW_NAMES)}
+    wins |= {V2_DECOY_NAMES[0]: (True,), V2_DECOY_NAMES[1]: (False,)}
+    plan = ab.ab_plan({ab.SET_ENV: ab.V2_SET, ab.ARMS_ENV: "A", ab.REPS_ENV: "1"})
+    rows = _v2_rows(dry, wins)
+    assert ab.blind_saturation(rows) == (won, 10)
+    assert ab.saturated(won, 10) is saturated
+    text = ab.render_ab(rows, plan)
+    assert text.startswith("## Blind saturation on corpus v2 (L5a)")
+    assert f"blind (arm A) won {won}/10 ({10 * won:.1f}%) of the v2 slowdown" in text
+    assert "threshold 90 %" in text and "Control false wins: A 1/2." in text
+    if saturated:
+        assert "v2 is saturated" in text and "arm B is not paid for" in text
+        assert "L5b" not in text
+    else:
+        assert "v2 is not saturated" in text and "L5b runs" in text
+    assert "| B |" not in text and "c - b" not in text and "deprioritise" not in text
+
+
+def test_the_l5a_call_needs_every_slowdown_and_counts_a_breach_as_no_win(
+    dry: Path,
+) -> None:
+    plan = ab.ab_plan({ab.SET_ENV: ab.V2_SET, ab.ARMS_ENV: "A", ab.REPS_ENV: "1"})
+    rows = _v2_rows(dry, {name: (True,) for name in V2_SLOW_NAMES[:9]})
+    text = ab.render_ab(rows, plan)
+    assert "Incomplete: 9 of 10 v2 slowdown tasks recorded" in text
+    assert "saturated" not in text.split("Incomplete")[1]
+    assert "Control false wins: A n/a (no control ran)." in text  # not 0/0
+    breach = replace(rows[0], guard="breach: AssertionError: x")
+    full = [breach, *rows[1:], *_v2_rows(dry, {V2_SLOW_NAMES[9]: (True,)})]
+    assert ab.blind_saturation(full) == (9, 10)
+    text = ab.render_ab(full, plan)
+    assert "won 9/10" in text and "1 breached a guard" in text
+    assert ab.saturated(0, 0) is False
+
+
+def test_the_l5b_summary_states_the_pooled_rule_inputs(dry: Path) -> None:
+    """Both arms: b, c, c - b and each arm's control false wins, the inputs
+    of the rule pre-registered before L5a, and its reading on v2 alone."""
+    plan = ab.ab_plan({ab.SET_ENV: ab.V2_SET})
+    a_b = [(False, True)] * 4 + [(True, False)] + [(True, True)] * 5
+    wins = dict(zip(V2_SLOW_NAMES, a_b, strict=True))
+    wins |= {V2_DECOY_NAMES[0]: (True, False), V2_DECOY_NAMES[1]: (False, False)}
+    rows = _v2_rows(dry, wins) + _v2_rows(dry, wins, rep=2)
+    assert ab.discordant(rows)[1:] == (2, 8)
+    assert ab.control_false_wins(rows, "A") == (2, 4)
+    assert ab.control_false_wins(rows, "B") == (0, 4)
+    text = ab.render_ab(rows, plan)
+    assert text.startswith("## Retrieval re-test on corpus v2 (L5b)")
+    assert "Pooled-rule inputs (v2): b = 2, c = 8, c - b = 6" in text
+    assert "control false wins A 2/4, B 0/4" in text
+    assert "On v2 alone the pooled rule is met" in text
+    assert "2026-10-25" in text and "L5c" in text
+    assert "deprioritise" not in text and "B must beat A" not in text
+    assert "| B |" in text and "(rep: A win, B win)" in text
+    worse = [
+        replace(r, win=True) if r.kind == "control" and r.arm == "B" else r
+        for r in rows
+    ]
+    assert ab.control_false_wins(worse, "B") == (4, 4)
+    assert "On v2 alone the pooled rule is not met" in ab.render_ab(worse, plan)
+    assert ab.ab_decision(2, 8, 2, 4) is False
+    assert "## Retrieval re-test on corpus v2 (L5b)" in ab.render_ab([], plan)
+
+
+def test_the_l5b_reading_needs_every_slowdown_and_control_on_both_arms(
+    dry: Path,
+) -> None:
+    """A run killed before the decoys leaves 0/0 control runs on both arms,
+    which ``ab_decision`` would read as met: no reading until every
+    slowdown task has both arms and each arm has every control run."""
+    plan = ab.ab_plan({ab.SET_ENV: ab.V2_SET})
+    wins = {name: (False, True) for name in V2_SLOW_NAMES}
+    wins |= {name: (False, False) for name in V2_DECOY_NAMES}
+    full = _v2_rows(dry, wins) + _v2_rows(dry, wins, rep=2)
+    assert "On v2 alone the pooled rule is met" in ab.render_ab(full, plan)
+    assert "Incomplete" not in ab.render_ab(full, plan)
+    slow_b = next(
+        i for i, r in enumerate(full) if r.kind == "slowdown" and r.arm == "B"
+    )
+    decoy_b = next(
+        i for i, r in enumerate(full) if r.kind == "control" and r.arm == "B"
+    )
+    no_decoys = [r for r in full if r.kind != "control"]
+    cases = {
+        "slowdown": ([r for i, r in enumerate(full) if i != slow_b], 19, 4, 4),
+        "control": ([r for i, r in enumerate(full) if i != decoy_b], 20, 4, 3),
+        "killed": (no_decoys, 20, 0, 0),
+    }
+    for name, (rows, tasks, controls_a, controls_b) in cases.items():
+        text = ab.render_ab(rows, plan)
+        assert (
+            f"Incomplete: {tasks} of 20 slowdown tasks recorded, A {controls_a}/4 "
+            f"and B {controls_b}/4 control runs; no reading (re-run the missing "
+            "tasks)."
+        ) in text, name
+        assert "pooled rule is" not in text, name
+        assert "Pooled-rule inputs (v2)" in text, name
+
+
+def test_the_e5_and_e3_summaries_are_unchanged_by_their_plans(dry: Path) -> None:
+    rows = _ab_rows(dry)
+    assert ab.render_ab(rows, ab.ab_plan({})) == ab.render_ab(rows)
+    p_rows = [replace(r, arm="P") if r.arm == "B" else r for r in rows]
+    e3 = ab.ab_plan({ab.SET_ENV: ab.P_SET})
+    assert ab.render_ab(p_rows, e3) == ab.render_ab(p_rows)
+
+
+def test_the_recorder_writes_the_plans_summary(dry: Path) -> None:
+    summary = dry / "summary.md"
+    environ = {corpus.SUMMARY_ENV: str(summary)}
+    plan = ab.ab_plan({ab.SET_ENV: ab.V2_SET, ab.ARMS_ENV: "A", ab.REPS_ENV: "1"})
+    recorder = ab.AbRecorder(plan, ResultsSink(environ), frozenset())
+    recorder.rows.extend(_v2_rows(dry, {V2_SLOW_NAMES[0]: (True,)}))
+    recorder.finish(lambda _line: None)
+    assert "## Blind saturation on corpus v2 (L5a)" in summary.read_text("utf-8")
+
+
+def test_the_v2_summaries_sanitise_hostile_text(dry: Path) -> None:
+    hostile = _hostile_outcome()
+    row = replace(
+        _v2_rows(dry, {V2_SLOW_NAMES[0]: (True, False)})[0],
+        repo=hostile.repo,
+        guard=hostile.guard,
+    )
+    for env in ({ab.ARMS_ENV: "A"}, {}):
+        _check_inert(ab.render_ab([row], ab.ab_plan({ab.SET_ENV: ab.V2_SET, **env})))
+
+
+def test_the_live_ab_module_runs_arm_b_only_when_the_plan_has_it() -> None:
+    source = ast.unparse(_tree("test_ab_live"))
+    assert "if ab.plan.pipeline:" in source
+    assert "elif 'B' in ab.plan.arms:" in source
+    assert "arms['B'] = retrieval_arm(gen, budget, phase.facts, playbook=playbook)" in (
+        source
+    )

@@ -133,3 +133,28 @@ def matches_pattern(path: str, pattern: str) -> bool:
     return folded_pattern.startswith("**/") and fnmatchcase(
         folded_path, folded_pattern[3:]
     )
+
+
+def literal_project_file(field: str, value: str) -> str:
+    """``value`` normalised as a literal project file, else ``ValueError``.
+
+    The rule for a quality check's frozen files (D37) and the measurement
+    mask: they reach pattern matchers (``extra_protected``, the editor's
+    read-deny list), so ``*``, ``?`` and ``[`` are refused rather than left to
+    widen or miss a match. Control characters, a leading ``-`` (read as an
+    interpreter flag), the project root itself and git metadata are refused.
+    """
+    if any(char in value for char in "*?[\x00\n\r"):
+        raise ValueError(
+            f"{field} must be a literal file name without '*', '?', '[' or "
+            f"control characters, got {value!r}"
+        )
+    normalized = normalize_path(value)
+    if normalized == ".":
+        raise ValueError(f"{field} must name a file, got {value!r}")
+    if normalized.startswith("-"):
+        raise ValueError(f"{field} must not start with '-', got {value!r}")
+    git_names = {name.casefold() for name in GIT_METADATA_NAMES}
+    if any(part.casefold() in git_names for part in normalized.split("/")):
+        raise ValueError(f"{field} must not be git metadata, got {value!r}")
+    return normalized

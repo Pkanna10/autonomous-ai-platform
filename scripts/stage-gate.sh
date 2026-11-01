@@ -133,7 +133,10 @@ if [[ $QUICK -eq 0 ]]; then
   echo ""
   echo "==== 2. Security audits"
   run_check "pnpm audit (moderate+)" must pnpm audit --audit-level=moderate
-  run_check "pip-audit" must bash -c "cd '$PY_DIR' && uv run pip-audit --progress-spinner off"
+  # Audit the lock, not the venv: the venv is synced only later (step 3) and only
+  # with some extras, so a stale package there could fail or pass this falsely.
+  # Same command as security.yml's "Audit every locked package".
+  run_check "pip-audit (every locked package)" must bash -c "cd '$PY_DIR' && t=\$(mktemp) && uv export --frozen --all-extras --no-emit-project -o \"\$t\" >/dev/null && uv run pip-audit --progress-spinner off --disable-pip --require-hashes -r \"\$t\"; rc=\$?; rm -f \"\$t\"; exit \$rc"
   run_check "bandit" must bash -c "cd '$PY_DIR' && uv run bandit -q -r src -c pyproject.toml"
   run_check "secret grep" must bash -c "! git grep -nE 'sk-ant-api03-[A-Za-z0-9_-]{20,}' -- ':!*.example' ':!*.md'"
 fi

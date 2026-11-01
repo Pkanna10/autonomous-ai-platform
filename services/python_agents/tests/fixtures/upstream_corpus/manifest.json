@@ -1,0 +1,2049 @@
+{
+  "cutoff": "2026-06-30",
+  "cutoff_source": "Claude Opus 5.5, Sonnet 5.5 and Fable 5.1: training-data and reliable-knowledge cutoff Jun 2026 (platform.claude.com models overview, read 2026-10-26)",
+  "candidates": [
+    {
+      "id": "attrs-astuple-atomic",
+      "lib": "attrs",
+      "url": "https://github.com/python-attrs/attrs.git",
+      "before_sha": "0a08cee06960e415f735dec4cf2fb91d669e2433",
+      "licence": "MIT",
+      "license_file": "LICENSE",
+      "package": "attr",
+      "module_root": "src/attr",
+      "touched_files": ["src/attr/_funcs.py"],
+      "touched_functions": {
+        "src/attr/_funcs.py": ["astuple"]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix.",
+      "hint_in_before": {
+        "kind": "hot_shape",
+        "evidence": "bench/test_benchmarks.py:185: test_astuple_nested_atomic, a maintainer benchmark of astuple on instances holding long sequences of atoms (the key's hot path), added by the before-commit itself ('Add benchmark for nested atomic fields', 26 minutes before the fix)"
+      },
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "--noconftest",
+        "tests/test_next_gen.py",
+        "tests/test_filters.py",
+        "tests/test_validators.py",
+        "tests/test_converters.py",
+        "tests/test_cmp.py",
+        "tests/test_hooks.py",
+        "tests/test_pattern_matching.py"
+      ],
+      "tests_note": "tests/test_funcs.py, astuple's own tests, needs hypothesis; test_next_gen.py calls astuple.",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": ">=3.10",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/attrs-astuple-atomic.patch",
+        "sha256": "6747946e8f533bd25a032bcf613c2576ada4af6e31abe807808d9c9480b01d46",
+        "fix_sha": "8f76a5262b3b426bfb6a1127f12d49430d168c8b",
+        "commit_date": "2026-10-13T13:53:24+00:00",
+        "author_date": "2026-10-13T13:53:24+00:00",
+        "author": "Johnny Kao",
+        "link": "https://github.com/python-attrs/attrs/pull/1636",
+        "commit_url": "https://github.com/python-attrs/attrs/commit/8f76a5262b3b426bfb6a1127f12d49430d168c8b",
+        "message": "Improve astuple performance for nested atomic sequences (#1636)\n\n* Improve astuple nested atomic sequence performance\n\n* Add changelog for astuple sequence optimization\n\n---------\n\nCo-authored-by: Hynek Schlawack <hs@ox.cx>",
+        "hot_path": "attr.astuple(..., recurse=True) on instances holding long lists/tuples of ints/strs: has() is called per element",
+        "touched_functions": {
+          "src/attr/_funcs.py": ["astuple"]
+        },
+        "diff_stats": {
+          "added": 1,
+          "deleted": 1,
+          "changed": 2
+        },
+        "other_files_in_commit": {
+          "tests": [],
+          "non_source": ["changelog.d/1636.change.md"]
+        },
+        "ai_assisted": []
+      }
+    },
+    {
+      "id": "boltons-multireplace-lastgroup",
+      "lib": "boltons",
+      "url": "https://github.com/mahmoud/boltons.git",
+      "before_sha": "f5cf8b5d32bf25752b44a11c9d87d2144c7b8919",
+      "licence": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "package": "boltons",
+      "module_root": "boltons",
+      "touched_files": ["boltons/strutils.py"],
+      "touched_functions": {
+        "boltons/strutils.py": ["MultiReplace._get_value"]
+      },
+      "contamination_risk": "medium",
+      "contamination_reason": "Authored 2026-06-19, before the shared Jun 2026 cutoff, and committed 2026-07-17, after it: the PR may have been public in the last weeks before the cutoff, so it may be in training data. A small, little-discussed change; its only release notes entry (CHANGELOG.md for 26.1.0) is dated 2026-07-17, after the cutoff. Medium, not high.",
+      "hint_in_before": null,
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests/test_strutils.py"
+      ],
+      "tests_note": "",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": ">=3.7",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/boltons-multireplace-lastgroup.patch",
+        "sha256": "945e2acf40c632a122f4ac3dcd5abd2490536cecd7c28d1047446aaa08ba92ae",
+        "fix_sha": "bba729bf4539afc993a6410bdf8074b28707004a",
+        "commit_date": "2026-07-17T01:10:56-07:00",
+        "author_date": "2026-06-19T19:36:05+08:00",
+        "author": "codingFeng101",
+        "link": null,
+        "commit_url": "https://github.com/mahmoud/boltons/commit/bba729bf4539afc993a6410bdf8074b28707004a",
+        "message": "Speed up MultiReplace match lookup",
+        "hot_path": "MultiReplace.sub on long text with many matches: groupdict() scan per match",
+        "touched_functions": {
+          "boltons/strutils.py": ["MultiReplace._get_value"]
+        },
+        "diff_stats": {
+          "added": 1,
+          "deleted": 3,
+          "changed": 4
+        },
+        "other_files_in_commit": {
+          "tests": [],
+          "non_source": []
+        },
+        "ai_assisted": []
+      }
+    },
+    {
+      "id": "idna-uts46-ascii-fastpath",
+      "lib": "idna",
+      "url": "https://github.com/kjd/idna.git",
+      "before_sha": "fe4ae48b87136fd2a1835b7f67d615318891d8cc",
+      "licence": "BSD-3-Clause",
+      "license_file": "LICENSE.md",
+      "package": "idna",
+      "module_root": "idna",
+      "touched_files": ["idna/core.py"],
+      "touched_functions": {
+        "idna/core.py": ["<module>", "uts46_remap"]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix.",
+      "hint_in_before": null,
+      "test_command": [
+        "python",
+        "-m",
+        "unittest",
+        "tests.test_idna",
+        "tests.test_idna_codec",
+        "tests.test_idna_uts46",
+        "tests.test_intranges",
+        "tests.test_idna_compat"
+      ],
+      "tests_note": "",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": ">=3.9",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/idna-uts46-ascii-fastpath.patch",
+        "sha256": "2998fff49c22c558eadf47df6f48bf4d687cecf29ca7eaa5312db7ce7e8f537c",
+        "fix_sha": "a7070b33f0c9594e26363e6b1fb9b457a47aa8c2",
+        "commit_date": "2026-08-16T06:58:17-10:00",
+        "author_date": "2026-08-15T21:36:38-10:00",
+        "author": "Kim Davies",
+        "link": null,
+        "commit_url": "https://github.com/kjd/idna/commit/a7070b33f0c9594e26363e6b1fb9b457a47aa8c2",
+        "message": "Speed up uts46_remap with an ASCII fast path and run-based copying",
+        "hot_path": "idna.encode/uts46_remap on many ASCII and mixed domains: per-char status lookup and string concatenation",
+        "touched_functions": {
+          "idna/core.py": ["<module>", "uts46_remap"]
+        },
+        "diff_stats": {
+          "added": 41,
+          "deleted": 23,
+          "changed": 64
+        },
+        "other_files_in_commit": {
+          "tests": ["tests/test_idna.py"],
+          "non_source": []
+        },
+        "ai_assisted": []
+      }
+    },
+    {
+      "id": "markdown-hash-header-regex",
+      "lib": "markdown",
+      "url": "https://github.com/Python-Markdown/markdown.git",
+      "before_sha": "5e335ef7e7be8ff6692363c56d1352e71b8ef279",
+      "licence": "BSD-3-Clause",
+      "license_file": "LICENSE.md",
+      "package": "markdown",
+      "module_root": "markdown",
+      "touched_files": ["markdown/blockprocessors.py"],
+      "touched_functions": {
+        "markdown/blockprocessors.py": ["HashHeaderProcessor"]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix.",
+      "hint_in_before": {
+        "kind": "same_class",
+        "evidence": "docs/changelog.md:21,67: 'Fix quadratic-time regex backtracking in attr_list' under [Unreleased] and the same fix in ReferenceProcessor: the same class (regex backtracking) in other processors"
+      },
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests/test_syntax/blocks",
+        "tests/test_syntax/inline"
+      ],
+      "tests_note": "",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": ">=3.11",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/markdown-hash-header-regex.patch",
+        "sha256": "dde03a1c0415a90e1c02abf914d510d7a8d54e77287d57c586c3410339b39930",
+        "fix_sha": "0f0a8604181d982e5e60bfdd6ab39d74ebe51432",
+        "commit_date": "2026-10-23T09:18:10-04:00",
+        "author_date": "2026-10-22T22:59:04+05:30",
+        "author": "Naaz nuria",
+        "link": null,
+        "commit_url": "https://github.com/Python-Markdown/markdown/commit/0f0a8604181d982e5e60bfdd6ab39d74ebe51432",
+        "message": "Fix quadratic-time backtracking in hash header regex\n\n`HashHeaderProcessor.RE` matches the header text lazily one character at\na time and, after each step, tries `#*(?:\\n|$)` to see whether only\nclosing hashes remain. When the lazy match is inside a run of `#` that\nis followed by more text, that check scans to the end of the run and\nthen fails, so a run of n hashes costs O(n^2). A line such as `# `\nfollowed by 8000 `#` and an `x` takes about 13 seconds to convert. A\nrun of hashes ending in a backslash (`'#' * n + '\\\\'`) hits the same path.\n\nHeader text now consumes a run of hashes in one step when the run is\nfollowed by something other than a newline or the end of the block, and\na lone `#` is no longer matched by the single-character branch. The\nlazy match therefore only stops at the start of a hash run, never\ninside one, and every match and capture group is unchanged. This was\nchecked against the old pattern on every string of up to 8 characters\nover `#`, `\\`, `a` and newline, plus random longer strings.\n\nThis differs from #1545, where the time was spent in inline escape\nhandling; here the time is spent inside the block regex itself.",
+        "hot_path": "markdown on '# ' followed by a long run of '#' then text: HashHeaderProcessor.RE backtracks O(n^2)",
+        "touched_functions": {
+          "markdown/blockprocessors.py": ["HashHeaderProcessor"]
+        },
+        "diff_stats": {
+          "added": 1,
+          "deleted": 1,
+          "changed": 2
+        },
+        "other_files_in_commit": {
+          "tests": ["tests/test_syntax/blocks/test_headers.py"],
+          "non_source": ["docs/changelog.md"]
+        },
+        "ai_assisted": []
+      }
+    },
+    {
+      "id": "markdown-inline-rescan",
+      "lib": "markdown",
+      "url": "https://github.com/Python-Markdown/markdown.git",
+      "before_sha": "7be0cff7318f9e0abf8a9481a4238a86e626530a",
+      "licence": "BSD-3-Clause",
+      "license_file": "LICENSE.md",
+      "package": "markdown",
+      "module_root": "markdown",
+      "touched_files": ["markdown/treeprocessors.py"],
+      "touched_functions": {
+        "markdown/treeprocessors.py": ["InlineProcessor.__applyPattern"]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix.",
+      "hint_in_before": {
+        "kind": "same_class",
+        "evidence": "docs/changelog.md:17: 'Fix an issue with excessive backtracking when matching inline code blocks (#1617)' under [Unreleased]: superlinear inline matching fixed elsewhere"
+      },
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests/test_syntax/blocks",
+        "tests/test_syntax/inline"
+      ],
+      "tests_note": "",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": ">=3.10",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/markdown-inline-rescan.patch",
+        "sha256": "ae49df767f3f1cc84dc7855c6c73739fa2d2ddc74e7c3c7446d8e2308071631e",
+        "fix_sha": "152a16fb1a926eabbfc5ab1af83f2b6cf9979314",
+        "commit_date": "2026-08-24T09:13:39-04:00",
+        "author_date": "2026-08-24T18:43:39+05:30",
+        "author": "Aryan Singh K.",
+        "link": "https://github.com/Python-Markdown/markdown/pull/1621",
+        "commit_url": "https://github.com/Python-Markdown/markdown/commit/152a16fb1a926eabbfc5ab1af83f2b6cf9979314",
+        "message": "Fix quadratic rendering time for many inline links (#1621)\n\nScanning from index 0 after every inline-pattern match rescanned the\nunprocessed text repeatedly, making conversion quadratic in the number\nof inline elements. Return the index just past the inserted placeholder\nso the next scan starts at the unprocessed tail.\n\nFixes #1619.",
+        "hot_path": "markdown.markdown on a paragraph with thousands of inline links/emphasis: inline scan restarts at 0 after every match (quadratic)",
+        "touched_functions": {
+          "markdown/treeprocessors.py": ["InlineProcessor.__applyPattern"]
+        },
+        "diff_stats": {
+          "added": 7,
+          "deleted": 2,
+          "changed": 9
+        },
+        "other_files_in_commit": {
+          "tests": ["tests/test_apis.py"],
+          "non_source": ["docs/changelog.md"]
+        },
+        "ai_assisted": []
+      }
+    },
+    {
+      "id": "markdown-toc-unique-ids",
+      "lib": "markdown",
+      "url": "https://github.com/Python-Markdown/markdown.git",
+      "before_sha": "0f0a8604181d982e5e60bfdd6ab39d74ebe51432",
+      "licence": "BSD-3-Clause",
+      "license_file": "LICENSE.md",
+      "package": "markdown",
+      "module_root": "markdown",
+      "touched_files": ["markdown/extensions/toc.py"],
+      "touched_functions": {
+        "markdown/extensions/toc.py": ["TocTreeprocessor.run", "unique"]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix. Committed 2026-10-26, the day of mining.",
+      "hint_in_before": {
+        "kind": "same_class",
+        "evidence": "docs/changelog.md:21,24: two quadratic-time fixes (attr_list, hash headers) under [Unreleased] in other processors; regex backtracking, not the toc's id probing, but the same complexity class"
+      },
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests/test_syntax/blocks",
+        "tests/test_syntax/inline",
+        "tests/test_syntax/extensions/test_toc.py"
+      ],
+      "tests_note": "",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": ">=3.11",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/markdown-toc-unique-ids.patch",
+        "sha256": "b161c12a236b3de78eb449c2ae84d36aa639649c2f63adc0ddd916b00a5867ce",
+        "fix_sha": "e76f0b739b5c081f5b6da56a0a5b647c07e4252c",
+        "commit_date": "2026-10-26T10:22:26-04:00",
+        "author_date": "2026-10-26T19:52:26+05:30",
+        "author": "naaz234",
+        "link": null,
+        "commit_url": "https://github.com/Python-Markdown/markdown/commit/e76f0b739b5c081f5b6da56a0a5b647c07e4252c",
+        "message": "Fix quadratic-time id generation in toc extension\n\n`unique` probes `base`, `base_1`, `base_2` and so on from the start on\nevery call, so with many headers that share the same text the n-th\nheader checks about n ids and the whole document costs time that grows\nwith the square of the header count.\n\nAdd an optional `counters` cache to `unique` which records, per base id,\nhow far the run of taken suffixes is already known to extend, and pass\none cache per document from `TocTreeprocessor.run`. The cache is only\nused when the probe run is contiguous with it, so the result is the same\nas the plain probe even when explicit ids leave gaps or an id such as\n`foo_07` collides numerically but not as a string. Calls without the\ncache behave as before.",
+        "hot_path": "markdown with the toc extension on a document with many headers of identical text: unique() probes base_1..base_n every time (quadratic)",
+        "touched_functions": {
+          "markdown/extensions/toc.py": ["TocTreeprocessor.run", "unique"]
+        },
+        "diff_stats": {
+          "added": 28,
+          "deleted": 6,
+          "changed": 34
+        },
+        "other_files_in_commit": {
+          "tests": ["tests/test_syntax/extensions/test_toc.py"],
+          "non_source": ["docs/changelog.md"]
+        },
+        "ai_assisted": []
+      }
+    },
+    {
+      "id": "markdown_it-inline-pending",
+      "lib": "markdown_it",
+      "url": "https://github.com/executablebooks/markdown-it-py.git",
+      "before_sha": "bff75edcd7e6ce68f417803361d6e9f1223ad373",
+      "licence": "MIT",
+      "license_file": "LICENSE",
+      "package": "markdown_it",
+      "module_root": "markdown_it",
+      "touched_files": [
+        "markdown_it/common/html_re.py",
+        "markdown_it/parser_inline.py",
+        "markdown_it/rules_inline/backticks.py",
+        "markdown_it/rules_inline/entity.py",
+        "markdown_it/rules_inline/html_inline.py",
+        "markdown_it/rules_inline/state_inline.py",
+        "markdown_it/rules_inline/text.py"
+      ],
+      "touched_functions": {
+        "markdown_it/common/html_re.py": ["<module>"],
+        "markdown_it/parser_inline.py": ["ParserInline.tokenize"],
+        "markdown_it/rules_inline/backticks.py": ["backtick"],
+        "markdown_it/rules_inline/entity.py": ["<module>", "entity"],
+        "markdown_it/rules_inline/html_inline.py": ["html_inline"],
+        "markdown_it/rules_inline/state_inline.py": [
+          "StateInline",
+          "StateInline.__init__"
+        ],
+        "markdown_it/rules_inline/text.py": ["text"]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix. Superseded PR #411 was opened 2026-07-29 (checked on github.com), also after the cutoff.",
+      "hint_in_before": {
+        "kind": "same_class",
+        "evidence": "CHANGELOG.md:11,27: two earlier fixes of the same quadratic class, 'Fix quadratic complexity in fragments_join / text_join' (#389) and 'fix quadratic complexity in reference parser' (#367)"
+      },
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests/test_api",
+        "tests/test_port",
+        "tests/test_tree.py",
+        "tests/test_cmark_spec"
+      ],
+      "tests_note": "",
+      "requires": ["mdurl"],
+      "setup_files": {},
+      "requires_python": ">=3.10",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/markdown_it-inline-pending.patch",
+        "sha256": "96d5f3cddafe302803826f0f5672e92d27ba4276d0b038a6c0052ef81c2041fa",
+        "fix_sha": "997232ee285f962232f660a34fac56a5e1f9ca5c",
+        "commit_date": "2026-09-08T13:39:10+02:00",
+        "author_date": "2026-09-08T13:39:10+02:00",
+        "author": "Chris Sewell",
+        "link": "https://github.com/executablebooks/markdown-it-py/pull/423",
+        "commit_url": "https://github.com/executablebooks/markdown-it-py/commit/997232ee285f962232f660a34fac56a5e1f9ca5c",
+        "message": "👌 Fix quadratic inline tokenization on runs of special characters (#423)\n\n## Summary\n\nLong runs of characters that begin an inline rule but never complete a\nconstruct (bare `&`, `<`, `~`, `{`, incomplete entities, …) were\ntokenised in **O(n²)** time, so a few hundred KB of such input stalls\n`render()` for many seconds. Output was always correct; the cost is pure\nCPU. This is the same class as #367 and #389.\n\nSupersedes #411. The root causes and the core fix were independently\nidentified by @hdimer there, and the first commit here is code-identical\nto that PR (credited as co-author, thank you!). The second commit closes\na gap found while auditing it that made the fix ineffective for a common\nplugin configuration, and adds a few hardening changes.\n\n## Root causes\n\nTwo independent quadratic factors, each hit once per character in a run:\n\n1. **`state.pending` accumulation.** The inline tokenizer's fallback\npath did `state.pending += state.src[state.pos]` one character at a\ntime. Because `pending` is an *attribute*, `str += ch` can't use\nCPython's in-place concatenation optimisation (the attribute holds a\nsecond reference), so every append copies the whole accumulated string.\n2. **`src[pos:]` slicing in `entity` / `html_inline`.** Both matched\n`^`-anchored regexes against `state.src[pos:]`, copying the remainder of\nthe source on every `&` / `<`. On Python 3.10 this carried a *second*\nquadratic factor inside the regex engine: before 3.11, `search()` on a\n`^`-anchored pattern retries at every offset.\n\nNeither is quadratic in the JavaScript markdown-it (rope-backed concat,\nsticky regex matching), so this is Python-port-specific.\n\n## Fix\n\n**Commit 1** (as in #411):\n- `StateInline.pending` accumulates through a lazily-materialised list\nbuffer via a new `append_pending()` method, giving amortised O(1)\nappends. It's still exposed as a plain `str` property, so existing\nreaders and plugins doing `state.pending += x` keep working.\n- `entity` and `html_inline` anchor with `.match(state.src, pos)`\ninstead of slicing; the leading `^` is dropped since `.match` anchors at\n`pos`. Neither pattern uses `\\b` or lookbehind, so this is exactly\nequivalent.\n\n**Commit 2** (new):\n- The buffered getter materialised with `self._pending += joined`,\nitself an attribute concat. Any rule that reads `state.pending` before\nits cheap character check therefore re-introduced the quadratic on every\ncharacter. The mdit-py-plugins `attrs` rule does exactly that, and\nmyst-parser's `attrs_inline` extension enables it: with it, `\"~a~\" *\n400_000` still took **34 s** (5.7× per doubling) after commit 1. The\ngetter now moves the string into a local and drops the instance's\nreference before concatenating, so CPython resizes it in place: **3.0 s,\n2.0× per doubling**, verified on CPython 3.10–3.13.\n- The setter no longer depends on `__init__` having run (a subclass\nassigning `pending` before `super().__init__()` raised\n`AttributeError`).\n- `copy.copy(state)` no longer shares the mutable buffer with the\noriginal.\n\n## Results\n\n`\"&\" * 400_000`, before → after:\n\n| interpreter | before | after |\n|---|---|---|\n| CPython 3.10 | 653 s | 1.8 s |\n| CPython 3.11 | 6.8 s | 1.3 s |\n| CPython 3.13 | 6.6 s | 1.1 s |\n| PyPy 7.3 | 145 s | 0.2 s |\n\nAll affected inputs now grow ~2.0× per doubling out to 640k characters.\nRuns of `[` were also reported as superlinear, but once the `pending`\nquadratic is removed they measure a flat 2.0× per doubling: that path\nwas already linear (bounded by the `skipToken` cache), just with a large\nconstant.\n\n**Trade-off:** the property indirection costs ~2% on ordinary Markdown\n(up to ~4.7% on inline-dense files) — measured over 55 inputs × 3\npresets, 8 interleaved rounds. The regex half is a pure win at every\nsize. Memory is unchanged on realistic input. If wanted, most of the 2%\ncan be recovered by having `push()`/`pushPending()` read the private\nfields directly; happy to do that as a follow-up once benchmarked\nproperly.\n\n## Verification\n\n- **Output unchanged:** 47,936-case differential (repo fixtures,\nCommonMark spec, targeted constructs, 6k fuzzed inputs × 7 presets)\ncomparing HTML, `renderInline` and full token streams byte-for-byte: 0\ndifferences.\n- **Downstream:** mdit-py-plugins (511), myst-parser (1245), mdformat\n(4282), rich and mdformat-gfm test suites give identical results against\nthis branch and `master`; a 61-document differential through a full\nplugin stack shows 0 differing renders.\n- Full suite passes on CPython 3.10, 3.11, 3.12, 3.13 and PyPy. Pinned\n`ruff` and strict `mypy` clean.\n- New tests: `test_long_special_char_runs_are_linear`,\n`test_state_inline_pending_buffer_semantics`,\n`test_pending_reader_rule_stays_linear`. Each linearity test exceeds the\nglobal 10 s timeout on the pre-fix code.\n\n## Notes for reviewers\n\n- `HTML_TAG_RE`, `DIGITAL_RE` and `NAMED_RE` lose their `^` anchor\n(they're now applied with `.match(src, pos)`). No external consumer was\nfound in any scanned package or via code search, but any third-party\n`.search()` on them would now be unanchored. Probably worth a changelog\nline. `HTML_OPEN_CLOSE_TAG_RE` is untouched.\n- mdformat-gfm ships its own replacement `text` rule that still does\n`state.pending +=`; it keeps its quadratic and gains nothing from this\nfix.\n- **Not covered here, follow-up PR:** with `html=True` (the `commonmark`\nand `gfm-like` presets), runs of `<![CDATA[`, `<!--`, `<?` and `<!a` in\ninline context are still quadratic because the regex sub-patterns rescan\nto end-of-input on every attempt (`<![CDATA[` × 40k takes ~245 s). This\nis inherited from upstream (it's quadratic in markdown-it JS too),\npre-existing, and a different code path, so it's kept separate. A\nvalidated fix (terminator quick-reject, zero output change) is ready.\n- The changelog is left for the release, following prior PRs.\n\n---------\n\nCo-authored-by: Haim Dimer <haim@dimer.org>",
+        "hot_path": "MarkdownIt().render on long runs of '&', '<', '`', '~' that never complete a construct: per-char pending += and rescans (quadratic)",
+        "touched_functions": {
+          "markdown_it/common/html_re.py": ["<module>"],
+          "markdown_it/parser_inline.py": ["ParserInline.tokenize"],
+          "markdown_it/rules_inline/backticks.py": ["backtick"],
+          "markdown_it/rules_inline/entity.py": ["<module>", "entity"],
+          "markdown_it/rules_inline/html_inline.py": ["html_inline"],
+          "markdown_it/rules_inline/state_inline.py": [
+            "StateInline",
+            "StateInline.__copy__",
+            "StateInline.__init__",
+            "StateInline.append_pending",
+            "StateInline.pending"
+          ],
+          "markdown_it/rules_inline/text.py": ["text"]
+        },
+        "diff_stats": {
+          "added": 68,
+          "deleted": 11,
+          "changed": 79
+        },
+        "other_files_in_commit": {
+          "tests": ["tests/test_api/test_main.py"],
+          "non_source": []
+        },
+        "ai_assisted": []
+      }
+    },
+    {
+      "id": "mistune-footnote-membership",
+      "lib": "mistune",
+      "url": "https://github.com/lepture/mistune.git",
+      "before_sha": "a1b50bc12e066e5707ff797f821829bfcdab03b5",
+      "licence": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "package": "mistune",
+      "module_root": "src/mistune",
+      "touched_files": ["src/mistune/plugins/footnotes.py"],
+      "touched_functions": {
+        "src/mistune/plugins/footnotes.py": ["parse_inline_footnote"]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix. Generated by an autonomous agent per its message; maintainer merged it.",
+      "hint_in_before": {
+        "kind": "same_class",
+        "evidence": "docs/changes.rst:62: 'Fix quadratic scans in inline links, reference links, and formatting markers.': the same quadratic class in other inline rules"
+      },
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests"
+      ],
+      "tests_note": "",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": ">=3.10",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/mistune-footnote-membership.patch",
+        "sha256": "674d2708d817f64c5fe54189d4a2187e9d13ecc08c8ef309d087b3e0c2da6aa6",
+        "fix_sha": "4c4e57ed1b1588dc159fdf474e0e9e2b547a9c70",
+        "commit_date": "2026-10-14T19:40:34+09:00",
+        "author_date": "2026-10-14T18:40:34+08:00",
+        "author": "susyimes",
+        "link": "https://github.com/lepture/mistune/pull/478",
+        "commit_url": "https://github.com/lepture/mistune/commit/4c4e57ed1b1588dc159fdf474e0e9e2b547a9c70",
+        "message": "fix: avoid quadratic inline footnote membership checks (#478)\n\n* fix: Inline footnote parsing does O\n\nInline footnote parsing does O(n) list membership per reference (quadratic DoS on n footnote references)\n\nDefect id: footnote-defs-membership-quadratic\nVerified against upstream tag v3.3.4 and HEAD (triage: unfixed_at_head).\n\nGenerated-by: blackhole-agent upstream-publication plane (autonomous stewardship mission)\n\n* [projection-agent] Address PR review feedback\n\n* test: make footnote complexity regression deterministic\n\n---------\n\nCo-authored-by: honor00 <susyimes2@gmail.com>",
+        "hot_path": "mistune with the footnotes plugin on a document with thousands of footnote references: list membership per reference (quadratic)",
+        "touched_functions": {
+          "src/mistune/plugins/footnotes.py": ["parse_inline_footnote"]
+        },
+        "diff_stats": {
+          "added": 1,
+          "deleted": 1,
+          "changed": 2
+        },
+        "other_files_in_commit": {
+          "tests": ["tests/test_security_footnotes.py"],
+          "non_source": []
+        },
+        "ai_assisted": [
+          "Generated-by: blackhole-agent upstream-publication plane (autonomous stewardship mission)"
+        ]
+      }
+    },
+    {
+      "id": "mistune-nested-lists",
+      "lib": "mistune",
+      "url": "https://github.com/lepture/mistune.git",
+      "before_sha": "bde6ad75bd35a56f0b3478d3ee2eb104e6ca36e5",
+      "licence": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "package": "mistune",
+      "module_root": "src/mistune",
+      "touched_files": [
+        "src/mistune/block_parser.py",
+        "src/mistune/core.py",
+        "src/mistune/list_parser.py"
+      ],
+      "touched_functions": {
+        "src/mistune/block_parser.py": [
+          "<module>",
+          "BlockParser",
+          "BlockParser.parse"
+        ],
+        "src/mistune/core.py": ["<module>", "BlockState.find_line_end_at"],
+        "src/mistune/list_parser.py": [
+          "_has_continuation_indent",
+          "_strip_continuation_indent"
+        ]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix.",
+      "hint_in_before": {
+        "kind": "same_class",
+        "evidence": "docs/changes.rst:62: 'Fix quadratic scans in inline links, reference links, and formatting markers.': repeated scans of the same kind fixed in other rules"
+      },
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests"
+      ],
+      "tests_note": "",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": ">=3.10",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/mistune-nested-lists.patch",
+        "sha256": "6ab09ec971f7e89286c36d08ba688bc3e6fb128ec03008abf2d791725ef82e34",
+        "fix_sha": "bc1f7f3e0c7f4aed89dc6bdc226a60236914e7bf",
+        "commit_date": "2026-08-21T13:47:30+09:00",
+        "author_date": "2026-08-21T13:47:30+09:00",
+        "author": "Hsiaoming Yang",
+        "link": null,
+        "commit_url": "https://github.com/lepture/mistune/commit/bc1f7f3e0c7f4aed89dc6bdc226a60236914e7bf",
+        "message": "perf: improve parsing speed for deep nested lists",
+        "hot_path": "mistune on deeply nested lists / long indented blocks: repeated line-end search and continuation-indent stripping",
+        "touched_functions": {
+          "src/mistune/block_parser.py": [
+            "<module>",
+            "BlockParser",
+            "BlockParser._parse_indent_code_fast",
+            "BlockParser.parse",
+            "_find_indent_code_end",
+            "_is_indent_code_line"
+          ],
+          "src/mistune/core.py": ["<module>", "BlockState.find_line_end_at"],
+          "src/mistune/list_parser.py": [
+            "_has_continuation_indent",
+            "_strip_continuation_indent"
+          ]
+        },
+        "diff_stats": {
+          "added": 89,
+          "deleted": 11,
+          "changed": 100
+        },
+        "other_files_in_commit": {
+          "tests": ["tests/test_misc.py"],
+          "non_source": []
+        },
+        "ai_assisted": []
+      }
+    },
+    {
+      "id": "mistune-renderer-method-lookup",
+      "lib": "mistune",
+      "url": "https://github.com/lepture/mistune.git",
+      "before_sha": "95923f1fec6ca4bc5bcc7bb8a14fc2221c491556",
+      "licence": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "package": "mistune",
+      "module_root": "src/mistune",
+      "touched_files": ["src/mistune/core.py"],
+      "touched_functions": {
+        "src/mistune/core.py": ["BaseRenderer._get_method"]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix.",
+      "hint_in_before": null,
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests"
+      ],
+      "tests_note": "",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": ">=3.10",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/mistune-renderer-method-lookup.patch",
+        "sha256": "68666f7c37af439261aa4b5153187fe1a1f2219da744ea5f3f816907673fbc68",
+        "fix_sha": "7542505f08bb70122c2a00d46b13e7f18de94493",
+        "commit_date": "2026-10-16T06:29:57+01:00",
+        "author_date": "2026-10-16T06:29:57+01:00",
+        "author": "Afonso Ribeiro",
+        "link": null,
+        "commit_url": "https://github.com/lepture/mistune/commit/7542505f08bb70122c2a00d46b13e7f18de94493",
+        "message": "perf: avoid re-subscripting Callable on every renderer method lookup",
+        "hot_path": "any mistune render: BaseRenderer._get_method subscripts typing.Callable on every token",
+        "touched_functions": {
+          "src/mistune/core.py": ["BaseRenderer._get_method"]
+        },
+        "diff_stats": {
+          "added": 1,
+          "deleted": 1,
+          "changed": 2
+        },
+        "other_files_in_commit": {
+          "tests": [],
+          "non_source": []
+        },
+        "ai_assisted": []
+      }
+    },
+    {
+      "id": "more_itertools-nth-permutation",
+      "lib": "more_itertools",
+      "url": "https://github.com/more-itertools/more-itertools.git",
+      "before_sha": "3a259350f28cd17f09b4f0af21c6ebc03cf725cf",
+      "licence": "MIT",
+      "license_file": "LICENSE",
+      "package": "more_itertools",
+      "module_root": "more_itertools",
+      "touched_files": ["more_itertools/more.py"],
+      "touched_functions": {
+        "more_itertools/more.py": ["<module>", "nth_permutation"]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix.",
+      "hint_in_before": null,
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests/test_recipes.py",
+        "tests/test_more.py",
+        "--deselect",
+        "tests/test_more.py::TestConcurrentTee"
+      ],
+      "tests_note": "",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": ">=3.10",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/more_itertools-nth-permutation.patch",
+        "sha256": "bd2b455b05fdf7b507b55f6d3352502f8e55ac898cb726ed6a4eda710e6d40c1",
+        "fix_sha": "237388cc3220bdc7cfacc6f766304a49b42fb8e7",
+        "commit_date": "2026-08-10T20:36:09+02:00",
+        "author_date": "2026-08-10T20:36:09+02:00",
+        "author": "Stefan Pochmann",
+        "link": null,
+        "commit_url": "https://github.com/more-itertools/more-itertools/commit/237388cc3220bdc7cfacc6f766304a49b42fb8e7",
+        "message": "Simplify and speed up nth_permutation\n\nIt was doing unnecessary computations and threw the results away.",
+        "hot_path": "nth_permutation(range(n), r, index) for large n and small r: factorial(n) bignum work then discarded",
+        "touched_functions": {
+          "more_itertools/more.py": ["<module>", "nth_permutation"]
+        },
+        "diff_stats": {
+          "added": 4,
+          "deleted": 5,
+          "changed": 9
+        },
+        "other_files_in_commit": {
+          "tests": [],
+          "non_source": []
+        },
+        "ai_assisted": []
+      }
+    },
+    {
+      "id": "mpmath-bin-to-radix-pow2",
+      "lib": "mpmath",
+      "url": "https://github.com/mpmath/mpmath.git",
+      "before_sha": "0be598fef010d51909e645bf627c5dbed78a6cf0",
+      "licence": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "package": "mpmath",
+      "module_root": "mpmath",
+      "touched_files": ["mpmath/libmp/libintmath.py"],
+      "touched_functions": {
+        "mpmath/libmp/libintmath.py": ["<module>", "bin_to_radix"]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix.",
+      "hint_in_before": {
+        "kind": "fix_idea",
+        "evidence": "mpmath/libmp/libintmath.py:65: '# TODO: speed up for bases 2, 4, 8, 16, ...' directly above bin_to_radix names the fix idea; the key deletes the line"
+      },
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "--noconftest",
+        "mpmath/tests/test_convert.py",
+        "mpmath/tests/test_bitwise.py",
+        "mpmath/tests/test_division.py",
+        "mpmath/tests/test_power.py",
+        "mpmath/tests/test_hp.py",
+        "mpmath/tests/test_compatibility.py",
+        "mpmath/tests/test_pickle.py",
+        "mpmath/tests/test_trig.py"
+      ],
+      "tests_note": "mpmath/_version.py is written by setuptools-scm at build time, so the benchmark commit adds a one-line stand-in; the root conftest.py imports hypothesis, so the subset runs with --noconftest (test_str and test_format, which test the string conversion directly, need hypothesis).",
+      "requires": [],
+      "setup_files": {
+        "mpmath/_version.py": "__version__ = \"0.0.0+upstream\"\n"
+      },
+      "requires_python": ">=3.10",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/mpmath-bin-to-radix-pow2.patch",
+        "sha256": "ad7b9acab21f3b71b777e429cceff2d06737651c3b00bda4e7ce36685ed20e47",
+        "fix_sha": "ffa16d0d01ecfd81a8140d99cf7bc458a738d073",
+        "commit_date": "2026-09-24T05:06:39+03:00",
+        "author_date": "2026-09-24T04:06:39+02:00",
+        "author": "Sai Adith Prakash",
+        "link": "https://github.com/mpmath/mpmath/pull/1187",
+        "commit_url": "https://github.com/mpmath/mpmath/commit/ffa16d0d01ecfd81a8140d99cf7bc458a738d073",
+        "message": "Speed up bin_to_radix for power-of-two bases (#1187)\n\nWhen the base is a power of two, base**bdigits is itself a power of two, so the\nradix conversion reduces to a bit shift and the large multiplication can be skipped. \nAdded regression test to check the if fast path matches the general formula.\n\nRemoved TODO mark, see #1168.",
+        "hot_path": "mpmath number to string in bases 2/8/16 (nstr/to_str with base) at high precision: big multiply instead of shift",
+        "touched_functions": {
+          "mpmath/libmp/libintmath.py": ["<module>", "bin_to_radix"]
+        },
+        "diff_stats": {
+          "added": 6,
+          "deleted": 2,
+          "changed": 8
+        },
+        "other_files_in_commit": {
+          "tests": ["mpmath/tests/test_convert.py"],
+          "non_source": []
+        },
+        "ai_assisted": []
+      }
+    },
+    {
+      "id": "mpmath-fpp2-exponent",
+      "lib": "mpmath",
+      "url": "https://github.com/mpmath/mpmath.git",
+      "before_sha": "70b722800fb88ae1300d4c293a0729e148afd63c",
+      "licence": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "package": "mpmath",
+      "module_root": "mpmath",
+      "touched_files": ["mpmath/libmp/libmpf.py"],
+      "touched_functions": {
+        "mpmath/libmp/libmpf.py": ["fpp2"]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix. Authored 2026-08-09.",
+      "hint_in_before": null,
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "--noconftest",
+        "mpmath/tests/test_convert.py",
+        "mpmath/tests/test_bitwise.py",
+        "mpmath/tests/test_division.py",
+        "mpmath/tests/test_power.py",
+        "mpmath/tests/test_hp.py",
+        "mpmath/tests/test_compatibility.py",
+        "mpmath/tests/test_pickle.py",
+        "mpmath/tests/test_trig.py"
+      ],
+      "tests_note": "mpmath/_version.py is written by setuptools-scm at build time, so the benchmark commit adds a one-line stand-in; the root conftest.py imports hypothesis, so the subset runs with --noconftest (test_str and test_format, which test the string conversion directly, need hypothesis).",
+      "requires": [],
+      "setup_files": {
+        "mpmath/_version.py": "__version__ = \"0.0.0+upstream\"\n"
+      },
+      "requires_python": ">=3.10",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/mpmath-fpp2-exponent.patch",
+        "sha256": "8a2a5958f01ec04f3bdeb3f06d50682aa6ea8bad4af5332221b853275da434cf",
+        "fix_sha": "0d2af59d5d8a45abe7e828d85f027e33d1a11ee7",
+        "commit_date": "2026-08-20T12:46:40+03:00",
+        "author_date": "2026-08-09T05:03:36+03:00",
+        "author": "Sergey B Kirpichev",
+        "link": null,
+        "commit_url": "https://github.com/mpmath/mpmath/commit/0d2af59d5d8a45abe7e828d85f027e33d1a11ee7",
+        "message": "Speedup exponent computation",
+        "hot_path": "mpmath fpp2 (shortest repr) on numbers with large exponents: linear loop computing the decimal exponent",
+        "touched_functions": {
+          "mpmath/libmp/libmpf.py": ["fpp2"]
+        },
+        "diff_stats": {
+          "added": 14,
+          "deleted": 5,
+          "changed": 19
+        },
+        "other_files_in_commit": {
+          "tests": [],
+          "non_source": []
+        },
+        "ai_assisted": []
+      }
+    },
+    {
+      "id": "networkx-edmonds-karp-reset",
+      "lib": "networkx",
+      "url": "https://github.com/networkx/networkx.git",
+      "before_sha": "3b4c227fda1c5462e6c04ac1ed7e7b0d8f2eacd4",
+      "licence": "BSD-3-Clause",
+      "license_file": "LICENSE.txt",
+      "package": "networkx",
+      "module_root": "networkx",
+      "touched_files": [
+        "networkx/algorithms/flow/edmondskarp.py",
+        "networkx/algorithms/flow/maxflow.py"
+      ],
+      "touched_functions": {
+        "networkx/algorithms/flow/edmondskarp.py": ["edmonds_karp_impl"],
+        "networkx/algorithms/flow/maxflow.py": ["minimum_cut"]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix.",
+      "hint_in_before": null,
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "networkx/algorithms/flow/tests"
+      ],
+      "tests_note": "",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": ">=3.12,!=3.14.1",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/networkx-edmonds-karp-reset.patch",
+        "sha256": "5586e4258560db089fd042cf8a644edc32dc88b6b1685d3b36c5604e7ed1660a",
+        "fix_sha": "f77c3b6852fb2ec3ed6575d0f42cd028c9a9dcb0",
+        "commit_date": "2026-07-17T14:53:11-04:00",
+        "author_date": "2026-07-17T20:53:11+02:00",
+        "author": "Jordi Torrents",
+        "link": "https://github.com/networkx/networkx/pull/8756",
+        "commit_url": "https://github.com/networkx/networkx/commit/f77c3b6852fb2ec3ed6575d0f42cd028c9a9dcb0",
+        "message": "Speed up the residual flow reset in `edmonds_karp` and simplify the `minimum_cut` partition (#8756)\n\n* Speed up the residual flow reset in edmonds_karp\n\nedmonds_karp zeroes the flow attribute of every residual edge before\neach run. Profiled on connectivity workloads that make thousands of\nsmall-cutoff flow computations on one reused residual network, this\nreset outweighed the actual flow work about 5:1 -- and almost all of\nit was the public adjacency-view machinery, not the assignments\n(129M dict-view __iter__ calls in one node_connectivity computation).\nIterate the internal adjacency dicts directly instead, a standard\nidiom in NetworkX hot paths: the reset itself gets ~3x faster (2,000\nresets on a 56,402-arc residual: 21.1s to 6.9s).\n\nThe reset semantics are unchanged -- every edge, every call -- so\nnothing else has to know: designs that cached per-edge state across\nruns (touched-edge tracking, a cached edge-dict tuple) were built,\nmeasured somewhat faster, and rejected because their staleness\ninvariants leaked into every other flow function and every caller\nthat mutates a reused residual. Caching on residual networks is also\ndisabled by design (build_residual_network sets __networkx_cache__ to\nNone) because flow attributes are written via direct dict access,\nwhich bypasses _clear_cache.\n\nnode_connectivity on a 2,129-node kernel of a real collaboration\nnetwork: 19.8s to 8.1s. Exact k_components on such networks: 1.5-1.7x\nend to end.\n\nThe new test pins the residual-reuse semantics that made the cached\ndesigns unsound: replacing residual edges between reused runs (which\nrebuilds their attribute dicts without changing the edge count, and\nthe copies retain stale flow values) must still compute correct\nflows.\n\n* Compute minimum_cut partition without mutating the residual network\n\nminimum_cut derived the node partition by snapshotting all saturated\nedges, removing them from the residual network, running\nshortest_path_length towards the sink, and re-adding them to keep the\nresidual reusable. Replace that with a reverse breadth-first search\nfrom the sink over edges with flow < capacity -- which is exactly how\nthe residual network documentation defines the induced minimum cut.\n\nThis is a simplification, not a fix: outputs are identical on every\nbenchmark (asserted). The isolated partition step gets 36-78x faster\n(the old version scanned every edge and traversed the whole residual;\nthe reverse BFS explores only the sink side of the cut), which is\nworth 7-9% end to end on gomory_hu_tree over sparse capacitated\ngraphs, where n - 1 minimum_cut calls reuse one residual network.\n\nIt also removes the last place in NetworkX that structurally mutates\na residual network between reuses: after this, flow functions write\nflow attributes and nobody rebuilds edges, which keeps the\nresidual-reuse contract simple for any future optimization work.\n\n* Use the raw _pred dict in the minimum_cut reverse BFS\n\nSuggested in review: indexing the .pred adjacency view builds a wrapper\nper visited node, while the underlying _pred dict is a plain dict\nlookup. This makes the breadth-first search itself 1.7-2.7x faster on\ngraphs where the traversal covers most nodes, and matches the raw _succ\niteration already used in the edmonds_karp residual reset.",
+        "hot_path": "node_connectivity / repeated edmonds_karp on one residual network: flow reset through adjacency views",
+        "touched_functions": {
+          "networkx/algorithms/flow/edmondskarp.py": ["edmonds_karp_impl"],
+          "networkx/algorithms/flow/maxflow.py": ["minimum_cut"]
+        },
+        "diff_stats": {
+          "added": 24,
+          "deleted": 14,
+          "changed": 38
+        },
+        "other_files_in_commit": {
+          "tests": ["networkx/algorithms/flow/tests/test_maxflow.py"],
+          "non_source": []
+        },
+        "ai_assisted": []
+      }
+    },
+    {
+      "id": "networkx-full-rary-tree",
+      "lib": "networkx",
+      "url": "https://github.com/networkx/networkx.git",
+      "before_sha": "56e3d0e4187f170a710235a4c5ea36668fd2cfeb",
+      "licence": "BSD-3-Clause",
+      "license_file": "LICENSE.txt",
+      "package": "networkx",
+      "module_root": "networkx",
+      "touched_files": ["networkx/generators/classic.py"],
+      "touched_functions": {
+        "networkx/generators/classic.py": [
+          "<module>",
+          "_tree_edges",
+          "full_rary_tree"
+        ]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix.",
+      "hint_in_before": null,
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "networkx/generators/tests/test_classic.py",
+        "networkx/algorithms/tree/tests"
+      ],
+      "tests_note": "",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": ">=3.12,!=3.14.1",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/networkx-full-rary-tree.patch",
+        "sha256": "7db156870be7b8cfb93cbb824b47cd592d6a94e514e4521461312be0a28c77ba",
+        "fix_sha": "a5652a9d440b6d98ec7c88761834adc293680d42",
+        "commit_date": "2026-07-30T17:20:49-07:00",
+        "author_date": "2026-07-30T19:20:49-05:00",
+        "author": "Erik Welch",
+        "link": "https://github.com/networkx/networkx/pull/8808",
+        "commit_url": "https://github.com/networkx/networkx/commit/a5652a9d440b6d98ec7c88761834adc293680d42",
+        "message": "Fix \"accidentally quadratic\" use of list as queue in `full_rary_tree` (#8808)\n\n* Fix \"accidentally quadratic\" use of list as queue in `full_rary_tree`\n\nUsing list `pop(0)` is O(N), but queue `popleft()` is O(1). Using the queue\nscales *much* better, because using the list was \"accidentally quadratic\".\n\n* Simplify `full_rary_tree` and drop the `_tree_edges` helper\n\nNodes of a full r-ary tree are labeled in breadth-first order, so the\nparent of node `child` is just `(child - 1) // r`. Computing edges\ndirectly replaces the `_tree_edges` helper — which used a list as a\nqueue and was accidentally quadratic — with a single generator\nexpression, and the helper is removed since it had one call site.\n\n`r <= 0` is guarded so an edgeless graph is still returned (and to\navoid dividing by zero). Node and edge insertion order are unchanged.\nAdd a test pinning the exact edge list.\n\nThanks @amcandio for the suggestion!",
+        "hot_path": "nx.full_rary_tree(r, n) for large n: list.pop(0) as a queue (quadratic)",
+        "touched_functions": {
+          "networkx/generators/classic.py": [
+            "<module>",
+            "_tree_edges",
+            "full_rary_tree"
+          ]
+        },
+        "diff_stats": {
+          "added": 4,
+          "deleted": 19,
+          "changed": 23
+        },
+        "other_files_in_commit": {
+          "tests": ["networkx/generators/tests/test_classic.py"],
+          "non_source": []
+        },
+        "ai_assisted": []
+      }
+    },
+    {
+      "id": "networkx-smallworld-has-path",
+      "lib": "networkx",
+      "url": "https://github.com/networkx/networkx.git",
+      "before_sha": "301b9a9381c697534c37aab5c1d088d2c831c71d",
+      "licence": "BSD-3-Clause",
+      "license_file": "LICENSE.txt",
+      "package": "networkx",
+      "module_root": "networkx",
+      "touched_files": ["networkx/algorithms/smallworld.py"],
+      "touched_functions": {
+        "networkx/algorithms/smallworld.py": [
+          "lattice_reference",
+          "random_reference"
+        ]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix.",
+      "hint_in_before": null,
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "networkx/algorithms/tests/test_smallworld.py",
+        "networkx/algorithms/shortest_paths/tests"
+      ],
+      "tests_note": "test_smallworld.py skips without numpy, so the job installs it (requirements.txt).",
+      "requires": ["numpy"],
+      "setup_files": {},
+      "requires_python": ">=3.12,!=3.14.1",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/networkx-smallworld-has-path.patch",
+        "sha256": "4b399cfce976643a50bc599c0f5023a3e1e1d75e658f91049ca060329c101ae5",
+        "fix_sha": "68206456ba00ec15c9e557330f58e2d8052b21b6",
+        "commit_date": "2026-09-02T12:05:55-07:00",
+        "author_date": "2026-09-03T04:05:55+09:00",
+        "author": "floppy73",
+        "link": "https://github.com/networkx/networkx/pull/8893",
+        "commit_url": "https://github.com/networkx/networkx/commit/68206456ba00ec15c9e557330f58e2d8052b21b6",
+        "message": "ENH: Speed up connectivity checks in random_reference and lattice_reference (#8893)\n\nUse has_path for connectivity checks in random_reference and lattice_reference",
+        "hot_path": "nx.random_reference / lattice_reference with connectivity=True: local_edge_connectivity (max-flow) per swap instead of a path check",
+        "touched_functions": {
+          "networkx/algorithms/smallworld.py": [
+            "lattice_reference",
+            "random_reference"
+          ]
+        },
+        "diff_stats": {
+          "added": 2,
+          "deleted": 6,
+          "changed": 8
+        },
+        "other_files_in_commit": {
+          "tests": [],
+          "non_source": []
+        },
+        "ai_assisted": []
+      }
+    },
+    {
+      "id": "packaging-marker-literal-eval",
+      "lib": "packaging",
+      "url": "https://github.com/pypa/packaging.git",
+      "before_sha": "f7c930eb18b556930564c1131fde78e576352ddc",
+      "licence": "Apache-2.0 OR BSD-2-Clause",
+      "license_file": "LICENSE.BSD",
+      "package": "packaging",
+      "module_root": "src/packaging",
+      "touched_files": ["src/packaging/_parser.py"],
+      "touched_functions": {
+        "src/packaging/_parser.py": ["process_python_str"]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix.",
+      "hint_in_before": null,
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests/test_markers.py",
+        "tests/test_requirements.py",
+        "tests/test_ranges.py",
+        "tests/test_metadata.py",
+        "tests/test_utils.py"
+      ],
+      "tests_note": "",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": ">=3.10",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/packaging-marker-literal-eval.patch",
+        "sha256": "abee4206bda5d14fef01cbeda74117635eabaa4bfe0858ee20843629bb92100d",
+        "fix_sha": "d17cfaf0b77a5690f03087359e7c8d665a3c728d",
+        "commit_date": "2026-10-05T11:28:14-04:00",
+        "author_date": "2026-10-06T00:28:14+09:00",
+        "author": "Johnny Kao",
+        "link": "https://github.com/pypa/packaging/pull/1429",
+        "commit_url": "https://github.com/pypa/packaging/commit/d17cfaf0b77a5690f03087359e7c8d665a3c728d",
+        "message": "perf(parser): avoid literal_eval for plain marker strings (#1429)\n\n* perf(parser): avoid literal_eval for plain marker strings\n\n* Apply suggestion from @henryiii\n\n---------\n\nCo-authored-by: Henry Schreiner <HenrySchreinerIII@gmail.com>",
+        "hot_path": "Marker(...) / Requirement(...) parsing at volume: ast.literal_eval per quoted string",
+        "touched_functions": {
+          "src/packaging/_parser.py": ["process_python_str"]
+        },
+        "diff_stats": {
+          "added": 4,
+          "deleted": 0,
+          "changed": 4
+        },
+        "other_files_in_commit": {
+          "tests": ["tests/test_markers.py"],
+          "non_source": []
+        },
+        "ai_assisted": []
+      }
+    },
+    {
+      "id": "packaging-marker-str-cache",
+      "lib": "packaging",
+      "url": "https://github.com/pypa/packaging.git",
+      "before_sha": "4b243af94ff6885c89b8acd7a22fc5714b18cb96",
+      "licence": "Apache-2.0 OR BSD-2-Clause",
+      "license_file": "LICENSE.BSD",
+      "package": "packaging",
+      "module_root": "src/packaging",
+      "touched_files": [
+        "src/packaging/markers.py",
+        "src/packaging/requirements.py"
+      ],
+      "touched_functions": {
+        "src/packaging/markers.py": [
+          "Marker",
+          "Marker.__init__",
+          "Marker.__setstate__",
+          "Marker.__str__",
+          "Marker._from_markers"
+        ],
+        "src/packaging/requirements.py": ["Requirement.__init__"]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix.",
+      "hint_in_before": {
+        "kind": "hot_shape",
+        "evidence": "benchmarks/markers.py:38: time_str, a maintainer benchmark of str(Marker) (the key's hot path), added with an earlier speed-up of the same formatting path (pull 1371, 2026-09-25)"
+      },
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests/test_markers.py",
+        "tests/test_requirements.py",
+        "tests/test_ranges.py",
+        "tests/test_metadata.py",
+        "tests/test_utils.py"
+      ],
+      "tests_note": "",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": ">=3.10",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/packaging-marker-str-cache.patch",
+        "sha256": "e82576862c3120595f14f8c3f9ec0bcf0468f7713b566ad710b3cba19c451666",
+        "fix_sha": "5706b87c213ab3171a6dfbd5e9ff91259d19931c",
+        "commit_date": "2026-10-20T15:10:32-04:00",
+        "author_date": "2026-10-20T15:10:32-04:00",
+        "author": "Damian Shaw",
+        "link": "https://github.com/pypa/packaging/pull/1459",
+        "commit_url": "https://github.com/pypa/packaging/commit/5706b87c213ab3171a6dfbd5e9ff91259d19931c",
+        "message": "perf(markers): cache formatted marker strings (#1459)",
+        "hot_path": "str(Marker) / str(Requirement) / hashing and equality of markers repeated: re-formats the marker tree every time",
+        "touched_functions": {
+          "src/packaging/markers.py": [
+            "Marker",
+            "Marker.__init__",
+            "Marker.__setstate__",
+            "Marker.__str__",
+            "Marker._from_markers"
+          ],
+          "src/packaging/requirements.py": ["Requirement.__init__"]
+        },
+        "diff_stats": {
+          "added": 10,
+          "deleted": 2,
+          "changed": 12
+        },
+        "other_files_in_commit": {
+          "tests": ["tests/test_markers.py", "tests/test_requirements.py"],
+          "non_source": ["benchmarks/markers.py"]
+        },
+        "ai_assisted": []
+      }
+    },
+    {
+      "id": "packaging-simple-version-fastpath",
+      "lib": "packaging",
+      "url": "https://github.com/pypa/packaging.git",
+      "before_sha": "59f183fe90da403e41eef339ce9088bda0fe4cd3",
+      "licence": "Apache-2.0 OR BSD-2-Clause",
+      "license_file": "LICENSE.BSD",
+      "package": "packaging",
+      "module_root": "src/packaging",
+      "touched_files": ["src/packaging/version.py"],
+      "touched_functions": {
+        "src/packaging/version.py": ["<module>", "Version.__init__"]
+      },
+      "contamination_risk": "medium",
+      "contamination_reason": "Committed 2026-02-11, before the shared Jun 2026 cutoff, so likely in training data: the fix is in the project's release notes (CHANGELOG.rst under 26.1, released 2026-04-14: 'Add fast path for parsing simple versions (digits and dots only)', pull 1082), a reviewed PR in pypa/packaging, a very widely used library. Kept medium pending the owner's decision: arguably widely known, which is high and refused.",
+      "hint_in_before": null,
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests/test_specifiers.py",
+        "tests/test_requirements.py",
+        "tests/test_markers.py",
+        "tests/test_utils.py",
+        "tests/test_structures.py"
+      ],
+      "tests_note": "tests/test_version.py, Version's own tests, needs pretend; test_specifiers.py parses versions throughout.",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": ">=3.8",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/packaging-simple-version-fastpath.patch",
+        "sha256": "6d8a91e25cf7208d083976a5a49f51ee88ed27ed9e08b9e13bc9449664642b04",
+        "fix_sha": "ee13ba2c1c9a01c97a08ca9d98ff9fa6f0a0a67b",
+        "commit_date": "2026-02-11T18:41:07-05:00",
+        "author_date": "2026-02-11T18:41:07-05:00",
+        "author": "Damian Shaw",
+        "link": "https://github.com/pypa/packaging/pull/1082",
+        "commit_url": "https://github.com/pypa/packaging/commit/ee13ba2c1c9a01c97a08ca9d98ff9fa6f0a0a67b",
+        "message": "perf: add fast path for parsing simple versions (digits and dots only) (#1082)\n\n* Add fast path for parsing simple versions\n\n* Drop fastpath regex\n\n* Switch to simple version indicators\n\n* Tests for coverage\n\n* update comment\n\n* fix: drop unneeded strip\n\n* Update tests/test_version.py\n\nCo-authored-by: Henry Schreiner <HenrySchreinerIII@gmail.com>\n\n---------\n\nCo-authored-by: Henry Schreiner <HenrySchreinerIII@gmail.com>",
+        "hot_path": "packaging.version.Version('1.2.3') parsing at volume: full PEP 440 regex for plain release versions",
+        "touched_functions": {
+          "src/packaging/version.py": ["<module>", "Version.__init__"]
+        },
+        "diff_stats": {
+          "added": 18,
+          "deleted": 0,
+          "changed": 18
+        },
+        "other_files_in_commit": {
+          "tests": ["tests/test_version.py"],
+          "non_source": []
+        },
+        "ai_assisted": []
+      }
+    },
+    {
+      "id": "pycparser-no-early-peek",
+      "lib": "pycparser",
+      "url": "https://github.com/eliben/pycparser.git",
+      "before_sha": "e0d2d130012eac7da0a86d1b772ef8bc58075693",
+      "licence": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "package": "pycparser",
+      "module_root": "pycparser",
+      "touched_files": ["pycparser/c_parser.py"],
+      "touched_functions": {
+        "pycparser/c_parser.py": [
+          "CParser",
+          "CParser._advance",
+          "CParser._peek"
+        ]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix.",
+      "hint_in_before": null,
+      "test_command": [
+        "python",
+        "-m",
+        "unittest",
+        "tests.test_c_parser",
+        "tests.test_c_lexer",
+        "tests.test_c_generator",
+        "tests.test_c_ast"
+      ],
+      "tests_note": "",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": ">=3.11",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/pycparser-no-early-peek.patch",
+        "sha256": "538cc49b2e85dd0f9f10ebda48c59ae06f2083eee8b77877d261624f2d5f436d",
+        "fix_sha": "0e94c78c1811428c7e03719dc0a3757f90b24a2c",
+        "commit_date": "2026-10-20T06:35:03-07:00",
+        "author_date": "2026-10-20T06:35:03-07:00",
+        "author": "Eli Bendersky",
+        "link": null,
+        "commit_url": "https://github.com/eliben/pycparser/commit/0e94c78c1811428c7e03719dc0a3757f90b24a2c",
+        "message": "Performance optimization, NFC: don't peek in advance",
+        "hot_path": "CParser().parse on a large C translation unit: _advance peeks then consumes, re-classifying tokens",
+        "touched_functions": {
+          "pycparser/c_parser.py": [
+            "CParser",
+            "CParser._advance",
+            "CParser._classify_token",
+            "CParser._peek"
+          ]
+        },
+        "diff_stats": {
+          "added": 12,
+          "deleted": 8,
+          "changed": 20
+        },
+        "other_files_in_commit": {
+          "tests": [],
+          "non_source": []
+        },
+        "ai_assisted": []
+      }
+    },
+    {
+      "id": "pygments-html-format-lines",
+      "lib": "pygments",
+      "url": "https://github.com/pygments/pygments.git",
+      "before_sha": "85ded1d005aac61d5087b9c61cddf3ef91dcbb14",
+      "licence": "BSD-2-Clause",
+      "license_file": "LICENSE",
+      "package": "pygments",
+      "module_root": "pygments",
+      "touched_files": ["pygments/formatters/html.py"],
+      "touched_functions": {
+        "pygments/formatters/html.py": ["HtmlFormatter._format_lines"]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix.",
+      "hint_in_before": null,
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests/test_html_formatter.py",
+        "tests/test_html_formatter_linenos_elements.py",
+        "tests/test_util.py",
+        "tests/test_basic_api.py"
+      ],
+      "tests_note": "",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": ">=3.9",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/pygments-html-format-lines.patch",
+        "sha256": "3df6e1fc9c293873e72734128b9dba7b32b1d1b07195429989b9a7a8528a9e85",
+        "fix_sha": "f7c11a0ff9103ab22e80890bebdb45628d9d3dc7",
+        "commit_date": "2026-07-06T07:24:17+02:00",
+        "author_date": "2026-07-06T07:24:17+02:00",
+        "author": "Julien Voisin",
+        "link": "https://github.com/pygments/pygments/pull/3184",
+        "commit_url": "https://github.com/pygments/pygments/commit/f7c11a0ff9103ab22e80890bebdb45628d9d3dc7",
+        "message": "Speed up HtmlFormatter._format_lines per-token loop (#3184)\n\nSkip the parts[:-1] slice for single-line tokens (the common case) by guarding\nthe all-but-last-line loop with len(parts) > 1, hoist the span_element_openers\n/ _translate_parts lookups to locals, and bind parts[-1] once.\n\nLocal microbenchmarks are saying ~16% faster formatting on a 50k-token corpus\nwith byte-identical output, but only 2% faster for a full lex+format highlight\nas lexing dominates.",
+        "hot_path": "HtmlFormatter on a large pre-lexed token stream: per-token slicing and attribute lookups in _format_lines",
+        "touched_functions": {
+          "pygments/formatters/html.py": ["HtmlFormatter._format_lines"]
+        },
+        "diff_stats": {
+          "added": 29,
+          "deleted": 24,
+          "changed": 53
+        },
+        "other_files_in_commit": {
+          "tests": [],
+          "non_source": []
+        },
+        "ai_assisted": []
+      }
+    },
+    {
+      "id": "pyparsing-results-copy",
+      "lib": "pyparsing",
+      "url": "https://github.com/pyparsing/pyparsing.git",
+      "before_sha": "ef50789db5de97b62dec74ef108be0a06354d38f",
+      "licence": "MIT",
+      "license_file": "LICENSE",
+      "package": "pyparsing",
+      "module_root": "pyparsing",
+      "touched_files": ["pyparsing/results.py"],
+      "touched_functions": {
+        "pyparsing/results.py": [
+          "ParseResults.copy",
+          "_ParseResultsWithOffset",
+          "_ParseResultsWithOffset.__setstate__"
+        ]
+      },
+      "contamination_risk": "medium",
+      "contamination_reason": "Committed 2026-02-16, before the shared Jun 2026 cutoff, so likely in training data: the commit itself adds the release notes entry (CHANGES under the in-development 3.3.3 section: '5-8% performance boost optimizing ParseResults.copy()'), public on the default branch since then. Medium: a small constant-factor change, not a famous fix.",
+      "hint_in_before": null,
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests/test_simple_unit.py",
+        "tests/test_util.py",
+        "tests/test_unit.py"
+      ],
+      "tests_note": "",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": ">=3.9",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/pyparsing-results-copy.patch",
+        "sha256": "002a82fd4e28ca4ef867a0af1258e7c32ecc2740102cf0d5a2c7c6c352bce4d9",
+        "fix_sha": "9c0180876c1eb51573106e5d6f3c59bbfdef3893",
+        "commit_date": "2026-02-16T18:08:13-06:00",
+        "author_date": "2026-02-16T18:08:13-06:00",
+        "author": "ptmcg",
+        "link": null,
+        "commit_url": "https://github.com/pyparsing/pyparsing/commit/9c0180876c1eb51573106e5d6f3c59bbfdef3893",
+        "message": "Minor perf enhancement in ParseResults.copy() (inspired by similar changes in https://github.com/evhub/cpyparsing)",
+        "hot_path": "pyparsing grammars that copy ParseResults heavily (copy() goes through the full constructor)",
+        "touched_functions": {
+          "pyparsing/results.py": [
+            "ParseResults.copy",
+            "_ParseResultsWithOffset",
+            "_ParseResultsWithOffset.__setstate__"
+          ]
+        },
+        "diff_stats": {
+          "added": 7,
+          "deleted": 6,
+          "changed": 13
+        },
+        "other_files_in_commit": {
+          "tests": [],
+          "non_source": ["CHANGES", "pyparsing/__init__.py"]
+        },
+        "ai_assisted": []
+      }
+    },
+    {
+      "id": "pypdf-clone-direct-objects",
+      "lib": "pypdf",
+      "url": "https://github.com/py-pdf/pypdf.git",
+      "before_sha": "7e25ccb60bb6721df6d563e64ffe03d3b519d755",
+      "licence": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "package": "pypdf",
+      "module_root": "pypdf",
+      "touched_files": [
+        "pypdf/generic/_base.py",
+        "pypdf/generic/_data_structures.py"
+      ],
+      "touched_functions": {
+        "pypdf/generic/_base.py": ["PdfObject._reference_clone"],
+        "pypdf/generic/_data_structures.py": [
+          "<module>",
+          "ArrayObject.clone",
+          "DictionaryObject._clone"
+        ]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix.",
+      "hint_in_before": null,
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "-m",
+        "not enable_socket and not samples",
+        "tests/test_generic.py",
+        "tests/generic/test_data_structures.py",
+        "tests/generic/test_base.py",
+        "tests/test_protocols.py"
+      ],
+      "tests_note": "The sample-files submodule is dropped and the sandbox has no network, so tests marked samples or enable_socket are deselected.",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": ">=3.9",
+      "drops_submodules": true,
+      "verified": null,
+      "key": {
+        "patch": "_keys/pypdf-clone-direct-objects.patch",
+        "sha256": "2a0cd261c95174fc1ebbb9d36f8aa812b0193dffec9c453b0417caea83a7e71c",
+        "fix_sha": "1fdc10f2ce45469400c2af045f4c2e6e552c17b7",
+        "commit_date": "2026-10-06T10:56:25+02:00",
+        "author_date": "2026-10-06T10:56:25+02:00",
+        "author": "Martin Thoma",
+        "link": "https://github.com/py-pdf/pypdf/pull/4152",
+        "commit_url": "https://github.com/py-pdf/pypdf/commit/1fdc10f2ce45469400c2af045f4c2e6e552c17b7",
+        "message": "PI: Speed up cloning direct objects (#4152)\n\n* PI: Speed up cloning direct objects\n\nPdfWriter(clone_from=...) was about 7x slower than append() for the PDF in\nthe issue. Most of the difference is by design: cloning copies all 5851\nobjects including the /StructTreeRoot, while append() copies 1385. But the\nclone itself was also disproportionately slow. The /ParentTree of that\ndocument contains 145 arrays with more than 1,000 entries each, about 506k\ndirect null objects in total, and each array element cost about 5 µs:\n\n* ArrayObject.clone ran isinstance(data, StreamObject) and\n  isinstance(data, IndirectObject) for every element. PdfObject inherits\n  from a Protocol, so these checks go through typing._ProtocolMeta and\n  take 0.6 to 1.3 µs each instead of about 0.1 µs.\n* PdfObject._reference_clone raised and caught two AttributeErrors for\n  every object without an indirect_reference attribute, i.e. for every\n  direct object.\n\nThe clone loops of ArrayObject and DictionaryObject now check the exact\ntype against booleans, numbers, strings, names and null first, and\n_reference_clone returns early for direct objects. The cloned objects are\nthe same as before.\n\nTimings on CPython 3.10.2 for the PDF from the issue:\n\n    Operation                                      before    after\n    PdfWriter(clone_from=path)                     4.73 s    3.18 s\n    PdfWriter(clone_from=reader), reader parsed    3.62 s    1.08 s\n    Cloning one direct array element               4.9 µs    1.1 µs\n\nWhen the reader still has to parse the objects, parsing now dominates.\nappend_pages_from_reader() and append() are unchanged at 0.6 s and 0.5 s.\n\ntest_cloning_array_of_direct_objects__function_calls clones an array of\n1,000 direct objects and counts the Python function calls, which keeps the\ntest independent of the machine speed. It fails without the fix:\n\n    Python    calls per element before    after\n    3.10.2                         9.7      3.6\n    3.12.8                         7.7      3.6\n    3.13.3                         7.7      3.6\n\nTest results:\n\n* pytest -m \"not enable_socket\": 1420 passed, 4 skipped, 1 xfailed.\n  test_font_old_fonttools_substitution was deselected; it fails with the\n  locally installed fontTools with and without this change.\n* pytest tests/test_writer.py tests/test_merger.py tests/test_generic.py\n  tests/test_page.py, including the tests which download files:\n  530 passed, 1 xfailed.\n* ruff check passes; mypy reports the same errors as before.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nCloses #2136\n\n* TST: Cover dictionary cloning and exception path for direct objects\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n\n* TST: Assert exact call counts for cloning direct objects\n\nThe test now compares the clones of 1,000 and 2,000 direct objects, so the\nwork for the container itself drops out, and asserts the exact number of\nPython function calls and raised exceptions per element. A warm-up clone\nfills the isinstance() caches first, and the garbage collector is disabled\nwhile counting, as finalizers and weakref callbacks of unrelated objects\nwould be counted otherwise. The counts are the same on CPython 3.9 to 3.15\nand PyPy 3.11.\n\nThe comments on the scalar shortcuts in the clone loops no longer refer to\nthe Protocol base of PdfObject, and explain that they do not change the\nresult.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+        "hot_path": "PdfWriter(clone_from=reader) or ArrayObject/DictionaryObject.clone on large arrays of direct objects",
+        "touched_functions": {
+          "pypdf/generic/_base.py": ["PdfObject._reference_clone"],
+          "pypdf/generic/_data_structures.py": [
+            "<module>",
+            "ArrayObject.clone",
+            "DictionaryObject._clone"
+          ]
+        },
+        "diff_stats": {
+          "added": 20,
+          "deleted": 7,
+          "changed": 27
+        },
+        "other_files_in_commit": {
+          "tests": ["tests/test_generic.py"],
+          "non_source": []
+        },
+        "ai_assisted": ["Claude Opus 5.5", "Claude Sonnet 5.5"]
+      }
+    },
+    {
+      "id": "soupsieve-tag-before-namespace",
+      "lib": "soupsieve",
+      "url": "https://github.com/facelessuser/soupsieve.git",
+      "before_sha": "d0c588f93229f5b832f9dc94bba4d4af802a8209",
+      "licence": "MIT",
+      "license_file": "LICENSE.md",
+      "package": "soupsieve",
+      "module_root": "soupsieve",
+      "touched_files": ["soupsieve/css_match.py"],
+      "touched_functions": {
+        "soupsieve/css_match.py": ["CSSMatch.match_tag"]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix.",
+      "hint_in_before": null,
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests/test_level1",
+        "tests/test_level2",
+        "tests/test_level3",
+        "tests/test_level4",
+        "tests/test_api.py"
+      ],
+      "tests_note": "The tests and the workload need beautifulsoup4 (requirements.txt); the checkout's soupsieve comes first on the path.",
+      "requires": ["beautifulsoup4"],
+      "setup_files": {},
+      "requires_python": ">=3.10",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/soupsieve-tag-before-namespace.patch",
+        "sha256": "2492baa12e21efdf067784907867d07469c9670b4835fd4d2a26e07f28fb7122",
+        "fix_sha": "797550747ce14aff07a356fcf10c1d62e3298e92",
+        "commit_date": "2026-09-22T15:38:49-06:00",
+        "author_date": "2026-09-22T15:38:49-06:00",
+        "author": "facelessuser",
+        "link": null,
+        "commit_url": "https://github.com/facelessuser/soupsieve/commit/797550747ce14aff07a356fcf10c1d62e3298e92",
+        "message": "Improve performance for tag and namespace checking",
+        "hot_path": "soupsieve.select with type selectors over a large document: namespace check runs before the cheaper tag-name check",
+        "touched_functions": {
+          "soupsieve/css_match.py": ["CSSMatch.match_tag"]
+        },
+        "diff_stats": {
+          "added": 2,
+          "deleted": 2,
+          "changed": 4
+        },
+        "other_files_in_commit": {
+          "tests": [],
+          "non_source": []
+        },
+        "ai_assisted": []
+      }
+    },
+    {
+      "id": "sqlglot-merge-subqueries",
+      "lib": "sqlglot",
+      "url": "https://github.com/tobymao/sqlglot.git",
+      "before_sha": "7fbb14f804e601598f3b398276e9d07b9a2d6dbc",
+      "licence": "MIT",
+      "license_file": "LICENSE",
+      "package": "sqlglot",
+      "module_root": "sqlglot",
+      "touched_files": ["sqlglot/optimizer/merge_subqueries.py"],
+      "touched_functions": {
+        "sqlglot/optimizer/merge_subqueries.py": [
+          "_mergeable",
+          "_mergeable._is_recursive",
+          "_mergeable._literal_group_unmergeable",
+          "_mergeable._literal_in_order_by",
+          "_mergeable._outer_select_joins_on_inner_select_join",
+          "_mergeable._window_projection_blocks_merge",
+          "merge_ctes",
+          "merge_derived_tables",
+          "merge_subqueries"
+        ]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix.",
+      "hint_in_before": null,
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests/test_lineage.py",
+        "tests/test_transforms.py",
+        "tests/test_parser.py",
+        "tests/test_build.py",
+        "tests/test_schema.py",
+        "tests/dialects"
+      ],
+      "tests_note": "tests/test_optimizer.py, the optimizer's own suite, imports duckdb and pandas at module level, so the guard is the parser, dialect, lineage, build, schema and transform tests plus the workload's output check.",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": ">= 3.9",
+      "drops_submodules": true,
+      "verified": null,
+      "key": {
+        "patch": "_keys/sqlglot-merge-subqueries.patch",
+        "sha256": "79f52861c1be8ea1d4403165cfafe3dd15fad58ae8d281224ddcdaebfd3370f7",
+        "fix_sha": "1a38c056a1f47cfc07c9bef4ed11b795a91f947e",
+        "commit_date": "2026-07-24T13:00:35+03:00",
+        "author_date": "2026-07-24T06:00:35-04:00",
+        "author": "fivetran-kwoodbeck",
+        "link": "https://github.com/tobymao/sqlglot/pull/7924",
+        "commit_url": "https://github.com/tobymao/sqlglot/commit/1a38c056a1f47cfc07c9bef4ed11b795a91f947e",
+        "message": "perf(optimizer): speed up merge_subqueries (#7924)\n\n* refactor to switch giant AND statement to ifs\n\n* single pass projection scan in _mergeable\n\n* minor fixes\n\n* extra check for recursion\n\n* share scope across traversals\n\n* minor fixes, added tests\n\n* style tweaks\n\n* added new test\n\n* minor refactor",
+        "hot_path": "sqlglot.optimizer.optimize / merge_subqueries on queries with many derived tables/CTEs: repeated projection scans in _mergeable",
+        "touched_functions": {
+          "sqlglot/optimizer/merge_subqueries.py": [
+            "_mergeable",
+            "_mergeable._is_recursive",
+            "_mergeable._literal_group_unmergeable",
+            "_mergeable._literal_in_order_by",
+            "_mergeable._outer_select_joins_on_inner_select_join",
+            "_mergeable._window_projection_blocks_merge",
+            "merge_ctes",
+            "merge_derived_tables",
+            "merge_subqueries"
+          ]
+        },
+        "diff_stats": {
+          "added": 84,
+          "deleted": 58,
+          "changed": 142
+        },
+        "other_files_in_commit": {
+          "tests": [],
+          "non_source": ["tests/fixtures/optimizer/merge_subqueries.sql"]
+        },
+        "ai_assisted": []
+      }
+    },
+    {
+      "id": "sqlglot-unnest-type-memo",
+      "lib": "sqlglot",
+      "url": "https://github.com/tobymao/sqlglot.git",
+      "before_sha": "aeb2711f3be05bdcfa39a5e7479a0bedb0ca03f7",
+      "licence": "MIT",
+      "license_file": "LICENSE",
+      "package": "sqlglot",
+      "module_root": "sqlglot",
+      "touched_files": ["sqlglot/optimizer/resolver.py"],
+      "touched_functions": {
+        "sqlglot/optimizer/resolver.py": [
+          "Resolver.__init__",
+          "Resolver._get_column_type_from_scope"
+        ]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix. The commit is tagged [CLAUDE] (written with a Claude model); not a training-data leak, but the fix style may be familiar to the attempter's family.",
+      "hint_in_before": null,
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests/test_lineage.py",
+        "tests/test_transforms.py",
+        "tests/test_parser.py",
+        "tests/test_build.py",
+        "tests/test_schema.py",
+        "tests/dialects"
+      ],
+      "tests_note": "tests/test_optimizer.py, the optimizer's own suite, imports duckdb and pandas at module level, so the guard is the parser, dialect, lineage, build, schema and transform tests plus the workload's output check.",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": ">= 3.9",
+      "drops_submodules": true,
+      "verified": null,
+      "key": {
+        "patch": "_keys/sqlglot-unnest-type-memo.patch",
+        "sha256": "a537c4e5cb9c4a4e5823ddb16623ef3800d09d5002f30037c3ae60262d3bf372",
+        "fix_sha": "693b3e3efa5f6e5ec547e29a79cbbe2b84971f21",
+        "commit_date": "2026-07-03T17:07:52+03:00",
+        "author_date": "2026-07-03T07:07:52-07:00",
+        "author": "dvryaboy",
+        "link": "https://github.com/tobymao/sqlglot/pull/7823",
+        "commit_url": "https://github.com/tobymao/sqlglot/commit/693b3e3efa5f6e5ec547e29a79cbbe2b84971f21",
+        "message": "perf(optimizer): memoize UNNEST/EXPLODE column-type resolution [CLAUDE] (#7823)\n\n`Resolver._get_column_type_from_scope` resolves the element type of an\nunnested/exploded column by recursing over the sources of each scope. It had no\nmemoization, so when the same CTE is reachable through several paths of the scope\ngraph, its subtree was re-walked once per path. Qualifying a query whose CTEs\nreconverge on a shared upstream CTE was therefore exponential in the depth of the\ngraph, for a single UNNEST/EXPLODE. On a real query this reached ~3.8M calls (~4s)\ninto the trace.\n\nThe scope and schema are immutable during qualification, so the type of a column\nunder a given source depends only on `(source, column name)`. Cache the result on\nthat key so each source is walked once, which makes the trace roughly linear in the\nsize of the scope graph. Qualified output is unchanged.\n\nReached through both BigQuery `UNNEST(col)` and Spark/Hive `LATERAL VIEW\nEXPLODE(col)`.\n\nCloses #7821\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+        "hot_path": "sqlglot qualify/optimize of a query with reconverging CTEs and UNNEST/EXPLODE: unmemoized recursive column-type resolution (exponential)",
+        "touched_functions": {
+          "sqlglot/optimizer/resolver.py": [
+            "Resolver.__init__",
+            "Resolver._get_column_type_from_scope"
+          ]
+        },
+        "diff_stats": {
+          "added": 21,
+          "deleted": 8,
+          "changed": 29
+        },
+        "other_files_in_commit": {
+          "tests": ["tests/test_optimizer.py"],
+          "non_source": []
+        },
+        "ai_assisted": ["Claude Opus 4.8 (1M context)", "[CLAUDE]"]
+      }
+    },
+    {
+      "id": "sqlparse-group-comments",
+      "lib": "sqlparse",
+      "url": "https://github.com/andialbrecht/sqlparse.git",
+      "before_sha": "26112ddb139361cc76218b3e3b50067652678fec",
+      "licence": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "package": "sqlparse",
+      "module_root": "sqlparse",
+      "touched_files": ["sqlparse/engine/grouping.py"],
+      "touched_functions": {
+        "sqlparse/engine/grouping.py": ["group_comments"]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix.",
+      "hint_in_before": {
+        "kind": "same_class",
+        "evidence": "CHANGELOG:12,14: 'Fix uncontrolled CPU consumption in TokenList grouping ... Two independent quadratic behaviours were fixed' under Development Version: the same class in the grouping engine"
+      },
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests"
+      ],
+      "tests_note": "",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": ">=3.10",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/sqlparse-group-comments.patch",
+        "sha256": "e1444a94871c5d5daafb28baf8c3736869736a05c5dcfeb787c5a3b01374aab6",
+        "fix_sha": "ef2012a5eeb491e604dea2b00d516904a3830c87",
+        "commit_date": "2026-08-10T07:41:56+02:00",
+        "author_date": "2026-08-10T07:35:42+02:00",
+        "author": "Andi Albrecht",
+        "link": null,
+        "commit_url": "https://github.com/andialbrecht/sqlparse/commit/ef2012a5eeb491e604dea2b00d516904a3830c87",
+        "message": "Fix quadratic DoS in group_comments (GHSA-f2ff-p2ww-7p4p)\n\nA comment-only statement ('-- c\\n' repeated) made group_comments rescan\nthe whole remaining token tail once per comment token, costing O(n^2).\nBecause group_comments runs before the MAX_GROUPING_TOKENS guard, the\ncost was paid even on oversized input.\n\nStop as soon as token_not_matching finds no terminator in the remaining\ntokens: from that point on nothing can group, so re-scanning the tail is\nwasted work. This makes the pass O(n) while preserving grouping output.\n\nAdd benchmarks/validate_group_comments_dos.py to check the scaling.\n\nReported by sanktjodel.\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>",
+        "hot_path": "sqlparse.parse on comment-heavy input (many '-- c' lines): group_comments rescans the tail per comment (quadratic)",
+        "touched_functions": {
+          "sqlparse/engine/grouping.py": ["group_comments"]
+        },
+        "diff_stats": {
+          "added": 8,
+          "deleted": 3,
+          "changed": 11
+        },
+        "other_files_in_commit": {
+          "tests": [],
+          "non_source": [
+            "CHANGELOG",
+            "benchmarks/validate_group_comments_dos.py"
+          ]
+        },
+        "ai_assisted": ["Claude Opus 4.8"]
+      }
+    },
+    {
+      "id": "sqlparse-reindent-offset",
+      "lib": "sqlparse",
+      "url": "https://github.com/andialbrecht/sqlparse.git",
+      "before_sha": "73d9ccddf21d73a68e3f99517a3918fd21eb81fa",
+      "licence": "BSD-3-Clause",
+      "license_file": "LICENSE",
+      "package": "sqlparse",
+      "module_root": "sqlparse",
+      "touched_files": ["sqlparse/filters/reindent.py"],
+      "touched_functions": {
+        "sqlparse/filters/reindent.py": [
+          "ReindentFilter",
+          "ReindentFilter._flatten_up_to_token",
+          "ReindentFilter._get_offset"
+        ]
+      },
+      "contamination_risk": "low",
+      "contamination_reason": "Authored and committed after the Jun 2026 training-data cutoff of Opus 5.5, Sonnet 5.5 and Fable 5.1, so no model under test can have seen the fix. Authored 2026-07-25 (security advisory GHSA-cfqr-cjx5-5jcm).",
+      "hint_in_before": {
+        "kind": "same_class",
+        "evidence": "CHANGELOG:23,39: quadratic grouping fixes under Development Version, among them 'Fix quadratic CPU consumption in group_comments'"
+      },
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests"
+      ],
+      "tests_note": "",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": ">=3.10",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/sqlparse-reindent-offset.patch",
+        "sha256": "89b392d2bfca9df4808eedbe0e098d5c7fd0392470480ae88da08a2141225b39",
+        "fix_sha": "a51df6d9e2d31b44be9adb6bc8732517db6bf96b",
+        "commit_date": "2026-08-13T07:56:51+02:00",
+        "author_date": "2026-07-25T08:52:26+02:00",
+        "author": "Andi Albrecht",
+        "link": null,
+        "commit_url": "https://github.com/andialbrecht/sqlparse/commit/a51df6d9e2d31b44be9adb6bc8732517db6bf96b",
+        "message": "Measure reindent offsets backwards to avoid quadratic CPU use\n\nReindentFilter._get_offset() reports the column a token starts on and is\ncalled once per group. It rebuilt the statement prefix from the start of\nthe statement on every call, so reindenting a list of N parenthesized\ntuples cost O(N^2). A ~12 KB payload sized just below MAX_GROUPING_TOKENS\noccupied a worker for seconds (CWE-1333, GHSA-cfqr-cjx5-5jcm).\n\nMeasure the current line by walking backwards from the token and counting\ncharacters instead, which stops at the preceding line break rather than\ntouching the whole statement. Formatting output is unchanged, verified\nbyte for byte over the test corpus and 147 option combinations.\n\nBoth vectors reaching the offset calculation are covered by the new\nbenchmark: IN (...) tuple lists via _process_parenthesis() and\n_process_identifierlist(), VALUES lists via _process_values().\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>",
+        "hot_path": "sqlparse.format(reindent=True) on statements with many parenthesised tuples (INSERT ... VALUES): offset rebuilt from statement start (quadratic)",
+        "touched_functions": {
+          "sqlparse/filters/reindent.py": [
+            "ReindentFilter",
+            "ReindentFilter._current_line_len",
+            "ReindentFilter._flatten_up_to_token",
+            "ReindentFilter._get_offset"
+          ]
+        },
+        "diff_stats": {
+          "added": 53,
+          "deleted": 13,
+          "changed": 66
+        },
+        "other_files_in_commit": {
+          "tests": [],
+          "non_source": ["CHANGELOG", "benchmarks/bench_reindent_offset.py"]
+        },
+        "ai_assisted": ["Claude Opus 5"]
+      }
+    },
+    {
+      "id": "tomlkit-inline-table-render",
+      "lib": "tomlkit",
+      "url": "https://github.com/python-poetry/tomlkit.git",
+      "before_sha": "de68fd06eef61aab0d50d69fb589a43f00a046bf",
+      "licence": "MIT",
+      "license_file": "LICENSE",
+      "package": "tomlkit",
+      "module_root": "tomlkit",
+      "touched_files": ["tomlkit/items.py"],
+      "touched_functions": {
+        "tomlkit/items.py": ["InlineTable.as_string"]
+      },
+      "contamination_risk": "medium",
+      "contamination_reason": "Committed 2026-06-23, a week before the shared Jun 2026 cutoff, so it may be in training data: the commit itself adds the release notes entry in CHANGELOG.md (pull 525: inline-table rendering made O(n) from O(n^2)), released in 0.15.1 on 2026-07-17, after the cutoff. Medium.",
+      "hint_in_before": null,
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests/test_api.py",
+        "tests/test_build.py",
+        "tests/test_items.py",
+        "tests/test_parser.py",
+        "tests/test_toml_document.py",
+        "tests/test_write.py",
+        "tests/test_utils.py"
+      ],
+      "tests_note": "tests/test_toml_tests.py reads the toml-test submodule, which is dropped.",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": "",
+      "drops_submodules": true,
+      "verified": null,
+      "key": {
+        "patch": "_keys/tomlkit-inline-table-render.patch",
+        "sha256": "0b756dab40a150d8b8db8c6530c16556fa243516e0661c4d3b8c2741eaa81a40",
+        "fix_sha": "86f45625bf67b5ae875fec8ced6d9032aef886e1",
+        "commit_date": "2026-06-23T15:32:27+08:00",
+        "author_date": "2026-06-23T09:32:27+02:00",
+        "author": "Thomas Foutrein",
+        "link": "https://github.com/python-poetry/tomlkit/pull/525",
+        "commit_url": "https://github.com/python-poetry/tomlkit/commit/86f45625bf67b5ae875fec8ced6d9032aef886e1",
+        "message": "Render inline tables in O(n) instead of O(n^2) (#525)\n\nInlineTable.as_string() recomputed, on every separator comma, two\nany(body[i + 1:]) tail scans (is there a following Null / a following key?)\nto decide whether to drop a dangling separator. On an inline table with many\nkeys that is O(n^2).\n\nPrecompute the needed facts in a single pass instead -- whether any\nexplicit-comma whitespace is present, the index of the last real key, and the\nindex of the last Null (deleted) element -- and turn the two per-comma scans\ninto O(1) index comparisons. The render is now O(n).\n\nNo behaviour change: the precomputed predicates are exactly equivalent to the\ntail scans. Full suite incl. toml-test conformance passes; round-trip output\nis byte-identical -- including edited inline tables (keys added/removed,\ntrailing/leading commas, comments, dotted/nested) -- verified by a\ndifferential over ~7k generated inline tables with del/setitem mutations.\n~4x faster rendering a 50-key inline table, ~40x at 800 keys.",
+        "hot_path": "tomlkit.dumps / InlineTable.as_string on inline tables with many keys: tail any() scans per comma (quadratic)",
+        "touched_functions": {
+          "tomlkit/items.py": ["InlineTable.as_string"]
+        },
+        "diff_stats": {
+          "added": 19,
+          "deleted": 19,
+          "changed": 38
+        },
+        "other_files_in_commit": {
+          "tests": ["tests/test_items.py"],
+          "non_source": ["CHANGELOG.md"]
+        },
+        "ai_assisted": []
+      }
+    },
+    {
+      "id": "wcwidth-wcswidth-ascii",
+      "lib": "wcwidth",
+      "url": "https://github.com/jquast/wcwidth.git",
+      "before_sha": "226d03933595f8cfc1c26fa320d767f953d3b00f",
+      "licence": "MIT",
+      "license_file": "LICENSE",
+      "package": "wcwidth",
+      "module_root": "wcwidth",
+      "touched_files": ["wcwidth/wcwidth.py"],
+      "touched_functions": {
+        "wcwidth/wcwidth.py": ["wcswidth"]
+      },
+      "contamination_risk": "medium",
+      "contamination_reason": "Committed 2026-01-18, before the shared Jun 2026 cutoff, so likely in training data: the commit itself adds the release notes entry (docs/intro.rst History: 'Performance improvement in wcswidth(). PR #171'), released in 0.3.0 on 2026-01-21; an ASCII fast path is a well-known idiom. Kept medium pending the owner's decision: arguably widely known, which is high and refused.",
+      "hint_in_before": null,
+      "test_command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "addopts=",
+        "tests/test_core.py",
+        "tests/test_width.py",
+        "tests/test_emojis.py"
+      ],
+      "tests_note": "",
+      "requires": [],
+      "setup_files": {},
+      "requires_python": ">=3.8",
+      "drops_submodules": false,
+      "verified": null,
+      "key": {
+        "patch": "_keys/wcwidth-wcswidth-ascii.patch",
+        "sha256": "81e6ef374ed754ba83879b300518406411b8c7b52693bb7dbe49ad048472d79c",
+        "fix_sha": "343eef2c899f140f900e48bcbd1e0d0801b0182d",
+        "commit_date": "2026-01-18T16:38:53-05:00",
+        "author_date": "2026-01-18T16:38:53-05:00",
+        "author": "Jeff Quast",
+        "link": "https://github.com/jquast/wcwidth/pull/171",
+        "commit_url": "https://github.com/jquast/wcwidth/commit/343eef2c899f140f900e48bcbd1e0d0801b0182d",
+        "message": "improve wcswidth() performance ~30% (#171)\n\nIt depends on the dataset and operation, but this improves performance pretty well for a majority of\ncases, str.isascii() returning true very fastly executes in CPython",
+        "hot_path": "wcswidth on many ASCII strings: per-character width lookup",
+        "touched_functions": {
+          "wcwidth/wcwidth.py": ["wcswidth"]
+        },
+        "diff_stats": {
+          "added": 5,
+          "deleted": 0,
+          "changed": 5
+        },
+        "other_files_in_commit": {
+          "tests": [],
+          "non_source": ["docs/intro.rst"]
+        },
+        "ai_assisted": []
+      }
+    }
+  ]
+}

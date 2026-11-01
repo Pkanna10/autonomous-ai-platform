@@ -1,0 +1,14 @@
+diff --git a/clubroster/roster.py b/clubroster/roster.py
+index e075bd2..8a84853 100644
+--- a/clubroster/roster.py
++++ b/clubroster/roster.py
+@@ -22,7 +22,8 @@ def page(crowd: list[Member], number: int, size: int) -> list[Member]:
+ 
+ def pages(crowd: list[Member], size: int) -> list[list[Member]]:
+     """Every page of the ranked roster, in order."""
+-    return [page(crowd, number, size) for number in range(-(-len(crowd) // size))]
++    ranked = sorted(crowd, key=standing_key)
++    return [ranked[start : start + size] for start in range(0, len(ranked), size)]
+ 
+ 
+ def format_line(place: int, member: Member) -> str:

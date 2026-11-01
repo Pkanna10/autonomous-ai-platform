@@ -57,7 +57,7 @@ from autonomous_ai_agents.common.models import Hypothesis, Project, Workload
 from autonomous_ai_agents.orchestrator.factory import build_context
 
 from .conftest import TESTS_DIR, LiveRun
-from .corpus import CorpusRepo, HypothesisSpec, Loop
+from .corpus import CorpusRepo, HypothesisSpec, Loop, Mode, mode_hypotheses, role_wiring
 
 OSS_DIR: Final = TESTS_DIR / "fixtures" / "live_oss"
 MANIFEST: Final = OSS_DIR / "manifest.json"
@@ -589,22 +589,27 @@ def start_oss_loop(
     policy: GitPolicy = PRODUCTION,
     environ: Mapping[str, str] | None = None,
     candidates: Callable[[Project], Sequence[Hypothesis]] | None = None,
+    mode: Mode = "aimed",
 ) -> Loop:
     """``repo`` prepared under ``root`` and ``build_context`` on the real
     transport (captured), with ``isolation`` (``required``). ``candidates``
     builds the hypotheses from the project (a discovery suite's own); without
-    it the manifest's are used."""
+    it those of ``mode`` (``aimed``: the manifest's; ``wired``: none, with the
+    generator's transport, ``corpus.role_wiring``)."""
     user = prepare_repo(repo, root / "user", policy=policy, environ=environ)
     before = user.snapshot()
     project = repo.project(user.path)
     chosen: Sequence[Hypothesis] = tuple(
-        repo.candidates(project) if candidates is None else candidates(project)
+        [spec.build(project) for spec in mode_hypotheses(repo.corpus, mode)]
+        if candidates is None
+        else candidates(project)
     )
     launches = LaunchLog()
     context = build_context(
         project,
         candidates=chosen,
         transport=run.transport(settings),
+        role_transports=role_wiring(run, mode),
         transport_factory=_no_factory,
         network=isolation.mode,
         fs=isolation.mode,
@@ -620,4 +625,5 @@ def start_oss_loop(
         launches,
         context,
         run.cap_usd,
+        mode,
     )

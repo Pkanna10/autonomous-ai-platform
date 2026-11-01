@@ -310,6 +310,7 @@ def call(
     *,
     sleep: Callable[[float], None],
     max_retries: int = settings.LLM_MAX_RETRIES,
+    estimate: float | None = None,
 ) -> LLMResult:
     """Send ``request`` under the budget and the retry policy (decision 9).
 
@@ -318,14 +319,21 @@ def call(
     401/402/403, ``LLMRequestError`` on any other refusal (not retried), and
     ``LLMUnavailable`` once the retries are spent or the server asks to wait
     more than ``MAX_RETRY_AFTER_S``. A ``refusal`` stop reason is returned.
+
+    ``estimate`` (USD, the idea pipeline's reservation, D48): when given, the
+    prompt is not counted again and every check and charge uses this number,
+    so a recount or a count failure's byte bound cannot overrun a child cap.
     """
     _require_whole("max_retries", max_retries)
-    estimate = preflight_estimate(
-        transport.count_input_tokens(request),
-        request.max_tokens,
-        transport.chain,
-        transport.prices,
-    )
+    if estimate is None:
+        estimate = preflight_estimate(
+            transport.count_input_tokens(request),
+            request.max_tokens,
+            transport.chain,
+            transport.prices,
+        )
+    elif isinstance(estimate, bool) or not (math.isfinite(estimate) and estimate >= 0):
+        raise ValueError(f"estimate must be finite and at least 0, got {estimate!r}")
     charged, attempt, delay = 0.0, 0, 0.0
     while True:
         budget.check(estimate)

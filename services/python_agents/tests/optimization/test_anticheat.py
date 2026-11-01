@@ -9,10 +9,16 @@ evaluator" guarantees nothing a trial writes can bypass.
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
+import tempfile
+import time
+import unicodedata
 import warnings
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
+from pathlib import Path
 
 import pytest
 
@@ -40,6 +46,7 @@ from autonomous_ai_agents.optimization.anticheat import (
     check_diff,
     check_diff_all,
     check_path,
+    check_quality_references,
     check_run_count,
     compare_fingerprints,
     exceeds_noise,
@@ -1181,8 +1188,9 @@ def test_process_spawn_fails_closed_on_python_the_engine_cannot_parse(
     """
     GIVEN a changed .py file with a syntax error, invalid UTF-8 or a late NUL
     WHEN the capture rules run with peak RSS judged
-    THEN it is a process_spawn violation naming the engine's Python: a file the
-        engine cannot parse may still run under a newer workload interpreter
+    THEN it is an unparsable_source violation naming the engine's Python, never
+        process_spawn (D62): a file the engine cannot parse may still run under
+        a newer workload interpreter, so it is refused unscanned
 
     Rewritten in review (was: no violation, "left to the tests"). That premise
     fails when the workload's Python is newer than the engine's.
@@ -1191,8 +1199,8 @@ def test_process_spawn_fails_closed_on_python_the_engine_cannot_parse(
 
     found = _capture((change,), blobs={change.path: source}, judged=RSS_JUDGED)
 
-    message = _only(found, ViolationRule.process_spawn, change.path).message
-    assert "could not be scanned" in message
+    message = _only(found, ViolationRule.unparsable_source, change.path).message
+    assert "cannot be checked for process spawning" in message
     assert f"Python {sys.version_info.major}.{sys.version_info.minor}" in message
 
 
@@ -1211,14 +1219,16 @@ def test_process_spawn_catches_newer_syntax_on_any_engine_python(
     GIVEN a spawn next to PEP 695 or PEP 701 syntax (valid on 3.12+, a
         SyntaxError on the 3.11 engine floor)
     WHEN the capture rules run with peak RSS judged
-    THEN it is a process_spawn violation on every engine Python: found by the
-        scan on 3.12+, refused as unscannable on 3.11
+    THEN it is refused on every engine Python: process_spawn found by the scan
+        on 3.12+, unparsable_source on 3.11 (D62)
     """
     change = _modified("dedupe/core.py")
 
     found = _capture((change,), blobs={change.path: source}, judged=RSS_JUDGED)
 
-    _only(found, ViolationRule.process_spawn, change.path)
+    newer = sys.version_info >= (3, 12)
+    rule = ViolationRule.process_spawn if newer else ViolationRule.unparsable_source
+    _only(found, rule, change.path)
 
 
 @pytest.mark.parametrize("source", UNPARSEABLE_SOURCES)
@@ -1334,14 +1344,14 @@ def test_process_spawn_fails_closed_on_python_too_deep_to_scan(source: bytes) ->
     GIVEN a changed .py file that exhausts the parser's recursion or stack
         (it may still compile under the workload's own interpreter)
     WHEN the capture rules run with peak RSS judged
-    THEN it is a process_spawn violation: unscanned code is refused
+    THEN it is an unparsable_source violation: unscanned code is refused (D62)
     """
     change = _modified("dedupe/core.py")
 
     found = _capture((change,), blobs={change.path: source}, judged=RSS_JUDGED)
 
-    violation = _only(found, ViolationRule.process_spawn, change.path)
-    assert "could not be scanned" in violation.message
+    violation = _only(found, ViolationRule.unparsable_source, change.path)
+    assert "too deeply nested or too large to parse" in violation.message
 
 
 def test_process_spawn_message_lists_findings_in_line_order() -> None:
@@ -1880,3 +1890,364 @@ def test_module_shadow_refuses_a_str_for_the_path_sets() -> None:
         check_capture(*args, module_roots="scripts")  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="existing_dirs"):
         check_capture(*args, existing_dirs="scripts")  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# quality_data_reference (Step 3, D37): a tripwire on the added lines
+# ---------------------------------------------------------------------------
+
+LABELS_CSV = "data/labels.csv"
+
+
+class _Patches:
+    """Each modified file's ``-U0`` patch from real git (``--no-index`` on
+    temporary copies), fed one byte at a time so a line spans chunks.
+    ``asked`` lists the paths whose patch was requested, ``read`` those whose
+    base was."""
+
+    def __init__(self, blobs: Mapping[str, bytes], bases: Mapping[str, bytes]) -> None:
+        self.blobs, self.bases = blobs, bases
+        self.asked, self.read = list[str](), list[str]()
+
+    def base_of(self, path: str) -> bytes | None:
+        self.read.append(path)
+        return self.bases.get(path)
+
+    def __call__(self, path: str, sink: Callable[[bytes], None]) -> None:
+        self.asked.append(path)
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "old").write_bytes(self.bases[path])
+            (Path(tmp) / "new").write_bytes(self.blobs[path])
+            argv = ["git", "diff", "--no-index", "--no-color", "-U0", "old", "new"]
+            env = {"PATH": os.environ["PATH"], "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}  # fmt: skip
+            done = subprocess.run(argv, cwd=tmp, env=env, capture_output=True, check=False)  # fmt: skip
+        assert done.returncode in (0, 1), done.stderr  # 1: the files differ
+        for byte in done.stdout:
+            sink(bytes((byte,)))
+
+
+def _references(
+    new: Mapping[str, str | bytes],
+    base: Mapping[str, str | bytes] | None = None,
+    frozen: Sequence[str] = (LABELS_CSV,),
+    patches: list[_Patches] | None = None,
+) -> list[tuple[str | None, str | None]]:
+    """(changed file, frozen path) of every quality_data_reference found."""
+
+    def raw(text: str | bytes) -> bytes:
+        return text if isinstance(text, bytes) else text.encode()
+
+    blobs = {path: raw(text) for path, text in new.items()}
+    bases = {path: raw(text) for path, text in (base or {}).items()}
+    patch = _Patches(blobs, bases)
+    found = check_quality_references(blobs, patch.base_of, frozen, patch)
+    if patches is not None:
+        patches.append(patch)
+    assert {v.rule for v in found} <= {ViolationRule.quality_data_reference}
+    return [(v.path, v.pattern) for v in found]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "rows = open('data/labels.csv').read()",  # the frozen path
+        'y = pd.read_csv("labels.csv")',  # its basename alone
+        "p = Path(ROOT) / 'data' / 'labels.csv'",
+        "load('../data/labels.csv')",
+        r"load('C:\\work\\labels.csv')",
+        "x = '/abs/mydata/labels.csv'",  # the basename after any '/'
+        "# reads labels.csv.",  # a trailing dot ends the name
+        "names = ['labels.csv', 'b']",
+        "f(labels.csv)",
+        "labels.csv",
+    ],
+)
+def test_quality_reference_flags_an_added_line_naming_a_frozen_file(line: str) -> None:
+    """
+    GIVEN a frozen quality file and an added line that names it or its
+          basename as a whole token
+    WHEN the quality reference rule runs
+    THEN one quality_data_reference names the changed file and the frozen path
+    """
+    assert _references({"predict.py": f"import x\n{line}\n"}) == [
+        ("predict.py", LABELS_CSV)
+    ]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "old_labels.csv_backup",
+        "labels.csv.bak",
+        "labels.csv_v2",
+        "labels.csvx",
+        "mylabels.csv",
+        "my-labels.csv",
+        "labels.csv-old",
+        ".labels.csv",
+        "labels.csv2",
+        "labels_csv",
+        "labels.tsv",
+        "labels",
+        "data/labels.cs",
+        "étiquettes.csv",
+    ],
+)
+def test_quality_reference_needs_a_whole_token(line: str) -> None:
+    """
+    GIVEN an added line holding a longer or different file name
+    WHEN the quality reference rule runs
+    THEN nothing is flagged: letters, digits, '_', '.' or '-' on either side
+         continue the name (a trailing run of '.' or '-' does not)
+    """
+    assert _references({"predict.py": f"x = '{line}'\n"}) == []
+
+
+@pytest.mark.parametrize(
+    ("frozen", "line"),
+    [
+        (LABELS_CSV, "open('DATA/LABELS.CSV')"),
+        (LABELS_CSV, "open('Labels.Csv')"),
+        ("data/étiquettes.csv", unicodedata.normalize("NFD", "x = 'étiquettes.csv'")),
+        (unicodedata.normalize("NFD", "data/étiquettes.csv"), "x = 'étiquettes.csv'"),
+        ("data/étiquettes.csv", "x = 'ÉTIQUETTES.CSV'"),
+        ("data/STRASSE.csv", "x = 'straße.csv'"),
+    ],
+)
+def test_quality_reference_folds_case_and_unicode_normalisation(
+    frozen: str, line: str
+) -> None:
+    """
+    GIVEN a spelling a case-insensitive, normalisation-insensitive file
+          system (APFS) opens as the frozen file
+    WHEN the quality reference rule runs
+    THEN it is flagged (both sides NFC-normalised and case-folded)
+    """
+    assert _references({"a.py": line + "\n"}, frozen=(frozen,)) == [("a.py", frozen)]
+
+
+def test_quality_reference_counts_only_added_lines() -> None:
+    """
+    GIVEN a modified file whose base already names the frozen file
+    WHEN the trial keeps that line as context, removes it, or adds other lines
+    THEN nothing is flagged; a second copy of the line, a changed line and a
+         new file's lines are added lines and are flagged
+    """
+    base = {"a.py": "import x\nLABELS = 'data/labels.csv'\nrun()\n"}
+    kept = {"a.py": "import x\nLABELS = 'data/labels.csv'\nrun(fast=True)\n"}
+    removed = {"a.py": "import x\nrun()\n"}
+    copied = {"a.py": base["a.py"] + "AGAIN = 'data/labels.csv'\n"}
+    twice = {"a.py": base["a.py"] + "LABELS = 'data/labels.csv'\n"}
+    changed = {"a.py": "import x\nLABELS = open('data/labels.csv')\nrun()\n"}
+
+    assert _references(kept, base) == []
+    assert _references(removed, base) == []
+    two = {"a.py": "A = 'labels.csv'\nB = 'labels.csv'\n"}
+    assert _references({"a.py": "A = 'labels.csv'\n"}, two) == []  # one removed
+    assert _references(base, base) == []
+    for new in (copied, twice, changed):
+        assert _references(new, base) == [("a.py", LABELS_CSV)]
+    assert _references({"b.py": base["a.py"]}, base) == [("b.py", LABELS_CSV)]
+
+
+def test_quality_reference_applies_only_with_a_quality_check() -> None:
+    """
+    GIVEN no frozen paths (no quality check: Step 2)
+    WHEN the quality reference rule runs on lines naming any file
+    THEN it finds nothing
+    """
+    assert _references({"a.py": "open('data/labels.csv')\n"}, frozen=()) == []
+
+
+def test_quality_reference_message_names_the_frozen_path_not_the_line() -> None:
+    """
+    GIVEN an added line naming a frozen file next to other content
+    WHEN the quality reference rule runs
+    THEN the message names the changed file and the frozen path, never the
+         rest of the line
+    """
+    line = "TOKEN = 'sk-SECRET-123'; rows = open('labels.csv')\n"
+    [found] = check_quality_references(
+        {"a.py": line.encode()}, dict[str, bytes]().get, (LABELS_CSV,), _Patches({}, {})
+    )
+
+    assert found.rule is ViolationRule.quality_data_reference
+    assert (found.path, found.pattern) == ("a.py", LABELS_CSV)
+    assert LABELS_CSV in found.message and "a.py" in found.message
+    assert "SECRET" not in found.message and "open" not in found.message
+    assert found.message.startswith("quality_data_reference: ")
+
+
+def test_quality_reference_reports_each_file_and_frozen_path_once() -> None:
+    """
+    GIVEN two changed files naming two frozen files, one of them many times
+    WHEN the quality reference rule runs
+    THEN one violation per (changed file, frozen path), in order
+    """
+    frozen = (LABELS_CSV, "score.py")
+    new = {
+        "a.py": "x = 'labels.csv'\ny = 'labels.csv'\nz = 'score.py'\n",
+        "b.py": "w = 'data/labels.csv'\n",
+        "c.py": "import score\n",
+        "settings.yaml": "labels: data/labels.csv\n",
+    }
+    assert _references(new, frozen=frozen) == [
+        ("a.py", LABELS_CSV),
+        ("a.py", "score.py"),
+        ("b.py", LABELS_CSV),
+        ("settings.yaml", LABELS_CSV),
+    ]
+
+
+TRAIN = "import x\n\ndef train():\n    rows = open('data/labels.csv').read()\n    return rows\n\ndef predict():\n    return 1\n"  # fmt: skip
+MOVED = "import x\n\ndef train():\n    return 0\n\ndef predict():\n    rows = open('data/labels.csv').read()\n    return rows\n"  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("frozen", "spelled"),
+    [
+        (LABELS_CSV, "data/labels.csv"),
+        (LABELS_CSV, "DATA/LABELS.CSV"),
+        ("data/étiquettes.csv", unicodedata.normalize("NFD", "data/étiquettes.csv")),
+    ],
+)
+def test_quality_reference_counts_a_moved_line_as_git_shows_it(
+    frozen: str, spelled: str
+) -> None:
+    """
+    GIVEN a base line naming the labels (in any spelling the file system
+          opens) moved verbatim from train() into predict(), so the new
+          content holds it as often as the base
+    WHEN the quality reference rule runs
+    THEN git's patch for that file is read and the line, which git shows as
+         added, is flagged; a line git shows as context is not: here a
+         reorder of the lines after it. A kept line whose neighbours are
+         edited is context too, so it is not flagged: a tripwire, not
+         closure; the review branch's diff is the backstop (D37)
+    """
+    patches: list[_Patches] = []
+    train, moved = (t.replace(LABELS_CSV, spelled) for t in (TRAIN, MOVED))
+    assert _references({"a.py": moved}, {"a.py": train}, (frozen,), patches) == [
+        ("a.py", frozen)
+    ]
+    base = f"LABELS = '{spelled}'\nA = 1\nB = 2\n"
+    reordered = f"LABELS = '{spelled}'\nB = 2\nA = 1\n"
+    assert _references({"a.py": reordered}, {"a.py": base}, (frozen,), patches) == []
+    assert [p.asked for p in patches] == [["a.py"], ["a.py"]]
+
+
+def test_quality_reference_reads_every_needle_a_file_leaves_unsure() -> None:
+    """
+    GIVEN a moved base line naming two frozen files at once
+    WHEN the quality reference rule runs
+    THEN one patch read decides both, and both are flagged
+    """
+    frozen = (LABELS_CSV, "score.py")
+    both = "open('data/labels.csv'), 'score.py'"
+    train, moved = (t.replace("open('data/labels.csv')", both) for t in (TRAIN, MOVED))
+    patches: list[_Patches] = []
+    found = _references({"a.py": moved}, {"a.py": train}, frozen, patches)
+    assert found == [("a.py", LABELS_CSV), ("a.py", "score.py")]
+    assert patches[0].asked == ["a.py"]
+
+
+def test_quality_reference_treats_a_binary_patch_as_naming_the_file() -> None:
+    """
+    GIVEN a base with a NUL in its first 8000 bytes, so git prints "Binary
+          files ... differ" instead of lines, and a NUL-free new text that
+          keeps the base's reference line
+    WHEN the quality reference rule runs
+    THEN it fails closed: the file is flagged as unreadable, naming the
+         frozen path
+    """
+    base = b"# \x00 header\n" + TRAIN.encode()
+    new = MOVED.encode()
+    blobs, bases = {"a.py": new}, {"a.py": base}
+    patch = _Patches(blobs, bases)
+    found = check_quality_references(blobs, bases.get, (LABELS_CSV,), patch)
+    assert patch.asked == ["a.py"]
+    assert [(v.path, v.pattern) for v in found] == [("a.py", LABELS_CSV)]
+    assert "could not be read as text" in found[0].message
+    assert LABELS_CSV in found[0].message
+
+
+def test_quality_reference_asks_git_only_when_the_fast_path_cannot_tell() -> None:
+    """
+    GIVEN an added file, a modified file whose counted added lines already
+          name the labels, and one whose new content never names them
+    WHEN the quality reference rule runs
+    THEN no patch is read: only a modified file naming the labels as often
+         as its base needs git
+    """
+    patches: list[_Patches] = []
+    twice = TRAIN + "    rows = open('data/labels.csv').read()\n"  # a second copy
+    new = {"new.py": TRAIN, "a.py": TRAIN + "B = 'labels.csv'\n", "d.py": twice, "c.py": "x = 2\n"}  # fmt: skip
+    base = {"a.py": TRAIN, "d.py": TRAIN, "c.py": TRAIN}
+    assert _references(new, base, patches=patches) == [
+        ("new.py", LABELS_CSV),
+        ("a.py", LABELS_CSV),
+        ("d.py", LABELS_CSV),
+    ]
+    assert patches[0].asked == []
+    assert patches[0].read == ["new.py", "a.py", "d.py"]  # c.py names nothing: unread
+
+
+def test_quality_reference_reads_only_the_patchs_added_lines() -> None:
+    """
+    GIVEN a patch whose headers, removed lines and no-newline marker name
+          the labels, and an added line starting with '++'
+    WHEN the quality reference rule reads it
+    THEN only the added lines count, a header is never one, and a hunk of a
+         second file in the patch starts its headers again
+    """
+    header = b"diff --git a/labels.csv/a.py b/labels.csv/a.py\n--- a/labels.csv/a.py\n+++ b/labels.csv/a.py\n"  # fmt: skip
+    quiet = header + b"@@ -1 +1 @@\n-x = 'a' + 'labels.csv'\n+x = 1\n\\ labels.csv\n"
+    second = quiet + header + b"@@ -2 +2 @@\n"
+    loud = quiet + b"@@ -3 +3 @@\n+++ 'labels.csv'"  # no final newline
+    latin = quiet + b"@@ -4 +4 @@\n+x = '\xff' + open('labels.csv')\n"  # not UTF-8
+
+    def check(patch: bytes) -> list[str | None]:
+        def stream(path: str, sink: Callable[[bytes], None]) -> None:
+            sink(patch)
+
+        found = check_quality_references({"a.py": b"labels.csv\n"}, {"a.py": b"labels.csv\n"}.get, (LABELS_CSV,), stream)  # fmt: skip
+        return [v.path for v in found]
+
+    bare = header.split(b"\n", 1)[1] + b"@@ -1 +1 @@\n+x = 1\n"  # no 'diff' line
+    assert check(quiet) == [] and check(second) == [] and check(bare) == []
+    assert check(loud) == ["a.py"] and check(latin) == ["a.py"]
+
+
+def test_quality_reference_reads_a_long_patch_line_in_linear_time() -> None:
+    """
+    GIVEN an 8 MiB added line arriving in 256-byte chunks
+    WHEN the quality reference rule reads it
+    THEN it is found, and quickly: no chunk re-copies the line read so far
+         (that would copy about 128 GiB here)
+    """
+    line = b"+" + b"x" * (8 << 20) + b" open('labels.csv')\n"
+
+    def stream(path: str, sink: Callable[[bytes], None]) -> None:
+        sink(b"diff --git a/a.py b/a.py\n@@ -1 +1 @@\n")
+        for start in range(0, len(line), 256):
+            sink(line[start : start + 256])
+
+    started = time.monotonic()
+    found = check_quality_references({"a.py": b"labels.csv\n"}, {"a.py": b"labels.csv\n"}.get, (LABELS_CSV,), stream)  # fmt: skip
+    assert [v.path for v in found] == ["a.py"]
+    assert time.monotonic() - started < 3.0
+
+
+def test_quality_reference_decodes_any_base_and_splits_every_line_end() -> None:
+    """
+    GIVEN a latin-1 base, and a CRLF base whose unchanged line names the labels
+    WHEN the quality reference rule runs
+    THEN nothing raises; a new reference is still flagged, an unchanged one not
+    """
+    latin = b"x = 1 # caf\xe9\n"
+    assert _references({"a.py": latin + b"y = 2\n"}, {"a.py": latin}) == []
+    named = latin + b"open('labels.csv')\n"
+    assert _references({"a.py": named}, {"a.py": latin}) == [("a.py", LABELS_CSV)]
+    crlf = b"LABELS = 'data/labels.csv'\r\nX = 1\r\n"
+    changed = b"LABELS = 'data/labels.csv'\r\nX = 2\r\n"
+    assert _references({"a.py": changed}, {"a.py": crlf}) == []

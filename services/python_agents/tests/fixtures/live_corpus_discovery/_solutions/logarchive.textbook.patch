@@ -1,0 +1,19 @@
+diff --git a/logarchive/archive.py b/logarchive/archive.py
+index a0cb6df..d929c5d 100644
+--- a/logarchive/archive.py
++++ b/logarchive/archive.py
+@@ -12,11 +12,12 @@ def pack(log: bytes) -> tuple[bytes, list[int]]:
+     parts: list[bytes] = []
+     written = 0
+     checkpoints: list[int] = []
++    view = memoryview(log)
+     for number, start in enumerate(range(0, len(log), PIECE), 1):
+-        part = stream.compress(log[start : start + PIECE])
++        part = stream.compress(view[start : start + PIECE])
+         parts.append(part)
+         written += len(part)
+         if number % CHECKPOINT_EVERY == 0:
+-            checkpoints = checkpoints + [written]
++            checkpoints.append(written)
+     parts.append(stream.flush())
+     return b"".join(parts), checkpoints

@@ -1,0 +1,9 @@
+Checkout refuses exact payments on 3-for-2 offers since money.py's rounding
+was switched to ROUND_HALF_UP. Three tins at 1.99 on the 3-for-2 offer cost
+3.98; the customer pays 3.98 and checkout raises PaymentError
+("paid 3.98 but the total is 5.97"). round_cents must be rounding the offer
+price wrongly; please fix the rounding.
+
+    cart = Cart()
+    cart.add("1.99", 3, "3for2")
+    cart.checkout("3.98")

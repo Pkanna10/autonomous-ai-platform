@@ -10,12 +10,12 @@ def _numbers(seed: int, count: int) -> list[int]:
     return out
 
 
-def transfers(count: int, accounts: int) -> list[tuple[str, int]]:
-    """``count`` transfers of ``(account, amount in cents)``; amounts may be
-    negative (a withdrawal)."""
+def transfers(count: int, accounts: int) -> list[tuple[int, int]]:
+    """``count`` transfers of ``(account number, amount in cents)``; account
+    numbers run from 10000 and amounts may be negative (a withdrawal)."""
     numbers = _numbers(23, 2 * count)
-    out: list[tuple[str, int]] = []
+    out: list[tuple[int, int]] = []
     for i in range(count):
         who, cents = numbers[2 * i], numbers[2 * i + 1]
-        out.append((f"acct-{who % accounts:04d}", cents % 20001 - 9000))
+        out.append((10000 + who % accounts, cents % 20001 - 9000))
     return out

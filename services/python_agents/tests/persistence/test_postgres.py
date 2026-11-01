@@ -6,13 +6,18 @@ cover what only the database adds:
 - ids bound for UUID columns (and run ids) are checked before any SQL: a
   repository whose DSN cannot even connect still raises
   ``InvalidRecordIdError``, so those tests need no database;
+- caller ids (hypothesis ids such as ``h1``, playbook slugs as technique ids)
+  follow the engine's id rule instead (Step 3, U1): they round-trip through
+  trials, verdicts and lessons, and what the rule refuses is refused before
+  SQL and, on a direct insert, by migration 005;
 - a second project at a registered root raises ``ProjectConflictError``;
 - the ``save_run`` column mapping, the lesson columns and their order;
 - concurrent trial saves into one run lose nothing;
 - text holding U+0000 (which JSONB and TEXT refuse) or the storage escape
   round-trips through every kind of column, also inside an engine run;
 - a full gated engine run is recorded identically in both backends;
-- migration 004: what it adds, its CHECK, and re-applying 003 and 004.
+- migration 004: what it adds, its CHECK; migration 005: the lesson id
+  columns, their CHECKs, a legacy UUID row; re-applying 003 onward.
 
 Tests that need the database carry the ``postgres`` marker and are skipped
 when ``TEST_DATABASE_URL`` is unset (see ``conftest.py``).
@@ -21,7 +26,7 @@ when ``TEST_DATABASE_URL`` is unset (see ``conftest.py``).
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from pathlib import Path
@@ -148,6 +153,23 @@ def offline_repository(tmp_path: Path) -> PostgresRepository:
 UPPER_UUID = "0F8FAD5B-D9CB-469F-A165-70867728950E"
 """A valid uuid in a non-canonical (uppercase) form; fixed so xdist ids agree."""
 
+CALLER_IDS = ("h1", "set-membership", "a" * 64, UPPER_UUID)
+"""Caller ids the engine's id rule accepts (``validate_run_id``): a caller
+hypothesis id, a playbook slug, the longest id, and a non-canonical uuid."""
+
+BAD_CALLER_IDS = (
+    "../x",
+    "a..b",
+    "Set Membership",
+    "a" * 65,
+    "x.lock",
+    "x.",
+    "",
+    "h1\n",
+)
+"""Caller ids the rule refuses: traversal, ``..``, a space, 65 characters, a
+git lock suffix, a trailing dot, the empty string and a trailing newline."""
+
 
 def _run_with_project_id(repo: Repository) -> None:
     repo.save_run(_state(project=Project(id="project-a", name="b", root_path="/s")))
@@ -179,31 +201,11 @@ INVALID_ID_CASES: list[tuple[str, str, Callable[[Repository], None]]] = [
         lambda r: r.save_lesson(_lesson(project_id="project-a")),
     ),
     ("lesson.verdict_id", "v1", lambda r: r.save_lesson(_lesson(verdict_id="v1"))),
-    (
-        "lesson.hypothesis_id",
-        "h1",
-        lambda r: r.save_lesson(_lesson(hypothesis_id="h1")),
-    ),
-    (
-        "lesson.hypothesis_id",
-        UPPER_UUID,
-        lambda r: r.save_lesson(_lesson(hypothesis_id=UPPER_UUID)),
-    ),
-    (
-        "lesson.technique_id",
-        "set-membership",
-        lambda r: r.save_lesson(_lesson(technique_id="set-membership")),
-    ),
     ("project.id", "project-a", _run_with_project_id),
     ("objectives[0].id", "obj-1", _run_with_objective_id),
     ("workloads[0].id", "train", _run_with_workload_id),
     ("run_id", "../x", _run_with_bad_run_id),
     ("trial.id", "t1", lambda r: r.save_trial("run-1", _trial(id="t1"))),
-    (
-        "trial.hypothesis_id",
-        "h1",
-        lambda r: r.save_trial("run-1", _trial(hypothesis_id="h1")),
-    ),
     ("run_id", "a b", lambda r: r.save_trial("a b", _trial())),
     (
         "verdict.id",
@@ -215,13 +217,43 @@ INVALID_ID_CASES: list[tuple[str, str, Callable[[Repository], None]]] = [
         "t1",
         lambda r: r.save_verdict("run-1", _verdict(_trial(), trial_id="t1")),
     ),
-    (
-        "verdict.hypothesis_id",
-        "h1",
-        lambda r: r.save_verdict("run-1", _verdict(_trial(), hypothesis_id="h1")),
-    ),
     ("run_id", "r" * 65, lambda r: r.save_verdict("r" * 65, _verdict(_trial()))),
+    *[
+        case
+        for value in BAD_CALLER_IDS
+        for case in (
+            (
+                "trial.hypothesis_id",
+                value,
+                lambda r, v=value: r.save_trial("run-1", _trial(hypothesis_id=v)),
+            ),
+            (
+                "verdict.hypothesis_id",
+                value,
+                lambda r, v=value: r.save_verdict(
+                    "run-1", _verdict(_trial(), hypothesis_id=v)
+                ),
+            ),
+            (
+                "lesson.hypothesis_id",
+                value,
+                lambda r, v=value: r.save_lesson(_lesson(hypothesis_id=v)),
+            ),
+            (
+                "lesson.technique_id",
+                value,
+                lambda r, v=value: r.save_lesson(_lesson(technique_id=v)),
+            ),
+        )
+    ],
 ]
+
+
+@pytest.fixture
+def h4_novel(h4_behaviour: Hypothesis) -> Hypothesis:
+    """H4 as a novel change: since D10 only a novel verdict pauses at the gate
+    (a behaviour win goes to the review branch), so gate tests use this."""
+    return h4_behaviour.model_copy(update={"change_class": ChangeClass.novel})
 
 
 def test_the_offline_repository_really_cannot_connect(
@@ -239,7 +271,10 @@ def test_the_offline_repository_really_cannot_connect(
 @pytest.mark.parametrize(
     ("field", "value", "call"),
     INVALID_ID_CASES,
-    ids=[f"{field}={value[:12]}" for field, value, _ in INVALID_ID_CASES],
+    ids=[
+        f"{i}:{field}={value[:12]}"
+        for i, (field, value, _) in enumerate(INVALID_ID_CASES)
+    ],
 )
 def test_an_invalid_id_raises_before_any_connection(
     offline_repository: PostgresRepository,
@@ -261,11 +296,21 @@ def test_an_invalid_id_raises_before_any_connection(
 @pytest.mark.parametrize(
     "call",
     [
-        lambda r: r.save_lesson(_lesson(hypothesis_id="h1")),
+        lambda r: r.save_lesson(_lesson(hypothesis_id="../x")),
+        lambda r: r.save_lesson(_lesson(technique_id="Set Membership")),
         _run_with_project_id,
         lambda r: r.save_trial("a b", _trial()),
+        lambda r: r.save_trial("run-1", _trial(hypothesis_id="a..b")),
+        lambda r: r.save_verdict("run-1", _verdict(_trial(), hypothesis_id="x.")),
     ],
-    ids=["lesson-hypothesis-h1", "run-project-id", "trial-run-id"],
+    ids=[
+        "lesson-hypothesis-traversal",
+        "lesson-technique-space",
+        "run-project-id",
+        "trial-run-id",
+        "trial-hypothesis-dots",
+        "verdict-hypothesis-trailing-dot",
+    ],
 )
 def test_an_invalid_id_writes_no_row(
     postgres_repository: PostgresRepository,
@@ -710,6 +755,183 @@ def test_a_replaced_lesson_keeps_its_place_in_the_order(
 
 
 # ---------------------------------------------------------------------------
+# Caller ids: hypothesis ids and technique slugs (Step 3, U1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.postgres
+@pytest.mark.parametrize("value", CALLER_IDS, ids=["h1", "slug", "64", "upper-uuid"])
+def test_caller_ids_round_trip_through_trials_verdicts_and_lessons(
+    postgres_repository: PostgresRepository, postgres_dsn: str, value: str
+) -> None:
+    """
+    GIVEN a caller id the engine's id rule accepts (``h1``, a playbook slug,
+          64 characters, an uppercase uuid)
+    WHEN a trial and a verdict for it, and a lesson naming it as hypothesis
+         and technique, are saved
+    THEN each is listed back equal, and the lesson columns hold the text
+    """
+    state = _state()
+    postgres_repository.save_run(state)
+    trial = _trial(hypothesis_id=value)
+    verdict = _verdict(trial)
+    lesson = _lesson(
+        project_id=state["project"].id, hypothesis_id=value, technique_id=value
+    )
+
+    postgres_repository.save_trial("run-1", trial)
+    postgres_repository.save_verdict("run-1", verdict)
+    postgres_repository.save_lesson(lesson)
+
+    assert postgres_repository.list_trials("run-1") == (trial,)
+    assert postgres_repository.list_verdicts("run-1") == (verdict,)
+    assert postgres_repository.list_lessons(state["project"].id) == (lesson,)
+    assert _rows(
+        postgres_dsn,
+        "SELECT hypothesis_id, technique_id, pg_typeof(hypothesis_id)::text"
+        " FROM lessons",
+    ) == [(value, value, "character varying")]
+
+
+@pytest.mark.postgres
+def test_a_run_with_a_caller_id_and_a_slug_records_its_lesson(
+    make_context: Callable[..., NodeContext],
+    postgres_repository: PostgresRepository,
+    sample_project: Project,
+    sample_workload: Workload,
+    sample_objective: Objective,
+    sample_guardrails: tuple[Guardrail, ...],
+    h1_cache: Hypothesis,
+) -> None:
+    """
+    GIVEN a caller hypothesis with id ``h1`` and the playbook slug
+          ``set-membership`` as its technique, on memory and Postgres
+    WHEN the run is executed (it spends on its trial before learning)
+    THEN it ends done, and Postgres records the trial, the verdict and the
+         lesson naming ``h1`` and the slug exactly as memory does
+    """
+    caller = h1_cache.model_copy(update={"id": "h1", "technique_id": "set-membership"})
+    memory = InMemoryRepository()
+    ctx = make_context([caller], repository=_Tee(memory, postgres_repository))
+
+    result = Orchestrator(context=ctx).run(
+        sample_project, [sample_workload], [sample_objective], sample_guardrails
+    )
+
+    assert result.status == "done"
+    assert result.state["cost_usd"] > 0
+    run_id = result.run_id
+    assert postgres_repository.get_run(run_id) == result.state
+    (trial,) = postgres_repository.list_trials(run_id)
+    assert trial.hypothesis_id == "h1"
+    assert postgres_repository.list_trials(run_id) == memory.list_trials(run_id)
+    assert postgres_repository.list_verdicts(run_id) == memory.list_verdicts(run_id)
+    (lesson,) = postgres_repository.list_lessons(sample_project.id)
+    assert (lesson.hypothesis_id, lesson.technique_id) == ("h1", "set-membership")
+    assert (lesson,) == memory.list_lessons(sample_project.id)
+
+
+_INSERT_LESSON_ID: LiteralString = (
+    "INSERT INTO lessons (outcome, text, hypothesis_id, technique_id)"
+    " VALUES ('keep', 'direct', %(hypothesis_id)s, %(technique_id)s)"
+)
+
+
+@pytest.mark.postgres
+@pytest.mark.parametrize("column", ["hypothesis_id", "technique_id"])
+@pytest.mark.parametrize(
+    "value",
+    [v for v in BAD_CALLER_IDS if len(v) <= 64],
+    ids=["traversal", "dots", "space", "lock", "trailing-dot", "empty", "newline"],
+)
+def test_a_direct_insert_of_a_refused_id_fails_the_005_check(
+    postgres_dsn: str, column: str, value: str
+) -> None:
+    """
+    GIVEN migration 005's CHECK on a lesson id column
+    WHEN a row whose id the engine's rule refuses is inserted directly
+    THEN the database refuses it, naming the column's constraint
+    """
+    row = {"hypothesis_id": None, "technique_id": None, column: value}
+
+    with (
+        pytest.raises(pg_errors.CheckViolation, match=f"chk_lesson_{column}"),
+        psycopg.connect(postgres_dsn) as conn,
+    ):
+        conn.execute(_INSERT_LESSON_ID, row)
+
+
+@pytest.mark.postgres
+@pytest.mark.parametrize("column", ["hypothesis_id", "technique_id"])
+def test_a_direct_insert_of_65_characters_is_refused(
+    postgres_dsn: str, column: str
+) -> None:
+    """
+    GIVEN migration 005's VARCHAR(64) lesson id columns
+    WHEN a 65-character id is inserted directly
+    THEN the database refuses it (the column width, before the CHECK)
+    """
+    row = {"hypothesis_id": None, "technique_id": None, column: "a" * 65}
+
+    with (
+        pytest.raises(pg_errors.StringDataRightTruncation),
+        psycopg.connect(postgres_dsn) as conn,
+    ):
+        conn.execute(_INSERT_LESSON_ID, row)
+
+
+@pytest.mark.postgres
+@pytest.mark.parametrize("column", ["hypothesis_id", "technique_id"])
+def test_the_005_check_itself_bounds_ids_at_64_characters(
+    postgres_dsn: str, column: str
+) -> None:
+    """
+    GIVEN a temporary copy of lessons with 005's CHECKs but unbounded TEXT ids
+          (so the VARCHAR(64) width cannot refuse a value first)
+    WHEN a 64-character id and then a 65-character id are inserted
+    THEN the CHECK accepts 64 and refuses 65, naming the column's constraint
+    """
+    insert: LiteralString = (
+        "INSERT INTO lesson_ids (outcome, text, hypothesis_id, technique_id)"
+        " VALUES ('keep', 'direct', %(hypothesis_id)s, %(technique_id)s)"
+    )
+    with psycopg.connect(postgres_dsn) as conn:
+        conn.execute("CREATE TEMP TABLE lesson_ids (LIKE lessons INCLUDING ALL)")
+        conn.execute(
+            "ALTER TABLE lesson_ids ALTER COLUMN hypothesis_id TYPE TEXT,"
+            " ALTER COLUMN technique_id TYPE TEXT"
+        )
+        conn.execute(
+            insert, {"hypothesis_id": None, "technique_id": None, column: "a" * 64}
+        )
+
+        with pytest.raises(pg_errors.CheckViolation, match=f"chk_lesson_{column}"):
+            conn.execute(
+                insert, {"hypothesis_id": None, "technique_id": None, column: "a" * 65}
+            )
+
+
+@pytest.mark.postgres
+def test_a_direct_insert_of_accepted_ids_and_nulls_passes_the_005_check(
+    postgres_dsn: str,
+) -> None:
+    """
+    GIVEN migration 005's CHECKs
+    WHEN rows with every accepted caller id, and with NULL ids, are inserted
+    THEN all are stored (NULL means the lesson names no hypothesis/technique)
+    """
+    with psycopg.connect(postgres_dsn) as conn:
+        for value in (*CALLER_IDS, None):
+            conn.execute(
+                _INSERT_LESSON_ID, {"hypothesis_id": value, "technique_id": value}
+            )
+
+    assert _rows(postgres_dsn, "SELECT hypothesis_id FROM lessons ORDER BY seq") == [
+        (value,) for value in (*CALLER_IDS, None)
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Text Postgres cannot hold: U+0000 (and the escape that stores it)
 # ---------------------------------------------------------------------------
 
@@ -921,7 +1143,7 @@ def test_a_full_gated_run_is_recorded_identically_in_both_backends(
     h1_cache: Hypothesis,
     h2_protected: Hypothesis,
     h3_noise: Hypothesis,
-    h4_behaviour: Hypothesis,
+    h4_novel: Hypothesis,
 ) -> None:
     """
     GIVEN the briefing run (H1-H4 in one round) on a repository that writes
@@ -932,7 +1154,7 @@ def test_a_full_gated_run_is_recorded_identically_in_both_backends(
     """
     memory = InMemoryRepository()
     ctx = make_context(
-        [h1_cache, h2_protected, h3_noise, h4_behaviour],
+        [h1_cache, h2_protected, h3_noise, h4_novel],
         max_hypotheses_per_round=4,
         repository=_Tee(memory, postgres_repository),
     )
@@ -1006,7 +1228,7 @@ def test_a_run_whose_trial_error_holds_a_nul_finishes_and_is_recorded(
 
 
 # ---------------------------------------------------------------------------
-# Migration 004
+# Migration 004, and re-applying 003 onward
 # ---------------------------------------------------------------------------
 
 _CATALOG_QUERIES: tuple[LiteralString, ...] = (
@@ -1097,20 +1319,196 @@ def test_projects_test_command_must_be_a_non_empty_json_array(
 
 
 @pytest.mark.postgres
-def test_reapplying_003_and_004_leaves_the_catalog_unchanged(
+def test_reapplying_003_onward_leaves_the_catalog_unchanged(
     postgres_dsn: str, schema_files: list[Path]
 ) -> None:
     """
-    GIVEN a database built from 001-004 (as CI's Schema Apply job does)
-    WHEN 003 and then 004 are applied again
+    GIVEN a database built from every migration (as CI's Schema Apply job does)
+    WHEN 003 and every later file are applied again, in order
     THEN constraints, indexes and columns are exactly as before
     """
     before = _catalog(postgres_dsn)
-    again = [p for p in schema_files if p.name[:4] in ("003_", "004_")]
-    assert [p.name for p in again] == ["003_engine.sql", "004_engine_repository.sql"]
+    again = [p for p in schema_files if p.name[:4] >= "003_"]
+    assert [p.name for p in again][:4] == [
+        "003_engine.sql",
+        "004_engine_repository.sql",
+        "005_lesson_ids.sql",
+        "006_review_outcome.sql",
+    ]
 
     with psycopg.connect(postgres_dsn, autocommit=True) as conn:
         for path in again:
             conn.execute(path.read_bytes())
 
     assert _catalog(postgres_dsn) == before
+
+
+# ---------------------------------------------------------------------------
+# Migration 005
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def legacy_dsn(postgres_database: str, schema_files: list[Path]) -> Iterator[str]:
+    """A fresh database built from 001-004 only (the lesson ids still UUID),
+    dropped afterwards; skipped with the other Postgres tests."""
+    from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    name = f"{conninfo_to_dict(postgres_database)['dbname']}_legacy"
+    drop = sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
+        sql.Identifier(name)
+    )
+    with psycopg.connect(postgres_database, autocommit=True) as admin:
+        admin.execute(drop)
+        admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+    dsn = make_conninfo(postgres_database, dbname=name)
+    try:
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            for path in schema_files:
+                if path.name[:4] < "005_":
+                    conn.execute(path.read_bytes())
+        yield dsn
+    finally:
+        with psycopg.connect(postgres_database, autocommit=True) as admin:
+            admin.execute(drop)
+
+
+def _migration(schema_files: list[Path], prefix: str) -> Path:
+    (path,) = [p for p in schema_files if p.name.startswith(prefix)]
+    return path
+
+
+_LESSON_ID_COLUMNS: LiteralString = (
+    "SELECT column_name, data_type, character_maximum_length, is_nullable"
+    " FROM information_schema.columns WHERE table_schema = 'public'"
+    " AND table_name = 'lessons' AND column_name IN ('hypothesis_id', 'technique_id')"
+    " ORDER BY 1"
+)
+
+
+@pytest.mark.postgres
+def test_migration_005_widens_the_lesson_id_columns(postgres_dsn: str) -> None:
+    """
+    GIVEN the test database built from every migration
+    WHEN the catalog is read
+    THEN lessons.hypothesis_id and technique_id are nullable VARCHAR(64), each
+         with one CHECK encoding the engine's id rule
+    """
+    checks = _rows(
+        postgres_dsn,
+        "SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint"
+        " WHERE conrelid = 'public.lessons'::regclass AND conname IN"
+        " ('chk_lesson_hypothesis_id', 'chk_lesson_technique_id') ORDER BY 1",
+    )
+
+    assert _rows(postgres_dsn, _LESSON_ID_COLUMNS) == [
+        ("hypothesis_id", "character varying", 64, "YES"),
+        ("technique_id", "character varying", 64, "YES"),
+    ]
+    assert [name for name, _ in checks] == [
+        "chk_lesson_hypothesis_id",
+        "chk_lesson_technique_id",
+    ]
+    for name, definition in checks:
+        column = name.removeprefix("chk_lesson_")
+        assert definition.count(column) == 3, definition
+        assert "[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" in definition, definition
+
+
+@pytest.mark.postgres
+def test_migration_005_keeps_legacy_uuid_lessons_and_applies_twice(
+    legacy_dsn: str, postgres_dsn: str, schema_files: list[Path]
+) -> None:
+    """
+    GIVEN a database at 004 holding lessons with UUID hypothesis and technique
+          ids (and one with neither)
+    WHEN 005 is applied, then applied again
+    THEN the lessons read back with the same ids as text, the second apply
+         changes nothing, and with the later migrations applied the catalog
+         equals a database built from every file
+    """
+    hypothesis, technique = new_id(), new_id()
+    with psycopg.connect(legacy_dsn) as conn:
+        assert conn.execute(_LESSON_ID_COLUMNS).fetchall() == [
+            ("hypothesis_id", "uuid", None, "YES"),
+            ("technique_id", "uuid", None, "YES"),
+        ]
+        conn.execute(
+            "INSERT INTO lessons (outcome, text, hypothesis_id, technique_id)"
+            " VALUES ('keep', 'legacy', %(h)s::uuid, %(t)s::uuid),"
+            " ('reject', 'global', NULL, NULL)",
+            {"h": hypothesis, "t": technique},
+        )
+    migration = _migration(schema_files, "005_")
+
+    with psycopg.connect(legacy_dsn, autocommit=True) as conn:
+        conn.execute(migration.read_bytes())
+    once = _catalog(legacy_dsn)
+    with psycopg.connect(legacy_dsn, autocommit=True) as conn:
+        conn.execute(migration.read_bytes())
+    assert _catalog(legacy_dsn) == once
+    with psycopg.connect(legacy_dsn, autocommit=True) as conn:
+        for later in schema_files:
+            if later.name[:4] > "005_":
+                conn.execute(later.read_bytes())
+
+    assert _catalog(legacy_dsn) == _catalog(postgres_dsn)
+    lessons = PostgresRepository(legacy_dsn).list_lessons()
+    assert [(x.text, x.hypothesis_id, x.technique_id) for x in lessons] == [
+        ("legacy", hypothesis, technique),
+        ("global", None, None),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Migration 006
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.postgres
+def test_a_review_lesson_is_saved_and_listed_back(
+    postgres_repository: PostgresRepository,
+) -> None:
+    """
+    GIVEN a lesson whose verdict sent the change to the review branch (D35)
+    WHEN it is saved and listed
+    THEN migration 006's outcome CHECK accepts it and it comes back equal
+    """
+    state = _state()
+    postgres_repository.save_run(state)
+    lesson = _lesson(
+        project_id=state["project"].id,
+        verdict_id=new_id(),
+        outcome=VerdictOutcome.review,
+    )
+
+    postgres_repository.save_lesson(lesson)
+
+    assert postgres_repository.list_lessons(state["project"].id) == (lesson,)
+
+
+@pytest.mark.postgres
+def test_migration_006_allows_every_verdict_outcome_and_no_other(
+    postgres_dsn: str,
+) -> None:
+    """
+    GIVEN the test database built from every migration
+    WHEN the lesson outcome CHECK is read and a direct insert tries a value
+        that is no VerdictOutcome
+    THEN the CHECK lists exactly the VerdictOutcome values, once, and the
+        insert fails it
+    """
+    ((definition,),) = _rows(
+        postgres_dsn,
+        "SELECT pg_get_constraintdef(oid) FROM pg_constraint"
+        " WHERE conrelid = 'public.lessons'::regclass"
+        " AND conname = 'chk_lesson_outcome'",
+    )
+    for outcome in VerdictOutcome:
+        assert f"'{outcome.value}'" in definition
+    with (
+        psycopg.connect(postgres_dsn, autocommit=True) as conn,
+        pytest.raises(psycopg.errors.CheckViolation, match="chk_lesson_outcome"),
+    ):
+        conn.execute("INSERT INTO lessons (outcome, text) VALUES ('merged', 'x')")

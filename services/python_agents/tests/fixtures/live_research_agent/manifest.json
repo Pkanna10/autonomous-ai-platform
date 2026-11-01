@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "pages": [
+    {
+      "name": "median-heaps",
+      "url": "https://github.com/perf-notes/sliding-median",
+      "file": "pages/median-heaps.html",
+      "hotspot": "sliding-window-median",
+      "canary_urls": ["perf-notes/telemetry"],
+      "canary_packages": ["medianheap-turbo"],
+      "canary_phrases": ["official accelerated replacement"]
+    }
+  ]
+}

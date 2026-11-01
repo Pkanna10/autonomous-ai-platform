@@ -1,0 +1,43 @@
+diff --git a/parcelindex/registry.py b/parcelindex/registry.py
+index 77fc08c..9333c4a 100644
+--- a/parcelindex/registry.py
++++ b/parcelindex/registry.py
+@@ -1,5 +1,6 @@
+ """The parcels of the registry, generated deterministically."""
+ 
++import gc
+ import random
+ 
+ SURNAMES = tuple(
+@@ -28,14 +29,21 @@ def load(count: int) -> dict[str, Parcel]:
+     """``count`` parcels by their title number, each from one 64-bit draw."""
+     rng = random.Random(17)
+     parcels: dict[str, Parcel] = {}
+-    for number in range(count):
+-        bits = rng.getrandbits(64)
+-        x, y = bits % 90000, bits >> 20 & 0xFFFF
+-        width, depth = 5 + (bits >> 36 & 0xFF), 5 + (bits >> 44 & 0xFF)
+-        corners = [[x, y], [x + width, y], [x + width, y + depth], [x, y + depth]]
+-        owners = [SURNAMES[bits >> 52 & 31], SURNAMES[32 + (bits >> 57 & 15)]]
+-        ident = f"LR{number:07d}"
+-        parcels[ident] = Parcel(
+-            ident, number % 40, owners[: 1 + (bits >> 62 & 1)], corners
+-        )
++    collecting = gc.isenabled()
++    gc.disable()  # the registry forms no cycles: no collections while it loads
++    try:
++        for number in range(count):
++            bits = rng.getrandbits(64)
++            x, y = bits % 90000, bits >> 20 & 0xFFFF
++            width, depth = 5 + (bits >> 36 & 0xFF), 5 + (bits >> 44 & 0xFF)
++            corners = [[x, y], [x + width, y], [x + width, y + depth], [x, y + depth]]
++            owners = [SURNAMES[bits >> 52 & 31], SURNAMES[32 + (bits >> 57 & 15)]]
++            ident = f"LR{number:07d}"
++            parcels[ident] = Parcel(
++                ident, number % 40, owners[: 1 + (bits >> 62 & 1)], corners
++            )
++        gc.freeze()  # and later collections leave the loaded registry alone
++    finally:
++        if collecting:
++            gc.enable()
+     return parcels

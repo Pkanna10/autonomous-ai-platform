@@ -27,9 +27,9 @@
       "fix_gain": 0.67,
       "hypotheses": [
         {
-          "title": "front-queue-and-window-max",
+          "title": "account-and-level-maps",
           "aimed": true,
-          "rationale": "settle in ledgerclose/settle.py takes each transfer off the front of a list, which shifts every remaining element, and window_peaks in ledgerclose/peaks.py recomputes the maximum of the whole window at every position. Walk the transfers in order without removing from the front, and maintain the window maximum incrementally with a structure of candidate positions whose values decrease; the output must not change."
+          "rationale": "settle in ledgerclose/settle.py finds each transfer's account by searching a list of every account seen so far, and level_numbers in ledgerclose/levels.py finds each total's level by searching a list of every level reached so far, so both scans grow with the entries. Keep the balances in a dict keyed by account number and the level numbers in a dict keyed by level, assigned in the order the levels are first reached; the output must not change."
         },
         {
           "title": "money-by-slicing",

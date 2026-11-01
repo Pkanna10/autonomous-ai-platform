@@ -160,14 +160,16 @@ def build_checkpointer() -> InMemorySaver:
 def default_context() -> NodeContext:
     """Stub runners, the frozen judges and an in-memory repository, no candidates.
 
-    The judges' noise rule uses ``settings.NOISE_MULTIPLIER``. The stub
-    baseline measures nothing, so a run on this context stops at the
-    baseline until Step 2 provides a real runner.
+    The judges' noise rule uses ``settings.NOISE_MULTIPLIER``; no quality
+    check is confirmed here (D40: only ``build_context``'s caller confirms
+    one), so no drop prints as points. The stub baseline measures nothing,
+    so a run on this context stops at the baseline until Step 2 provides a
+    real runner.
     """
     return NodeContext(
         runner=StubTrialRunner({}, default=ScriptedOutcome()),
         baseline_runner=StubBaselineRunner(ScriptedOutcome()),
-        judges=default_judges(settings.NOISE_MULTIPLIER),
+        judges=default_judges(settings.NOISE_MULTIPLIER, quality=None),
         repository=InMemoryRepository(),
     )
 

@@ -29,8 +29,8 @@ from langgraph.types import Command
 
 from autonomous_ai_agents.common.models import (
     ApprovalDecision,
-    ApprovalRequest,
     Baseline,
+    ChangeClass,
     Delivery,
     DeliveryKind,
     Guardrail,
@@ -119,6 +119,13 @@ def _only_verdict(state: EngineState) -> Verdict:
 # ---------------------------------------------------------------------------
 # 1. Clean keep
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def h4_novel(h4_behaviour: Hypothesis) -> Hypothesis:
+    """H4 as a novel change: since D10 only a novel verdict pauses at the gate
+    (a behaviour win goes to the review branch), so gate tests use this."""
+    return h4_behaviour.model_copy(update={"change_class": ChangeClass.novel})
 
 
 def test_h1_is_kept_and_delivered_on_an_engine_branch(
@@ -272,16 +279,16 @@ def test_h4_interrupts_for_approval_and_is_delivered_once_approved(
     make_context: ContextFactory,
     engine_graph: GraphFactory,
     start: Callable[..., EngineState],
-    h4_behaviour: Hypothesis,
+    h4_novel: Hypothesis,
 ) -> None:
     """
-    GIVEN H4 (behaviour change, within the val_loss guardrail)
+    GIVEN H4 as a novel change (within the val_loss guardrail)
     WHEN the graph runs, pauses, and is resumed with an approval
-    THEN the first call returns an interrupt whose item is a behaviour change
+    THEN the first call returns an interrupt whose item is a novel change
          with the graph parked before approval_gate, and the resumed run
          delivers H4's verdict, records the approver and teaches a keep lesson
     """
-    ctx = make_context([h4_behaviour])
+    ctx = make_context([h4_novel])
     graph = engine_graph(ctx)
     cfg = _config("e2e-approve")
 
@@ -290,8 +297,8 @@ def test_h4_interrupts_for_approval_and_is_delivered_once_approved(
     assert len(paused.interrupts) == 1
     request = paused.interrupts[0].value
     assert request["run_id"] == "e2e-approve"
-    assert request["items"][0]["change_class"] == "behaviour"
-    assert request["items"][0]["title"] == h4_behaviour.title
+    assert request["items"][0]["change_class"] == "novel"
+    assert request["items"][0]["title"] == h4_novel.title
     assert graph.get_state(cfg).next == ("approval_gate",)
     verdict_id = request["items"][0]["verdict_id"]
     assert paused.value["pending_approval_ids"] == [verdict_id]
@@ -320,7 +327,7 @@ def test_h4_interrupts_for_approval_and_is_delivered_once_approved(
     assert stored.approval_note == "bf16 is fine"
     assert decided_verdicts(final["verdicts"], final["approval"]) == [stored]
     assert [h.status for h in final["hypotheses"]] == [HypothesisStatus.kept]
-    assert f"| {h4_behaviour.title} | keep |" in delivery.report_markdown
+    assert f"| {h4_novel.title} | keep |" in delivery.report_markdown
     (lesson,) = final["lessons"]
     assert lesson.outcome is VerdictOutcome.keep
     assert [e.phase for e in final["events"] if "code" not in e.data][9:11] == [
@@ -334,7 +341,7 @@ def test_h4_rejected_at_the_gate_is_reported_only(
     make_context: ContextFactory,
     engine_graph: GraphFactory,
     start: Callable[..., EngineState],
-    h4_behaviour: Hypothesis,
+    h4_novel: Hypothesis,
 ) -> None:
     """
     GIVEN a run paused on H4
@@ -342,7 +349,7 @@ def test_h4_rejected_at_the_gate_is_reported_only(
     THEN nothing is kept, the delivery is report only, the verdict and the
          hypothesis record the rejection and the lesson is reject
     """
-    ctx = make_context([h4_behaviour])
+    ctx = make_context([h4_novel])
     graph = engine_graph(ctx)
     cfg = _config("e2e-reject")
     paused = graph.invoke(start("e2e-reject"), cfg, version="v2")
@@ -373,7 +380,7 @@ def test_h4_rejected_at_the_gate_is_reported_only(
 def test_a_second_graph_over_the_same_checkpointer_resumes_the_thread(
     make_context: ContextFactory,
     start: Callable[..., EngineState],
-    h4_behaviour: Hypothesis,
+    h4_novel: Hypothesis,
 ) -> None:
     """
     GIVEN a run paused on H4 by one graph instance
@@ -383,7 +390,7 @@ def test_a_second_graph_over_the_same_checkpointer_resumes_the_thread(
          the decided verdict is keep, and the second repository holds the
          approved verdict and the lesson
     """
-    ctx = make_context([h4_behaviour])
+    ctx = make_context([h4_novel])
     saver: BaseCheckpointSaver[str] = build_checkpointer()
     cfg = _config("e2e-durable")
     first = create_graph(saver, context=ctx)
@@ -533,7 +540,7 @@ def test_a_re_executed_trials_node_gets_verdicts_for_its_final_trials_only(
 # ---------------------------------------------------------------------------
 
 
-def test_the_briefing_example_keeps_h1_and_the_approved_h4(
+def test_the_briefing_example_keeps_h1_and_sends_h4_to_review(
     make_context: ContextFactory,
     engine_graph: GraphFactory,
     start: Callable[..., EngineState],
@@ -545,10 +552,11 @@ def test_the_briefing_example_keeps_h1_and_the_approved_h4(
 ) -> None:
     """
     GIVEN H1-H4 as candidates, four per round, and the conftest baseline
-    WHEN the graph runs, pauses for H4 and is resumed with H4 approved
-    THEN round 1 gives keep / reject / inconclusive / needs_approval, the
-         interrupt lists H4 only, combine keeps H1 + H4 on engine/run-<id>,
-         and four lessons record keep / reject / inconclusive / keep
+    WHEN the graph runs (no pause: H4 is a behaviour change, D10)
+    THEN round 1 gives keep / reject / inconclusive / review, nothing
+         interrupts, combine keeps H1 alone on engine/run-<id> (H4 is for the
+         review branch, which needs a combiner), and four lessons record
+         keep / reject / inconclusive / review
     """
     ctx = make_context(
         [h1_cache, h2_protected, h3_noise, h4_behaviour], max_hypotheses_per_round=4
@@ -556,34 +564,23 @@ def test_the_briefing_example_keeps_h1_and_the_approved_h4(
     graph = engine_graph(ctx)
     cfg = _config("e2e-example")
 
-    paused = graph.invoke(start("e2e-example"), cfg, version="v2")
+    output = graph.invoke(start("e2e-example"), cfg, version="v2")
 
-    by_hypothesis = {v.hypothesis_id: v for v in paused.value["verdicts"]}
+    by_hypothesis = {v.hypothesis_id: v for v in output.value["verdicts"]}
     assert {h: v.outcome for h, v in by_hypothesis.items()} == {
         h1_cache.id: VerdictOutcome.keep,
         h2_protected.id: VerdictOutcome.reject,
         h3_noise.id: VerdictOutcome.inconclusive,
-        h4_behaviour.id: VerdictOutcome.needs_approval,
+        h4_behaviour.id: VerdictOutcome.review,
     }
     assert by_hypothesis[h1_cache.id].gain == pytest.approx(0.4167, abs=1e-3)
     assert [v.rule for v in by_hypothesis[h2_protected.id].violations] == [
         ViolationRule.protected_path
     ]
-    (interrupt,) = paused.interrupts
-    request = ApprovalRequest.model_validate(interrupt.value)
-    (item,) = request.items
-    assert item.verdict_id == by_hypothesis[h4_behaviour.id].id
-    assert item.title == h4_behaviour.title
-    assert graph.get_state(cfg).next == ("approval_gate",)
+    assert output.interrupts == ()
+    final = output.value
 
-    decision = ApprovalDecision(
-        approved_verdict_ids=(item.verdict_id,), approver="praveen"
-    )
-    final = graph.invoke(
-        Command(resume=decision.model_dump(mode="json")), cfg, version="v2"
-    ).value
-
-    kept = [by_hypothesis[h1_cache.id].id, by_hypothesis[h4_behaviour.id].id]
+    kept = [by_hypothesis[h1_cache.id].id]
     assert final["kept_verdict_ids"] == kept
     delivery = _delivery(final)
     assert delivery.kind is DeliveryKind.branch
@@ -594,14 +591,14 @@ def test_the_briefing_example_keeps_h1_and_the_approved_h4(
         h1_cache.id: VerdictOutcome.keep,
         h2_protected.id: VerdictOutcome.reject,
         h3_noise.id: VerdictOutcome.inconclusive,
-        h4_behaviour.id: VerdictOutcome.keep,
+        h4_behaviour.id: VerdictOutcome.review,
     }
     assert len(ctx.repository.list_lessons(sample_project.id)) == 4
     assert {h.id: h.status for h in final["hypotheses"]} == {
         h1_cache.id: HypothesisStatus.kept,
         h2_protected.id: HypothesisStatus.rejected,
         h3_noise.id: HypothesisStatus.inconclusive,
-        h4_behaviour.id: HypothesisStatus.kept,
+        h4_behaviour.id: HypothesisStatus.trialled,
     }
     assert final["round"] == 1
     assert final["phase"] is RunPhase.done
@@ -615,14 +612,14 @@ def test_the_briefing_example_keeps_h1_and_the_approved_h4(
 def test_without_a_checkpointer_the_gate_cannot_resume(
     make_context: ContextFactory,
     start: Callable[..., EngineState],
-    h4_behaviour: Hypothesis,
+    h4_novel: Hypothesis,
 ) -> None:
     """
     GIVEN a graph compiled without a checkpointer and H4 as the candidate
     WHEN it runs and a resume is attempted
     THEN the output reports the interrupt and Command(resume) raises RuntimeError
     """
-    graph = create_graph(None, context=make_context([h4_behaviour]))
+    graph = create_graph(None, context=make_context([h4_novel]))
 
     output = graph.invoke(start("e2e-no-saver"), version="v2")
 
