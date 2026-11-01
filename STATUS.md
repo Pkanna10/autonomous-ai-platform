@@ -833,6 +833,12 @@ any corrected count was computed.
   another arm's; a duplicate of the same arm's own idea still does not count.
   Every other check, the gate (one arm with 3 or more good ideas on 5 of the 7
   counted libraries), the arm-P choice and arm D's exclusion are unchanged.
+- **The strict count (added 2026-11-01, V7c, from the owner's reading).** As
+  corrected, minus every idea whose verdict was decided on a root from arm A
+  (today's generator): an idea today's generator also proposed is not counted as
+  new. Arm A's own strict count is not defined (shown "-"). It is reported
+  beside the as-coded and the corrected counts, never instead of them. E1 under
+  it: libraries with 3 or more, arms B / C / D / E, 2 / 4 / 3 / 5.
 - **Who decides.** The corrected reading is reported beside the original. The
   original, as coded, said E2 is not paid for; whether the corrected reading
   governs E2 is the owner's call.
