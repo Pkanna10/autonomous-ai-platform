@@ -612,6 +612,83 @@ numbers that decide anything are copied into the ledger).
 
 ## Decisions
 
+### 2026-11-01 (owner: E1's answers and the idea lab, O23-O30)
+
+Recorded as given; the build waits for the owner's approval of the spec draft
+(`.claude/handoff/step3/spec-idea-lab.md`). Labels proposed there: G (idea-lab
+build units), X (exploratory rounds), K (confirmatory runs).
+
+- **O23. Answers to Q1-Q4.** Q1: fix the pipeline's convergence first; no E2
+  yet. Q2: no OSS-only L5c (Window 0 already re-tested retrieval on real code:
+  18 libraries, blind 23/36 against matched 24/36); a harder corpus from an
+  independent setter is built inside the idea lab. Q3: E1b skipped. Q4: the
+  exact child-process signal (seccomp user-notify) lands before the pipeline is
+  ever on by default.
+- **O24. Why the pipeline converged (the owner's reading of E1's idea lists).**
+  Every lane proposed the same local micro-edits to the same hot lines (tomli:
+  today's generator, `name_the_problem` and `far` all proposed one compiled
+  regex for the whitespace loop). Causes, by impact: 15-32k tokens of identical
+  hot code drown a ~100-token lens; the rules (quote a hot line, byte-identical
+  output, no dependencies, no processes) leave few distinct local edits in a
+  mature library; parallel lanes are blind to each other and the table holds
+  S1's titles only; arms B, C and D are one Sonnet generator sampled three
+  times. The honest-exam misses had best trials of 1.8-3.8 % under 2-5.9 %
+  floors, so idea size matters as much as diversity; the biggest measured gains
+  came from compounding (evolution 22 % to 35 %, sqlparse 52 % and rising).
+- **O25. The redesign: four levers.** Who thinks (lanes spread across Sonnet
+  5.5, Sonnet 5, Haiku 5.5, Haiku 4.5, Opus 5.5, Fable 5, Fable 5.1; prices
+  added for the three new ones; Haiku 4.5's own request shape; no model takes
+  temperature). What they see (a view per lane: callers, data structures, real
+  input shape, the whole module, 2nd and 3rd hotspots, the project's
+  performance-commit history). What they may change (rule-relaxing lanes: a new
+  dependency, changed output order, install-time precompute, an API change;
+  their ideas are parked proposals, never shipped). What is already taken (lanes
+  run in sequence, each sees earlier lanes' mechanisms; duplicates are filtered
+  by mechanism). Each lane also gets its own idea framework, and the spec says
+  how the pipeline feeds evolution and how near-misses combine into one trial.
+- **O26. The idea lab: how we work.** Goal: a general "make it better" engine
+  for any code and any measurable objective (speed, memory, operation count, ML
+  accuracy on sealed held-out data, web performance, security under O28), with
+  proof; iterate on architecture, models, prompts and frameworks until it beats
+  the public state of the art, with no promise that it will. Fixed in every
+  experiment: frozen judges, budgets, sealed test sets. Varied: one or two
+  factors a round (the four levers, frameworks, selection, idea count, effort,
+  evolution rounds, a diversity archive). Exploratory rounds are small,
+  labelled, prove nothing, and share the full idea lists (per arm and lane:
+  title, mechanism, target lines, verdict, duplicate-of). Confirmatory runs: one
+  pre-registered run per ladder rung, on sets never used while designing.
+  Measures: unique mechanisms, share new to today's generator, ideas whose
+  ceiling clears the floor, spread across mechanism families, predicted change
+  in growth rate, an owner-read sample; wins, gain size, cost per win, the
+  compounding curve.
+- **O27. The test ladder.** (1) The development set: today's 8 OSS libraries,
+  exploratory only. (2) 18 unseen problems, 6 domains x 3 tiers (textbook,
+  memory or efficiency, beyond-textbook), each with big headroom, several valid
+  routes, a sealed expert reference and a size setting; set by Fable 5.1 under
+  O19, marked by the frozen judges plus Opus 5 for idea quality (re-validated on
+  the grader labels first). (3) Held-out OSS libraries, chosen and sealed now.
+  (4) V9's sealed maintainer fixes. (5) The Python tasks of SWE-Perf, GSO and
+  SWE-fficiency, scored their way, later, as its own unit.
+- **O28. Security scope: defensive only.** The engine looks for security
+  weaknesses as well as improvement opportunities. Fixes, not exploits: a proof
+  of weakness may only be a small reproducer test run inside the sandbox against
+  the target's own code. Only code the owner owns or is authorised to test,
+  never third-party or live systems. Every security fix goes to the review
+  branch, never automatic delivery. Judges: a frozen reproducer that fails
+  before and passes after, static analysers, and the full test suite with no
+  regression. Lanes are prompted as defensive review; refusal categories are
+  logged.
+- **O29. Two new judges, shadow mode.** A scaling judge (2-3 input sizes, fit
+  the growth) and an operation-count judge (deterministic counts, a second
+  signal only). Each records, never decides, until A/A, controls and a gaming
+  check pass and the owner approves promotion. OSS benchmarks get a size setting
+  from the Lead or the setter, never from a trial.
+- **O30. The first exploratory round (X1).** The development set, today's
+  pipeline as baseline, a handful of configurations each varying one lever
+  (mixed-model lanes; sequential lanes with mechanism exclusion; a view per
+  lane; rule-relaxing lanes); a high ceiling, bounded by scope; cost per
+  configuration and every idea list reported.
+
 ### 2026-10-31 (recorded before computing it: E1's duplicate re-score)
 
 Written after E1's raw counts and the auditor's reason codes were read, before
