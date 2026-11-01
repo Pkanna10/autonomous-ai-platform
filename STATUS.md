@@ -619,6 +619,46 @@ numbers that decide anything are copied into the ledger).
 
 ## Decisions
 
+### 2026-11-01 (owner: spec revision 3 and X1 approved with changes, O36)
+
+**O36. Approved, with these changes before X1 is dispatched** (spec revision 4):
+
+1. **The marker is validated on measured outcomes.** V5's 12 builder-written
+   labels and the 75 blind sweep-record labels grade hit or miss on planted
+   slowdowns in a saturated corpus; they cannot separate Opus 5.5 from Opus 5
+   and say nothing about idea quality on real code. Instead: the oss-ab run's
+   `E5-oss-ab-rank` rows (per idea: title, class, verdict, gain, noise floor).
+   The marker sees the title, the class and the hot code from the pinned clone,
+   never the result, and is scored on how well its ranking matches the measured
+   outcomes. Titles only, no mechanism text, so this is a first check, not the
+   final one. Report how many rows carry a real verdict (not `NOT_TRIALLED` or
+   `NO_RESULT`) and fix the bar before running. Add an owner-labelled sample of
+   20-30 ideas for novelty.
+2. **X1 gains an execution slice.** Per configuration, the top 2-3 ideas new to
+   today's generator on sqlparse, pyparsing and tomli (sortedcontainers as
+   control) go through real trials under the frozen judges. Every trial's full
+   idea text, verdict, gain and floor, and the combine summary, are recorded, so
+   the slice is also the marker's full-text validation set. Priced in the
+   pre-dispatch estimate. Lever rankings without it are provisional.
+3. **A views pass.** Recorded hotspots hold no caller graph or argument shapes,
+   so the callers and input-shape views cannot come from E1's facts. One
+   deterministic, no-API views pass per library at the recorded commit, stored
+   once as new rows, so every configuration shares identical inputs.
+4. **X1-1 rotates models across lenses** over the 8 libraries (Latin-square
+   style), so model effects and lens effects separate. No extra cost.
+5. **Smaller items.** (a) X1-3 is labelled two factors (views plus frameworks),
+   split in X2 if it wins. (b) The sampling-noise reading uses E1's arms B, C
+   and D with X1-0's re-run. (c) G9: the held-out list is picked by a session
+   that does no tuning, kept outside the repository, and only a salted hash is
+   committed now; it is revealed at the K run. (d) G8: each sealed reference is
+   measured by the frozen judges before sealing (gain clears the floor, output
+   or quality holds). (e) The V suite sends one live request each to Sonnet 5
+   and Fable 5 before X1.
+
+X1's estimate is re-derived with items 2 and 3 and reported before dispatch; the
+80 USD fuse stays. The PR #22 close-out continues as planned; none of this
+blocks it.
+
 ### 2026-11-01 (owner: X1 and the PR #22 close-out, O31-O35)
 
 - **O31. Haiku 4.5 deferred.** Out of X1; added only if the mixed-model lever
@@ -702,12 +742,12 @@ build units), X (exploratory rounds), K (confirmatory runs).
   memory or efficiency, beyond-textbook), each with big headroom, several valid
   routes, a sealed expert reference and a size setting; set by Fable 5.1 under
   O19, marked by the frozen judges plus an idea-quality marker. The marker is an
-  open slot (owner, 2026-11-01): the first validation run scores Opus 5.5 and
-  Opus 5 on the existing grader labels, and the marker is whichever agrees
-  better with the human labels and did not write the ideas it grades. (3)
-  Held-out OSS libraries, chosen and sealed now. (4) V9's sealed maintainer
-  fixes. (5) The Python tasks of SWE-Perf, GSO and SWE-fficiency, scored their
-  way, later, as its own unit.
+  open slot (owner, 2026-11-01), validated against measured outcomes, not labels
+  (O36): Opus 5.5 and Opus 5 each rank ideas whose trial results are known, and
+  the marker is whichever ranks closer to the measured outcomes and did not
+  write the ideas it grades. (3) Held-out OSS libraries, chosen and sealed now.
+  (4) V9's sealed maintainer fixes. (5) The Python tasks of SWE-Perf, GSO and
+  SWE-fficiency, scored their way, later, as its own unit.
 - **O28. Security scope: defensive source analysis (owner, revised
   2026-11-01).** The precedent is OSS-Fuzz, CodeQL and Semgrep: they analyse
   public open-source code and report to maintainers. The line is not "never

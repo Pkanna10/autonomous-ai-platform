@@ -1,11 +1,13 @@
 # Step 3 spec amendment: the idea lab (G units, X rounds, K runs)
 
-**Draft for owner approval — build nothing until approved.** Revision 3
-(2026-11-01): the owner's X1 answers (O31-O35) applied: Haiku 4.5 deferred, all
-four levers in X1 behind a security-reviewed quarantine, per-rung stopping
-bars, no Fable attempter on rung 2, W1/W2/W4 folded in, PR #22 closed first.
-Revision 2 added the dedupe validation (G4), the history view's contamination
-guard (G2), a corrected X1 cost and the branch sequencing.
+**Approved by the owner with changes (O36); revision 4 carries them. X1 is not
+dispatched until its re-derived estimate is reported.** Revision 4
+(2026-11-01): the marker validated on measured outcomes plus an owner-labelled
+novelty sample; an execution slice in X1; a deterministic views pass; X1-1's
+Latin-square rotation; X1-3 labelled two factors; the sampling-noise reading;
+G9's salted hash; G8's measured references; smoke requests to Sonnet 5 and
+Fable 5. Revision 3 applied O31-O35; revision 2 added the dedupe validation, the
+history view's guard and the branch sequencing.
 
 Base: `claude/step3-research` at `38495de`. Paths are relative to
 `services/python_agents/src/autonomous_ai_agents/` unless they start with
@@ -242,8 +244,16 @@ A short process doc (`.claude/handoff/step3/idea-lab.md`) that the rounds follow
    can match a reference by shared bias, so neither Fable 5 nor Fable 5.1 runs
    as an idea lane on rung 2. Fable lanes stay allowed on the development set,
    V9 and the held-out OSS set.
+   **Measured references (O36.5d):** before a problem is sealed, the frozen
+   judges measure its expert reference on the problem's workload: the gain must
+   clear the measured floor and the output (or the quality tolerance for the ML
+   tier) must hold; a reference that fails is fixed or the problem is dropped.
 3. **Held-out OSS libraries (G9)** — chosen and sealed now, before any tuning,
-   so they cannot leak into the development set.
+   so they cannot leak into the development set. **Sealing (O36.5c):** the list
+   is picked by a separate session that does no tuning and never sees the lab's
+   prompts or results; the list (library, pinned commit, workload) is kept
+   outside the repository; only a salted hash of it is committed now, and the
+   list and salt are revealed at the K run so anyone can check the hash.
 4. **V9** — the sealed maintainer fixes, already built.
 5. **SWE-Perf / GSO / SWE-fficiency (later, own unit)** — the Python tasks,
    scored their way, compared with published agents. **Informative, not a
@@ -286,56 +296,118 @@ never counts toward an efficiency gate.
 ## 6 The first exploratory round (X1)
 
 - **No budget cap in practice** (O22): a high CI ceiling for the engine to run,
-  bounded by **scope**, not dollars. Report cost per configuration and share
-  every idea list.
-- **Before X1, two validations (no idea generation):** (a) the marker: Opus 5.5
-  and Opus 5 grade the existing grader-label set; (b) the dedupe judge (G4) on
-  labelled E1 idea pairs. Each has its bar fixed before it runs.
+  bounded by **scope**, not dollars; the 80 USD fuse stays per dispatch. Report
+  cost per configuration and share every idea list.
+
+### 6.1 Before X1: inputs and validations (no idea generation)
+
+- **Views pass (O36.3).** A recorded hotspot holds no caller graph or argument
+  shapes, so the callers and input-shape views cannot come from E1's
+  `ideas-facts` rows. One deterministic, no-API pass per library at the
+  recorded commit builds every view (callers, data structures, input shape,
+  whole module, 2nd/3rd hotspots, performance-commit history up to the pinned
+  commit) and stores it once as new rows; every configuration reads those rows,
+  so all share identical inputs. Profiles stay E1's.
+- **Marker validation on measured outcomes (O36.1).** Not the grader labels:
+  V5's 12 builder-written labels and the 75 sweep-record labels grade hit or
+  miss on planted slowdowns in a saturated corpus and cannot separate the two
+  candidates. Source: the `E5-oss-ab-rank` rows of Window 0's oss-ab runs (per
+  idea: title, class, verdict, gain, noise floor; 18 libraries). The marker
+  sees the title, the class and the hot code from the pinned clone, never the
+  result, and ranks the ideas of each (library, repetition, arm) set; its score
+  is the rank agreement with the measured outcomes (kept above the floor >
+  trialled and not kept > ...). Only rows with a real verdict count (not
+  `NOT_TRIALLED`, not `NO_RESULT`); **the Lead reports that count and the owner
+  fixes the bar before the run.** Titles only, no mechanism text: a first
+  check, not the final one. The execution slice (§6.3) becomes the full-text
+  validation set.
+- **Owner-labelled novelty sample.** 20-30 ideas drawn from E1's lists (mixed
+  arms and lanes), shown to the owner without their source, labelled new or
+  not new to today's generator; the marker's novelty calls are scored against
+  them.
+- **Dedupe validation (G4):** labelled E1 idea pairs, bar fixed before it runs.
+- **Smoke requests (O36.5e).** The V suite sends one live request each to
+  Sonnet 5 and Fable 5 (the two models X1 adds to the price table) before any
+  X1 configuration runs.
 - **Marker independence rule:** every idea is graded by the best-validated
   marker that did not write it. If Opus 5.5 wins, ideas written by an Opus 5.5
   lane or leap are graded by Opus 5 (the runner-up), all others by Opus 5.5; if
   Opus 5 wins, it grades everything (no lane is Opus 5).
-- **Configurations, one lever each** (S1 and the six lens lanes = 7 idea lanes;
-  leap and reviewer as today unless stated):
+
+### 6.2 The idea configurations, one lever each
+
+S1 and the six lens lanes = 7 idea lanes; leap and reviewer as today unless
+stated:
 
 | Config | Lever | Idea lanes | What changes vs baseline |
 | --- | --- | --- | --- |
-| X1-0 | baseline | today's pipeline (arm C: Sonnet 5.5 lanes `medium`, Opus 5.5 leap and reviewer `high`) | none; re-run once on E1's facts for an A/A reading |
-| X1-1 | who thinks (G1) | S1 Sonnet 5.5; lenses on Sonnet 5, Haiku 5.5, Opus 5.5, Fable 5, Fable 5.1, Sonnet 5.5 | model per lane; same view, prompts and order |
+| X1-0 | baseline | today's pipeline (arm C: Sonnet 5.5 lanes `medium`, Opus 5.5 leap and reviewer `high`) | none; re-run once on E1's facts |
+| X1-1 | who thinks (G1) | S1 Sonnet 5.5; lenses on Sonnet 5, Haiku 5.5, Opus 5.5, Fable 5, Fable 5.1, Sonnet 5.5 | model per lane, **rotated across lenses over the 8 libraries (a 6x6 Latin square, rows 1-6 then 1-2)** so model and lens effects separate; same view, prompts and order |
 | X1-2 | what is taken (G4) | baseline models | lanes in sequence, each shown earlier lanes' mechanisms; mechanism dedupe |
-| X1-3 | what they see (G2) | baseline models | each lens lane a different view (callers, data structures, input shape, whole module, 2nd/3rd hotspots, performance-commit history) with its framework (G5) |
-| X1-4 | what they may change (G3) | baseline models | four lanes, each relaxing one rule (new dependency, output order, install-time precompute, API change); proposals only, reported, never scored; only behind the reviewed quarantine (O32), else X2 |
+| X1-3 | what they see **and** how they think (G2 + G5) | baseline models | each lens lane a different view with its framework; **two factors, labelled so; split in X2 if it wins** |
+| X1-4 | what they may change (G3) | baseline models | four lanes, each relaxing one rule (new dependency, output order, install-time precompute, API change); proposals only, reported, never scored or trialled; only behind the reviewed quarantine (O32), else X2 |
 
 - **Today's generator alongside**: arm A (one Sonnet request, 0.025 USD) is
   re-run on the same facts, so "share new to today's generator" compares
   against a same-day reading, not only E1's.
+- **Sampling noise (O36.5b)**: E1's arms B, C and D (one Sonnet lane generator
+  sampled three times) plus X1-0's re-run give the spread of every idea measure
+  by sampling alone; a configuration's difference counts only beyond it.
 - **Libraries**: the 8 development libraries (more_itertools, pyparsing, tomli,
-  sortedcontainers, mistune, sqlparse, markdown, idna); sortedcontainers stays
-  the reported control.
-- **Measures per configuration**: ideas proposed; unique mechanisms (validated
-  dedupe); share new to today's generator; ideas whose ceiling clears the
-  run's floor; spread across mechanism families; marker-feasible ideas; cost.
-  X1-4 reports its proposals by rule relaxed, with no score.
-- **Where the idea lists go**: one markdown file per library and configuration
-  under `.claude/handoff/step3/idea-lab/x1/` (title, mechanism, target lines,
-  verdict, duplicate-of, lane and model), a summary table in STATUS, and the
-  raw rows in the run's results artifact.
-- **Same inputs for every configuration**: all configurations run on E1's
-  recorded phase-1 facts (the `ideas-facts` rows of runs 41186544846 and
-  41190431186), so they see identical profiles and no phase 1 is paid. The
-  baseline is re-run once on those facts (not reused from E1) so the round has
-  an A/A reading of how much the idea measures move by sampling alone.
-- **Expected cost (corrected from Revision 1's 15-25)**: E1 measured per
-  pipeline call: B 0.43, C 0.63, D 1.76, E 0.44 USD; the auditor ~0.35 a
-  library. Per library: baseline (C) ~0.63, mixed-model ~1.5 (Fable 5.1 and Opus
-  lanes), sequential ~0.65, views ~0.8 (larger views), rule-relaxing ~0.65, the
-  auditor ~0.35 per configuration. **About 4.6-5 USD a library, ~37-40 USD for
-  the 8 libraries expected**, with the two validations (~2-3 USD) on top: about
-  42 USD in all, ~28 % of Window 1's 148.73 USD (expires 2026-11-25); an
-  ~80 USD CI ceiling as the fuse. Re-derived and reported before dispatch.
-- **Output**: cost per configuration, and the full idea lists (title, mechanism,
-  target lines, verdict, duplicate-of) for the owner and a reviewing session to
-  read. X1 decides how later rounds run; nothing in it counts as proof.
+  sortedcontainers, mistune, sqlparse, markdown, idna); sortedcontainers is the
+  reported control.
+- **Idea measures per configuration**: ideas proposed; unique mechanisms
+  (validated dedupe); share new to today's generator; ideas whose ceiling clears
+  the run's floor; spread across mechanism families; marker-feasible ideas;
+  cost. X1-4 reports its proposals by rule relaxed, with no score.
+
+### 6.3 The execution slice (O36.2)
+
+Idea measures alone leave the size question open, so X1 also runs ideas.
+
+- **What runs**: per idea configuration X1-0 to X1-3, the top 2-3 ideas new to
+  today's generator (by the validated marker), on sqlparse, pyparsing and tomli,
+  with sortedcontainers as the control: 4 libraries x 4 configurations x 2-3
+  ideas = 32-48 trials, each a normal engine trial (Opus editor, sandboxed
+  worktree, the frozen judges, N >= 5 runs against the measured floor), then
+  the combine per (configuration, library).
+- **What is recorded**: every trial's full idea text (title, mechanism, target
+  lines, rationale), verdict, gain and floor, and every combine summary. This is
+  what the eventagg finding showed was missing, and it makes the slice the
+  marker's full-text validation set.
+- **Reading**: lever rankings from the idea measures alone are provisional; the
+  slice says whether a configuration's ideas win trials more often, or by more,
+  than the baseline's. With 3-12 trials per configuration it is exploratory,
+  not proof.
+- **Dispatch**: two execution dispatches of two libraries each, so each
+  dispatch's worst case stays under the 80 USD fuse (per trial worst case 2.50
+  USD as in E2's plan; 24 trials = 60).
+
+### 6.4 Expected cost (re-derived with the views pass and the execution slice)
+
+| Part | Basis | Expected USD |
+| --- | --- | --- |
+| Views pass | deterministic, no API | 0 |
+| Smoke requests (Sonnet 5, Fable 5) | one request each | ~0.1 |
+| Marker validation | 2 candidates x the rank sets (final after the row count) | ~5-8 |
+| Dedupe validation | labelled E1 pairs | ~2 |
+| Idea configurations X1-0 to X1-4 + arm A | E1's measured per-call costs: baseline ~0.63, mixed ~1.5, sequential ~0.65, views ~0.8, rule-relaxing ~0.65, auditor ~0.35 a configuration, 8 libraries | ~37-40 |
+| Execution slice | 32-48 trials at ~0.10-0.15 measured per Opus-editor trial (L2b: 0.55 a wired OSS run of several trials) | ~5-8 |
+| **Total** | | **~50-58** |
+
+About 34-39 % of Window 1's 148.73 USD (expires 2026-11-25). Worst cases per
+dispatch: the idea configurations go as two dispatches of four libraries each,
+the slice as two of two, the validations as one; each stays under the 80 USD
+fuse. The final figure is re-derived and reported before the first dispatch.
+
+### 6.5 Output
+
+- One markdown file per library and configuration under
+  `.claude/handoff/step3/idea-lab/x1/` (title, mechanism, target lines, verdict,
+  duplicate-of, lane and model), plus the slice's per-trial records; a summary
+  table in STATUS; the raw rows in each run's results artifact.
+- Cost per configuration. X1 decides how later rounds run; nothing in it counts
+  as proof.
 
 ---
 
@@ -350,15 +422,16 @@ never counts toward an efficiency gate.
 | G5 | Per-lane frameworks; compounding into evolution, with W4's near-miss compounds folded in | `optimization/idea_prompts.py`, `orchestrator/nodes.py`, `optimization/evolve.py`; tests | G2-G4 |
 | G6 | Scaling + operation-count judges, shadow mode | `optimization/judges.py`, `execution/measure.py`; tests | — |
 | G7 | The idea-lab process doc | `.claude/handoff/step3/idea-lab.md` | — |
-| G8 | The 18 unseen problems (setter Fable 5.1, O19; no Fable attempter, O34) | `tests/fixtures/idea_lab/…`, a setter harness | G1-G6 |
-| G9 | Held-out OSS set, chosen and sealed now | `tests/fixtures/idea_lab/heldout/…` | — (do early) |
+| G8 | The 18 unseen problems (setter Fable 5.1, O19; no Fable attempter, O34; each reference measured by the frozen judges before sealing) | `tests/fixtures/idea_lab/…`, a setter harness | G1-G6 |
+| G9 | Held-out OSS set: picked by a non-tuning session, kept outside the repository, a salted hash committed now | the hash file only (the list stays outside the repository) | — (do early) |
 | G11 | The lab's learning mechanism: W1 (lessons in the lane prompts, fenced) and W2 (combine-failed lesson discount) | `optimization/generate.py` / `idea_prompts.py`, `learning/lessons.py`, `nodes.py`; tests | G5 |
-| V (CI) | An `idea-lab` live suite: configurations, the marker and dedupe validations, caps per configuration, full idea lists | `tests/live/…`, `ci.yml` | G1-G6 |
-| X1 | The first exploratory round (live) | — | G1-G7, the V suite, the two validations |
+| V (CI) | An `idea-lab` live suite: the views pass, the Sonnet 5 / Fable 5 smoke requests, the marker and dedupe validations, the idea configurations (X1-1's Latin square), the execution slice with per-trial records and combine summaries, caps per dispatch, full idea lists | `tests/live/…`, `ci.yml` | G1-G6 |
+| X1 | The first exploratory round (live): validations, idea configurations, execution slice | — | G1-G7, the V suite, the views pass |
 
-**The idea-quality marker** is resolved by the first validation run (§6): Opus
-5.5 and Opus 5 grade the existing grader labels, the better agreement wins, and
-no idea is graded by the model that wrote it (the independence rule in §6).
+**The idea-quality marker** is resolved before X1 (§6.1): Opus 5.5 and Opus
+5 rank ideas with measured trial outcomes (the oss-ab rank rows), the closer
+ranking wins, the owner-labelled sample scores novelty, and no idea is graded
+by the model that wrote it.
 
 **Sequencing (O35).** PR #22 closes first, on `claude/step3-research`:
 
