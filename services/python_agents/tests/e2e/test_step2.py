@@ -647,6 +647,7 @@ def test_e2e_c_budget_stops_the_second_trial(
          for v in state["verdicts"]],
         [e.message for e in state["events"] if e.level is not EventLevel.info],
         None if combination is None else combination.summary,
+        launches.report(),
     )  # fmt: skip
     assert combination is not None and combination.holds, why
     assert state["cost_usd"] == pytest.approx(

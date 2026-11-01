@@ -231,6 +231,22 @@ class Launch:
     fs: str
     net_isolated: bool  # what the launcher reported it applied
     fs_isolated: bool
+    # For failure messages only (``LaunchLog.report``): which commit the
+    # worktree sat at, what ran, and the launcher's numbers.
+    commit: str = ""
+    command: str = ""
+    wall_s: float = 0.0
+    child_cpu_s: float | None = None
+    strays: int | None = None
+
+
+def _head(cwd: Path) -> str:
+    """The commit ``cwd``'s worktree sits at, or ``?``; never raises."""
+    proc = subprocess.run(
+        ["git", "-C", str(cwd), "rev-parse", "--short=10", "HEAD"],
+        env=_GIT_ENV, capture_output=True, check=False,
+    )  # fmt: skip
+    return proc.stdout.decode().strip() if proc.returncode == 0 else "?"
 
 
 class LaunchLog:
@@ -242,6 +258,7 @@ class LaunchLog:
 
     def __init__(self) -> None:
         self.launches: list[Launch] = []
+        self.failures: list[str] = []  # RunFailure reasons, by phase and commit
 
     def __call__(
         self,
@@ -255,18 +272,48 @@ class LaunchLog:
         fresh_dirs: Sequence[Path] = (),
     ) -> RunSample:
         where = Path(os.path.realpath(cwd)).relative_to(settings.WORKTREE_ROOT)
-        sample = procrun.run_once(
-            argv, cwd, env, sandbox, timeout_s, caps, fresh_dirs=fresh_dirs
-        )
+        commit, command = _head(cwd), " ".join(argv[-3:])
+        try:
+            sample = procrun.run_once(
+                argv, cwd, env, sandbox, timeout_s, caps, fresh_dirs=fresh_dirs
+            )
+        except procrun.RunFailure as failure:
+            self.failures.append(f"{where.parts[1]}@{commit} {command}: {failure}")
+            raise
         launch = Launch(
             where.parts[1],
             sandbox.network,
             sandbox.fs,
             sample.net_isolated,
             sample.fs_isolated,
+            commit=commit,
+            command=command,
+            wall_s=sample.wall_ns / 1e9,
+            child_cpu_s=sample.child_cpu_s,
+            strays=sample.strays,
         )
         self.launches.append(launch)
         return sample
+
+    def report(self) -> str:
+        """Per phase, commit and command: runs, mean wall, the tripwire's
+        largest child CPU and stray count; then every RunFailure. For an
+        assertion message: shows whether a re-test compared what it should."""
+        rows: dict[tuple[str, str, str], list[Launch]] = {}
+        for launch in self.launches:
+            key = (launch.phase, launch.commit, launch.command)
+            rows.setdefault(key, []).append(launch)
+        lines = []
+        for (phase, commit, command), runs in rows.items():
+            mean = sum(run.wall_s for run in runs) / len(runs)
+            child = max((run.child_cpu_s or 0.0 for run in runs), default=0.0)
+            strays = sum(run.strays or 0 for run in runs)
+            lines.append(
+                f"{phase}@{commit} [{command}] n={len(runs)} mean={mean:.3f}s"
+                f" child_cpu_max={child:.3f}s strays={strays}"
+            )
+        lines.extend(f"FAILED {failure}" for failure in self.failures)
+        return "\n".join(lines)
 
     def phases(self) -> set[str]:
         """Every phase launched in; trials collapse to ``trial-*``."""

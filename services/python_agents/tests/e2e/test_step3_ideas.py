@@ -631,7 +631,7 @@ def test_e3_j_the_pipeline_drops_five_ideas_and_two_portfolio_rounds_stack_two_k
     combination, delivery = state["combination"], state["delivery"]
     # A rare CI miss (8b32afe, 3.11) delivered one of the two keeps and did not
     # reproduce locally: the combine summary says why the stacked re-test failed.
-    why = None if combination is None else combination.summary
+    why = (None if combination is None else combination.summary, launches.report())
     assert combination is not None and combination.holds, why
     assert delivery is not None and delivery.kind is DeliveryKind.branch, why
     assert delivery.branch == f"engine/run-{run}" and delivery.commit == combination.tip_commit  # fmt: skip
@@ -731,7 +731,7 @@ def test_e3_k_a_refused_leap_a_timed_out_lane_and_a_cut_review_still_deliver(
     verdicts = _by_title(state)[1]
     assert {t for t, v in verdicts.items() if v.outcome is VerdictOutcome.keep} == {O1, FROMKEYS}  # fmt: skip
     delivery, combination = state["delivery"], state["combination"]
-    why = None if combination is None else combination.summary
+    why = (None if combination is None else combination.summary, launches.report())
     assert delivery is not None and delivery.kind is DeliveryKind.branch, why
     _check_clean(scene, state, isolation, launches)
 
