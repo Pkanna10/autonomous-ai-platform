@@ -612,6 +612,35 @@ numbers that decide anything are copied into the ledger).
 
 ## Decisions
 
+### 2026-11-01 (owner: X1 and the PR #22 close-out, O31-O35)
+
+- **O31. Haiku 4.5 deferred.** Out of X1; added only if the mixed-model lever
+  shows diversity worth chasing (old request shape, 200K context, 10x Haiku
+  5.5's price, a secondary hypothesis).
+- **O32. All four levers in X1.** Views and rule-relaxing lanes are the
+  idea-size levers, and size is the bottleneck E1 exposed. Condition: the
+  rule-relaxing lane's structural quarantine (tag from birth, proposals-only
+  path, anti-cheat rejects a tagged trial claiming equivalence) is built and
+  security-reviewed first; if it slips, X1 runs three levers and rule-relaxing
+  becomes X2. It never ships without the quarantine.
+- **O33. Stopping-rule bar:** per confirmatory rung, pre-registered before that
+  run, owner-approved; no single number fixed now.
+- **O34. Rung 2 attempters:** no Fable 5 or Fable 5.1 lane on rung 2 only, since
+  Fable 5.1 sets it and a same-family attempter can match the sealed reference
+  by shared bias. Fable lanes are fine on the development set, V9 and the
+  held-out OSS set.
+- **O35. Close PR #22, then the lab on its own branch.** Merge PR #22 with the
+  pipeline off once the stage gate passes and CI is green (approved in
+  principle; proceed when green and mergeable); the idea lab runs on
+  `claude/step3-idea-lab` off master. First resolve or record the Wave 1 open
+  items (the eventagg combine, the ledgerclose guard) and confirm the
+  code-scanning thread is the known false positive. Pilots A0-A2 kept
+  (test-only); P3 parked unless nearly free; V9 and the exam sets kept. W4
+  (evolution) folds into the lab's compounding unit, W1/W2 (lessons) become the
+  lab's learning mechanism, W3 deferred. Budget: X1 (~42 USD) is ~28 % of Window
+  1's 148.73 USD; read every idea list in full; some confirmatory rungs may
+  spill into Window 2.
+
 ### 2026-11-01 (owner: E1's answers and the idea lab, O23-O30)
 
 Recorded as given; the build waits for the owner's approval of the spec draft

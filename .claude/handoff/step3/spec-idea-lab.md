@@ -1,10 +1,11 @@
 # Step 3 spec amendment: the idea lab (G units, X rounds, K runs)
 
-**Draft for owner approval — build nothing until approved.** Revision 2
-(2026-11-01): reconciled with the owner's consolidated brief of the same day;
-adds the dedupe judge's validation (G4), the setter/attempter conflict on rung 2
-(§4), the history view's contamination guard (G2), a corrected X1 cost (§6) and
-the branch sequencing (§7).
+**Draft for owner approval — build nothing until approved.** Revision 3
+(2026-11-01): the owner's X1 answers (O31-O35) applied: Haiku 4.5 deferred, all
+four levers in X1 behind a security-reviewed quarantine, per-rung stopping
+bars, no Fable attempter on rung 2, W1/W2/W4 folded in, PR #22 closed first.
+Revision 2 added the dedupe validation (G4), the history view's contamination
+guard (G2), a corrected X1 cost and the branch sequencing.
 
 Base: `claude/step3-research` at `38495de`. Paths are relative to
 `services/python_agents/src/autonomous_ai_agents/` unless they start with
@@ -75,9 +76,10 @@ reviewer, portfolio); the levers change its inputs, not its skeleton.
   (not available under zero-data-retention), so a Fable lane sets
   `ALLOW_RETENTION_MODELS` only on a pinned OSS library, exactly as arm D does
   today; the guard is reused, not rewritten.
-- **Haiku 4.5 flagged as the highest-maintenance lane** (own shape, 200K
-  context so the "whole module" view may not fit, 10x Haiku 5.5's price). It is
-  included in the roster but **X1 may omit it** (owner's call, §6).
+- **Haiku 4.5 deferred (O31).** The highest-maintenance lane (own shape, 200K
+  context so the "whole module" view may not fit, 10x Haiku 5.5's price). G1
+  adds its price row but not its request shape; the shape is built only if X1's
+  mixed-model lever shows diversity worth chasing.
 
 ### G2 — What they see: a view per lane
 
@@ -120,6 +122,13 @@ instruction** (Lead pushback, accepted):
 This is where the "unthinkable" ideas live, safely walled off from the proof
 path.
 
+**Gate before X1 (O32).** G3 gets a security review (a separate Reviewer, on
+the quarantine only: the tag cannot be dropped, the proposals path cannot
+deliver or count, the anti-cheat rejects a tagged equivalence claim) before X1
+uses it. If the review is not clean in time, X1 runs three levers and the
+rule-relaxing configuration becomes X2. The lane never runs without the
+quarantine.
+
 ### G4 — What is already taken: sequential lanes, mechanism dedupe
 
 - Lanes run **sequentially**, each shown the **mechanisms** (not titles) of the
@@ -153,6 +162,11 @@ path.
   **near-miss ideas** — each individually below the noise floor — are combined
   into one trial so their gains can add. A combined-near-miss trial is a normal
   trial under the frozen judges; nothing about it relaxes a rule.
+- **Folded-in Wave 3 units (O35).** W4 (evolution: near-miss compounds) becomes
+  part of G5. W1 and W2 (lessons in the generator prompt; the combine-failed
+  lesson discount) become G11, the lab's learning mechanism: each round's
+  verdicts become lessons that steer the next round's lanes. W3 (hotspot tags)
+  is deferred.
 
 ---
 
@@ -197,10 +211,10 @@ A short process doc (`.claude/handoff/step3/idea-lab.md`) that the rounds follow
 - **Confirmatory runs (K)**: once a design settles, **one pre-registered run per
   ladder rung**, on sets never used while designing. Pre-registration fixes the
   scoring before results; the architecture may change freely between runs.
-- **Stopping rule (Lead pushback, accepted)**: each confirmatory rung has a
-  pre-set "minimum worth continuing" bar. If two rungs in a row miss it, the lab
-  stops and reports rather than tuning further. "Iterate until it wins" gets an
-  explicit exit.
+- **Stopping rule (Lead pushback, accepted; O33)**: each confirmatory rung has a
+  "minimum worth continuing" bar, pre-registered before that rung's run and
+  approved by the owner; no single number is fixed now. If two rungs in a row
+  miss their bar, the lab stops and reports rather than tuning further.
 - **Idea-level measures**: unique mechanisms after dedupe; share new to today's
   generator; ideas whose ceiling clears the noise floor; spread across mechanism
   families; predicted change in growth rate (the scaling judge, shadow); an
@@ -223,12 +237,11 @@ A short process doc (`.claude/handoff/step3/idea-lab.md`) that the rounds follow
    attempter, under O19.** Attempter: the engine. Marker: the frozen judges plus
    the idea-quality marker (open slot, §7). Fable 5.1 is a retention model, so
    the setter runs under O15 on OSS-pinned material; the setter's problems are
-   sealed before any tuning. **O19 conflict (Lead pushback):** the mixed-model
-   roster (G1) includes Fable 5.1 as an idea lane, but on rung 2 Fable 5.1 is
-   the setter and wrote the sealed references. A setter that also attempts its
-   own problems breaks O19's separation. Proposal: on rung 2, no Fable 5.1 lane;
-   Fable 5 (a different model, same family) is allowed only if the owner
-   accepts the family overlap, otherwise excluded too.
+   sealed before any tuning. **No Fable attempter on rung 2 (O34):** Fable 5.1
+   sets the rung and writes its sealed references, and a same-family attempter
+   can match a reference by shared bias, so neither Fable 5 nor Fable 5.1 runs
+   as an idea lane on rung 2. Fable lanes stay allowed on the development set,
+   V9 and the held-out OSS set.
 3. **Held-out OSS libraries (G9)** — chosen and sealed now, before any tuning,
    so they cannot leak into the development set.
 4. **V9** — the sealed maintainer fixes, already built.
@@ -275,16 +288,38 @@ never counts toward an efficiency gate.
 - **No budget cap in practice** (O22): a high CI ceiling for the engine to run,
   bounded by **scope**, not dollars. Report cost per configuration and share
   every idea list.
-- **Baseline**: today's pipeline (arm C config) on the development set.
-- **Configurations, one lever each** (so a difference is attributable):
-  1. **mixed-model lanes** (G1): lanes spread across Sonnet 5.5, Sonnet 5, Haiku
-     5.5, Opus 5.5, Fable 5.1 — Haiku 4.5 included only if the owner says so;
-  2. **sequential + mechanism exclusion** (G4): same models as the baseline,
-     lanes sequential with mechanism dedupe;
-  3. **a view per lane** (G2): the baseline models, each lane a different view;
-  4. **rule-relaxing lanes** (G3): the proposals path, reported, never scored.
+- **Before X1, two validations (no idea generation):** (a) the marker: Opus 5.5
+  and Opus 5 grade the existing grader-label set; (b) the dedupe judge (G4) on
+  labelled E1 idea pairs. Each has its bar fixed before it runs.
+- **Marker independence rule:** every idea is graded by the best-validated
+  marker that did not write it. If Opus 5.5 wins, ideas written by an Opus 5.5
+  lane or leap are graded by Opus 5 (the runner-up), all others by Opus 5.5; if
+  Opus 5 wins, it grades everything (no lane is Opus 5).
+- **Configurations, one lever each** (S1 and the six lens lanes = 7 idea lanes;
+  leap and reviewer as today unless stated):
+
+| Config | Lever | Idea lanes | What changes vs baseline |
+| --- | --- | --- | --- |
+| X1-0 | baseline | today's pipeline (arm C: Sonnet 5.5 lanes `medium`, Opus 5.5 leap and reviewer `high`) | none; re-run once on E1's facts for an A/A reading |
+| X1-1 | who thinks (G1) | S1 Sonnet 5.5; lenses on Sonnet 5, Haiku 5.5, Opus 5.5, Fable 5, Fable 5.1, Sonnet 5.5 | model per lane; same view, prompts and order |
+| X1-2 | what is taken (G4) | baseline models | lanes in sequence, each shown earlier lanes' mechanisms; mechanism dedupe |
+| X1-3 | what they see (G2) | baseline models | each lens lane a different view (callers, data structures, input shape, whole module, 2nd/3rd hotspots, performance-commit history) with its framework (G5) |
+| X1-4 | what they may change (G3) | baseline models | four lanes, each relaxing one rule (new dependency, output order, install-time precompute, API change); proposals only, reported, never scored; only behind the reviewed quarantine (O32), else X2 |
+
+- **Today's generator alongside**: arm A (one Sonnet request, 0.025 USD) is
+  re-run on the same facts, so "share new to today's generator" compares
+  against a same-day reading, not only E1's.
 - **Libraries**: the 8 development libraries (more_itertools, pyparsing, tomli,
-  sortedcontainers, mistune, sqlparse, markdown, idna).
+  sortedcontainers, mistune, sqlparse, markdown, idna); sortedcontainers stays
+  the reported control.
+- **Measures per configuration**: ideas proposed; unique mechanisms (validated
+  dedupe); share new to today's generator; ideas whose ceiling clears the
+  run's floor; spread across mechanism families; marker-feasible ideas; cost.
+  X1-4 reports its proposals by rule relaxed, with no score.
+- **Where the idea lists go**: one markdown file per library and configuration
+  under `.claude/handoff/step3/idea-lab/x1/` (title, mechanism, target lines,
+  verdict, duplicate-of, lane and model), a summary table in STATUS, and the
+  raw rows in the run's results artifact.
 - **Same inputs for every configuration**: all configurations run on E1's
   recorded phase-1 facts (the `ideas-facts` rows of runs 41186544846 and
   41190431186), so they see identical profiles and no phase 1 is paid. The
@@ -295,9 +330,9 @@ never counts toward an efficiency gate.
   library. Per library: baseline (C) ~0.63, mixed-model ~1.5 (Fable 5.1 and Opus
   lanes), sequential ~0.65, views ~0.8 (larger views), rule-relaxing ~0.65, the
   auditor ~0.35 per configuration. **About 4.6-5 USD a library, ~37-40 USD for
-  the 8 libraries expected**, with the dedupe judge's validation (~2 USD) on
-  top; a ~80 USD CI ceiling as the fuse. Window 1 has 148.73 USD left (expires
-  2026-11-25). Re-derived and reported before dispatch.
+  the 8 libraries expected**, with the two validations (~2-3 USD) on top: about
+  42 USD in all, ~28 % of Window 1's 148.73 USD (expires 2026-11-25); an
+  ~80 USD CI ceiling as the fuse. Re-derived and reported before dispatch.
 - **Output**: cost per configuration, and the full idea lists (title, mechanism,
   target lines, verdict, duplicate-of) for the owner and a reviewing session to
   read. X1 decides how later rounds run; nothing in it counts as proof.
@@ -308,51 +343,52 @@ never counts toward an efficiency gate.
 
 | Unit | What | Files (owned) | After |
 | --- | --- | --- | --- |
-| G1 | Mixed-model lanes, price table, Haiku 4.5 shape, retention guard reuse | `common/config.py`, `clients/transport.py` (+ adapter), `optimization/idea_lanes.py`; tests | — |
-| G2 | Per-lane views | `optimization/idea_context.py`; tests | G1 |
-| G3 | Rule-relaxing proposals path + quarantine | `optimization/idea_types.py`, `idea_lanes.py`, `anticheat.py`, the judges; tests | G1 |
-| G4 | Sequential lanes, mechanism dedupe | `optimization/idea_pipeline.py`, `idea_dedupe.py` (new); tests | G1 |
-| G5 | Per-lane frameworks, compounding into evolution | `optimization/idea_prompts.py`, `orchestrator/nodes.py`, `optimization/evolve.py`; tests | G2-G4 |
+| G1 | Mixed-model lanes; price rows for Sonnet 5, Haiku 4.5, Fable 5; retention guard reuse (Haiku 4.5's request shape deferred, O31) | `common/config.py`, `optimization/idea_lanes.py`; tests | — |
+| G2 | Per-lane views, the history view's contamination guard | `optimization/idea_context.py`; tests | G1 |
+| G3 | Rule-relaxing proposals path + structural quarantine, security-reviewed before X1 (O32) | `optimization/idea_types.py`, `idea_lanes.py`, `anticheat.py`, the judges; tests | G1 |
+| G4 | Sequential lanes, mechanism dedupe, its validation set | `optimization/idea_pipeline.py`, `idea_dedupe.py` (new); tests | G1 |
+| G5 | Per-lane frameworks; compounding into evolution, with W4's near-miss compounds folded in | `optimization/idea_prompts.py`, `orchestrator/nodes.py`, `optimization/evolve.py`; tests | G2-G4 |
 | G6 | Scaling + operation-count judges, shadow mode | `optimization/judges.py`, `execution/measure.py`; tests | — |
 | G7 | The idea-lab process doc | `.claude/handoff/step3/idea-lab.md` | — |
-| G8 | The 18 unseen problems (setter Fable 5.1, O19) | `tests/fixtures/idea_lab/…`, a setter harness | G1-G6 |
-| G9 | Held-out OSS set, sealed now | `tests/fixtures/idea_lab/heldout/…` | — (do early) |
-| V (CI) | An `idea-lab` live suite that plans configurations, caps per config, records full idea lists | `tests/live/…`, `ci.yml` | G1-G6 |
-| X1 | The first exploratory round (live) | — | the G units + the V suite |
+| G8 | The 18 unseen problems (setter Fable 5.1, O19; no Fable attempter, O34) | `tests/fixtures/idea_lab/…`, a setter harness | G1-G6 |
+| G9 | Held-out OSS set, chosen and sealed now | `tests/fixtures/idea_lab/heldout/…` | — (do early) |
+| G11 | The lab's learning mechanism: W1 (lessons in the lane prompts, fenced) and W2 (combine-failed lesson discount) | `optimization/generate.py` / `idea_prompts.py`, `learning/lessons.py`, `nodes.py`; tests | G5 |
+| V (CI) | An `idea-lab` live suite: configurations, the marker and dedupe validations, caps per configuration, full idea lists | `tests/live/…`, `ci.yml` | G1-G6 |
+| X1 | The first exploratory round (live) | — | G1-G7, the V suite, the two validations |
 
-**Open slot — the idea-quality marker.** The first validation run scores both
-**Opus 5.5** and **Opus 5** against the existing grader labels (`grader-labels/`);
-the marker is whichever agrees better with the human labels **and did not write
-the ideas it grades**. If Opus 5.5 is the marker, no lane uses Opus 5.5; if
-Opus 5 is the marker, Opus 5.5 is free to be a lane. Resolved before X1; left
-open here.
+**The idea-quality marker** is resolved by the first validation run (§6): Opus
+5.5 and Opus 5 grade the existing grader labels, the better agreement wins, and
+no idea is graded by the model that wrote it (the independence rule in §6).
 
-**Sequencing (Lead recommendation).** PR #22 already carries Step 3 Waves 1-2
-and is large. Close it first: the duplicate-scoring fix in `ideas_probe.py`
-(test-first), V6's fixtures, a Wave 2 report in STATUS, the stage gate, then
-mark it ready and merge with the pipeline still off (it is opt-in today). The
-idea lab then runs on its own branch (`claude/step3-idea-lab`) and its own PR,
-so each review stays readable. The agent pilots, the independent exams and the
-W units are the owner's call: run them before the idea lab, fold W4
-(evolution) into G5's compounding, or park them. The live rounds (X1, then the
-K runs) start only once the G units and the V suite are in and green.
+**Sequencing (O35).** PR #22 closes first, on `claude/step3-research`:
+
+1. Resolve or record the Wave 1 open items: the eventagg combine (the L1a
+   re-run delivered 30.9 % where the best trial measured 92.3 % on peak RSS;
+   read the run's results to see whether the confirmation or the combine
+   dropped it) and the ledgerclose partial-fix guard that fails in the Lead's
+   container.
+2. Confirm the code-scanning thread on the idna key is the known false positive
+   (answered on the thread; left open for the owner).
+3. Fix the pooled auditor's duplicate scoring in `tests/live/ideas_probe.py`,
+   test-first; commit V6's fixtures; a Wave 2 report in STATUS.
+4. The stage gate (upgrades, audits, security review of the new code, docs,
+   quality), CI green, then mark ready and merge with the pipeline off
+   (approved in principle).
+
+Kept as they are: pilots A0-A2 (test-only code), V9 and the exam sets. Parked:
+P3 (Managed Agents objects on the owner's account) unless nearly free. Folded:
+W4 into G5, W1 and W2 into G11. Deferred: W3. The idea lab then runs on
+`claude/step3-idea-lab` off master, its own PR; X1 starts only once its units
+and the V suite are in and green.
 
 ---
 
-## 8 Questions for the owner before building
+## 8 For approval
 
-1. **Haiku 4.5 in X1?** It is the one model needing its own request shape and has
-   a 200K window (the whole-module view may not fit); 10x Haiku 5.5's price.
-   Include it in X1, or add it only if the cheaper-model-different-ideas
-   hypothesis looks alive after X1?
-2. **G ordering.** Build all four levers before X1 (cleanest attribution, more
-   up-front work), or build G1+G4 first and run a smaller X1 on those two levers
-   to fail fast?
-3. **The stopping rule's bar.** I will propose a concrete "minimum worth
-   continuing" number per rung with each K run's pre-registration; confirm you
-   want it owner-approved each time rather than fixed now.
-4. **Rung 2's attempter roster.** No Fable 5.1 lane on rung 2 (it set the
-   problems). Fable 5 lanes: allowed or excluded?
-5. **Sequencing.** Close and merge PR #22 first, then the idea lab on a new
-   branch? And for the pilots (P0-P3), the exams (L3b, VC, A1s/A2s) and the W
-   units: before the idea lab, folded in, or parked?
+1. **This spec (revision 3):** the G units, the two shadow judges, the process,
+   the ladder, O28's scope, and the sequencing above.
+2. **The X1 configuration plan (§6):** five configurations (X1-0 baseline to
+   X1-4 rule-relaxing), arm A alongside, the 8 development libraries, the two
+   validations first, about 42 USD expected, an ~80 USD fuse.
+
+Nothing is built until both are approved.
