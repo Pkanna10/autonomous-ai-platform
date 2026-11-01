@@ -429,11 +429,36 @@ false-keep rate on the paired path (L0, 0 of 130); wired wins on the hard and
 benchmark corpora (L1a, L1b) with every guard, including a real `GitCombiner`'s
 confirmations and final combine in one run.
 
-### Step 3 Wave 2 progress (2026-10-26 to 2026-10-30, building)
+### Step 3 Wave 2 summary (2026-10-26 to 2026-11-01, built; closed out with PR #22)
 
-Built and committed one unit per commit, each after its Fable 5.1 review round
-and the Lead's gate on a clean copy (ruff, format, mypy, bandit, pytest with
-Postgres at 100 % under CPython 3.13 and 3.11, prettier):
+**The report, in brief.**
+
+- **Built:** the idea pipeline (N0-N5: spawn delta, contracts, code context,
+  lanes, reviewer, portfolio, the pipeline, wiring, the child-process tripwire,
+  E2E), corpus v2 and the upstream-fixes corpus (V1-V3, V9), the experiment
+  instruments (V4, V7, V7b, V8, V10), the agent pilots (A0-A3) and the replay
+  fixtures (V6). Build record: Delivery Metrics below.
+- **What the live runs showed** (Wave 2 spent 34.79 USD of Window 1: L3, L4, E0b
+  and its re-run, E1, L5a):
+  - E0b: the pipeline's prompts were larger than planned (lane max 35,686
+    tokens); the bounds were re-derived (V7b) and caching works on every lane.
+  - E1: as coded, the gate failed; the pooled auditor counted repeats of another
+    arm's idea as infeasible (220 of 225). Corrected, every arm passes; strict
+    (repeats of today's generator excluded), only arm E (Haiku lanes) does. The
+    owner's reading of the idea lists: the lanes converge on the same local
+    micro-edits, and idea size is the bottleneck (O24).
+  - L5a: corpus v2 is saturated for blind generation (9 of 10).
+- **Decided:** the pipeline stays off by default (`IDEA_PIPELINE` off); no E2
+  until the convergence is fixed; retrieval stays off (Window 0's real-code
+  re-test already tied); the work moves to the idea lab (O23-O36, spec
+  `.claude/handoff/step3/spec-idea-lab.md`, its own branch and PR).
+- **Carried forward:** the exact child-process signal before any default switch
+  (O23 Q4); W1, W2 and W4 into the idea lab; W3 deferred; P3 parked; the
+  eventagg combine question answered by the idea lab's per-trial records.
+
+The units, one commit each after a Fable 5.1 review round and the Lead's gate on
+a clean copy (ruff, format, mypy, bandit, pytest with Postgres at 100 % under
+CPython 3.13 and 3.11, prettier):
 
 - **Batch 1:** N1a `cc2d416` (contracts), V1 `6214f60` (corpus v2 part 1), V3
   `3068400`, V5 `d7ba9a7`.
@@ -601,7 +626,7 @@ the order, the small letter a variant or a re-test (L1a, L1b; E0b after E0a).
 | Step 0-6, Wave 1-3     | build-order step (CLAUDE.md); a step's approved build waves                                                | CLAUDE.md; the step's spec §7; Development Log                                             |
 | Window 0-2             | a block of API credit                                                                                      | Live API testing plan                                                                      |
 | U, V, N, A, W + number | build units: U Step 3 Wave 1; V Wave 2 tests and CI; N Wave 2 engine code; A agent-pilot builds; W Wave 3  | spec §7 row (brief); one commit whose subject names the unit; Wave 2 build record; batches |
-| batch N                | units built in parallel on disjoint files, gated and committed one at a time                               | Wave 2 progress                                                                            |
+| batch N                | units built in parallel on disjoint files, gated and committed one at a time                               | Wave 2 summary                                                                             |
 | L + number             | Step 3 live runs of the engine on corpora                                                                  | spec §6 row; live ledger (CI run link, cost, result)                                       |
 | E + number             | experiments that decide a setting; Window 0's E1-E9 and Step 3's E0-E4 are separate sets                   | the pre-registered rule (Decisions); ledger                                                |
 | E3-A to E3-L           | Step 3's end-to-end test scenarios, not experiments                                                        | `tests/e2e/test_step3*.py`                                                                 |
