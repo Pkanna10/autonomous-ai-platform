@@ -2,9 +2,11 @@
 
 ``tests/fixtures/discovery_eval/seed.json`` holds, per (repository, arm), the
 generator's recorded reply, the hypotheses the sweep kept from it, a label
-per hypothesis (the grader's verdict) and the grader's recorded reply. Wave 1
-ships a synthetic seed; L4's ``sweep-record`` run replaces it (V6) through
-``discovery_sweep.eval_case``. No network, no key: every model call is a
+per hypothesis (the grader's verdict) and the grader's recorded reply: since V6
+L4's ``sweep-record`` run (41122348574, 2026-10-30: Sonnet 5.5 medium on corpus
+v1, the hard corpus and v2), each recorded line made a case by
+``discovery_sweep.eval_case``; ``synthetic.json`` beside it is Wave 1's
+hand-written seed. No network, no key: every model call is a
 ``ScriptedTransport`` replaying a recorded reply, through the generator role's
 real adapter (``ClaudeHypothesisGenerator``), ``rank_generated`` and the
 hypotheses node's slice (``NodeContext.max_hypotheses_per_round``).
@@ -21,6 +23,7 @@ from live import discovery_grader as grader
 from live import discovery_sweep as sweep
 from live.corpus import CORPUS, HARD_CORPUS, CorpusRepo
 from live.discovery import ArmResult, RepoFacts
+from live.discovery_corpus import DISCOVERY_CORPUS
 from live.discovery_io import json_line
 from pydantic import ValidationError
 
@@ -31,9 +34,13 @@ from autonomous_ai_agents.common.models import Hypothesis
 from autonomous_ai_agents.orchestrator.nodes import NodeContext
 
 SEED = sweep.load_seed()
+# Wave 1's hand-written seed, kept beside L4's: one of its replies repeats a
+# title, which no recorded reply does, so it alone proves the parse drops one
+SYNTHETIC = sweep.load_seed(sweep.EVAL_SEED.with_name("synthetic.json"))
 GEN_CFG = role_settings(settings, "generator")
 GRADER_CFG = grader.grader_settings(settings)
-REPOS = {r.name: r for r in (*CORPUS, *HARD_CORPUS)}
+REPOS = {r.name: r for r in (*CORPUS, *HARD_CORPUS, *DISCOVERY_CORPUS)}
+L4_RUN = "41122348574"  # STATUS live log, 2026-10-30
 SLOWDOWNS = tuple(c for c in SEED.cases if c.kind == "slowdown")
 
 
@@ -75,13 +82,28 @@ def test_the_seed_is_the_generator_roles_arm_sliced_as_the_node_slices() -> None
     assert len(SLOWDOWNS) >= 3
 
 
+def test_the_seed_is_l4s_recorded_sweep_on_every_corpus_repository() -> None:
+    """V6: L4's run as STATUS logs it (37 repositories: 32 slowdowns, 5
+    controls; hit@1 28/32, hit@5 31/32), every line a case, none hand-made."""
+    assert L4_RUN in SEED.source and "synthetic" not in SEED.source
+    repos = [c.repo for c in SEED.cases]
+    assert len(repos) == len(set(repos)) and set(repos) == set(REPOS)
+    kinds = [c.kind for c in SEED.cases]
+    assert (kinds.count("slowdown"), kinds.count("control")) == (32, 5)
+    assert (sweep.recorded_hits(SEED, k=1), sweep.recorded_hits(SEED, k=5)) == (28, 31)
+    assert SEED.baseline_hits == sweep.recorded_hits(SEED, k=SEED.k) == 30
+    assert all(c.grader_reply for c in SLOWDOWNS)  # every slowdown was graded
+
+
 def test_each_recorded_reply_replays_to_the_same_hypotheses() -> None:
-    for case in SEED.cases:
+    for case in (*SEED.cases, *SYNTHETIC.cases):
         facts, replayed = _replayed(case)
         assert sweep.ideas_of(replayed, facts.hotspots) == case.hypotheses, case.repo
     # the generator really parses the reply: one duplicate title is dropped
-    raw = {c.repo: len(json.loads(c.reply)["hypotheses"]) for c in SEED.cases}
-    assert any(raw[c.repo] > len(c.hypotheses) for c in SEED.cases)
+    raw = {c.repo: len(json.loads(c.reply)["hypotheses"]) for c in SYNTHETIC.cases}
+    assert any(raw[c.repo] > len(c.hypotheses) for c in SYNTHETIC.cases)
+    assert "synthetic" in SYNTHETIC.source
+    assert {c.repo for c in SYNTHETIC.cases} <= set(REPOS)
 
 
 def test_hit_at_k_after_ranking_and_the_slice_holds_the_recorded_value() -> None:
