@@ -89,9 +89,11 @@ CONNECT → UNDERSTAND → DEFINE "BETTER" → BASELINE → PROFILE → RESEARCH
 ## Current State (honest)
 
 Step 2 built the core loop for CPU-bound Python workloads; every phase that runs
-code does so for real, in a sandbox, on your machine. Step 3's first wave is
-built on its branch (`claude/step3-research`, draft PR #22) and tested offline;
-its end-to-end tests are in progress and no live run of it has happened yet.
+code does so for real, in a sandbox, on your machine. Step 3's first two waves
+(PR #22) add generated hypotheses, a fix retry, the review branch, the quality
+check, the noise rule and an idea pipeline; Wave 1 has run live, the idea
+pipeline is built and live-tested but off by default (its lanes converge on the
+same small edits). Step 3 continues in the idea lab.
 
 | Area                                                        | State                                                   |
 | ----------------------------------------------------------- | ------------------------------------------------------- |
@@ -104,8 +106,9 @@ its end-to-end tests are in progress and no live run of it has happened yet.
 | Baseline, profile (cProfile), trials in sandboxed worktrees | Working (Step 2), CPU Python workloads                  |
 | Claude trial editor and git-side anti-cheating              | Working (Step 2)                                        |
 | Judges, verdicts, approval, combine with an ABAB re-test    | Working (Step 2)                                        |
-| Generated hypotheses, one fix retry a run, review branch    | Built (Step 3 Wave 1); E2E in progress, no live run yet |
-| Output check by default, quality check, noise rule          | Built (Step 3 Wave 1); E2E in progress, no live run yet |
+| Generated hypotheses, one fix retry a run, review branch    | Working (Step 3 Wave 1), live-tested                    |
+| Output check by default, quality check, noise rule          | Working (Step 3 Wave 1), live-tested                    |
+| Idea pipeline (lanes, reviewer, portfolio)                  | Built (Step 3 Wave 2), off by default (`IDEA_PIPELINE`) |
 | Delivery to a local `engine/run-<id>` branch                | Working (Step 2); never pushed, no PR yet               |
 | Postgres repository (`persistence/postgres.py`)             | Working (Step 2)                                        |
 | Playbook matcher; papers                                    | Matcher built, off; papers conditional on a re-test     |
@@ -645,7 +648,7 @@ default `TRIAL_BRANCH_PREFIX` (`engine/`).
   attribute source the combine reads is refused at connect; `union` and binary
   merges are notes. The combined tip is re-tested either way.
 
-### Known limitations (Step 3, Wave 1)
+### Known limitations (Step 3)
 
 - **Workloads under about 0.3 s** may let the noise rule conclude that no gain
   can be proven (see "Keep workloads at about 0.3 s or longer").
@@ -674,8 +677,9 @@ default `TRIAL_BRANCH_PREFIX` (`engine/`).
 - **One fix retry per run.** A second retried trial waits for further safeguards
   against the error message carrying data out (about 18 bytes a run is the bound
   today).
-- **The Step 3 loop has not run live yet**; its live runs follow its end-to-end
-  tests.
+- **The idea pipeline is off by default.** Live (E1), its lanes converged on the
+  same local micro-edits; the idea lab works on idea size and diversity before
+  it is switched on.
 
 ---
 

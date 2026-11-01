@@ -1,14 +1,16 @@
 # Project Status - Autonomous AI Platform
 
-**Last Updated:** 2026-10-25
+**Last Updated:** 2026-11-01
 
 ---
 
 ## Current Step
 
 **Build step:** 3 (wired discovery, engine self-retry, review delivery, quality
-check, noise rule). Wave 1 is built and committed (27 units, E2E U14 and U26
-included); next are the live runs L0 to L2. Step 2 is merged (PR
+check, noise rule, idea pipeline). Waves 1 and 2 are built, live-tested and
+closed out on PR #22 (see "Step 3 Wave 2 summary"); next is the idea lab on
+`claude/step3-idea-lab` (spec `.claude/handoff/step3/spec-idea-lab.md`, revision
+4, approved with changes, O36-O37). Step 2 is merged (PR
 [#12](https://github.com/Pkanna10/autonomous-ai-platform/pull/12)); the Window 0
 live experiments are closed out on PR
 [#21](https://github.com/Pkanna10/autonomous-ai-platform/pull/21). **Branch:**
@@ -120,7 +122,8 @@ the step.
 | 1    | Engine design (typed state, data model, judges, migration 003)            | 2026-10-21 | 2026-10-21 | 2026-10-21 | [#11](https://github.com/Pkanna10/autonomous-ai-platform/pull/11) | passed |
 | 2    | Core loop end to end on CPU Python workloads + E2E fixture test           | 2026-10-21 | 2026-10-21 | 2026-10-24 | [#12](https://github.com/Pkanna10/autonomous-ai-platform/pull/12) | passed |
 | W0   | Window 0 live experiments (discovery, A/B, noise, evolution, heal, build) | 2026-10-23 | 2026-10-23 | 2026-10-25 | [#21](https://github.com/Pkanna10/autonomous-ai-platform/pull/21) | passed |
-| 3    | Discovery and proof: generator, retry, review branch, quality, noise rule | 2026-10-24 | 2026-10-24 |            | [#22](https://github.com/Pkanna10/autonomous-ai-platform/pull/22) |        |
+| 3    | Discovery and proof: generator, retry, review branch, quality, noise rule | 2026-10-24 | 2026-10-24 | 2026-11-01 | [#22](https://github.com/Pkanna10/autonomous-ai-platform/pull/22) | passed |
+| 3L   | Idea lab (`spec-idea-lab.md`): views, marker, X1, the K and I rounds      | 2026-11-01 |            |            |                                                                   |        |
 | 3c   | Self-healing of the user's code (designed in the Step 3 spec; before 3b)  |            |            |            |                                                                   |        |
 | 3b   | Capability acquisition: automatic package policy (designed in Step 3)     |            |            |            |                                                                   |        |
 | 4    | Interfaces + runner: live CLI, hardware detection, `--goal`               |            |            |            |                                                                   |        |
@@ -433,6 +436,16 @@ confirmations and final combine in one run.
 
 **The report, in brief.**
 
+- **Stage gate (2026-11-01):** upgrades: langgraph 1.2.17 only (every other
+  release is under the seven-day cooldown; majors left to Dependabot); audits:
+  pip-audit and bandit clean, pnpm audit clean with one dated exception
+  (GHSA-g3hv-75wg-m249, minimatch, dev tooling only, no compatible fix;
+  `pnpm-workspace.yaml`); security review of the whole Step 3 diff (a fresh
+  Sonnet 5.5 Reviewer, every trust boundary): no finding at the bar, two notes
+  in Technical Debt; `pnpm stage-gate`: passed (2 warnings: outdated majors and
+  cooldown-held minors), 8,503 passed, 100 % coverage. The first run failed
+  pip-audit on a stale venv (pypdf 6.21.2, locked 6.21.4): the gate now audits
+  every locked package, as `security.yml` does.
 - **Built:** the idea pipeline (N0-N5: spawn delta, contracts, code context,
   lanes, reviewer, portfolio, the pipeline, wiring, the child-process tripwire,
   E2E), corpus v2 and the upstream-fixes corpus (V1-V3, V9), the experiment
@@ -607,7 +620,8 @@ CPython 3.13 and 3.11, prettier):
 | Data model, anti-cheating, judges, ranking, lessons, `PostgresRepository`            | Working (Steps 1 and 2)                            |
 | `research/arxiv_monitor.py`, `pdf_parser.py`; the `watch` node                       | Placeholders / stub (paper intake conditional, D2) |
 | `packages/research-engine`, `execution-engine`                                       | TypeScript placeholders                            |
-| Step 3 Wave 1: generator wired, fix retry, review branch, quality check, noise rule  | Built; E2E in progress, no live run                |
+| Step 3 Wave 1: generator wired, fix retry, review branch, quality check, noise rule  | Working; E2E and live runs L0-L2 (Step 3)          |
+| Step 3 Wave 2: idea pipeline (lanes, reviewer, portfolio), child-process tripwire    | Built and live-tested (E0b, E1); off by default    |
 | Research matcher (matched retrieval)                                                 | Built, off by default (D1)                         |
 | CLI, live log, hardware detection, web console                                       | Not started                                        |
 
@@ -2613,6 +2627,7 @@ on 2026-10-24 agreed):
 | 2    | ~60 h (2026-10-21 18:18 to 2026-10-24 ~07:00, Window 0 experiments included) | 4 (`dbec415` Python 3.10 on the runner, `3b2ffee`, `92cefe7`, `a02e55e` the orderlookup timing floor) | 28 `fix` commits of 116            | 0       |
 | W0   | ~2 days (2026-10-23 to 2026-10-25), 52 live runs, $77.78                     | 0                                                                                                     | 4 (lint of fixtures, review fixes) | 0       |
 | 3 W1 | ~36 h (spec 2026-10-24 08:00 to U27 2026-10-25 20:11 UTC; build ~11.5 h)     | 2 (`6342eca` macOS interpreters, `60cee15` graphwalk at the floor)                                    | 2 (`f1080dc`, `3e04294`) of 27     | 0       |
+| 3 W2 | ~6 days (2026-10-26 14:10 to 2026-11-01 15:05 UTC; a 3.5-day usage pause)    | 4 (`988430f`, `40778d9`, `db745d1`, `181f1ef`; below)                                                 | 6 Lead follow-ups of 71 commits    | 0       |
 
 Step 3 Wave 1: the build ran from U5 (08:41) to U27 (20:11 UTC) on 2026-10-25,
 U1 on 2026-10-24. The CI-red pushes were the macOS job missing `python3.9` and
@@ -2621,10 +2636,11 @@ at the corpus floor (fixed in `3e04294`); review fixes landed inside each unit's
 own commit, so they are not counted as rework.
 
 Step 3 Wave 2 (build, 2026-10-26 to 2026-10-31, a usage-limit pause from 10-26
-19:40 to 10-30 09:09): 3 CI-red pushes (`40778d9` and `db745d1`, seven new pypdf
-advisories, fixed in `0bca456`; `181f1ef`, the E3-A miss, Technical Debt);
-rework: N0c built twice (re-scoped) and six Lead follow-ups (`7b970bf`,
-`71940d0`, `a724611`, `2dd55cc`, `e6c2799`, `1c43097`); 0 reverts.
+19:40 to 10-30 09:09): 4 CI-red pushes (`988430f`, the ledgerclose baseline at
+0.27 s, fixed in `7b970bf`; `40778d9` and `db745d1`, seven new pypdf advisories,
+fixed in `0bca456`; `181f1ef`, the E3-A miss, Technical Debt); rework: N0c built
+twice (re-scoped) and six Lead follow-ups (`7b970bf`, `71940d0`, `a724611`,
+`2dd55cc`, `e6c2799`, `1c43097`); 0 reverts.
 
 ### Step 3 Wave 2 build record (the baseline for the Improvement pilot, I)
 
@@ -2891,6 +2907,12 @@ worktree", 4.4.0) or in the builder rules every brief carries.
 
 ## Technical Debt
 
+- Step 3 gate security review, below its bar (2026-11-01): `READ_DENY_PATTERNS`
+  lacks `*.tfvars`, `terraform.tfstate`, `.git-credentials`,
+  `.docker/config.json`, `kubeconfig` and `*.env` (predates Step 3; add before a
+  run on a real repository); with `unordered_lines` and a builtin line-aligned
+  measure, the score is read from the first timed run's bytes only (later runs
+  need only the same canonical fingerprint).
 - E3-A (`tests/e2e/test_step3.py`) once delivered report only on CI (`181f1ef`,
   CPython 3.11: kept and confirmed twice, then the combine re-test did not
   hold). It did not reproduce in three E2E runs and two full 3.11 suites under
