@@ -665,10 +665,13 @@ build units), X (exploratory rounds), K (confirmatory runs).
   exploratory only. (2) 18 unseen problems, 6 domains x 3 tiers (textbook,
   memory or efficiency, beyond-textbook), each with big headroom, several valid
   routes, a sealed expert reference and a size setting; set by Fable 5.1 under
-  O19, marked by the frozen judges plus Opus 5 for idea quality (re-validated on
-  the grader labels first). (3) Held-out OSS libraries, chosen and sealed now.
-  (4) V9's sealed maintainer fixes. (5) The Python tasks of SWE-Perf, GSO and
-  SWE-fficiency, scored their way, later, as its own unit.
+  O19, marked by the frozen judges plus an idea-quality marker. The marker is an
+  open slot (owner, 2026-11-01): the first validation run scores Opus 5.5 and
+  Opus 5 on the existing grader labels, and the marker is whichever agrees
+  better with the human labels and did not write the ideas it grades. (3)
+  Held-out OSS libraries, chosen and sealed now. (4) V9's sealed maintainer
+  fixes. (5) The Python tasks of SWE-Perf, GSO and SWE-fficiency, scored their
+  way, later, as its own unit.
 - **O28. Security scope: defensive source analysis (owner, revised
   2026-11-01).** The precedent is OSS-Fuzz, CodeQL and Semgrep: they analyse
   public open-source code and report to maintainers. The line is not "never
@@ -698,8 +701,8 @@ build units), X (exploratory rounds), K (confirmatory runs).
     separate human-led track, not an autonomous engine capability, out of this
     spec.
   - **Judges:** a frozen reproducer that fails before the fix and passes after,
-    static analysers, and the full test suite with no regression. Refusal
-    categories are logged.
+    static analysers, and the full test suite with no regression. Lanes are
+    prompted as defensive review; refusal categories are logged.
 - **O29. Two new judges, shadow mode.** A scaling judge (2-3 input sizes, fit
   the growth) and an operation-count judge (deterministic counts, a second
   signal only). Each records, never decides, until A/A, controls and a gaming
