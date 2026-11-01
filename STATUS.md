@@ -644,6 +644,34 @@ numbers that decide anything are copied into the ledger).
 
 ## Decisions
 
+### 2026-11-01 (owner: the marker-validation bar, O37; fixed before any marker result)
+
+- **O37. The bar.** A candidate marker passes when its AUC (the chance a kept
+  idea is ranked above a non-kept one) is at least 0.65 and the 95 % interval's
+  lower bound is above 0.5. The higher AUC wins; if Opus 5.5 and Opus 5 are
+  within 0.05, Opus 5 is chosen. Four rules:
+  1. AUC is computed within each library and averaged over libraries; the
+     interval comes from a cluster bootstrap that resamples whole libraries, not
+     rows.
+  2. The baseline is the generator's own rank order (the `rank` field), scored
+     the same way; a marker passes only if its AUC is at least that baseline's.
+     On a tie it may still be used, and STATUS records the tie.
+  3. Positive = `keep`; negative = trialled with `reject` or `inconclusive`.
+     Excluded: `NOT_TRIALLED`, `NOT_HANDED`, `NO_RESULT`, `no_verdict` and
+     guard-breached rows. Fewer than ~20 positives left means underpowered: the
+     validation decides nothing and the X1 execution slice becomes the deciding
+     set.
+  4. If neither model passes, X1 runs without a marker: it reports the other
+     idea measures with no marker-feasible count, and the slice becomes the
+     marker's next validation set. The bar is not adjusted after results.
+- **Known before the bar was fixed (reported to the owner):** the 332
+  `E5-oss-ab-rank` rows of the 18 oss-ab runs all carry `keep` (114),
+  `inconclusive` (175) or `reject` (43), all with guard `ok`, so 114 positives
+  remain under rule 3. The rows are committed as a fixture before their
+  artifacts expire on 2026-11-23.
+- **V6's vendored upstream files** (owner): kept in the repository with their
+  licences and sha256 values, read as text only.
+
 ### 2026-11-01 (owner: spec revision 3 and X1 approved with changes, O36)
 
 **O36. Approved, with these changes before X1 is dispatched** (spec revision 4):

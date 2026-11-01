@@ -318,8 +318,13 @@ never counts toward an efficiency gate.
   is the rank agreement with the measured outcomes (kept above the floor >
   trialled and not kept > ...). Only rows with a real verdict count (not
   `NOT_TRIALLED`, not `NO_RESULT`); **the Lead reports that count and the owner
-  fixes the bar before the run.** Titles only, no mechanism text: a first
-  check, not the final one. The execution slice (§6.3) becomes the full-text
+  fixes the bar before the run.** The bar is fixed (O37): AUC >= 0.65 with the
+  95 % interval's lower bound above 0.5, within-library AUC averaged with a
+  cluster bootstrap over libraries, at least the generator's own rank order,
+  Opus 5 if the two are within 0.05; positives are `keep`, negatives trialled
+  `reject` or `inconclusive`; under ~20 positives it decides nothing; if neither
+  passes, X1 runs without a marker. 332 rows, 114 positives. Titles only, no
+  mechanism text: a first check, not the final one. The execution slice (§6.3) becomes the full-text
   validation set.
 - **Owner-labelled novelty sample.** 20-30 ideas drawn from E1's lists (mixed
   arms and lanes), shown to the owner without their source, labelled new or
