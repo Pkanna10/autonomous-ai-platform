@@ -62,10 +62,16 @@ history at `5ce95a4` (`git show 5ce95a4:.claude/handoff/step2/spec.md`).
   2 6/10, 5.94 USD), below W5's 10 of 20: the editor default stays Opus.
 - **L2b delivered 7 of 10** (Opus editor, same rule, 5.46 USD): Opus stays the
   editor default. Wave 1's live runs are done; next is the Wave 1 report.
-  **Open:** on the L1a re-run `eventagg` delivered 30.9 % (one kept idea) while
-  its best trial measured 92.3 % on peak RSS; the first L1a run kept that
-  streaming idea at 92.3 %. Read the run's results artifact (the confirmation or
-  the combine dropped it) before the Wave 1 report.
+  **Recorded, not resolvable (2026-11-01):** on the L1a re-run (run 40244866489)
+  `eventagg` delivered 30.9 % (one kept idea, "drop the unused f-string id
+  field") while its best trial measured 92.3 % on peak RSS; the first L1a run
+  had kept that streaming idea at 92.3 %. The results row, the job summary and
+  the full job log hold only the kept titles, the delivered and best-trial
+  gains; the per-trial verdicts and the combine summary were never recorded, so
+  whether the confirmation or the combine dropped it cannot be read back. Both
+  stay unverified. The run still met the 30 % reference. Fix for the future: the
+  idea lab's live suite records every trial's verdict and the combine summary
+  (E3-A's test already prints the latter).
 - **Wave 2 is approved** (O6: hard corpus v2, the `ledgerclose` rebuild, the A/B
   instrument, grader labels, L3-L5). **Wave 3 is held** until Wave 1's live runs
   report (O6); each of its units has its own gate (spec section 7).
@@ -77,8 +83,9 @@ history at `5ce95a4` (`git show 5ce95a4:.claude/handoff/step2/spec.md`).
   `python3.14` (`uv python install 3.8 3.9 3.10 3.11 3.12 3.13 3.14` puts them
   in `~/.local/bin`); a missing one skips locally but fails CI (U3, `f1080dc`).
   Check both before a long run; do not assume an environment setup script ran.
-  In the Lead's container the `ledgerclose` partial-fix guard fails (see Known
-  gaps); CI is the reference.
+  The old `ledgerclose` partial-fix failure in the Lead's container is gone: V3
+  (`3068400`) rebuilt it with two hot spots of the same kind, and its six guards
+  pass here (2026-11-01, plus two repeats of the partial-fix guard).
 - **How a unit was built in Step 2:** the Workflow tool ran one unit per run
   (Builder tests first, correctness and security Reviewers on a different model,
   fixer; a missing review halts the run); the script is
@@ -2441,18 +2448,12 @@ on 2026-10-24 agreed):
 - **Dependency shadowing**: a trial adding `numpy.py` under a module root is an
   accepted limitation covered by human review; it matters more once Step 3b adds
   packages.
-- **`ledgerclose`'s two hot spots stress different hardware.** `pop(0)` on a
-  60,000-item list is memory-bandwidth bound, the window maximum is compute
-  bound, so their ratio varies about tenfold between machines (16:1 in the
-  Lead's container, close to 1:1 on GitHub runners). The guard
-  `test_a_fix_that_leaves_one_hot_spot_falls_short` is machine-independent since
-  2026-10-24: each partial fix must stay at least 2x slower than the full fix
-  measured in the same run (measured minimum 3.2x). What remains: the live
-  hard-corpus scoring's known-fix rule still compares against the absolute
-  `fix_gain`, so on a memory-slow machine a settle-only fix of `ledgerclose`
-  would be credited as the full fix. Follow-up: rebuild the repository with two
-  hot spots of the same kind (both C-level loops over Python objects), keeping
-  its multi category. Owner: Step 3's corpus rework (Wave 2, V3).
+- **Resolved (V3, `3068400`): `ledgerclose`'s hot spots.** They once stressed
+  different hardware (a memory-bound `pop(0)` and a compute-bound window
+  maximum, about tenfold apart between machines), so the live known-fix rule
+  could credit a partial fix on a memory-slow machine. V3 rebuilt both as the
+  same kind of work (`list.index` scans within 0.5-2x of each other) with a
+  part-cost ratio guard; the guards pass in the Lead's container (2026-11-01).
 - **Multiprocessing `spawn`/`forkserver` fail in the Linux sandbox.** The
   seccomp filter that closes path-based AF_UNIX egress refuses every
   `socket(AF_UNIX)`, and those start methods need an AF_UNIX listener; `fork`
