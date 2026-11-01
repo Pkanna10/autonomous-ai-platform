@@ -669,18 +669,37 @@ build units), X (exploratory rounds), K (confirmatory runs).
   the grader labels first). (3) Held-out OSS libraries, chosen and sealed now.
   (4) V9's sealed maintainer fixes. (5) The Python tasks of SWE-Perf, GSO and
   SWE-fficiency, scored their way, later, as its own unit.
-- **O28. Security scope: defensive only (owner's words, 2026-11-01).** Like the
-  researchers who caught the PHP backdoors: the engine finds weaknesses and
-  sounds the alarm for a human to fix; it never exploits anything. It inspects
-  the code, builds a replica of the setup inside its own sandbox, and tests it
-  with dummy values only (no real data or credentials). Only code the owner owns
-  or is authorised to test; never a public codebase, website, third-party or
-  live system. The deliverable is the finding: a small reproducer test that
-  shows the weakness on the replica, a plain report, and a proposed fix when
-  there is one, all on the review branch, never automatic delivery. Judges: the
-  frozen reproducer fails before a fix and passes after, static analysers, and
-  the full suite with no regression. Lanes are prompted as defensive review;
-  refusal categories are logged.
+- **O28. Security scope: defensive source analysis (owner, revised
+  2026-11-01).** The precedent is OSS-Fuzz, CodeQL and Semgrep: they analyse
+  public open-source code and report to maintainers. The line is not "never
+  touch public repos"; it is what the engine does with them.
+  - **May analyse:** code the owner owns, the owner's dependency tree, and any
+    public open-source repository, examined as source or as a build the engine
+    compiles inside its own sandbox.
+  - **How:** inspection and static analysis, or fuzzing/testing a local sandbox
+    build, always on a copy with dummy data, never real credentials or real
+    data.
+  - **Delivers:** a finding = a contained sandbox reproducer on the local copy
+    - a plain report + a proposed fix when it has one, all to the review branch
+      for a human.
+  - **A human owns disclosure, every time.** The engine surfaces and sounds the
+    alarm; it never discloses, publishes, contacts a maintainer, or acts on a
+    finding itself. Coordinated disclosure upstream is a human decision.
+  - **Scale guardrail:** surface only high-confidence findings with a reproducer
+    (the OSS-Fuzz spirit: reports a maintainer can act on, not mass noise).
+  - **Out, non-negotiable:** no active probing of live or deployed third-party
+    systems or websites the owner does not own or is not authorised to test (a
+    running service cannot be copied into a sandbox; pointing the engine at the
+    real thing is testing the real thing, the unauthorised-access line); no
+    weaponised or deployable exploit artifacts, a contained proof-of-concept on
+    the local copy only to prove the problem to a human (the PHP/xz-backdoor
+    model); no autonomous disclosure or action. Broader authorised third-party
+    engagements (signed scope, legal sign-off, a disclosure process) are a
+    separate human-led track, not an autonomous engine capability, out of this
+    spec.
+  - **Judges:** a frozen reproducer that fails before the fix and passes after,
+    static analysers, and the full test suite with no regression. Refusal
+    categories are logged.
 - **O29. Two new judges, shadow mode.** A scaling judge (2-3 input sizes, fit
   the growth) and an operation-count judge (deterministic counts, a second
   signal only). Each records, never decides, until A/A, controls and a gaming
