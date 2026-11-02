@@ -896,3 +896,24 @@ def test_the_leap_takes_no_per_lane_transport() -> None:
 
     with pytest.raises(ValueError, match="leap lane runs on the leap transport"):
         lane_transports(roles, {Lane.leap: roles["leap"]}, cfg)
+
+
+def test_a_prefix_no_other_request_reads_is_never_cached() -> None:
+    """
+    GIVEN a lens whose data block is its own view (G2), read by no other
+        request of the call
+    WHEN its request is built with shared=False
+    THEN the block carries no breakpoint, since nothing would read the write
+        (D59); shared=True, the default, keeps today's breakpoint
+    """
+    prefix = _prefix(Fence(LANE_TOKEN))
+    alone = lane_request(
+        Lane.far, system=IDEAS_SYSTEM_PROMPT, prefix=prefix, instruction="ask",
+        schema=IDEAS_SCHEMA, max_tokens=9, effort=None, shared=False,
+    )  # fmt: skip
+    assert "cache_control" not in json.dumps(alone.messages)
+    shared = lane_request(
+        Lane.far, system=IDEAS_SYSTEM_PROMPT, prefix=prefix, instruction="ask",
+        schema=IDEAS_SCHEMA, max_tokens=9, effort=None,
+    )  # fmt: skip
+    assert json.dumps(shared.messages).count("cache_control") == 1

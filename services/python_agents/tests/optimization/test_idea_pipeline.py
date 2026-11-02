@@ -52,6 +52,7 @@ from autonomous_ai_agents.common.models import (
     Project,
     Technique,
     VerdictOutcome,
+    Workload,
 )
 from autonomous_ai_agents.common.repo_read import RepoReader
 from autonomous_ai_agents.execution.git import GitError
@@ -60,7 +61,7 @@ from autonomous_ai_agents.optimization.hypothesis_source import (
 )
 from autonomous_ai_agents.optimization.idea_pipeline import IdeaPipelineGenerator
 from autonomous_ai_agents.optimization.idea_portfolio import rotation
-from autonomous_ai_agents.optimization.idea_prompts import THINK_LINE
+from autonomous_ai_agents.optimization.idea_prompts import THINK_LINE, VIEW_HEADINGS
 from autonomous_ai_agents.optimization.idea_review import REVIEW_SYSTEM_PROMPT
 from autonomous_ai_agents.optimization.idea_types import (
     LENS_LANES,
@@ -389,6 +390,7 @@ class _Run:
         techniques: Sequence[Technique] = (),
         n: int = 5,
         hotspots: Sequence[Hotspot] = HOTSPOTS,
+        workloads: Sequence[Workload] = (),
     ) -> GenerateResult:
         self.budget = Budget(5.0) if budget is None else budget
         return self.generator.generate(
@@ -404,6 +406,7 @@ class _Run:
             commit=commit,
             run_id=run_id,
             call_index=call_index,
+            workloads=workloads,
         )
 
     def requests(self, role: Role) -> list[LLMRequest]:
@@ -1134,3 +1137,191 @@ def test_ideas_the_reviewer_may_not_be_shown_are_dropped_unsent() -> None:
     assert result.hypotheses == ()
     assert _noted(result.notes, "dropped before review: it holds a tag shape")
     assert _noted(result.notes, "not reviewed (no idea could be shown to the reviewer)")
+
+
+# --------------------------------------------------------------------------
+# G2: a view per lane
+# --------------------------------------------------------------------------
+
+
+def _viewed(views: Mapping[str, str]) -> Settings:
+    return Settings.model_validate({**BASE.model_dump(), "IDEAS_LANE_VIEWS": views})
+
+
+def _lens_requests(run: _Run) -> dict[Lane, LLMRequest]:
+    return dict(zip(LENS_LANES, run.requests("lane")[1:], strict=True))
+
+
+def _cached(request: LLMRequest) -> bool:
+    return "cache_control" in json.dumps(request.messages)
+
+
+def test_a_lane_with_a_view_sees_it_instead_of_the_shared_block() -> None:
+    """
+    GIVEN IDEAS_LANE_VIEWS gives eliminate the 2nd-and-3rd-hotspots view
+        (find_all and join_lines: the five tied hotspots rank by name)
+    WHEN the pipeline runs
+    THEN eliminate's data block is that view, fenced with the call's token
+        and not cached (nothing else reads it); S1, every other lens, the
+        leap and the reviewer keep the shared block; eliminate's quote in
+        join_lines grounds in its view, its quote in merge_runs (not shown
+        to it) does not
+    """
+    mine = [
+        _idea("Build the lines in one join", "join_lines", mechanism="remove_work",
+              cells=("work:eliminate",)),
+        _idea("Skip the sort when items arrive sorted", "merge_runs"),
+    ]  # fmt: skip
+    run = _Run(
+        lane=[S1_REPLY, *_lens_replies(eliminate=_ideas(*mine))],
+        leap=[LEAP], reviewer=[REVIEW], cfg=_viewed({"eliminate": "next_hotspots"}),
+    )  # fmt: skip
+
+    result = run()
+
+    s1 = run.requests("lane")[0]
+    shared = _texts(s1)[0]
+    lenses = _lens_requests(run)
+    view = _texts(lenses[Lane.eliminate])[0]
+    assert view != shared
+    assert view.startswith(shared.split("\n", 1)[0])  # the same boundary token
+    assert VIEW_HEADINGS["next_hotspots"] in view
+    assert "def join_lines(lines):" in view
+    assert "def parse_tokens(" not in view
+    assert not _cached(lenses[Lane.eliminate])
+    for lane, request in lenses.items():
+        if lane is not Lane.eliminate:
+            assert _texts(request)[0] == shared
+            assert _cached(request)
+    assert _texts(run.requests("leap")[0])[0] == shared
+    assert _texts(run.requests("reviewer")[0])[0].startswith(f"{shared}\n")
+    assert result.stats is not None
+    assert result.stats.ideas_per_lane[Lane.eliminate] == 1
+    dropped = [e for e in result.events if e.code == "idea_dropped"
+               and e.data.get("lane") == "eliminate"]  # fmt: skip
+    assert [e.data["title"] for e in dropped] == [
+        "Skip the sort when items arrive sorted"
+    ]
+
+
+def test_two_lanes_sharing_a_view_share_one_cached_block() -> None:
+    run = _Run(
+        lane=[S1_REPLY, *_lens_replies()], leap=[LEAP], reviewer=[REVIEW],
+        cfg=_viewed({"eliminate": "whole_module", "far": "whole_module"}),
+    )  # fmt: skip
+    run()
+    lenses = _lens_requests(run)
+    eliminate, far = (lenses[Lane.eliminate], lenses[Lane.far])
+    assert _texts(eliminate)[0] == _texts(far)[0]
+    assert VIEW_HEADINGS["whole_module"] in _texts(far)[0]
+    assert _cached(eliminate) and _cached(far)
+
+
+def test_a_view_that_cannot_be_built_leaves_the_lane_on_the_shared_block() -> None:
+    run = _Run(
+        lane=[S1_REPLY, *_lens_replies()], leap=[LEAP], reviewer=[REVIEW],
+        cfg=_viewed({"far": "next_hotspots"}),
+    )  # fmt: skip
+    result = run(hotspots=HOTSPOTS[:1])
+    lenses = _lens_requests(run)
+    assert _texts(lenses[Lane.far])[0] == _texts(run.requests("lane")[0])[0]
+    assert _noted(result.notes, "lane far: no next_hotspots view", "shared data block")
+    assert _noted(result.notes, "view next_hotspots: ")
+
+
+class _HistoryReader(_Reader):
+    """A reader with a one-commit history: the pinned commit, a speed-up."""
+
+    def resolve_commit(self, rev: str) -> str:
+        raise GitError(f"no parent of {rev}")
+
+    def commit_message(self, commit: str) -> bytes:
+        assert commit == SHA
+        return b"Speed up parse_tokens with a frozenset\n"
+
+    def diff_commits(self, base: str, tip: str, *, max_bytes: int = 1) -> str:
+        raise AssertionError("a root commit has no parent to diff against")
+
+
+def test_the_input_and_history_views_reach_their_lanes() -> None:
+    """
+    GIVEN eliminate on the input shape view (the call's workloads name a
+        tracked input) and far on the history view (a reader with history)
+    WHEN the pipeline runs
+    THEN eliminate's block lists the workload and its input file, far's the
+        pinned commit's speed-up
+    """
+    workload = Workload(project_id="p1", name="bench",
+                        command=("python", "data/words.txt"))  # fmt: skip
+
+    def reader(_project: Project) -> _Reader:
+        return _HistoryReader({PATH: SOURCE, "data/words.txt": "if else\nfor\n"})
+
+    run = _Run(
+        lane=[S1_REPLY, *_lens_replies()], leap=[LEAP], reviewer=[REVIEW],
+        cfg=_viewed({"eliminate": "input_shape", "far": "history"}),
+        reader=reader,
+    )  # fmt: skip
+    run(workloads=(workload,))
+    lenses = _lens_requests(run)
+    eliminate = _texts(lenses[Lane.eliminate])[0]
+    assert '"argv": ["python", "data/words.txt"]' in eliminate
+    assert '"path": "data/words.txt"' in eliminate
+    assert "Speed up parse_tokens with a frozenset" in _texts(lenses[Lane.far])[0]
+
+
+def test_the_reviewer_is_shown_the_code_a_viewed_lane_grounded_in() -> None:
+    """
+    GIVEN a shared block of two hot functions (count_words, find_all: the
+        file, padded with comments, is too large to show whole) and
+        eliminate on the 2nd-and-3rd hotspots view (find_all and join_lines)
+    WHEN eliminate's idea quotes join_lines, which only its view shows
+    THEN the idea is grounded and the reviewer's request, under the shared
+        boundary token, shows join_lines's line as well as the shared code;
+        without a viewed idea the reviewer gets the shared block unchanged
+    """
+    cfg = Settings.model_validate({
+        **BASE.model_dump(), "IDEAS_HOT_FUNCTIONS": 2, "IDEAS_FILE_MAX_BYTES": 1024,
+        "IDEAS_LANE_VIEWS": {"eliminate": "next_hotspots"},
+    })  # fmt: skip
+    padded = SOURCE + "\n" + "# a comment that pads the file out\n" * 40
+
+    def reader(_project: Project) -> _Reader:
+        return _Reader({PATH: padded})
+
+    mine = _idea("Build the lines in one join", "join_lines", mechanism="remove_work",
+                 cells=("work:eliminate",))  # fmt: skip
+    run = _Run(
+        lane=[S1_REPLY, *_lens_replies(eliminate=_ideas(mine))],
+        leap=[LEAP], reviewer=[REVIEW], cfg=cfg, reader=reader,
+    )  # fmt: skip
+
+    result = run()
+
+    shared = _texts(run.requests("lane")[0])[0]
+    assert QUOTES["join_lines"] not in shared
+    assert QUOTES["count_words"] in shared
+    assert QUOTES["join_lines"] in _texts(_lens_requests(run)[Lane.eliminate])[0]
+    assert result.stats is not None
+    assert result.stats.ideas_per_lane[Lane.eliminate] == 1
+    review = _texts(run.requests("reviewer")[0])[0]
+    assert review.split("\n", 1)[0] == shared.split("\n", 1)[0]
+    assert QUOTES["join_lines"] in review
+    assert QUOTES["count_words"] in review
+    assert QUOTES["find_all"] in review
+    assert VIEW_HEADINGS["next_hotspots"] not in review
+
+    quiet = _Run(
+        lane=[S1_REPLY, *_lens_replies(eliminate=_ideas())],
+        leap=[LEAP], reviewer=[REVIEW], cfg=cfg, reader=reader,
+    )  # fmt: skip
+    quiet()
+    plain = _texts(quiet.requests("lane")[0])[0]
+    assert _texts(quiet.requests("reviewer")[0])[0].startswith(f"{plain}\n")
+
+
+def test_a_second_call_builds_no_view() -> None:
+    run = _Run(lane=[S1_REPLY], cfg=_viewed({"eliminate": "callers"}))
+    result = run(call_index=1)
+    assert len(run.requests("lane")) == 1
+    assert not _noted(result.notes, "view callers")

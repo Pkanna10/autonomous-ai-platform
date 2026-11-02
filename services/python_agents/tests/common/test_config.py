@@ -13,6 +13,7 @@ from pydantic import SecretStr, ValidationError
 from autonomous_ai_agents.clients.cost import chain
 from autonomous_ai_agents.common.config import (
     EFFORT_LEVELS,
+    IDEA_VIEWS,
     RETENTION_REQUIRED_MODELS,
     Settings,
     lane_chain,
@@ -1271,3 +1272,57 @@ def test_a_retention_model_on_a_lane_needs_the_flag(clean_env: Path) -> None:
     assert FABLE_5 in RETENTION_REQUIRED_MODELS
     with pytest.raises(ValidationError, match="ALLOW_RETENTION_MODELS"):
         Settings.model_validate({**copy.model_dump(), "ALLOW_RETENTION_MODELS": False})
+
+
+# --------------------------------------------------------------------------
+# G2: a view per lane (IDEAS_LANE_VIEWS)
+# --------------------------------------------------------------------------
+
+
+def test_with_no_lane_views_every_lane_sees_the_shared_block(clean_env: Path) -> None:
+    """Should keep today's behaviour exactly while IDEAS_LANE_VIEWS is empty."""
+    assert _cfg().IDEAS_LANE_VIEWS == {}
+    assert IDEA_VIEWS == (
+        "callers", "data_structures", "input_shape", "whole_module",
+        "next_hotspots", "history",
+    )  # fmt: skip
+
+
+def test_a_lens_may_name_its_view_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch, clean_env: Path
+) -> None:
+    """Should read per-lane views as JSON, two lenses sharing one allowed."""
+    views = {"eliminate": "callers", "far": "history", "recombine": "callers"}
+    monkeypatch.setenv("IDEAS_LANE_VIEWS", json.dumps(views))
+
+    cfg = Settings(_env_file=None)
+
+    assert cfg.IDEAS_LANE_VIEWS == {
+        Lane.eliminate: "callers", Lane.far: "history", Lane.recombine: "callers"
+    }  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("views", "extra", "match"),
+    [
+        pytest.param({"sideways": "callers"}, {},
+                     "IDEAS_LANE_VIEWS names 'sideways'", id="unknown lane"),
+        pytest.param({"obvious": "callers"}, {}, "obvious.*shared data block",
+                     id="S1 keeps the shared block"),
+        pytest.param({"leap": "callers"}, {}, "leap.*shared data block",
+                     id="the leap keeps the shared block"),
+        pytest.param({"far": "callers"}, {"IDEAS_LENSES": ("eliminate",)},
+                     "IDEAS_LANE_VIEWS.*far.*not in IDEAS_LENSES",
+                     id="lane that never runs"),
+        pytest.param({"far": "everything"}, {}, "IDEAS_LANE_VIEWS",
+                     id="unknown view"),
+        pytest.param(["far", "callers"], {}, "IDEAS_LANE_VIEWS", id="not a mapping"),
+    ],
+)  # fmt: skip
+def test_a_lane_view_the_pipeline_cannot_route_is_refused(
+    clean_env: Path, views: object, extra: dict[str, object], match: str
+) -> None:
+    """Should refuse, at load and with the pipeline off too, a view for a
+    lane that is no running lens, or a view that does not exist."""
+    with pytest.raises(ValidationError, match=match):
+        _cfg(IDEAS_LANE_VIEWS=views, **extra)

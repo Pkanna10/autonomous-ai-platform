@@ -35,6 +35,13 @@ Retrieval = Literal["blind", "matched"]
 """How research picks techniques for the generator (D1): ``blind`` shows the
 context's techniques as they are; ``matched`` asks the matcher first."""
 
+IdeaView = Literal[
+    "callers", "data_structures", "input_shape", "whole_module", "next_hotspots",
+    "history",
+]  # fmt: skip
+"""A lens lane's slice of the profiled repository (G2, ``idea_context``)."""
+IDEA_VIEWS: Final[tuple[IdeaView, ...]] = get_args(IdeaView)
+
 Role = Literal["engine", "editor", "generator", "matcher", "lane", "leap", "reviewer"]
 """A Claude role with its own model chain (``role_chain``); ``lane``, ``leap``
 and ``reviewer`` are the idea pipeline's (Step 3 Wave 2, D58)."""
@@ -303,6 +310,11 @@ class Settings(BaseSettings):
     its model alone, every other one on ``IDEAS_LANE_MODEL``; empty keeps one
     lane model. Each needs a price and an effort row, checked with the
     pipeline off too; the leap's model is ``IDEAS_LEAP_MODEL``."""
+    IDEAS_LANE_VIEWS: dict[Lane, IdeaView] = Field(default_factory=dict)
+    """Per-lane views (G2): a lens named here sees its view of the repository
+    (``idea_context.build_view``) instead of the shared hot-code block; S1,
+    the leap and the reviewer always see the shared block. Empty keeps one
+    block for every lane. Checked with the pipeline off too."""
     IDEAS_LANE_MAX_TOKENS: int = Field(default=12000, ge=1)
     IDEAS_LANE_N: int = Field(default=6, ge=1, le=10)
     IDEAS_LENSES: tuple[Lane, ...] = LENS_LANES
@@ -368,6 +380,30 @@ class Settings(BaseSettings):
                     raise ValueError(f"IDEAS_LANE_MODELS names {key!r}, which is "
                                      f"not a lane; name any of {', '.join(names)}")  # fmt: skip
         return value
+
+    @field_validator("IDEAS_LANE_VIEWS", mode="before")
+    @classmethod
+    def _lane_views_name_lenses(cls, value: object) -> object:
+        """A clear refusal for a key that is not a lens (G2)."""
+        if isinstance(value, Mapping):
+            names = [lane.value for lane in LENS_LANES]
+            for key in value:
+                if key in (Lane.obvious, Lane.leap):
+                    raise ValueError(f"IDEAS_LANE_VIEWS names {key!r}: S1 and the "
+                                     "leap always see the shared data block")  # fmt: skip
+                if key not in names:
+                    raise ValueError(f"IDEAS_LANE_VIEWS names {key!r}, which is not "
+                                     f"a lens; name any of {', '.join(names)}")  # fmt: skip
+        return value
+
+    @model_validator(mode="after")
+    def _lane_views_name_running_lenses(self) -> Self:
+        for lane, view in self.IDEAS_LANE_VIEWS.items():
+            if lane not in self.IDEAS_LENSES:
+                raise ValueError(f"IDEAS_LANE_VIEWS[{lane.value}] {view!r}: the "
+                                 f"{lane.value} lane is not in IDEAS_LENSES, so it "
+                                 "never runs")  # fmt: skip
+        return self
 
     @model_validator(mode="after")
     def _idea_bounds_are_consistent(self) -> Self:

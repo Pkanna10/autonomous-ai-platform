@@ -3,7 +3,8 @@ N2; spec amendment 3.4, 4.2b.2, 4.2b.7, D45, D50, D59, D60).
 
 - ``lane_request``: the system prompt, the data block as its own text block
   (the cached prefix: a 5-minute breakpoint for S1 and the lenses, none for
-  the leap, whose prompt is sent once on another model) and the instruction.
+  the leap, whose prompt is sent once on another model, nor for a view that
+  only one lane reads) and the instruction.
 - ``lane_transports``: each lane's transport, a per-lane model's own (G1).
 - ``on_the_table``: titles as ASCII-escaped JSON data lines, so no title can
   forge an element; a title holding a live token or a tag shape is withheld.
@@ -116,16 +117,18 @@ def lane_request(
     schema: Mapping[str, object],
     max_tokens: int,
     effort: Effort | None,
+    shared: bool = True,
 ) -> LLMRequest:
     """One lane's request; the data block carries the breakpoint unless the
-    lane is the leap (D59: no cache write where nothing reads it)."""
+    lane is the leap or no other request reads it (``shared``: a lane's own
+    view, G2) (D59: no cache write where nothing reads it)."""
     return structured_request(
         system,
         instruction,
         schema=schema,
         max_tokens=max_tokens,
         effort=effort,
-        cache=lane is not Lane.leap,
+        cache=shared and lane is not Lane.leap,
         prefix=prefix,
     )
 

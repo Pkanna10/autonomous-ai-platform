@@ -2932,6 +2932,15 @@ worktree", 4.4.0) or in the builder rules every brief carries.
   3.6 % (0.820 s to 0.791 s) and `meterlog` 2.7 % (0.688 s to 0.669 s), both
   `small` cases with a 5 % bar; re-run alone, one pass and one fail; 3.11 green.
   CI has not failed on either; bars unchanged.
+- G2 (views): about 870 source lines, 2.2x the unit norm, kept as one revertable
+  commit. Open for the owner before X1 assigns `input_shape`: the view shows
+  workload input files even under protected paths (`tests/`, `benchmarks/`) as a
+  summary and a 5-line screened head, which changes S0's "protected is never
+  shown"; frozen quality files and secret-shaped files are never read. The
+  history view walks every parent breadth first (three git calls a commit, up to
+  400 commits): fine once a call, costly if rebuilt often; callers are found by
+  name, so a generic name can give false positives; the reviewer gets up to
+  twice the code cap.
 - G6a review nits, left as they are: `OpCountJudge` counts a workload as
   uncounted only from the base side (a trial-side-only count is dropped
   silently); `measure.counted_argv` imports the profiler's private `_split`

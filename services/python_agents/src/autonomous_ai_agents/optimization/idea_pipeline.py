@@ -2,10 +2,15 @@
 amendment 3.4, 4.2b, D43-D59, D64, D65, section 5).
 
 One ``generate`` call: S0 reads the hot code at the base commit (no code:
-today's generator, unchanged); S1, the obvious lane, names the defaults;
+today's generator, unchanged); a lens named in ``IDEAS_LANE_VIEWS`` sees its
+own view instead (G2) and is grounded in it; S1, the obvious lane, names the
+defaults;
 S2 sends the lens lanes and the leap in parallel; S4a filters
-deterministically; S3, the reviewer, may only remove; S4b picks the
-portfolio and interleaves it with S1. A second call in a run is S1 only.
+deterministically; S3, the reviewer, may only remove, and is shown the
+shared code plus whatever the views of the surviving ideas' lanes showed;
+S4b picks the portfolio and interleaves it with S1. A second call in a run
+is S1 only. The run's ``workloads`` reach the input-shape view through
+``generate``.
 
 Money (D48, section 5): before each stage every request is counted once
 (free) and priced at its worst case; the parent ``Budget`` checks the
@@ -54,6 +59,7 @@ from autonomous_ai_agents.clients.transport import (
 )
 from autonomous_ai_agents.common.config import (
     Effort,
+    IdeaView,
     Role,
     Settings,
     role_chain,
@@ -76,13 +82,18 @@ from autonomous_ai_agents.common.models import (
     Project,
     ProjectUnderstanding,
     Technique,
+    Workload,
 )
 from autonomous_ai_agents.common.repo_read import RepoReader
 from autonomous_ai_agents.optimization.idea_context import (
+    HistoryReader,
     IdeaReadLimits,
+    ViewSource,
     amdahl_ceiling,
+    build_view,
     read_code_context,
     render_data_block,
+    review_context,
 )
 from autonomous_ai_agents.optimization.idea_lanes import (
     lane_request,
@@ -157,6 +168,16 @@ class _Job:
     error: Exception | None = None
 
 
+@dataclass(frozen=True)
+class _Seen:
+    """What one lane sees (G2): its data block, the documents it grounds in
+    and whether another request reads the same block (then it is cached)."""
+
+    prefix: str
+    context: CodeContext
+    shared: bool
+
+
 @dataclass
 class _Call:
     """The facts and the running record of one ``generate`` call."""
@@ -180,6 +201,8 @@ class _Call:
     verdicts: Counter[ReviewVerdict] = field(default_factory=Counter)
     gate_passed: int = 0
     non_obvious: int = 0
+    views: dict[Lane, _Seen] = field(default_factory=dict)
+    understanding: ProjectUnderstanding | None = None
 
 
 class IdeaPipelineGenerator:
@@ -240,15 +263,21 @@ class IdeaPipelineGenerator:
         call_index: int = 0,
         protected: Sequence[str] = (),
         read_deny: Sequence[str] = (),
+        workloads: Sequence[Workload] = (),
     ) -> GenerateResult:
+        """``workloads`` are the run's (G2): the input-shape view shows their
+        real inputs; none, and that view shows no input."""
         notes: list[str] = []
         research = research_system(IDEAS_SYSTEM_PROMPT, techniques, notes)
         fence = repo_fence(research)
         context = CodeContext()
-        if commit is not None and self._reader is not None:
+        reader = (
+            None if commit is None or self._reader is None else self._reader(project)
+        )
+        if commit is not None and reader is not None:
             limits = IdeaReadLimits.from_settings(self._cfg)
             context = read_code_context(
-                self._reader(project), commit, hotspots, fence=fence,
+                reader, commit, hotspots, fence=fence,
                 protected=protected, read_deny=read_deny, limits=limits, notes=notes,
             )  # fmt: skip
         if not context.documents:
@@ -273,7 +302,8 @@ class IdeaPipelineGenerator:
         for spot in hotspot_rows(hotspots, fence, [])[1]:  # the shown profile only
             index.setdefault((spot.file_path, spot.symbol), []).append(spot.id)
         c = _Call(project, objective, hotspots, budget, research, fence, context,
-                  prefix, index, notes, budget.spent_usd)  # fmt: skip
+                  prefix, index, notes, budget.spent_usd,
+                  understanding=understanding)  # fmt: skip
         named = [*avoid_titles, *(t.name for t in research.by_slug.values())]
         s1 = self._s1(c, n, named)
         if call_index >= 1:
@@ -284,6 +314,14 @@ class IdeaPipelineGenerator:
             *self._cfg.IDEAS_LENSES,
             *((Lane.leap,) if self._cfg.IDEAS_LEAP_N else ()),
         )
+        if self._cfg.IDEAS_LANE_VIEWS and commit is not None and reader is not None:
+            source = ViewSource(
+                reader, commit, tuple(hotspots), fence, tuple(protected),
+                tuple(read_deny), IdeaReadLimits.from_settings(self._cfg),
+                tuple(workloads),
+                reader if isinstance(reader, HistoryReader) else None,
+            )  # fmt: skip
+            c.views = self._views(c, source)
         order = rotation(seed, lanes)
         examples = example_rotation(seed, lanes, exclude=(project.name,))
         table = on_the_table([*(i.title for i in s1), *named], fence, notes)
@@ -298,6 +336,32 @@ class IdeaPipelineGenerator:
                            minimum=self._cfg.IDEAS_PORTFOLIO_MIN,
                            maximum=self._cfg.IDEAS_PORTFOLIO_MAX)  # fmt: skip
         return self._result(c, picked, n)
+
+    def _views(self, c: _Call, source: ViewSource) -> dict[Lane, _Seen]:
+        """Each viewed lens's view (G2), built and rendered once per view; a
+        view that cannot be built leaves its lane on the shared block."""
+        wanted = self._cfg.IDEAS_LANE_VIEWS
+        readers = Counter(wanted.values())
+        built: dict[IdeaView, _Seen | None] = {}
+        for name in readers:
+            view = build_view(name, source, c.notes)
+            built[name] = None if view is None else _Seen(
+                render_data_block(
+                    view.context, project=c.project, objective=c.objective,
+                    understanding=c.understanding, hotspots=c.hotspots,
+                    fence=c.fence, notes=c.notes, view=name, facts=view.facts,
+                ),
+                view.context, readers[name] > 1,
+            )  # fmt: skip
+        seen: dict[Lane, _Seen] = {}
+        for lane, name in wanted.items():
+            found = built[name]
+            if found is None:
+                c.notes.append(f"lane {lane.value}: no {name} view, so it sees the "
+                               "shared data block")  # fmt: skip
+            else:
+                seen[lane] = found
+        return seen
 
     # ----------------------------------------------------------------------
     # The stages
@@ -378,7 +442,8 @@ class IdeaPipelineGenerator:
         if cfg.IDEAS_REVIEW:
             think = with_think("", self._transports["reviewer"].chain[0]) != ""
             request, shown_ids = review_request(
-                ideas, prefix=c.prefix, fence=c.fence, reviewer_fence=reviewer,
+                ideas, prefix=self._review_prefix(c, ideas), fence=c.fence,
+                reviewer_fence=reviewer,
                 max_ideas=cfg.IDEAS_REVIEW_MAX_IDEAS,
                 max_tokens=cfg.IDEAS_REVIEWER_MAX_TOKENS,
                 effort=self._efforts["reviewer"], notes=c.notes, think=think,
@@ -388,6 +453,26 @@ class IdeaPipelineGenerator:
             kept = unreviewed(ideas, fences=fences, why=why, notes=c.notes)
             c.verdicts.update(i.review for i in kept if i.review is not None)
         return kept
+
+    def _review_prefix(self, c: _Call, ideas: Sequence[IdeaCandidate]) -> str:
+        """The shared data block, or (G2) the shared documents with what the
+        views of the ideas' lanes showed beyond them, under the same fence:
+        the reviewer checks each quote in code it is shown."""
+        used: list[_Seen] = []
+        for lane, seen in c.views.items():
+            mine = any(idea.lane is lane for idea in ideas)
+            if mine and all(seen is not other for other in used):
+                used.append(seen)
+        merged = review_context(c.context, [s.context for s in used],
+                                cap=self._cfg.IDEAS_CODE_MAX_BYTES,
+                                notes=c.notes)  # fmt: skip
+        if merged.documents == c.context.documents:
+            return c.prefix
+        return render_data_block(
+            merged, project=c.project, objective=c.objective,
+            understanding=c.understanding, hotspots=c.hotspots, fence=c.fence,
+            notes=[],  # every withholding was noted when the blocks were built
+        )  # fmt: skip
 
     def _review(
         self,
@@ -440,12 +525,15 @@ class IdeaPipelineGenerator:
     ) -> _Job:
         role: Role = "leap" if lane is Lane.leap else "lane"
         leap, transport = lane is Lane.leap, self._lanes[lane]
+        view = c.views.get(lane)
         instruction = lane_instruction(
             lane, table=table, examples=examples, n=n,
             floor=c.objective.min_relative_gain, model=transport.chain[0],
         )  # fmt: skip
         request = lane_request(
-            lane, system=c.research.system, prefix=c.prefix, instruction=instruction,
+            lane, system=c.research.system, instruction=instruction,
+            prefix=c.prefix if view is None else view.prefix,
+            shared=view is None or view.shared,
             schema=IDEAS_SCHEMA, effort=self._efforts[role],
             max_tokens=self._cfg.IDEAS_LEAP_MAX_TOKENS if leap
             else self._cfg.IDEAS_LANE_MAX_TOKENS,
@@ -508,15 +596,17 @@ class IdeaPipelineGenerator:
                            if isinstance(job.error, BudgetExceeded)
                            else f"lane {lane.value} failed {_failure(job)}")  # fmt: skip
             return []
+        view = c.views.get(lane)
+        context = c.context if view is None else view.context
         try:
             ideas = read_lane_reply(
-                job.result, lane=lane, context=c.context, index=c.index, n=n,
+                job.result, lane=lane, context=context, index=c.index, n=n,
                 fence=c.fence, notes=c.notes, events=c.events,
             )  # fmt: skip
         except UnusableReplyError as exc:
             c.notes.append(f"lane {lane.value} failed (UnusableReplyError): {exc}")
             return []
-        found = [self._ceiling(c, self._floored(c, idea)) for idea in ideas]
+        found = [self._ceiling(c, self._floored(c, idea), context) for idea in ideas]
         c.per_lane[lane] = len(found)
         c.read += found
         return found
@@ -541,9 +631,12 @@ class IdeaPipelineGenerator:
             return idea.model_copy(update={"change_class": technique.change_class})
         return idea
 
-    def _ceiling(self, c: _Call, idea: IdeaCandidate) -> IdeaCandidate:
+    def _ceiling(
+        self, c: _Call, idea: IdeaCandidate, context: CodeContext
+    ) -> IdeaCandidate:
+        """The ceiling in the documents the idea was grounded in."""
         spots = [h for h in c.hotspots if h.id in idea.hotspot_ids]
-        found = amdahl_ceiling(idea.anchor, spots, c.context, profile=c.hotspots)
+        found = amdahl_ceiling(idea.anchor, spots, context, profile=c.hotspots)
         return idea.model_copy(update={"ceiling": found})
 
     # ----------------------------------------------------------------------

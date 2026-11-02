@@ -15,6 +15,8 @@
   per lane, transformational ones for the leap, none naming the project.
 - ``lane_instruction``: everything after the cached data block, ending with
   the ask; the think line closes it only on Sonnet 5.5 (D58).
+- ``VIEW_HEADINGS``: what each lane view (G2) shows, stated in the view's
+  own data block in place of the shared hot-code heading.
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ from autonomous_ai_agents.clients.structured import (
     schema_array,
     schema_object,
 )
+from autonomous_ai_agents.common.config import IdeaView
 from autonomous_ai_agents.optimization.generate import (
     MAX_REPLY_ITEMS,
     MAX_SUMMARY_CHARS,
@@ -483,3 +486,41 @@ def lane_instruction(
         lens, ask = LENS_TEXT[lane], LENS_ASK.format(n=n)
     parts = (table, lens, examples_block(examples), with_think(ask, model))
     return "\n".join(part for part in parts if part)
+
+
+# --------------------------------------------------------------------------
+# The views (G2): what a lens lane sees in place of the shared hot code
+# --------------------------------------------------------------------------
+
+VIEW_HEADINGS: Final[Mapping[IdeaView, str]] = {
+    "callers": (
+        "view: who calls the hottest function (by self time), found by name in "
+        "the source: each call site's caller, line, argument shape and whether "
+        "it sits inside a loop, with the profiler's call counts:"
+    ),
+    "data_structures": (
+        "view: the data structures the hottest function (by self time) touches: "
+        "the module-level names it reads with their kind and size, the classes "
+        "it names or runs in, and how its body uses each name:"
+    ),
+    "input_shape": (
+        "view: the real inputs of the profiled workloads: each workload's "
+        "command and inputs, and a summary and the first lines of each input "
+        "file it names (data, not code to change):"
+    ),
+    "whole_module": (
+        "view: the whole module around the hottest function (by self time), "
+        "not only the function:"
+    ),
+    "next_hotspots": (
+        "view: the 2nd and 3rd hotspots by self time, not the hottest one:"
+    ),
+    "history": (
+        "view: this project's own past performance commits (subject, files), "
+        "newest first, read only from the profiled commit and its ancestors:"
+    ),
+}
+VIEW_CODE_HEADING: Final = (
+    "code for this view at the base commit (line numbers are for reference; "
+    "quote the code, not the numbers):"
+)
