@@ -629,11 +629,14 @@ def test_e3_j_the_pipeline_drops_five_ideas_and_two_portfolio_rounds_stack_two_k
         SORTED: ["equivalence"], WRITE: ["equivalence"], O2: ["tests"],
     }  # fmt: skip
     combination, delivery = state["combination"], state["delivery"]
-    assert combination is not None and combination.holds
-    assert delivery is not None and delivery.kind is DeliveryKind.branch
+    # A rare CI miss (8b32afe, 3.11) delivered one of the two keeps and did not
+    # reproduce locally: the combine summary says why the stacked re-test failed.
+    why = (None if combination is None else combination.summary, launches.report())
+    assert combination is not None and combination.holds, why
+    assert delivery is not None and delivery.kind is DeliveryKind.branch, why
     assert delivery.branch == f"engine/run-{run}" and delivery.commit == combination.tip_commit  # fmt: skip
     tip, base = str(delivery.commit), scene.repo.base
-    assert git(scene.repo.path, "rev-list", "--count", f"{base}..{tip}") == "2"
+    assert git(scene.repo.path, "rev-list", "--count", f"{base}..{tip}") == "2", why
     assert git(scene.repo.path, "diff", "--name-only", base, tip) == CORE
     edited = (FIXTURE / "repo" / CORE).read_text("utf-8")
     for title in (O1, FROMKEYS):
@@ -727,8 +730,9 @@ def test_e3_k_a_refused_leap_a_timed_out_lane_and_a_cut_review_still_deliver(
     assert state["discovery_cost_usd"] == pytest.approx(billed + estimate, rel=1e-9)
     verdicts = _by_title(state)[1]
     assert {t for t, v in verdicts.items() if v.outcome is VerdictOutcome.keep} == {O1, FROMKEYS}  # fmt: skip
-    delivery = state["delivery"]
-    assert delivery is not None and delivery.kind is DeliveryKind.branch
+    delivery, combination = state["delivery"], state["combination"]
+    why = (None if combination is None else combination.summary, launches.report())
+    assert delivery is not None and delivery.kind is DeliveryKind.branch, why
     _check_clean(scene, state, isolation, launches)
 
 

@@ -464,7 +464,12 @@ Step 2 (repository code now runs on the user's machine):
   `sandbox-exec` with `(deny network*)` (which also covers AF_UNIX `connect`)
   and a write allowlist. Under `required` a failed step refuses the run; procrun
   parses the report strictly and cross-checks it against the wrapper's `wait4`
-  accounting. `NETWORK_ISOLATION=off` on Linux runs without namespaces.
+  accounting. `NETWORK_ISOLATION=off` on Linux runs without namespaces. An
+  output pipe (stdout or stderr) still open `IO_GRACE_S` (2 s) after the run is
+  a `RunFailure` naming the pipe, never a fingerprint of partial output. On
+  macOS (no PID namespace) a workload whose children outlive it and hold stdout
+  or stderr open therefore fails; the fix is in the workload: wait for its
+  children, or close or redirect their output.
 - **Child environment** (`sandbox.child_env`): an allowlist (`PATH` with
   relative entries dropped, locale, `TZ`, venv vars) plus deny patterns that win
   over explicit extras; forced `PYTHONHASHSEED=0`, `PYTHONDONTWRITEBYTECODE=1`,
@@ -700,7 +705,7 @@ default context; "test double" means it exists for tests only.
 ## Commands
 
 ```bash
-uv sync --extra dev --extra database
+uv sync --extra dev --extra database --extra experiments
 uv run ruff check . && uv run ruff format --check .
 uv run mypy src tests
 TEST_DATABASE_URL=postgresql://dev:devpass@localhost:5432/ai_platform uv run pytest

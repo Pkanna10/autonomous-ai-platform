@@ -21,11 +21,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import stat
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,7 +37,9 @@ import pytest
 from autonomous_ai_agents.common.config import IsolationMode, settings
 from autonomous_ai_agents.execution import launcher, procrun
 from autonomous_ai_agents.execution.procrun import OutputCaps, RunSample
+from autonomous_ai_agents.execution.protocols import Combiner, KeptChange
 from autonomous_ai_agents.execution.sandbox import UNSHARE_ARGV, SandboxPolicy
+from autonomous_ai_agents.orchestrator import combine_node
 from autonomous_ai_agents.persistence.repository import (
     InMemoryRepository,
     Repository,
@@ -231,6 +235,60 @@ class Launch:
     fs: str
     net_isolated: bool  # what the launcher reported it applied
     fs_isolated: bool
+    # For failure messages only (``LaunchLog.report``): which commit the
+    # worktree sat at, what ran, and the launcher's numbers.
+    commit: str = ""
+    command: str = ""
+    wall_s: float = 0.0
+    child_cpu_s: float | None = None
+    strays: int | None = None
+    loadavg: str = ""
+    notes: tuple[str, ...] = ()  # run_once's notes (an output pipe or the
+    # group still open at IO_GRACE_S / DRAIN_CAP_S): they never fail a run
+
+
+def _loadavg() -> str:
+    """The first three ``/proc/loadavg`` fields, or ``?`` (darwin)."""
+    try:
+        return " ".join(Path("/proc/loadavg").read_text().split()[:3])
+    except OSError:
+        return "?"
+
+
+def _head(cwd: Path) -> str:
+    """The commit ``cwd``'s worktree sits at, or ``?``; never raises.
+
+    Read from the worktree's ``.git`` file and HEAD (a detached SHA, or a ref
+    in the gitdir, the common dir or ``packed-refs``) with no subprocess, and
+    only after the launch returns: the diagnostic adds no gap between
+    back-to-back launches.
+    """
+    try:
+        dot = cwd / ".git"
+        gitdir = dot
+        if dot.is_file():
+            gitdir = Path(dot.read_text().split(":", 1)[1].strip())
+            gitdir = gitdir if gitdir.is_absolute() else cwd / gitdir
+        head = (gitdir / "HEAD").read_text().strip()
+        if not head.startswith("ref: "):
+            return head[:10]
+        ref = head[5:]
+        common = gitdir / "commondir"
+        dirs = [gitdir]
+        if common.is_file():
+            dirs.append(gitdir / common.read_text().strip())
+        for where in dirs:
+            if (where / ref).is_file():
+                return (where / ref).read_text().strip()[:10]
+        for where in dirs:
+            packed = where / "packed-refs"
+            if packed.is_file():
+                for line in packed.read_text().splitlines():
+                    if line.endswith(" " + ref):
+                        return line[:10]
+    except (OSError, IndexError):
+        pass
+    return "?"
 
 
 class LaunchLog:
@@ -240,8 +298,24 @@ class LaunchLog:
     (a ``ValueError`` otherwise): no engine run executes anywhere else.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, shared: Path | None = None, test: str = "") -> None:
         self.launches: list[Launch] = []
+        self.failures: list[str] = []  # RunFailure reasons, by phase and commit
+        # Every E2E launch of the session, all xdist workers, one JSON line
+        # each: the failure report lists the ones that overlapped this test.
+        self.shared, self.test = shared, test
+        self.span: tuple[float, float] | None = None
+
+    def _share(self, record: dict[str, object]) -> None:
+        start, end = float(str(record["start"])), float(str(record["end"]))
+        first = start if self.span is None else self.span[0]
+        self.span = (first, end)
+        if self.shared is None:
+            return
+        line = json.dumps({"worker": os.environ.get("PYTEST_XDIST_WORKER", "main"),
+                           "test": self.test, **record}) + "\n"  # fmt: skip
+        with self.shared.open("a", encoding="utf-8") as sink:
+            sink.write(line)
 
     def __call__(
         self,
@@ -255,18 +329,93 @@ class LaunchLog:
         fresh_dirs: Sequence[Path] = (),
     ) -> RunSample:
         where = Path(os.path.realpath(cwd)).relative_to(settings.WORKTREE_ROOT)
-        sample = procrun.run_once(
-            argv, cwd, env, sandbox, timeout_s, caps, fresh_dirs=fresh_dirs
-        )
+        command, phase, start = " ".join(argv[-3:]), where.parts[1], time.time()
+        try:
+            sample = procrun.run_once(
+                argv, cwd, env, sandbox, timeout_s, caps, fresh_dirs=fresh_dirs
+            )
+        except procrun.RunFailure as failure:
+            commit, load = _head(cwd), _loadavg()  # after the launch: no gap
+            self.failures.append(f"{phase}@{commit} {command}: {failure} (load {load})")
+            self._share({"phase": phase, "start": start, "end": time.time(),
+                         "load": load, "failure": str(failure)})  # fmt: skip
+            raise
+        commit, load = _head(cwd), _loadavg()  # after the launch: no gap
+        self._share({"phase": phase, "start": start, "end": time.time(), "load": load,
+                     "child_cpu": sample.child_cpu_s, "strays": sample.strays,
+                     "notes": list(sample.notes)})  # fmt: skip
         launch = Launch(
             where.parts[1],
             sandbox.network,
             sandbox.fs,
             sample.net_isolated,
             sample.fs_isolated,
+            commit=commit,
+            command=command,
+            wall_s=sample.wall_ns / 1e9,
+            child_cpu_s=sample.child_cpu_s,
+            strays=sample.strays,
+            loadavg=load,
+            notes=sample.notes,
         )
         self.launches.append(launch)
         return sample
+
+    def report(self) -> str:
+        """Per phase, commit and command: runs, mean wall, the tripwire's
+        largest child CPU and stray count; then every RunFailure. For an
+        assertion message: shows whether a re-test compared what it should."""
+        rows: dict[tuple[str, str, str], list[Launch]] = {}
+        for launch in self.launches:
+            key = (launch.phase, launch.commit, launch.command)
+            rows.setdefault(key, []).append(launch)
+        lines = []
+        for (phase, commit, command), runs in rows.items():
+            mean = sum(run.wall_s for run in runs) / len(runs)
+            child = max((run.child_cpu_s or 0.0 for run in runs), default=0.0)
+            strays = sum(run.strays or 0 for run in runs)
+            lines.append(
+                f"{phase}@{commit} [{command}] n={len(runs)} mean={mean:.3f}s"
+                f" child_cpu_max={child:.3f}s strays={strays}"
+            )
+        lines.extend(f"FAILED {failure}" for failure in self.failures)
+        noted = {(run.phase, run.commit, n) for run in self.launches for n in run.notes}
+        lines.extend(
+            f"NOTE {phase}@{commit}: {note}" for phase, commit, note in sorted(noted)
+        )
+        loads = sorted({launch.loadavg for launch in self.launches})
+        lines.append(f"load at launches: {loads[:1]}..{loads[-1:]}; now: {_loadavg()}")
+        lines.extend(self._concurrent())
+        return "\n".join(lines)
+
+    def _concurrent(self) -> list[str]:
+        """Other tests' launches that overlapped this test's, per test and
+        phase: runs, the largest child CPU, strays, any RunFailure."""
+        if self.shared is None or self.span is None or not self.shared.exists():
+            return []
+        first, last = self.span
+        rows: dict[tuple[str, str, str], list[dict[str, object]]] = {}
+        for line in self.shared.read_text(encoding="utf-8").splitlines():
+            record = json.loads(line)
+            if record["test"] == self.test:
+                continue
+            if record["end"] < first or record["start"] > last:
+                continue
+            key = (str(record["worker"]), str(record["test"]), str(record["phase"]))
+            rows.setdefault(key, []).append(record)
+        out = [f"concurrent launches in other tests: {sum(map(len, rows.values()))}"]
+        for (worker, test, phase), runs in sorted(rows.items())[:40]:
+            child = max(
+                (float(str(r.get("child_cpu") or 0.0)) for r in runs), default=0.0
+            )
+            strays = sum(int(str(r.get("strays") or 0)) for r in runs)
+            failed = [str(r["failure"]) for r in runs if r.get("failure")]
+            out.append(
+                f"  {worker} {test.rsplit('::', 1)[-1][:50]} {phase[:20]} n={len(runs)}"
+                f" child_cpu_max={child:.3f}s strays={strays}"
+                + (f" FAILED {failed[0]}" if failed else "")
+            )
+        return out
 
     def phases(self) -> set[str]:
         """Every phase launched in; trials collapse to ``trial-*``."""
@@ -277,8 +426,12 @@ class LaunchLog:
 
 
 @pytest.fixture
-def launches() -> LaunchLog:
-    return LaunchLog()
+def launches(
+    request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory
+) -> LaunchLog:
+    base = tmp_path_factory.getbasetemp()
+    root = base.parent if os.environ.get("PYTEST_XDIST_WORKER") else base
+    return LaunchLog(root / "e2e-launches.jsonl", request.node.nodeid)
 
 
 @pytest.fixture
@@ -311,3 +464,66 @@ def e2e_repository() -> Iterator[Repository]:
     finally:
         with psycopg.connect(server, autocommit=True) as admin:
             admin.execute(drop)
+
+
+def _retest_line(retest: combine_node.Retest, offered: Sequence[str]) -> str:
+    """One re-test for a failure report: what it was offered and applied,
+    whether it held and why, the judges that did not pass, each side's
+    mean wall time."""
+    measured, verdict = retest.measured, retest.verdict
+
+    def mean(rows: Sequence[object]) -> str:
+        walls = [s for m in rows if getattr(m, "metric", "") == "wall_time_s"
+                 for s in getattr(m, "samples", ())]  # fmt: skip
+        return f"{sum(walls) / len(walls):.3f}s n={len(walls)}" if walls else "none"
+
+    judges = [
+        f"{j.judge}={j.outcome.value} ({j.reason})"
+        for j in verdict.judge_results
+        if j.outcome.value != "passed"
+    ]
+    return (
+        f"offered={[t[:8] for t in offered]} applied={[t[:8] for t in measured.applied]}"
+        f" tip={measured.tip_commit[:10]} holds={retest.holds}: {retest.reason};"
+        f" base={mean(measured.baseline)} tip={mean(measured.combined)};"
+        f" not passed={judges}; violations={[v.message for v in verdict.violations]}"
+    )
+
+
+@pytest.fixture(autouse=True)
+def retests(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Every combine re-test (confirmation second looks included), for the
+    failure report: ``_retest`` is wrapped, never changed."""
+    seen: list[str] = []
+    real = combine_node._retest
+
+    def spy(
+        combiner: Combiner,
+        offered: Sequence[KeptChange],
+        rules: combine_node.CombineRules,
+        target: combine_node.CombineTarget,
+    ) -> combine_node.Retest:
+        result = real(combiner, offered, rules, target)
+        seen.append(_retest_line(result, [c.trial_id for c in offered]))
+        return result
+
+    monkeypatch.setattr(combine_node, "_retest", spy)
+    return seen
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[None]
+) -> Iterator[None]:
+    """On a failed E2E test: append its combine re-tests and launch table."""
+    outcome = yield
+    report = outcome.get_result()  # type: ignore[attr-defined]
+    if report.when != "call" or not report.failed:
+        return
+    args = getattr(item, "funcargs", {})
+    seen = args.get("retests")
+    if seen:
+        report.sections.append(("combine re-tests", "\n".join(seen)))
+    log = args.get("launches")
+    if isinstance(log, LaunchLog):
+        report.sections.append(("launches", log.report()))

@@ -273,7 +273,7 @@ skips = ["B101"]
 # pytest Configuration (Proposal 3)
 # ============================================
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "tests"]  # tests/: `live` imports in any import mode
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]

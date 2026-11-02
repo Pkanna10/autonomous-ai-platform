@@ -155,7 +155,7 @@ pnpm install
 
 # Python (the database extra installs psycopg for the Postgres repository)
 cd services/python_agents
-uv sync --extra dev --extra database
+uv sync --extra dev --extra database --extra experiments
 cd ../..
 
 # Environment
@@ -670,6 +670,14 @@ default `TRIAL_BRANCH_PREFIX` (`engine/`).
   count.
 - **Exact mode compares stdout and the declared `output_file` only**: a change
   confined to stderr, logging or undeclared files is not seen.
+- **A workload's children must not hold its output open after it exits.** If
+  stdout or stderr is still open 2 s after the workload exits, the run fails and
+  names the pipe, rather than measuring a truncated output. On Linux the sandbox
+  kills leftover children first, so only a stalled host trips it. On macOS (no
+  PID namespace) a child that outlives the workload and keeps stdout or stderr
+  open, such as a `setsid` daemon or a training job's worker that prints at
+  exit, fails the run. Fix it in the workload: wait for its children, or close
+  or redirect their output (`stdout=subprocess.DEVNULL`, a log file).
 - **`NETWORK_ISOLATION=off` and the quality labels**: with no PID namespace, a
   workload's `setsid` child can outlive its run and could read the frozen labels
   while a scoring copy exists. Prefer the default isolation with a quality
