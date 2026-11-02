@@ -70,7 +70,7 @@ classifiers = [
 # Phase 1, Week 3-4: LangGraph Orchestrator & Intent Parsing
 dependencies = [
     # Core AI/ML (constrained for fast resolution)
-    "anthropic>=1.17.0,<2.0.0",       # Claude API client (Messages API)
+    "anthropic>=1.17.0,<3.0.0",       # Claude API client (Messages API)
     "langgraph>=1.2.0,<2.0.0",        # State machine orchestration
     "langchain>=1.4.0,<2.0.0",        # LLM framework base
 
