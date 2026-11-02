@@ -12,6 +12,20 @@ S4b picks the portfolio and interleaves it with S1. A second call in a run
 is S1 only. The run's ``workloads`` reach the input-shape view through
 ``generate``.
 
+What is already taken (G4), two switches, both off by default (off keeps
+the parallel lanes and the portfolio exactly as they were):
+``IDEAS_SEQUENTIAL_LANES`` sends S2's lanes one after another in the run's
+rotation, each shown the mechanisms (``idea_dedupe.taken_block``: file,
+function, target lines, mechanism, primary cell; never a title) of every
+idea S1 and the earlier lanes produced, with a "do not repeat" lead-in,
+after the cached data block so the cache is still shared; S2 is still
+reserved whole first (each lane priced with S1's block), then each later
+lane is re-priced with its grown block and a lane that no longer fits ends
+S2 there (a ``discovery_unaffordable`` event naming it).
+``IDEAS_MECHANISM_DEDUPE`` drops, in S4b, an idea whose mechanism key
+matches an earlier admitted idea's (an ``idea_dropped`` event, reason
+``mechanism_duplicate``, with ``duplicate_of``).
+
 Money (D48, section 5): before each stage every request is counted once
 (free) and priced at its worst case; the parent ``Budget`` checks the
 stage's sum once (S2 not fitting is skipped whole, a ``discovery_unaffordable``
@@ -94,6 +108,11 @@ from autonomous_ai_agents.optimization.idea_context import (
     read_code_context,
     render_data_block,
     review_context,
+)
+from autonomous_ai_agents.optimization.idea_dedupe import (
+    MechanismKey,
+    idea_key,
+    taken_block,
 )
 from autonomous_ai_agents.optimization.idea_lanes import (
     lane_request,
@@ -203,6 +222,7 @@ class _Call:
     non_obvious: int = 0
     views: dict[Lane, _Seen] = field(default_factory=dict)
     understanding: ProjectUnderstanding | None = None
+    keys: dict[str, MechanismKey] = field(default_factory=dict)
 
 
 class IdeaPipelineGenerator:
@@ -245,6 +265,8 @@ class IdeaPipelineGenerator:
         self._lanes = resolve_lanes(self._transports, lane_transports or {}, config)
         self._reader, self._cfg, self._sleep = reader, config, sleep
         self._fallback = fallback
+        self._sequential = _switch(config, "IDEAS_SEQUENTIAL_LANES")
+        self._dedupe = _switch(config, "IDEAS_MECHANISM_DEDUPE")
 
     def generate(
         self,
@@ -332,9 +354,21 @@ class IdeaPipelineGenerator:
         reviewed = self._s3(c, survivors)
         olds = [i for i in reviewed if i.lane is Lane.obvious]
         news = [i for i in reviewed if i.lane is not Lane.obvious]
+        merged: list[tuple[IdeaCandidate, IdeaCandidate]] = []
         picked = portfolio(olds, news, rotation=order, notes=notes,
                            minimum=self._cfg.IDEAS_PORTFOLIO_MIN,
-                           maximum=self._cfg.IDEAS_PORTFOLIO_MAX)  # fmt: skip
+                           maximum=self._cfg.IDEAS_PORTFOLIO_MAX,
+                           mechanisms=c.keys if self._dedupe else None,
+                           merged=merged)  # fmt: skip
+        for idea, twin in merged:
+            c.events.append(GenerateEvent(
+                code="idea_dropped",
+                message=f"mechanism dedupe dropped {shown(idea.title)}: the same "
+                        f"mechanism as {shown(twin.title)}",
+                data={"lane": idea.lane.value, "reason": "mechanism_duplicate",
+                      "title": shorten(idea.title),
+                      "duplicate_of": shorten(twin.title)},
+            ))  # fmt: skip
         return self._result(c, picked, n)
 
     def _views(self, c: _Call, source: ViewSource) -> dict[Lane, _Seen]:
@@ -388,7 +422,8 @@ class IdeaPipelineGenerator:
         cfg = self._cfg
         sizes = {lane: cfg.IDEAS_LANE_N for lane in cfg.IDEAS_LENSES}
         sizes[Lane.leap] = cfg.IDEAS_LEAP_N
-        jobs = {lane: self._lane_job(c, lane, sizes[lane], table, examples[lane])
+        first = self._taken(c, table) if self._sequential else table
+        jobs = {lane: self._lane_job(c, lane, sizes[lane], first, examples[lane])
                 for lane in lanes}  # fmt: skip
         total = sum(job.estimate for job in jobs.values())
         try:
@@ -401,11 +436,57 @@ class IdeaPipelineGenerator:
                 level=EventLevel.warning, data={"stage": "lanes", "estimate_usd": total},
             ))  # fmt: skip
             return None
+        if self._sequential:
+            return self._in_sequence(c, order, jobs, sizes, table, examples)
         self._run(list(jobs.values()), c.budget)
         found: list[IdeaCandidate] = []
         for lane in order:  # the run's lane order decides dedup (D52)
             found += self._read(c, lane, jobs[lane], sizes[lane])
         return found
+
+    def _in_sequence(
+        self,
+        c: _Call,
+        order: Sequence[Lane],
+        jobs: Mapping[Lane, _Job],
+        sizes: Mapping[Lane, int],
+        table: str,
+        examples: Mapping[Lane, tuple[Example, ...]],
+    ) -> list[IdeaCandidate]:
+        """S2's lanes one at a time in the rotation (G4), each shown what S1
+        and the lanes before it produced; a lane is re-priced once earlier
+        lanes added ideas, and one that no longer fits ends S2 there."""
+        priced = len(c.read)  # the ideas each job of ``jobs`` was built with
+        found: list[IdeaCandidate] = []
+        for at, lane in enumerate(order):
+            job = jobs[lane]
+            if len(c.read) != priced:
+                job = self._lane_job(c, lane, sizes[lane], self._taken(c, table),
+                                     examples[lane])  # fmt: skip
+                try:
+                    c.budget.check(job.estimate)
+                except BudgetExceeded as exc:
+                    rest = ", ".join(x.value for x in order[at:])
+                    message = (f"lanes {rest} not sent: the {lane.value} lane may "
+                               f"cost {job.estimate:.6f} USD")  # fmt: skip
+                    c.notes.append(f"{message} ({exc})")
+                    c.events.append(GenerateEvent(
+                        code="discovery_unaffordable", message=message,
+                        level=EventLevel.warning,
+                        data={"stage": "lanes", "lane": lane.value,
+                              "estimate_usd": job.estimate},
+                    ))  # fmt: skip
+                    break
+            self._run([job], c.budget)
+            found += self._read(c, lane, job, sizes[lane])
+        return found
+
+    def _taken(self, c: _Call, table: str) -> str:
+        """The table, then the mechanisms taken so far (G4), if any."""
+        notes: list[str] = []
+        block = taken_block(c.read, c.keys, c.fence, notes)
+        c.notes.extend(f"mechanisms block: {note}" for note in notes)
+        return f"{table}\n{block}" if block else table
 
     def _s4a(
         self,
@@ -607,6 +688,10 @@ class IdeaPipelineGenerator:
             c.notes.append(f"lane {lane.value} failed (UnusableReplyError): {exc}")
             return []
         found = [self._ceiling(c, self._floored(c, idea), context) for idea in ideas]
+        for idea in found:
+            key = idea_key(idea, context)
+            if key is not None:
+                c.keys[idea.id] = key
         c.per_lane[lane] = len(found)
         c.read += found
         return found
@@ -698,6 +783,12 @@ class IdeaPipelineGenerator:
             risk=idea.risk,
             tags=tuple(tags),
         )  # fmt: skip
+
+
+def _switch(config: Settings, name: str) -> bool:
+    """A G4 switch. ``Settings`` gains both with the G4 config patch; until
+    it lands a missing one reads as off (``model_copy(update=...)`` sets it)."""
+    return getattr(config, name, False) is True
 
 
 def _failure(job: _Job) -> str:

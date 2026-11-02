@@ -352,6 +352,14 @@ class Settings(BaseSettings):
     """An idea's ceiling must reach this times the floor (D51)."""
     IDEAS_PORTFOLIO_MIN: int = Field(default=3, ge=1, le=10)
     IDEAS_PORTFOLIO_MAX: int = Field(default=5, ge=1, le=10)
+    IDEAS_SEQUENTIAL_LANES: bool = False
+    """Send S2's lanes one after another in the run's rotation, each shown the
+    mechanisms (never the titles) of the ideas S1 and the earlier lanes wrote
+    (G4, ``idea_dedupe.taken_block``); off keeps today's parallel lanes."""
+    IDEAS_MECHANISM_DEDUPE: bool = False
+    """Drop, in the portfolio, an idea whose mechanism key (``idea_dedupe``:
+    overlapping target lines, same mechanism and primary cell) matches an
+    earlier one's (G4). Unvalidated until the dedupe passes its bar."""
     ALLOW_RETENTION_MODELS: bool = False
     """Admit ``RETENTION_REQUIRED_MODELS`` in repository-text roles (D63).
     Set only by the live harness, for fixture and pinned-OSS repositories."""

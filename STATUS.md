@@ -2941,6 +2941,14 @@ worktree", 4.4.0) or in the builder rules every brief carries.
   400 commits): fine once a call, costly if rebuilt often; callers are found by
   name, so a generic name can give false positives; the reviewer gets up to
   twice the code cap.
+- G4 (sequential lanes, dedupe): with `IDEAS_SEQUENTIAL_LANES` an X1 plan on
+  four libraries needs about 320 minutes against ci.yml's 240-minute ideas-probe
+  timeout (`JOB_MINUTES`): the V suite splits dispatches or raises the timeout.
+  Nits left: the mechanisms block's withheld-lines note repeats once a re-priced
+  lane; one bar-constants test is tautological. The dedupe's labelled pairs need
+  a live labeller that wrote none of E1's ideas (the V suite);
+  `idea_dedupe.load_recorded` and `candidate_pairs` builds candidates from V6's
+  recorded ideas.
 - G6b review nits, left as they are: `ScaleSetting.env_var` refuses only PATH,
   HOME, TMPDIR and the PYTHON, LD_ and DYLD_ prefixes, so a name the sandbox
   denies (a token-shaped one) or one only passed through (LANG, TZ) is caught at

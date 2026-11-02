@@ -248,6 +248,19 @@ def test_a_plan_past_the_jobs_minutes_is_refused_before_any_spend() -> None:
     assert ip.probe_plan({ip.REPOS_ENV: "idna"}).minutes() == 56
 
 
+def test_sequential_lanes_count_one_stage_a_lane() -> None:
+    """G4: S1, six lenses and the leap one at a time, then the reviewer."""
+    seq = (("IDEAS_SEQUENTIAL_LANES", True),)
+    sequential = ip.IdeaArm("C-seq", True, seq, e1=False)  # no auditor stage
+    assert ip.arm_stages(sequential) == 1 + 7 + 1
+    no_leap = ip.IdeaArm(
+        "C-seq0", True, (("IDEAS_SEQUENTIAL_LANES", True), ("IDEAS_LEAP_N", 0))
+    )
+    assert ip.arm_stages(no_leap) == 1 + 6 + 1
+    plan = ip.ProbePlan((sequential,), _repos(("tomli",)), Path("f"))
+    assert plan.library_minutes() == ip.CLONE_MINUTES + 9 * ip.STAGE_MINUTES == 28
+
+
 def test_recorded_facts_resolve_against_the_service_directory(tmp_path: Path) -> None:
     facts = tmp_path / "facts.jsonl"
     facts.write_text("", encoding="utf-8")

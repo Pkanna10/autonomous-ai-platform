@@ -11,7 +11,9 @@ Pure functions: no model, no I/O, nothing random.
   S1 signature, no title already tried (``avoid``) or learnt (lesson titles),
   no shown technique (matched mode). S1 ideas pass through untouched, first.
 - ``portfolio`` (S4b, after the reviewer): ``_sift``'s title and class
-  filters run first (a repeated title key is dropped, a ``novel`` idea is
+  filters run first (a repeated title key is dropped; with ``mechanisms``
+  (G4), so is an idea whose ``idea_dedupe`` key matches an earlier admitted
+  idea's, obvious ideas first; a ``novel`` idea is
   placed after the portfolio, where ``_sift`` parks it), then 3-5 non-obvious
   ideas are picked by quotas (one per lane, one per anchor, one per primary
   cell, then at least one ``transformational``, swapped in for the pick that
@@ -29,7 +31,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from typing import Final
 
 from autonomous_ai_agents.clients.structured import shorten, shown
@@ -38,6 +40,10 @@ from autonomous_ai_agents.common.models import (
     Lesson,
     Objective,
     ObjectiveKind,
+)
+from autonomous_ai_agents.optimization.idea_dedupe import (
+    MechanismKey,
+    same_mechanism,
 )
 from autonomous_ai_agents.optimization.idea_types import (
     GenerateEvent,
@@ -190,12 +196,19 @@ def portfolio(
     minimum: int,
     maximum: int,
     notes: list[str],
+    mechanisms: Mapping[str, MechanismKey] | None = None,
+    merged: list[tuple[IdeaCandidate, IdeaCandidate]] | None = None,
 ) -> tuple[IdeaCandidate, ...]:
-    """The interleaved obvious and picked ideas, then any ``novel`` ones."""
+    """The interleaved obvious and picked ideas, then any ``novel`` ones.
+
+    ``mechanisms`` (G4) maps idea ids to their mechanism keys: a later idea
+    with the same mechanism is dropped (an idea with no key never is), and
+    ``(dropped, kept twin)`` is appended to ``merged`` when it is given."""
     if not 1 <= minimum <= maximum:
         raise ValueError(f"need 1 <= minimum <= maximum, got {minimum}, {maximum}")
     titles: set[str] = set()
     parked: list[IdeaCandidate] = []
+    taken: list[tuple[MechanismKey, IdeaCandidate]] = []
 
     def admitted(idea: IdeaCandidate) -> bool:
         key = _title_key(idea.title)
@@ -203,6 +216,17 @@ def portfolio(
             notes.append(f"portfolio: dropped repeated idea {shown(idea.title)}")
             return False
         titles.add(key)
+        mark = None if mechanisms is None else mechanisms.get(idea.id)
+        twin = next((i for k, i in taken if same_mechanism(k, mark)), None)
+        if twin is not None:
+            notes.append(f"portfolio: dropped idea {shown(idea.title)} "
+                         f"({idea.lane.value}): the same mechanism as "
+                         f"{shown(twin.title)} (mechanism dedupe)")  # fmt: skip
+            if merged is not None:
+                merged.append((idea, twin))
+            return False
+        if mark is not None:
+            taken.append((mark, idea))
         if idea.change_class is ChangeClass.novel:
             parked.append(idea)
             notes.append(f"portfolio: novel idea {shown(idea.title)} placed after "

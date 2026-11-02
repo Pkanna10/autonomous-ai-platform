@@ -17,6 +17,7 @@ import json
 import re
 import secrets
 import threading
+import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 
 import pytest
@@ -59,6 +60,7 @@ from autonomous_ai_agents.execution.git import GitError
 from autonomous_ai_agents.optimization.hypothesis_source import (
     ClaudeHypothesisGenerator,
 )
+from autonomous_ai_agents.optimization.idea_dedupe import TAKEN_TAG
 from autonomous_ai_agents.optimization.idea_pipeline import IdeaPipelineGenerator
 from autonomous_ai_agents.optimization.idea_portfolio import rotation
 from autonomous_ai_agents.optimization.idea_prompts import THINK_LINE, VIEW_HEADINGS
@@ -1325,3 +1327,240 @@ def test_a_second_call_builds_no_view() -> None:
     result = run(call_index=1)
     assert len(run.requests("lane")) == 1
     assert not _noted(result.notes, "view callers")
+
+
+# --------------------------------------------------------------------------
+# G4: sequential lanes and the mechanism dedupe (config.py gains both flags
+# with the G4 config patch; ``model_copy(update=...)`` sets them either way)
+# --------------------------------------------------------------------------
+
+SEQUENTIAL = BASE.model_copy(update={"IDEAS_SEQUENTIAL_LANES": True})
+DEDUPE = BASE.model_copy(update={"IDEAS_MECHANISM_DEDUPE": True})
+ROTATION = rotation(RUN_ID, LANES_ALL)
+LENS_ORDER = [lane for lane in ROTATION if lane is not Lane.leap]
+LEAP_IDEAS: list[Json] = [
+    _idea("Represent counts as an array of word ids", "count_words",
+          mechanism="representation", cells=("representation:compact",),
+          tier="transformational"),
+]  # fmt: skip
+_TAKEN_BLOCK = re.compile(
+    rf"<{TAKEN_TAG} boundary=[0-9a-f]+>\n(.*?)\n</{TAKEN_TAG} boundary=", re.DOTALL
+)
+
+
+def _sequential(cfg: Settings = SEQUENTIAL, **changes: ScriptedReply) -> _Run:
+    """S1, then the lenses in the run's rotation (the leap on its own)."""
+    replies = [changes.get(lane.value, _ideas(*LENS[lane])) for lane in LENS_ORDER]
+    leap = changes.get("leap", LEAP)
+    return _Run(lane=[S1_REPLY, *replies], leap=[leap], reviewer=[REVIEW], cfg=cfg)
+
+
+def _taken(request: LLMRequest) -> list[object] | None:
+    found = _TAKEN_BLOCK.search(_texts(request)[1])
+    if found is None:
+        return None
+    return [json.loads(line) for line in found.group(1).split("\n")]
+
+
+def _entry(item: Json) -> dict[str, object]:
+    quote = item["depends_on_quote"]
+    assert isinstance(quote, str)
+    rows = quote.split("\n")
+    first = next(i for i, line in enumerate(SOURCE.split("\n"), 1) if rows[0] in line)
+    hotspots = item["hotspots"]
+    assert isinstance(hotspots, list)
+    cells = item["morph_cells"]
+    assert isinstance(cells, list)
+    return {"path": PATH, "function": hotspots[0]["symbol"],
+            "lines": f"{first}-{first + len(rows) - 1}",
+            "mechanism": item["mechanism"], "cell": cells[0]}  # fmt: skip
+
+
+def _lens_request(run: _Run, lane: Lane) -> LLMRequest:
+    if lane is Lane.leap:
+        return run.requests("leap")[0]
+    for request in run.requests("lane")[1:]:
+        found = _LENS_TAG.search(_texts(request)[1])
+        if found is not None and found.group(1) == lane.value:
+            return request
+    raise AssertionError(f"no {lane.value} request")
+
+
+class _InFlight(ScriptedTransport):
+    """Records the most requests in flight at once, across transports."""
+
+    lock = threading.Lock()
+
+    def __init__(
+        self, replies: Sequence[ScriptedReply], *, cfg: Settings, flight: list[int]
+    ) -> None:
+        super().__init__(replies, cfg=cfg)
+        self.flight = flight
+
+    def send(self, request: LLMRequest) -> BetaMessage:
+        with self.lock:
+            self.flight[0] += 1
+            self.flight[1] = max(self.flight)
+        try:
+            time.sleep(0.02)  # room for a parallel send to overlap
+            return super().send(request)
+        finally:
+            with self.lock:
+                self.flight[0] -= 1
+
+
+def test_sequential_lanes_run_one_at_a_time_each_shown_the_mechanisms_before_it() -> (
+    None
+):
+    cfg = SEQUENTIAL.model_copy(update={"IDEAS_LANE_WORKERS": 4})
+    run = _sequential(cfg)
+    flight = [0, 0]
+    lane_replies: list[ScriptedReply] = [S1_REPLY]
+    lane_replies += [_ideas(*LENS[lane]) for lane in LENS_ORDER]
+    plan: tuple[tuple[Role, list[ScriptedReply]], ...] = (
+        ("lane", lane_replies),
+        ("leap", [LEAP]),
+    )
+    for role, replies in plan:
+        run.transports[role] = _InFlight(
+            replies, cfg=role_settings(cfg, role), flight=flight
+        )
+    run.generator = IdeaPipelineGenerator(
+        dict(run.transports), reader=_reader, config=cfg, sleep=lambda _s: None
+    )
+    result = run()
+    assert flight[1] == 1
+    lenses = run.requests("lane")[1:]
+    sent = [_LENS_TAG.search(_texts(r)[1]) for r in lenses]
+    assert [m.group(1) for m in sent if m is not None] == [x.value for x in LENS_ORDER]
+    assert _taken(run.requests("lane")[0]) is None  # S1 sees no block
+    earlier: list[Json] = [O1, O2, O3]
+    for lane in ROTATION:
+        request = _lens_request(run, lane)
+        assert _taken(request) == [_entry(item) for item in earlier]
+        text = _texts(request)[1]
+        assert "Do not repeat these mechanisms" in text
+        own = LEAP_IDEAS if lane is Lane.leap else LENS[lane]
+        earlier += [
+            item for item in own if item["depends_on_quote"] != QUOTES["header"]
+        ]
+    for item in (*LEAP_IDEAS, *(i for lane in LENS_LANES for i in LENS[lane])):
+        block = _TAKEN_BLOCK.search(_texts(_lens_request(run, Lane.far))[1])
+        assert block is not None and json.dumps(item["title"]) not in block.group(1)
+    parallel = _full()()
+    assert [h.title for h in result.hypotheses] == [
+        h.title for h in parallel.hypotheses
+    ]
+    assert run.budget.spent_usd == pytest.approx(7 * _bill(SONNET) + 2 * _bill(OPUS))
+
+
+def test_parallel_lanes_carry_no_mechanism_block() -> None:
+    run = _full()
+    run()
+    for request in (*run.requests("lane"), *run.requests("leap")):
+        assert TAKEN_TAG not in _texts(request)[1]
+
+
+def test_with_nothing_taken_the_first_sequential_lane_sees_no_block() -> None:
+    run = _sequential()
+    run.transports["lane"] = ScriptedTransport(
+        [_ideas(), *[_ideas(*LENS[lane]) for lane in LENS_ORDER]],
+        cfg=role_settings(SEQUENTIAL, "lane"),
+    )
+    run.generator = IdeaPipelineGenerator(
+        dict(run.transports), reader=_reader, config=SEQUENTIAL, sleep=lambda _s: None
+    )
+    run()
+    assert ROTATION[0] is Lane.leap
+    assert _taken(_lens_request(run, Lane.leap)) is None
+    assert _taken(_lens_request(run, ROTATION[1])) == [_entry(LEAP_IDEAS[0])]
+
+
+def test_a_failed_sequential_lane_adds_nothing_and_the_next_lanes_run() -> None:
+    lost = LLMNoResponseError("Claude API: connection lost", timed_out=False)
+    run = _sequential(name_the_problem=lost)
+    result = run()
+    assert len(run.requests("lane")) == 7
+    assert _noted(result.notes, "lane name_the_problem failed (LLMUnavailable)")
+    shown = _taken(_lens_request(run, Lane.name_the_problem))
+    assert _taken(_lens_request(run, Lane.recombine)) == shown
+
+
+def test_a_configuration_error_in_a_sequential_lane_stops_the_rest() -> None:
+    denied = LLMConfigError("Claude API HTTP 401: check ANTHROPIC_API_KEY")
+    run = _sequential(assume_less=denied)
+    with pytest.raises(LLMConfigError):
+        run()
+    assert len(run.requests("lane")) == 2  # S1 and assume_less
+    assert len(run.requests("leap")) == 1  # first in the rotation
+    assert run.requests("reviewer") == []
+    assert run.budget.spent_usd == pytest.approx(_bill(SONNET) + _bill(OPUS))
+
+
+class _Growing(ScriptedTransport):
+    """Counts ten million tokens for each taken mechanism past S1's three."""
+
+    def count_input_tokens(self, request: LLMRequest) -> int:
+        shown = _taken(request) or []
+        return super().count_input_tokens(request) + 10_000_000 * max(0, len(shown) - 3)
+
+
+def test_a_sequential_lane_that_no_longer_fits_stops_the_rest_with_an_event() -> None:
+    run = _sequential()
+    run.transports["lane"] = _Growing(
+        [S1_REPLY, *[_ideas(*LENS[lane]) for lane in LENS_ORDER]],
+        cfg=role_settings(SEQUENTIAL, "lane"),
+    )
+    run.generator = IdeaPipelineGenerator(
+        dict(run.transports), reader=_reader, config=SEQUENTIAL, sleep=lambda _s: None
+    )
+    result = run(budget=Budget(5.0))
+    assert len(run.requests("lane")) == 1  # S1 only: assume_less no longer fits
+    assert len(run.requests("leap")) == 1
+    (event,) = [e for e in result.events if e.code == "discovery_unaffordable"]
+    assert event.level is EventLevel.warning
+    assert event.data["stage"] == "lanes" and event.data["lane"] == "assume_less"
+    rest = ", ".join(lane.value for lane in ROTATION[1:])
+    assert _noted(result.notes, f"lanes {rest} not sent: the assume_less lane may cost")
+    assert TITLE_OF[Lane.leap] in [h.title for h in result.hypotheses]
+
+
+TWIN = _idea(
+    "Drop repeated runs while sorting",
+    "merge_runs",
+    mechanism="algorithm",
+    cells=("algorithm:better_constant", "work:eliminate"),
+)  # O3's twin
+
+
+def test_the_mechanism_dedupe_drops_a_lens_twin_of_an_s1_idea() -> None:
+    run = _Run(
+        lane=[S1_REPLY, *_lens_replies(eliminate=_ideas(TWIN))],
+        leap=[LEAP],
+        reviewer=[REVIEW],
+        cfg=DEDUPE,
+    )
+    result = run()
+    assert TWIN["title"] not in [h.title for h in result.hypotheses]
+    (event,) = [
+        e for e in result.events if e.data.get("reason") == "mechanism_duplicate"
+    ]
+    assert event.code == "idea_dropped"
+    assert event.data["lane"] == "eliminate"
+    assert event.data["title"] == TWIN["title"]
+    assert event.data["duplicate_of"] == O3["title"]
+    assert _noted(result.notes, "the same mechanism as 'Dedupe runs in one pass'")
+    assert all(TAKEN_TAG not in _texts(r)[1] for r in run.requests("lane"))
+
+
+def test_with_the_dedupe_off_the_twin_is_kept() -> None:
+    run = _Run(
+        lane=[S1_REPLY, *_lens_replies(eliminate=_ideas(TWIN))],
+        leap=[LEAP],
+        reviewer=[REVIEW],
+    )
+    result = run()
+    assert TWIN["title"] in [h.title for h in result.hypotheses]
+    assert not [
+        e for e in result.events if e.data.get("reason") == "mechanism_duplicate"
+    ]

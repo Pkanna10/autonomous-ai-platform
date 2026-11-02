@@ -20,7 +20,9 @@ most 48 pooled ideas (each arm's returned non-obvious ideas, its own
 reviewer's removals, then the rest), neutral ids, its cost in the cap.
 
 Minutes: each sequential model stage counts ``STAGE_MINUTES`` (S1, two lens
-rounds on four workers, the reviewer: four a pipeline call), phase 1
+rounds on four workers, the reviewer: four a pipeline call; with
+``IDEAS_SEQUENTIAL_LANES`` (G4) each lens and the leap is its own stage:
+nine a pipeline call on the defaults), phase 1
 ``PHASE_ONE_MINUTES`` (re-pinned from E0b: a count-mode library took about
 47 s; the stage minutes stay until E1's recorded seconds re-pin them, as E0b
 timed only count mode's Sonnet sends, 9-18 s); a plan past ci.yml's
@@ -300,12 +302,14 @@ AUDIT_USD: Final = request_usd(AUDIT_PROMPT_BOUND, AUDIT_MAX_TOKENS, OPUS)
 def arm_stages(arm: IdeaArm, base: Settings = settings) -> int:
     """The arm's model requests in sequence: one for today's generator,
     count mode's sends, or S1, the lens rounds (the lenses and the leap on
-    ``IDEAS_LANE_WORKERS``) and the reviewer."""
+    ``IDEAS_LANE_WORKERS``, or one lane a round with
+    ``IDEAS_SEQUENTIAL_LANES``, G4) and the reviewer."""
     if not arm.pipeline or arm is ARM_COUNT:
         return 1 if not arm.pipeline else COUNT_SENT
     cfg = base.model_copy(update=dict(arm.update))
     fan = len(cfg.IDEAS_LENSES) + (1 if cfg.IDEAS_LEAP_N else 0)
-    return 1 + math.ceil(fan / cfg.IDEAS_LANE_WORKERS) + (1 if cfg.IDEAS_REVIEW else 0)
+    workers = 1 if cfg.IDEAS_SEQUENTIAL_LANES else cfg.IDEAS_LANE_WORKERS
+    return 1 + math.ceil(fan / workers) + (1 if cfg.IDEAS_REVIEW else 0)
 
 
 @dataclass(frozen=True)
