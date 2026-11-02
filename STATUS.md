@@ -443,9 +443,9 @@ confirmations and final combine in one run.
   `pnpm-workspace.yaml`); security review of the whole Step 3 diff (a fresh
   Sonnet 5.5 Reviewer, every trust boundary): no finding at the bar, two notes
   in Technical Debt; `pnpm stage-gate`: passed (2 warnings: outdated majors and
-  cooldown-held minors), 8,503 passed, 100 % coverage. The first run failed
-  pip-audit on a stale venv (pypdf 6.21.2, locked 6.21.4): the gate now audits
-  every locked package, as `security.yml` does.
+  cooldown-held minors), 8,503 passed and 67 skipped (8,570 collected), 100 %
+  coverage. The first run failed pip-audit on a stale venv (pypdf 6.21.2, locked
+  6.21.4): the gate now audits every locked package, as `security.yml` does.
 - **Built:** the idea pipeline (N0-N5: spawn delta, contracts, code context,
   lanes, reviewer, portfolio, the pipeline, wiring, the child-process tripwire,
   E2E), corpus v2 and the upstream-fixes corpus (V1-V3, V9), the experiment
@@ -2913,11 +2913,55 @@ worktree", 4.4.0) or in the builder rules every brief carries.
   run on a real repository); with `unordered_lines` and a builtin line-aligned
   measure, the score is read from the first timed run's bytes only (later runs
   need only the same canonical fingerprint).
-- E3-A (`tests/e2e/test_step3.py`) once delivered report only on CI (`181f1ef`,
-  CPython 3.11: kept and confirmed twice, then the combine re-test did not
-  hold). It did not reproduce in three E2E runs and two full 3.11 suites under
-  load, and passed on the next commit. The assertion now prints the combine
-  summary, so a repeat says why.
+- `test_reference_fix_reaches_its_gain_and_the_textbook_falls_short[auditchain]`
+  (a `small` case: 9 runs a copy, best CPU, 5 % bar) failed twice in the
+  2026-11-01 test audit on a shared 4-vCPU cloud container (3.13): 4.2 % (base
+  0.667 s, fixed 0.639 s CPU) under xdist contention, and once unattributed with
+  `-n 0` on an idle box; it passed on the next run. Here it measured 8.3-16.4 %
+  in 10 readings (CPU burners, a gate running, with and without `--cov`;
+  coverage is not the cause). The fix removes about 0.1 s of CPU here but 0.03 s
+  there, which points at the measurement (CPU seconds vary with the vCPU's clock
+  and steal) rather than the fixture. Left unchanged (the owner agreed); if CI
+  repeats it, compare against these numbers before widening the slowdown.
+- `test_a_decoy_tempting_idea_gains_nothing[sitebackup]` failed once in the
+  Lead's container (2026-11-02, full 3.11 suite, `-n 4`): the tempting idea
+  measured 5.8 % against the 5 % bound with an A/A gap of 0.3 % (base 0.655 s,
+  twin 0.657 s, tempting 0.617 s CPU). The same family as auditchain (a CPU-
+  seconds guard on a shared vCPU); the bar stays (the owner agreed).
+- **The combine re-test miss on CI (not currently reproducible).** Four misses
+  in 36 hours, each a re-test of a large real gain (about 96 %, floor about 4 %)
+  that did not hold, all on the `Python CI` job (CPython 3.11, the only Linux
+  job running E2E): E3-A `181f1ef` (2026-10-31 05:24, delivered report only),
+  E3-J on master `8b32afe` (2026-11-01 16:00, one of two keeps), E2E-C on its
+  re-run (16:37, no keep, no combination), E2E-B on `34a6df0` re-run 2
+  (2026-11-02 03:00, the greedy re-test failed, the fallback shipped h5). Runner
+  image `ubuntu-22.04` 20261025.340.1 (provisioner 20261021.618), kernel
+  6.8.0-1070-azure, Landlock ABI 4 on every run checked, misses and clean alike,
+  before and after. 0 misses since (to 2026-11-02 10:13): 18 plain runs and 4
+  runs with 160 repeated E2E instances (18 clean plain runs at 1 in 7 is about a
+  6 % outcome). Ruled out by reading or measurement: noise (the judges'
+  margins), langgraph 1.2.17, the CI caches, push vs PR, worktree collisions,
+  the live checkout's branch, cross-launch stray counting (each launch has its
+  own launcher; the workload is reaped before the drain), teardown outliving
+  `run_once`, and the diagnostics' gap between launches (`34a6df0` already had
+  it when E2E-B missed). Surviving hypothesis: a transient host stall tripping a
+  fixed wall-clock limit on the launch path. The limits: `IO_GRACE_S` 2 s (the
+  pump's read deadline after the wrapper exits; a hard RunFailure on the report
+  pipe, and, until the follow-up PR, only a note plus a partial stdout hash on
+  stdout), `PROBE_TIMEOUT_S` 2 s (the launcher's isolation probe; RunFailure),
+  `DRAIN_CAP_S` 3 s (a note), the 3 s thread join, then `GIT_TIMEOUT_S` 60 s,
+  the LLM and quality timeouts 300 s, the workload 600 s, `TEST_TIMEOUT_S` 900
+  s. The trap stays in `tests/e2e/conftest.py` (prints only on failure): every
+  combine re-test (offered, applied, held, the judges that did not pass), each
+  side's commit and mean, every RunFailure and run note, `/proc/loadavg`, and
+  every overlapping launch of other workers. **Rule (recorded now, not only on a
+  caught stall):** the fixed short limits on the launch path become proportional
+  to the measured run (for example max(the constant, a multiple of the run's
+  wall time)), `IO_GRACE_S` first: once an output pipe still open after the
+  grace is a RunFailure (the follow-up PR), a workload whose children print at
+  exit (ML training with worker processes) depends on that 2 s window. Not built
+  yet (its own unit); nothing is widened on a guess meanwhile, and a caught
+  stall names the limit to change first.
 - Wave 2 batch 3 reviewers' open nits: N2's line-by-line fallback (a hot
   function that no longer tokenizes) can let a docstring-only quote ground an
   idea, against D50 (b); N0b's re-edit reuses the D14 notice that says the

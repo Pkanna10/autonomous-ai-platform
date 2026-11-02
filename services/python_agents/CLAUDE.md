@@ -700,7 +700,7 @@ default context; "test double" means it exists for tests only.
 ## Commands
 
 ```bash
-uv sync --extra dev --extra database
+uv sync --extra dev --extra database --extra experiments
 uv run ruff check . && uv run ruff format --check .
 uv run mypy src tests
 TEST_DATABASE_URL=postgresql://dev:devpass@localhost:5432/ai_platform uv run pytest
