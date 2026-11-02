@@ -380,7 +380,7 @@ jobs:
       github.event_name == 'push'
     permissions:
       contents: read
-    timeout-minutes: 15
+    timeout-minutes: 40 # TEMPORARY (PR #29 probe): E2E_REPEAT; back to 15 before merge
     defaults:
       run:
         working-directory: ./services/python_agents
@@ -518,6 +518,8 @@ jobs:
 
       - name: Run tests with parallelization
         run: uv run pytest -m "not live" -n auto --cov --cov-report=xml --cov-report=term
+        env:
+          E2E_REPEAT: '10' # TEMPORARY (PR #29 probe): reverted before merge
         if: hashFiles('services/python_agents/tests/**/*.py') != ''
 
   # The macOS sandbox (sandbox-exec), Apple git and maxrss units, before the
