@@ -75,6 +75,7 @@ class _Generator:
         call_index: int = 0,
         protected: Sequence[str] = (),
         read_deny: Sequence[str] = (),
+        workloads: Sequence[Workload] = (),
     ) -> GenerateResult:
         return GenerateResult(hypotheses=self.hypotheses[:n], notes=("one",))
 

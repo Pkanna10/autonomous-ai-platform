@@ -1011,6 +1011,7 @@ def _generate(
             call_index=state["generator_calls"],
             protected=(*ctx.protected_patterns, *state["extra_protected"]),
             read_deny=() if ctx.quality is None else ctx.quality.frozen_paths,
+            workloads=state["workloads"],
         )
     except BudgetExceeded as exc:  # the reserve or the share refused it (D7)
         spend = _discovery_spend(state, budget, called=budget.spent_usd > cost)

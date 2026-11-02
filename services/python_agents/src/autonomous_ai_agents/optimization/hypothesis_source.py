@@ -42,6 +42,7 @@ from autonomous_ai_agents.common.models import (
     ProjectUnderstanding,
     Technique,
     TechniqueMatchRecord,
+    Workload,
 )
 from autonomous_ai_agents.optimization.generate import generate_hypotheses
 from autonomous_ai_agents.optimization.sources import GenerateResult, MatchResult
@@ -94,6 +95,7 @@ class ClaudeHypothesisGenerator:
         call_index: int = 0,  # noqa: ARG002
         protected: Sequence[str] = (),  # noqa: ARG002
         read_deny: Sequence[str] = (),  # noqa: ARG002
+        workloads: Sequence[Workload] = (),  # noqa: ARG002 - the pipeline's (G2)
     ) -> GenerateResult:
         notes: list[str] = []
         hypotheses = generate_hypotheses(

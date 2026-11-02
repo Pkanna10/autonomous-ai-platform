@@ -289,7 +289,7 @@ class IdeaPipelineGenerator:
                 objective=objective, techniques=techniques, lessons=lessons,
                 avoid_titles=avoid_titles, n=n, budget=budget, commit=commit,
                 run_id=run_id, call_index=call_index, protected=protected,
-                read_deny=read_deny,
+                read_deny=read_deny, workloads=workloads,
             )  # fmt: skip
             return GenerateResult(
                 today.hypotheses, (*notes, *today.notes), today.events, today.stats

@@ -35,6 +35,7 @@ from autonomous_ai_agents.common.models import (
     ProjectUnderstanding,
     Technique,
     TechniqueMatchRecord,
+    Workload,
 )
 from autonomous_ai_agents.optimization.idea_types import GenerateEvent, IdeaStats
 
@@ -68,7 +69,8 @@ class HypothesisGenerator(Protocol):
     The run's facts (D44): ``commit`` is the base commit the code is read at
     (``None``: no code context), ``run_id`` seeds the pipeline's rotation,
     ``call_index`` counts this run's earlier generator calls, ``protected``
-    and ``read_deny`` are patterns and paths never to be shown.
+    and ``read_deny`` are patterns and paths never to be shown, and
+    ``workloads`` are the run's (the idea pipeline's input-shape view, G2).
     """
 
     def generate(
@@ -88,6 +90,7 @@ class HypothesisGenerator(Protocol):
         call_index: int = 0,
         protected: Sequence[str] = (),
         read_deny: Sequence[str] = (),
+        workloads: Sequence[Workload] = (),
     ) -> GenerateResult: ...
 
 
