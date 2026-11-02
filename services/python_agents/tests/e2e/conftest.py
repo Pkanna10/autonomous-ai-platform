@@ -21,11 +21,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import stat
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -240,6 +242,15 @@ class Launch:
     wall_s: float = 0.0
     child_cpu_s: float | None = None
     strays: int | None = None
+    loadavg: str = ""
+
+
+def _loadavg() -> str:
+    """The first three ``/proc/loadavg`` fields, or ``?`` (darwin)."""
+    try:
+        return " ".join(Path("/proc/loadavg").read_text().split()[:3])
+    except OSError:
+        return "?"
 
 
 def _head(cwd: Path) -> str:
@@ -258,9 +269,24 @@ class LaunchLog:
     (a ``ValueError`` otherwise): no engine run executes anywhere else.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, shared: Path | None = None, test: str = "") -> None:
         self.launches: list[Launch] = []
         self.failures: list[str] = []  # RunFailure reasons, by phase and commit
+        # Every E2E launch of the session, all xdist workers, one JSON line
+        # each: the failure report lists the ones that overlapped this test.
+        self.shared, self.test = shared, test
+        self.span: tuple[float, float] | None = None
+
+    def _share(self, record: dict[str, object]) -> None:
+        start, end = float(str(record["start"])), float(str(record["end"]))
+        first = start if self.span is None else self.span[0]
+        self.span = (first, end)
+        if self.shared is None:
+            return
+        line = json.dumps({"worker": os.environ.get("PYTEST_XDIST_WORKER", "main"),
+                           "test": self.test, **record}) + "\n"  # fmt: skip
+        with self.shared.open("a", encoding="utf-8") as sink:
+            sink.write(line)
 
     def __call__(
         self,
@@ -275,13 +301,18 @@ class LaunchLog:
     ) -> RunSample:
         where = Path(os.path.realpath(cwd)).relative_to(settings.WORKTREE_ROOT)
         commit, command = _head(cwd), " ".join(argv[-3:])
+        phase, load, start = where.parts[1], _loadavg(), time.time()
         try:
             sample = procrun.run_once(
                 argv, cwd, env, sandbox, timeout_s, caps, fresh_dirs=fresh_dirs
             )
         except procrun.RunFailure as failure:
-            self.failures.append(f"{where.parts[1]}@{commit} {command}: {failure}")
+            self.failures.append(f"{phase}@{commit} {command}: {failure} (load {load})")
+            self._share({"phase": phase, "start": start, "end": time.time(),
+                         "load": load, "failure": str(failure)})  # fmt: skip
             raise
+        self._share({"phase": phase, "start": start, "end": time.time(), "load": load,
+                     "child_cpu": sample.child_cpu_s, "strays": sample.strays})  # fmt: skip
         launch = Launch(
             where.parts[1],
             sandbox.network,
@@ -293,6 +324,7 @@ class LaunchLog:
             wall_s=sample.wall_ns / 1e9,
             child_cpu_s=sample.child_cpu_s,
             strays=sample.strays,
+            loadavg=load,
         )
         self.launches.append(launch)
         return sample
@@ -315,7 +347,39 @@ class LaunchLog:
                 f" child_cpu_max={child:.3f}s strays={strays}"
             )
         lines.extend(f"FAILED {failure}" for failure in self.failures)
+        loads = sorted({launch.loadavg for launch in self.launches})
+        lines.append(f"load at launches: {loads[:1]}..{loads[-1:]}; now: {_loadavg()}")
+        lines.extend(self._concurrent())
         return "\n".join(lines)
+
+    def _concurrent(self) -> list[str]:
+        """Other tests' launches that overlapped this test's, per test and
+        phase: runs, the largest child CPU, strays, any RunFailure."""
+        if self.shared is None or self.span is None or not self.shared.exists():
+            return []
+        first, last = self.span
+        rows: dict[tuple[str, str, str], list[dict[str, object]]] = {}
+        for line in self.shared.read_text(encoding="utf-8").splitlines():
+            record = json.loads(line)
+            if record["test"] == self.test:
+                continue
+            if record["end"] < first or record["start"] > last:
+                continue
+            key = (str(record["worker"]), str(record["test"]), str(record["phase"]))
+            rows.setdefault(key, []).append(record)
+        out = [f"concurrent launches in other tests: {sum(map(len, rows.values()))}"]
+        for (worker, test, phase), runs in sorted(rows.items())[:40]:
+            child = max(
+                (float(str(r.get("child_cpu") or 0.0)) for r in runs), default=0.0
+            )
+            strays = sum(int(str(r.get("strays") or 0)) for r in runs)
+            failed = [str(r["failure"]) for r in runs if r.get("failure")]
+            out.append(
+                f"  {worker} {test.rsplit('::', 1)[-1][:50]} {phase[:20]} n={len(runs)}"
+                f" child_cpu_max={child:.3f}s strays={strays}"
+                + (f" FAILED {failed[0]}" if failed else "")
+            )
+        return out
 
     def phases(self) -> set[str]:
         """Every phase launched in; trials collapse to ``trial-*``."""
@@ -326,8 +390,12 @@ class LaunchLog:
 
 
 @pytest.fixture
-def launches() -> LaunchLog:
-    return LaunchLog()
+def launches(
+    request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory
+) -> LaunchLog:
+    base = tmp_path_factory.getbasetemp()
+    root = base.parent if os.environ.get("PYTEST_XDIST_WORKER") else base
+    return LaunchLog(root / "e2e-launches.jsonl", request.node.nodeid)
 
 
 @pytest.fixture
