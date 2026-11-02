@@ -310,8 +310,9 @@ def _judge(outcome: RunOutcome, policy: SandboxPolicy, notes: list[str]) -> RunS
         raise RunFailure("the measurement report pipe was still open after the run")
     if not outcome.outputs_complete:  # truncated output is never a fingerprint
         names = " and ".join(outcome.open_outputs) or "output"
+        pipes = "pipes were" if len(outcome.open_outputs) > 1 else "pipe was"
         raise RunFailure(
-            f"the {names} pipe was still open {IO_GRACE_S:g} s after the run:"
+            f"the {names} {pipes} still open {IO_GRACE_S:g} s after the run:"
             " the output is incomplete"
         )
     if not outcome.report:

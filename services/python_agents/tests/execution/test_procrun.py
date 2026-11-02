@@ -741,8 +741,9 @@ def test_judge_refuses_a_run_whose_output_pipe_stayed_open(
     with pytest.raises(RunFailure) as caught:
         judge(run, make_policy(tmp_path))
 
+    pipes = "pipes were" if len(names) > 1 else "pipe was"
     assert caught.value.reason == (
-        f"the {' and '.join(names)} pipe was still open {procrun.IO_GRACE_S:g} s"
+        f"the {' and '.join(names)} {pipes} still open {procrun.IO_GRACE_S:g} s"
         " after the run: the output is incomplete"
     )
     assert caught.value.notes == ("process group still alive after 3 s",)
@@ -1925,7 +1926,8 @@ def test_real_run_fails_when_an_escaped_orphan_holds_stdout(
         grandchild keeps stdout open (the documented limitation there)
     WHEN it runs
     THEN run_once returns after the grace period instead of hanging, and the
-        run fails naming stdout: its output may be incomplete
+        run fails naming both pipes the grandchild inherited: its output may
+        be incomplete
     """
     monkeypatch.setattr(procrun, "IO_GRACE_S", 0.3)
     started = time.monotonic()
@@ -1936,7 +1938,9 @@ def test_real_run_fails_when_an_escaped_orphan_holds_stdout(
     orphan = int((dirs.wt / "orphan.pid").read_text())
     try:
         assert time.monotonic() - started < 5.0
-        assert caught.value.reason.startswith("the stdout pipe was still open")
+        assert caught.value.reason.startswith(
+            "the stdout and stderr pipes were still open"
+        )
     finally:
         try:
             os.kill(orphan, signal.SIGKILL)
