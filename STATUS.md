@@ -2937,30 +2937,31 @@ worktree", 4.4.0) or in the builder rules every brief carries.
   (2026-11-02 03:00, the greedy re-test failed, the fallback shipped h5). Runner
   image `ubuntu-22.04` 20261025.340.1 (provisioner 20261021.618), kernel
   6.8.0-1070-azure, Landlock ABI 4 on every run checked, misses and clean alike,
-  before and after. 0 misses since: 160 repeated E2E instances and 16 plain runs
-  (at 1 in 7, about a 10 % outcome). Ruled out by reading or measurement: noise
-  (the judges' margins), langgraph 1.2.17, the CI caches, push vs PR, worktree
-  collisions, the live checkout's branch, cross-launch stray counting (each
-  launch has its own launcher; the workload is reaped before the drain),
-  teardown outliving `run_once`, and the diagnostics' gap between launches
-  (`34a6df0` already had it when E2E-B missed). Surviving hypothesis: a
-  transient host stall tripping a fixed wall-clock limit on the launch path. The
-  limits: `IO_GRACE_S` 2 s (the pump's read deadline after the wrapper exits; a
-  hard RunFailure on the report pipe, and, until the follow-up PR, only a note
-  plus a partial stdout hash on stdout), `PROBE_TIMEOUT_S` 2 s (the launcher's
-  isolation probe; RunFailure), `DRAIN_CAP_S` 3 s (a note), the 3 s thread join,
-  then `GIT_TIMEOUT_S` 60 s, the LLM and quality timeouts 300 s, the workload
-  600 s, `TEST_TIMEOUT_S` 900 s. The trap stays in `tests/e2e/conftest.py`
-  (prints only on failure): every combine re-test (offered, applied, held, the
-  judges that did not pass), each side's commit and mean, every RunFailure and
-  run note, `/proc/loadavg`, and every overlapping launch of other workers.
-  **Rule (recorded now, not only on a caught stall):** the fixed short limits on
-  the launch path become proportional to the measured run (for example max(the
-  constant, a multiple of the run's wall time)), `IO_GRACE_S` first: once an
-  output pipe still open after the grace is a RunFailure (the follow-up PR), a
-  workload whose children print at exit (ML training with worker processes)
-  depends on that 2 s window. Not built yet (its own unit); nothing is widened
-  on a guess meanwhile, and a caught stall names the limit to change first.
+  before and after. 0 misses since (to 2026-11-02 10:13): 18 plain runs and 4
+  runs with 160 repeated E2E instances (18 clean plain runs at 1 in 7 is about a
+  6 % outcome). Ruled out by reading or measurement: noise (the judges'
+  margins), langgraph 1.2.17, the CI caches, push vs PR, worktree collisions,
+  the live checkout's branch, cross-launch stray counting (each launch has its
+  own launcher; the workload is reaped before the drain), teardown outliving
+  `run_once`, and the diagnostics' gap between launches (`34a6df0` already had
+  it when E2E-B missed). Surviving hypothesis: a transient host stall tripping a
+  fixed wall-clock limit on the launch path. The limits: `IO_GRACE_S` 2 s (the
+  pump's read deadline after the wrapper exits; a hard RunFailure on the report
+  pipe, and, until the follow-up PR, only a note plus a partial stdout hash on
+  stdout), `PROBE_TIMEOUT_S` 2 s (the launcher's isolation probe; RunFailure),
+  `DRAIN_CAP_S` 3 s (a note), the 3 s thread join, then `GIT_TIMEOUT_S` 60 s,
+  the LLM and quality timeouts 300 s, the workload 600 s, `TEST_TIMEOUT_S` 900
+  s. The trap stays in `tests/e2e/conftest.py` (prints only on failure): every
+  combine re-test (offered, applied, held, the judges that did not pass), each
+  side's commit and mean, every RunFailure and run note, `/proc/loadavg`, and
+  every overlapping launch of other workers. **Rule (recorded now, not only on a
+  caught stall):** the fixed short limits on the launch path become proportional
+  to the measured run (for example max(the constant, a multiple of the run's
+  wall time)), `IO_GRACE_S` first: once an output pipe still open after the
+  grace is a RunFailure (the follow-up PR), a workload whose children print at
+  exit (ML training with worker processes) depends on that 2 s window. Not built
+  yet (its own unit); nothing is widened on a guess meanwhile, and a caught
+  stall names the limit to change first.
 - Wave 2 batch 3 reviewers' open nits: N2's line-by-line fallback (a hot
   function that no longer tokenizes) can let a docstring-only quote ground an
   idea, against D50 (b); N0b's re-edit reuses the D14 notice that says the
