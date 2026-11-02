@@ -425,7 +425,7 @@ jobs:
           python-version: '3.11'
 
       - name: Setup uv (fast Python package installer)
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           # Pinned: without it the action downloads whatever uv is latest.
           version: '0.11.32'
@@ -554,7 +554,7 @@ jobs:
           python-version: '3.11'
 
       - name: Setup uv (fast Python package installer)
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           # Pinned: without it the action downloads whatever uv is latest.
           version: '0.11.32'
@@ -653,7 +653,7 @@ jobs:
           python-version: ${{ env.UV_PYTHON }}
 
       - name: Setup uv (fast Python package installer)
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           # Pinned: without it the action downloads whatever uv is latest.
           version: '0.11.32'
