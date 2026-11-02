@@ -466,6 +466,11 @@ class Settings(BaseSettings):
     """Measure each trial alternately against its own base worktree (D41 a)."""
     CONFIRM_WINNERS: bool = True
     """Re-test every would-be keep or review before it stands (D41 b)."""
+    OP_COUNT_JUDGE: bool = False
+    """G6a, shadow mode: one counted run per workload and side (cProfile's
+    call counts) and the operation-count judge, a report column that never
+    decides a verdict. Off by default: each counted run costs about 1.5-3x
+    one workload run."""
     NOISE_CALIBRATION_BLOCKS: int = Field(
         default=3, ge=0, le=NOISE_CALIBRATION_BLOCKS_MAX
     )

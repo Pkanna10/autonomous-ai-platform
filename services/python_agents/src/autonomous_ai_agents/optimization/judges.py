@@ -16,6 +16,12 @@ Outcome semantics shared by every judge:
 
 :func:`derive_verdict` then folds the judge results and the anti-cheating
 violations into one :class:`Verdict`, in a fixed order.
+
+Shadow judges (``SHADOW_JUDGES``, spec section 2) record, never decide,
+until the owner promotes them: :class:`OpCountJudge` (G6a) records the
+operation counts of one counted run per side. ``derive_verdict`` leaves
+their results out of every rule and of the gain, and keeps them on the
+verdict for the report's column.
 """
 
 from __future__ import annotations
@@ -52,6 +58,11 @@ from autonomous_ai_agents.common.models import (
     VerdictOutcome,
     Violation,
     ViolationRule,
+)
+from autonomous_ai_agents.execution.measure import (
+    C_CALLS_KEY,
+    METRIC_OP_CALLS,
+    PYTHON_CALLS_KEY,
 )
 from autonomous_ai_agents.optimization.anticheat import (
     compare_fingerprints,
@@ -707,22 +718,114 @@ class TestSuiteJudge:
         )
 
 
+# ---------------------------------------------------------------------------
+# Shadow judges: they record, never decide (spec section 2)
+# ---------------------------------------------------------------------------
+
+
+OP_COUNT_JUDGE = "op_count"
+SHADOW_JUDGES: frozenset[str] = frozenset({OP_COUNT_JUDGE})
+"""Judge names whose results ``derive_verdict`` never reads (record only)."""
+_SHADOW = "shadow, records only"
+
+
+def _split_of(row: Measurement, key: str) -> int | None:
+    value = row.hardware.get(key)
+    return value if type(value) is int else None
+
+
+def _sum_split(rows: Sequence[Measurement], key: str) -> int | None:
+    found = [_split_of(row, key) for row in rows]
+    return None if None in found else sum(v for v in found if v is not None)
+
+
+@dataclass(frozen=True)
+class OpCountJudge:
+    """Records the base's and the trial's ``op_calls`` rows (G6a).
+
+    Summed over the workloads counted on both sides: both totals (as
+    ``baseline`` and ``trial``), the Python and C split, and the relative
+    change ``(trial - base) / base`` (negative: fewer calls; ``None`` over a
+    zero base) in ``details``. The outcome is always ``not_applicable`` and
+    ``gain`` ``None``: a second signal only, since moving work into C
+    builtins can cut counted calls without cutting time, so it never
+    overrides the timing judge (and ``derive_verdict`` ignores it anyway).
+    """
+
+    @property
+    def name(self) -> str:
+        """Judge name as it appears in results."""
+        return OP_COUNT_JUDGE
+
+    def applies_to(self, objective: Objective) -> bool:
+        """It records whatever the objective is."""
+        return True
+
+    def evaluate(self, baseline: Baseline, trial: Trial) -> JudgeResult:
+        """Pair the ``op_calls`` rows per workload and record the sums."""
+        pairs = _pair(baseline.measurements, trial.measurements, METRIC_OP_CALLS)
+        both = [(e, a) for _, e, a in pairs if a is not None]
+        uncounted = len(pairs) - len(both)
+        if not both:
+            return JudgeResult(
+                judge=self.name,
+                outcome=JudgeOutcome.not_applicable,
+                reason=f"{_SHADOW}: no operation counts on both sides",
+                details={"shadow": True, "workloads": 0, "uncounted": uncounted},
+            )
+        before = [e for e, _ in both]
+        after = [a for _, a in both]
+        base = sum(row.stats.mean for row in before)
+        total = sum(row.stats.mean for row in after)
+        change = (total - base) / base if base > 0 else None
+        said = "no relative change" if change is None else f"{change:+.1%}"
+        missing = f"; {uncounted} not counted on both sides" if uncounted else ""
+        return JudgeResult(
+            judge=self.name,
+            outcome=JudgeOutcome.not_applicable,
+            metric=METRIC_OP_CALLS,
+            baseline=RunStats.from_samples((base,), unit="calls"),
+            trial=RunStats.from_samples((total,), unit="calls"),
+            reason=(
+                f"{_SHADOW}: {total:.0f} calls against the base's {base:.0f}"
+                f" ({said}) over {len(both)} workload(s){missing}"
+            ),
+            details={
+                "shadow": True,
+                "workloads": len(both),
+                "uncounted": uncounted,
+                "change": change,
+                "base_calls": round(base),
+                "trial_calls": round(total),
+                "base_python_calls": _sum_split(before, PYTHON_CALLS_KEY),
+                "base_c_calls": _sum_split(before, C_CALLS_KEY),
+                "trial_python_calls": _sum_split(after, PYTHON_CALLS_KEY),
+                "trial_c_calls": _sum_split(after, C_CALLS_KEY),
+            },
+        )
+
+
 def default_judges(
-    noise_multiplier: float = 2.0, *, quality: QualityCheck | None = None
+    noise_multiplier: float = 2.0,
+    *,
+    quality: QualityCheck | None = None,
+    op_count: bool = False,
 ) -> tuple[Judge, ...]:
-    """The frozen judge set in evaluation order (``quality``: the confirmed check).
+    """The frozen judge set in evaluation order (``quality``: the confirmed
+    check; ``op_count``: the shadow :class:`OpCountJudge` last).
 
     Keep ``EquivalenceJudge`` in any judge set: it is the only judge that sets
     ``output_changed``, which rule 6 of :func:`derive_verdict` relies on to
     send a changed output to review instead of keeping it.
     """
-    return (
+    judges: tuple[Judge, ...] = (
         SpeedJudge(noise_multiplier=noise_multiplier),
         MemoryJudge(noise_multiplier=noise_multiplier),
         EquivalenceJudge(),
         GuardrailMetricJudge(quality=quality),
         TestSuiteJudge(),
     )
+    return (*judges, OpCountJudge()) if op_count else judges
 
 
 # ---------------------------------------------------------------------------
@@ -777,11 +880,16 @@ def derive_verdict(
     Rule 6 relies on :class:`EquivalenceJudge` being among the judges that
     produced ``judge_results``: it is the only judge that sets
     ``output_changed``, so without it a changed output is never seen here.
+
+    Results of ``SHADOW_JUDGES`` take part in no rule and in no gain,
+    whatever they say: they are kept on the verdict, in order, and nothing
+    more.
     """
     results = tuple(judge_results)
+    deciding = tuple(r for r in results if r.judge not in SHADOW_JUDGES)
     found = tuple(violations)
     change_class = hypothesis.change_class
-    outcome, summary = _decide(trial, change_class, results, found, primary_metric)
+    outcome, summary = _decide(trial, change_class, deciding, found, primary_metric)
     return Verdict(
         trial_id=trial.id,
         hypothesis_id=hypothesis.id,
@@ -789,7 +897,7 @@ def derive_verdict(
         change_class=change_class,
         judge_results=results,
         violations=found,
-        gain=_select_gain(results, primary_metric),
+        gain=_select_gain(deciding, primary_metric),
         summary=summary,
     )
 

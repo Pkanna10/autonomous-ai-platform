@@ -80,6 +80,14 @@ note that names counts, never the bytes. The baseline freezes the files
 that carries the labels column (``label_leaks``; the check is sound only
 without one). A trial freezes against ``Baseline.quality_files`` once per run
 (a resume), and its editor's brief always protects and read-denies the files.
+
+Counted runs (G6a, ``count_ops``; off by default, the factory's setting):
+after a phase's measurements and its suite, every workload gets one counted
+run per side (``measure.count_workload``): a paired trial on its twin (an
+``op_calls`` row in ``base_measurements``) and on itself, an unpaired trial
+on itself, the baseline on the base. A counted run that cannot count is a
+note, never a failed trial or an ``EngineError``: the operation-count judge
+only records.
 """
 
 from __future__ import annotations
@@ -156,6 +164,7 @@ from autonomous_ai_agents.execution.measure import (
     Phase,
     RunOnce,
     baseline_test_count,
+    count_workload,
     make_phase,
     measure_abab,
     measure_workload,
@@ -516,8 +525,10 @@ class _PhaseOwner:
         on_note: Callable[[str], None] | None = None,
         scorer: RunnerScorer | None = None,
         scorer_notes: NoteTap | None = None,
+        count_ops: bool = False,
     ) -> None:
         self._project = project
+        self._count_ops = count_ops
         self._quality, self._scorer_notes = QualityHooks(scorer), scorer_notes
         self._git = GitWorkspace(Path(project.root_path)) if git is None else git
         self._phase = functools.partial(
@@ -591,7 +602,33 @@ class _PhaseOwner:
             self._note(prefix, failure.notes)
             raise
         self._note(prefix, suite.notes)
-        return tuple(base), (*rows, *suite.measurements)
+        counted_base, counted = self._count(phase, twin, workloads, prefix, trial_id)
+        return (*base, *counted_base), (*rows, *suite.measurements, *counted)
+
+    def _count(
+        self,
+        phase: Phase,
+        twin: Phase | None,
+        workloads: Sequence[Workload],
+        prefix: str,
+        trial_id: str | None,
+    ) -> tuple[tuple[Measurement, ...], tuple[Measurement, ...]]:
+        """With ``count_ops``, one counted run per workload on the twin (A)
+        and on ``phase``: (the twin's rows, ``phase``'s rows); notes emitted."""
+        if not self._count_ops:
+            return (), ()
+        base: list[Measurement] = []
+        rows: list[Measurement] = []
+        for workload in workloads:
+            if twin is not None:
+                a = count_workload(twin, workload, side=" A")
+                base.extend(a.rows)
+                self._note(prefix, a.notes)
+            side = "" if twin is None else " B"
+            b = count_workload(phase, workload, trial_id=trial_id, side=side)
+            rows.extend(b.rows)
+            self._note(prefix, b.notes)
+        return tuple(base), tuple(rows)
 
     def _checked_out(self, ref: str) -> bool:
         return ref.casefold() in {
@@ -622,7 +659,8 @@ class _PhaseOwner:
 
 class GitBaselineRunner(_PhaseOwner):
     """The real ``BaselineRunner``: every workload at ``commit``, then the suite
-    once (its ``tests_passed`` rows record the passing count trials must reach).
+    once (its ``tests_passed`` rows record the passing count trials must reach),
+    then with ``count_ops`` one counted run per workload (G6a).
     A ``RunFailure`` is an ``EngineError`` once F1 held. Notes go to
     ``on_note`` prefixed ``baseline:``; with a ``scorer`` (module docstring),
     ``scorer_notes``, the scorer's ``NoteTap``, adds its run notes once."""
@@ -757,7 +795,7 @@ class GitTrialRunner(_PhaseOwner):
     ``fix_retries`` (0-1, default 0: off) and ``retry_floor_usd`` bound the fix
     retry (module docstring). ``paired`` (default off: Step 2; the factory
     passes ``PAIRED_TRIALS``) measures every attempt against a twin of the
-    base (module docstring). Notes (``RunSample``, ``RunFailure``,
+    base (module docstring); ``count_ops`` adds the counted runs (G6a). Notes (``RunSample``, ``RunFailure``,
     ``Measured``) go to ``on_note``
     prefixed ``trial for hypothesis <id>:``. ``prefix`` is the engine branch
     prefix (default the setting's; the factory passes the context's): the
@@ -783,6 +821,7 @@ class GitTrialRunner(_PhaseOwner):
         retry_floor_usd: float = 0.0,
         paired: bool = False,
         scorer: RunnerScorer | None = None,
+        count_ops: bool = False,
     ) -> None:
         if not 0 <= fix_retries <= FIX_RETRIES_MAX:
             raise ValueError(
@@ -797,6 +836,7 @@ class GitTrialRunner(_PhaseOwner):
         super().__init__(
             project, git=git, network=network, fs=fs, platform=platform,
             base_env=base_env, run=run, on_note=on_note, scorer=scorer,
+            count_ops=count_ops,
         )  # fmt: skip
         self._prefix = settings.TRIAL_BRANCH_PREFIX if prefix is None else prefix
         problem = branch_prefix_problem(self._prefix)

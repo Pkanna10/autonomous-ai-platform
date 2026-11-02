@@ -611,6 +611,7 @@ def build_context(
                 run=run,
                 scorer=scorer,
                 scorer_notes=tap,
+                count_ops=settings.OP_COUNT_JUDGE,
             ),
             GitTrialRunner(
                 bound,
@@ -625,6 +626,7 @@ def build_context(
                 retry_floor_usd=floor,
                 paired=settings.PAIRED_TRIALS,
                 scorer=scorer,
+                count_ops=settings.OP_COUNT_JUDGE,
             ),
         )
 
@@ -641,7 +643,11 @@ def build_context(
         runner=ConnectedTrialRunner(runners),
         baseline_runner=baseline_runner,
         judges=(
-            default_judges(settings.NOISE_MULTIPLIER, quality=quality)
+            default_judges(
+                settings.NOISE_MULTIPLIER,
+                quality=quality,
+                op_count=settings.OP_COUNT_JUDGE,
+            )
             if judges is None
             else tuple(judges)
         ),

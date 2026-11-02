@@ -2928,6 +2928,16 @@ worktree", 4.4.0) or in the builder rules every brief carries.
   measured 5.8 % against the 5 % bound with an A/A gap of 0.3 % (base 0.655 s,
   twin 0.657 s, tempting 0.617 s CPU). The same family as auditchain (a CPU-
   seconds guard on a shared vCPU); the bar stays (the owner agreed).
+- The same family again in the G1 gate (2026-11-02, 3.13, `-n 4`): auditchain
+  3.6 % (0.820 s to 0.791 s) and `meterlog` 2.7 % (0.688 s to 0.669 s), both
+  `small` cases with a 5 % bar; re-run alone, one pass and one fail; 3.11 green.
+  CI has not failed on either; bars unchanged.
+- G6a review nits, left as they are: `OpCountJudge` counts a workload as
+  uncounted only from the base side (a trial-side-only count is dropped
+  silently); `measure.counted_argv` imports the profiler's private `_split`
+  inside the function to avoid an import cycle (move `_split` into `measure.py`
+  when `profiler.py` is next touched). Combine and confirmation re-tests are not
+  counted.
 - **The combine re-test miss on CI (not currently reproducible).** Four misses
   in 36 hours, each a re-test of a large real gain (about 96 %, floor about 4 %)
   that did not hold, all on the `Python CI` job (CPython 3.11, the only Linux

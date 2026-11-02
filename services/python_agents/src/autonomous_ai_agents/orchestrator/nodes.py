@@ -104,6 +104,7 @@ from autonomous_ai_agents.common.models import (
     Hypothesis,
     HypothesisStatus,
     JudgeOutcome,
+    JudgeResult,
     Lesson,
     Measurement,
     NoiseCalibration,
@@ -152,6 +153,7 @@ from autonomous_ai_agents.optimization.anticheat import (
     check_run_count,
 )
 from autonomous_ai_agents.optimization.judges import (
+    OP_COUNT_JUDGE,
     Judge,
     derive_verdict,
     drop_text,
@@ -2241,6 +2243,17 @@ def _head(state: EngineState, title: str, now: datetime) -> list[str]:
     return [title, "", baseline_line, _total_time(state, now), ""]
 
 
+def op_count_cell(results: Sequence[JudgeResult]) -> str:
+    """The report's shadow cell (G6a): the operation-count judge's totals and
+    change, "base → trial calls (+x.x%)", or "not counted"."""
+    found = next((r for r in results if r.judge == OP_COUNT_JUDGE), None)
+    if found is None or found.baseline is None or found.trial is None:
+        return "not counted"
+    base, after = found.baseline.mean, found.trial.mean
+    cell = f"{base:.0f} → {after:.0f} calls"
+    return cell if base <= 0 else f"{cell} ({after / base - 1:+.1%})"
+
+
 def _report(
     state: EngineState,
     prefix: str,
@@ -2251,25 +2264,29 @@ def _report(
 ) -> str:
     """The markdown report: title, baseline, total time, one row per verdict,
     kept with each gain (D42), the review branch, retry notes, parked ideas,
-    conditions."""
+    conditions. A verdict carrying the shadow operation-count result adds
+    the "Op calls (shadow)" column (G6a: a column, never a decision)."""
     project = state["project"]
     hypotheses = _by_id(state["hypotheses"])
     decided = decided_verdicts(state["verdicts"], state["approval"])
     decided_by_id = {verdict.id: verdict for verdict in decided}
+    shadow = any(r.judge == OP_COUNT_JUDGE for v in decided for r in v.judge_results)
     lines = [
         *_head(
             state,
             f"# Engine run {state['run_id'][:8]}: {_cell(project.name)}",
             now or utc_now(),
         ),
-        "| Hypothesis | Outcome | Gain | Summary |",
-        "| --- | --- | --- | --- |",
+        "| Hypothesis | Outcome | Gain | Summary |"
+        + (" Op calls (shadow) |" if shadow else ""),
+        "| --- | --- | --- | --- |" + (" --- |" if shadow else ""),
     ]
     for verdict in decided:
         gain = "n/a" if verdict.gain is None else f"{verdict.gain:+.1%}"
+        extra = f" {_cell(op_count_cell(verdict.judge_results))} |" if shadow else ""
         lines.append(
             f"| {_cell(_title_for(hypotheses, verdict))} | {verdict.outcome.value} "
-            f"| {gain} | {_cell(verdict.summary)} |"
+            f"| {gain} | {_cell(verdict.summary)} |{extra}"
         )
     kept_verdicts = [
         decided_by_id[verdict_id]

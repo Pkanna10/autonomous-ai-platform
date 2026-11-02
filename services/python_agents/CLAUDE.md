@@ -236,7 +236,15 @@ class Judge(Protocol):
 keep `EquivalenceJudge` in any judge set, since it is the only judge that sets
 `JudgeResult.output_changed`. They are frozen dataclasses held in the node
 context, never in the state, and they do no I/O: every number they see was
-measured by the runner before they run.
+measured by the runner before they run. **Shadow judges** (`SHADOW_JUDGES`, G6a)
+record and never decide: `default_judges(..., op_count=True)` (setting
+`OP_COUNT_JUDGE`, off by default) adds `OpCountJudge`, which compares one
+counted run per side (Python and C call counts from cProfile, run by
+`execution/_opcount_shim.py` from the engine's own package, outside every
+worktree) and always returns `not_applicable`; `derive_verdict` leaves every
+shadow judge out of the rules and the gain, and the report shows its column only
+when a verdict carries it. Promotion needs the owner and the A/A, controls and
+gaming checks (idea-lab spec section 2).
 
 `derive_verdict(trial, hypothesis, judge_results, violations)` is pure and
 ordered:

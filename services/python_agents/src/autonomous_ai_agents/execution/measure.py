@@ -24,6 +24,17 @@ the worst launch's ``child_cpu_s`` and ``strays`` (D62, N0c; warm-ups
 included, ``None`` once a launch did not report them); the suite's rows
 carry neither.
 
+The counted run (G6a, ``count_workload``): one launch of a Python workload
+under ``_opcount_shim``, as the profiler launches its shim (the phase's
+sandbox, environment, reset and mask, the workload's interpreter and
+options, the scratch root as the output channel, read capped and never
+through a final link, parsed strictly: ``parse_counts``), gives one
+``op_calls`` row (``n=1``, unit ``calls``; the Python and C split in its
+hardware). It never raises for the workload's sake: a command the shim
+cannot run, a failed run or unusable output is a note and no row. The row is
+the operation-count judge's input only (shadow mode), and the workload
+controls the interpreter, so its count is a hint, never proof.
+
 ``tests_passed`` needs the runner's own summary, never the exit code alone:
 unittest's last ``Ran N tests`` line followed by ``OK`` (the suite keeps a
 larger stderr tail), or the JUnit XML pytest writes into the scratch root
@@ -39,6 +50,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import json
 import os
 import platform as _platform
 import re
@@ -65,6 +77,7 @@ from autonomous_ai_agents.common.models import (
     Workload,
 )
 from autonomous_ai_agents.common.paths import normalize_path
+from autonomous_ai_agents.execution import _opcount_shim
 from autonomous_ai_agents.execution.outputs import (
     Retained,
     RunOutput,
@@ -102,6 +115,17 @@ _CHUNK, _TEXT_CAP = 64 * 1024, 200
 CHILD_CPU_KEY, STRAYS_KEY = "child_cpu_s", "strays"
 _N = TypeVar("_N", int, float)
 """The ``Measurement.hardware`` keys of the child-process tripwire (D62, N0c)."""
+METRIC_OP_CALLS = "op_calls"
+"""The counted run's row (G6a): every call of one run, Python and C."""
+PYTHON_CALLS_KEY, C_CALLS_KEY = "python_calls", "c_calls"
+"""The ``op_calls`` row's ``hardware`` keys of the split."""
+OPCOUNT_NAME = "opcount.json"
+"""The shim's output, in the phase's scratch root (wiped before every run)."""
+OPCOUNT_SHIM = Path(_opcount_shim.__file__).resolve()
+OPCOUNT_TIMEOUT_FACTOR = 3.0
+"""The counted run's timeout is the workload's times this (cProfile's
+overhead, as for the profile run; the run is not timed)."""
+MAX_CALLS = 2**53
 
 
 class RunOnce(Protocol):
@@ -717,3 +741,117 @@ def baseline_test_count(measurements: Sequence[Measurement]) -> int | None:
     rows = (m for m in measurements if m.metric == METRIC_TESTS_PASSED)
     found = [c for m in rows if type(c := m.hardware.get("tests_counted")) is int]
     return max(found) if found else None
+
+
+class CountFormatError(Exception):
+    """The shim's output is not a count document the engine accepts; says why."""
+
+
+@dataclass(frozen=True)
+class OpCounts:
+    """One counted run's calls."""
+
+    python_calls: int
+    c_calls: int
+
+    @property
+    def total(self) -> int:
+        return self.python_calls + self.c_calls
+
+
+@dataclass(frozen=True)
+class Counted:
+    """A counted run's row (none when it could not count) and its notes."""
+
+    rows: tuple[Measurement, ...]
+    notes: tuple[str, ...] = ()
+
+
+def _unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    found = dict(pairs)
+    if len(found) != len(pairs):
+        raise CountFormatError("has an object with a repeated key")
+    return found
+
+
+def _constant(name: str) -> object:
+    raise CountFormatError(f"holds {name}, which is not a number")
+
+
+def _calls(value: object, what: str) -> int:
+    if type(value) is not int or not 0 <= value <= MAX_CALLS:
+        raise CountFormatError(f"{what} must be an integer from 0 to {MAX_CALLS}")
+    return value
+
+
+def parse_counts(data: bytes) -> OpCounts:
+    """The shim's document, or ``CountFormatError``: ASCII JSON of at most
+    the shim's cap, exactly its keys, version 1, bounded integer counts."""
+    if len(data) > _opcount_shim.MAX_DOC_BYTES:
+        raise CountFormatError(f"is larger than {_opcount_shim.MAX_DOC_BYTES} bytes")
+    if not data.isascii():
+        raise CountFormatError("is not ASCII JSON")
+    try:
+        doc: object = json.loads(
+            data.decode("ascii"), object_pairs_hook=_unique, parse_constant=_constant
+        )
+    except (ValueError, RecursionError):  # JSONDecodeError, int digit limit
+        raise CountFormatError("is not valid JSON") from None
+    if not isinstance(doc, dict) or set(doc) != set(_opcount_shim.DOC_KEYS):
+        raise CountFormatError(
+            "its top level must hold exactly version, python_calls, c_calls"
+        )
+    version = doc["version"]
+    if type(version) is not int or version != _opcount_shim.FORMAT_VERSION:
+        raise CountFormatError(f"version must be the integer {_opcount_shim.FORMAT_VERSION}")  # fmt: skip
+    return OpCounts(
+        _calls(doc["python_calls"], "python_calls"), _calls(doc["c_calls"], "c_calls")
+    )
+
+
+def counted_argv(command: Sequence[str], out: Path) -> list[str]:
+    """``command`` under the opcount shim, which writes ``out``; the
+    profiler's ``NotProfiledError`` when the shim cannot run it."""
+    # The profiler's CPython argv parser; imported here because the profiler
+    # imports trial_runner, which imports this module.
+    from autonomous_ai_agents.execution.profiler import _split
+
+    options, kind, name, args = _split(command)
+    return [command[0], *options, str(OPCOUNT_SHIM), str(out), kind, name, *args]
+
+
+def count_workload(
+    phase: Phase, workload: Workload, *, trial_id: str | None = None, side: str = ""
+) -> Counted:
+    """One counted run of ``workload`` (module docstring); ``side`` (`` A``,
+    `` B``) names the side in its notes."""
+    from autonomous_ai_agents.execution.profiler import NotProfiledError
+
+    label = f"workload {workload.name!r}{side}"
+    out = phase.scratch / OPCOUNT_NAME
+    try:
+        argv = counted_argv(workload.command, out)
+    except NotProfiledError as reason:
+        return Counted((), (f"{label} is not counted: {reason}",))
+    notes: list[str] = []
+    timeout = workload.timeout_s * OPCOUNT_TIMEOUT_FACTOR
+    try:
+        sample = launch(
+            phase, argv, workload.working_dir, timeout, "the counted run", notes,
+            workload_id=workload.id,
+        )  # fmt: skip
+    except RunFailure as failure:
+        said = [f"{label}: {note}" for note in notes]
+        return Counted((), (*said, f"{label} is not counted: {failure.reason}"))
+    said = [f"{label}: {note}" for note in notes]
+    data = bytearray()
+    try:
+        read_capped(out, _opcount_shim.MAX_DOC_BYTES, data.extend)
+        counts = parse_counts(bytes(data))
+    except (UnusableError, CountFormatError) as problem:
+        return Counted((), (*said, f"{label} is not counted: the count output {problem}"))  # fmt: skip
+    hardware = _host(phase.policy, 1, int(sample.fs_isolated), int(sample.net_isolated))
+    hardware |= {PYTHON_CALLS_KEY: counts.python_calls, C_CALLS_KEY: counts.c_calls}
+    total = (float(counts.total),)
+    row = _row(workload, trial_id, METRIC_OP_CALLS, "calls", total, hardware)
+    return Counted((row,), tuple(said))

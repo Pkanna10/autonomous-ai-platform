@@ -413,6 +413,23 @@ fuse. The final figure is re-derived and reported before the first dispatch.
   table in STATUS; the raw rows in each run's results artifact.
 - Cost per configuration. X1 decides how later rounds run; nothing in it counts
   as proof.
+- **The comparison tables (owner, 2026-11-02),** beside §6.2's per-configuration
+  measures:
+  1. **Mechanism × configuration overlap:** each deduped mechanism against the
+     configurations that produced it, so ideas unique to one lever show.
+  2. **X1-1 model × lens:** from the rotation, the model effect and the lens
+     effect read separately (each cell: ideas, unique mechanisms, ceilings
+     above the floor).
+  3. **Predicted ceilings against the floor, per configuration:** the whole
+     distribution (quantiles and a plot), not only the count above the floor.
+  4. **Every lever's delta beside the noise:** next to the A/A spread from X1-0
+     and E1's arms B, C and D, so a difference inside that spread is not read
+     as a result.
+- **The owner-read sample:** 20-30 ideas, source (configuration, lane, model)
+  hidden, kept.
+- **The shadow judges are on:** the X1 dispatch sets `OP_COUNT_JUDGE` (G6a) so
+  the operation-count column is recorded for every execution-slice trial, and
+  the V suite asserts it is on.
 
 ---
 
@@ -430,7 +447,7 @@ fuse. The final figure is re-derived and reported before the first dispatch.
 | G8 | The 18 unseen problems (setter Fable 5.1, O19; no Fable attempter, O34; each reference measured by the frozen judges before sealing) | `tests/fixtures/idea_lab/…`, a setter harness | G1-G6 |
 | G9 | Held-out OSS set: picked by a non-tuning session, kept outside the repository, a salted hash committed now | the hash file only (the list stays outside the repository) | — (do early) |
 | G11 | The lab's learning mechanism: W1 (lessons in the lane prompts, fenced) and W2 (combine-failed lesson discount) | `optimization/generate.py` / `idea_prompts.py`, `learning/lessons.py`, `nodes.py`; tests | G5 |
-| V (CI) | An `idea-lab` live suite: the views pass, the Sonnet 5 / Fable 5 smoke requests, the marker and dedupe validations, the idea configurations (X1-1's Latin square), the execution slice with per-trial records and combine summaries, caps per dispatch, full idea lists | `tests/live/…`, `ci.yml` | G1-G6 |
+| V (CI) | An `idea-lab` live suite: the views pass, the Sonnet 5 / Fable 5 smoke requests, the marker and dedupe validations, the idea configurations (X1-1's Latin square), the execution slice with per-trial records and combine summaries, `OP_COUNT_JUDGE` on (asserted), the §6.5 comparison tables, caps per dispatch, full idea lists | `tests/live/…`, `ci.yml` | G1-G6 |
 | X1 | The first exploratory round (live): validations, idea configurations, execution slice | — | G1-G7, the V suite, the views pass |
 
 **The idea-quality marker** is resolved before X1 (§6.1): Opus 5.5 and Opus
