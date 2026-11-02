@@ -71,6 +71,7 @@ from autonomous_ai_agents.execution.measure import (
 from autonomous_ai_agents.optimization.anticheat import (
     compare_fingerprints,
     exceeds_noise,
+    proposal_conflict,
     relative_gain,
 )
 
@@ -984,6 +985,9 @@ def derive_verdict(
 ) -> Verdict:
     """Fold judge results and violations into a verdict, in a fixed order.
 
+    0. a quarantined proposal (G3, ``anticheat.proposal_conflict``) ->
+       reject, whatever the judges say: its tag and a claim of equivalent
+       output are contradictory, so no tagged trial is ever kept or reviewed;
     1. any violation -> reject;
     2. trial failed or rejected -> reject;
     3. any judge failed -> reject;
@@ -1007,7 +1011,11 @@ def derive_verdict(
     deciding = tuple(r for r in results if r.judge not in SHADOW_JUDGES)
     found = tuple(violations)
     change_class = hypothesis.change_class
-    outcome, summary = _decide(trial, change_class, deciding, found, primary_metric)
+    quarantined = proposal_conflict(hypothesis, deciding)
+    if quarantined is not None:  # rule 0 (G3): before every other rule
+        outcome, summary = VerdictOutcome.reject, f"reject: {quarantined}"
+    else:
+        outcome, summary = _decide(trial, change_class, deciding, found, primary_metric)
     return Verdict(
         trial_id=trial.id,
         hypothesis_id=hypothesis.id,

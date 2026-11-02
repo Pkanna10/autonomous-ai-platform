@@ -56,6 +56,7 @@ from autonomous_ai_agents.optimization.hypothesis_source import (
 from autonomous_ai_agents.optimization.idea_types import (
     LENS_LANES,
     MORPH_DIMENSIONS,
+    RELAXING_LANES,
     Anchor,
     CodeContext,
     CodeDocument,
@@ -781,9 +782,12 @@ def test_portfolio_rounds_defaults_to_step2_and_takes_0_to_3(
 def test_the_enums_hold_the_specs_values() -> None:
     assert [lane.value for lane in Lane] == [
         "obvious", "eliminate", "assume_less", "name_the_problem", "recombine",
-        "resolve_tradeoff", "far", "leap",
+        "resolve_tradeoff", "far", "leap", "relax_dependency",
+        "relax_output_order", "relax_precompute", "relax_api",
     ]  # fmt: skip
-    assert set(LENS_LANES) == set(Lane) - {Lane.obvious, Lane.leap}
+    assert set(LENS_LANES) == (
+        set(Lane) - {Lane.obvious, Lane.leap} - set(RELAXING_LANES)
+    )
     assert len(LENS_LANES) == 6
     assert len(Mechanism) == 12 and Mechanism.other in Mechanism
     assert MORPH_DIMENSIONS == (

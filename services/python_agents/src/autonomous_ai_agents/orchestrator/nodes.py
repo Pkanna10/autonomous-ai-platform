@@ -152,6 +152,7 @@ from autonomous_ai_agents.optimization.anticheat import (
     check_diff_all,
     check_run_count,
 )
+from autonomous_ai_agents.optimization.idea_types import is_proposal, relaxed_rules
 from autonomous_ai_agents.optimization.judges import (
     OP_COUNT_JUDGE,
     SCALING_JUDGE,
@@ -877,14 +878,35 @@ _SOFT_DISCOVERY = (LLMUnavailable, LLMRequestError, UnusableReplyError)
 def _untried(
     ctx: NodeContext, state: EngineState
 ) -> tuple[list[Hypothesis], list[Hypothesis]]:
-    """Caller candidates and pooled ideas no trial ran and no round holds."""
+    """Caller candidates and pooled ideas no trial ran and no round holds;
+    never a quarantined proposal (G3), which only the proposals path holds."""
     seen = {trial.hypothesis_id for trial in state["trials"]} | {
         hypothesis.id for hypothesis in state["hypotheses"]
     }
     return (
-        [h for h in ctx.candidates if h.id not in seen],
-        [h for h in state["candidate_pool"] if h.id not in seen],
-    )
+        [h for h in ctx.candidates if h.id not in seen and not is_proposal(h)],
+        [h for h in state["candidate_pool"]
+         if h.id not in seen and not is_proposal(h)],
+    )  # fmt: skip
+
+
+def proposal_reason(hypothesis: Hypothesis) -> str:
+    """The ``parked_reason`` of a quarantined proposal (G3)."""
+    rules = ", ".join(relaxed_rules(hypothesis))
+    return f"proposal (G3): relaxes {rules}; never trialled or delivered"
+
+
+def _quarantine(ctx: NodeContext, state: EngineState) -> list[Hypothesis]:
+    """The proposals path's intake (G3): every tagged caller candidate or
+    pooled idea not parked yet, parked as a proposal for a human."""
+    parked = {h.id for h in state["parked"]}
+    found: list[Hypothesis] = []
+    for hypothesis in (*ctx.candidates, *state["candidate_pool"]):
+        if is_proposal(hypothesis) and hypothesis.id not in parked:
+            parked.add(hypothesis.id)
+            reason = {"parked_reason": proposal_reason(hypothesis)}
+            found.append(hypothesis.model_copy(update=reason))
+    return found
 
 
 def _discovery_cap(ctx: NodeContext, state: EngineState) -> float:
@@ -930,6 +952,8 @@ class _Generated:
     hypotheses: list[Hypothesis]
     delta: NodeDelta
     events: list[EngineEvent]
+    parked: tuple[Hypothesis, ...] = ()
+    """The ideas this turn parked (also in ``delta["parked"]``)."""
 
 
 def _discovery_spend(state: EngineState, budget: Budget, *, called: bool) -> NodeDelta:
@@ -964,6 +988,10 @@ def _sift(
             notes.append(f"dropped hypothesis {named}: its id is unusable or taken")
         elif key in titles:
             notes.append(f"dropped repeated hypothesis {named}")
+        elif is_proposal(hypothesis):  # the proposals path only (G3)
+            reason = {"parked_reason": proposal_reason(hypothesis)}
+            parked.append(hypothesis.model_copy(update=reason))
+            notes.append(f"parked proposal {named} for a human")
         elif hypothesis.change_class not in ctx.generated_classes:
             reason = {"parked_reason": "needs approval"}
             parked.append(hypothesis.model_copy(update=reason))
@@ -1027,7 +1055,9 @@ def _generate(
     kept, parked, notes = _sift(ctx, state, result.hypotheses)
     delta = _discovery_spend(state, budget, called=True)
     delta["parked"] = [*state["parked"], *parked]
-    counts: ScalarDict = {"kept": len(kept), "parked": len(parked)}
+    proposals = sum(1 for h in parked if is_proposal(h))
+    counts: ScalarDict = {"kept": len(kept), "parked": len(parked),
+                          "proposals": proposals}  # fmt: skip
     summary = f"{len(kept)} hypothesis(es) kept, {len(parked)} parked"
     events = [_note(state, phase, "generated", summary, data=counts)]
     for found in result.events:  # the pipeline's own codes and levels (D65)
@@ -1037,7 +1067,7 @@ def _generate(
         )
     for note in (*result.notes, *notes):
         events.append(_note(state, phase, "generate_note", note))
-    return _Generated(kept, delta, events)
+    return _Generated(kept, delta, events, tuple(parked))
 
 
 _SOFT_MATCH = (BudgetExceeded, LLMConfigError, *_SOFT_DISCOVERY)
@@ -2086,9 +2116,18 @@ def _delivery_sets(
     return run, review
 
 
+def _deliverable(state: EngineState) -> list[Verdict]:
+    """The decided verdicts, less any of a quarantined proposal (G3): the
+    verdict rules already reject those; this keeps them out of the
+    combines, the branches and the lessons whatever a verdict says."""
+    held = {h.id for h in (*state["hypotheses"], *state["parked"]) if is_proposal(h)}
+    decided = decided_verdicts(state["verdicts"], state["approval"])
+    return [v for v in decided if v.hypothesis_id not in held]
+
+
 def _review_verdicts(state: EngineState) -> list[Verdict]:
     """The review set (:func:`_delivery_sets`), in order."""
-    return _delivery_sets(decided_verdicts(state["verdicts"], state["approval"]))[1]
+    return _delivery_sets(_deliverable(state))[1]
 
 
 def _delivered_review(state: EngineState) -> list[Verdict]:
@@ -2174,11 +2213,26 @@ def _retry_section(state: EngineState) -> list[str]:
     return ["**Retry notes**", "", *lines, ""] if lines else []
 
 
+def _proposals_section(state: EngineState) -> list[str]:
+    """The proposals path's report (G3): each quarantined idea for a human,
+    with the rules it relaxes and its lane; never trialled or delivered."""
+    lines: list[str] = []
+    for h in state["parked"]:
+        if is_proposal(h):
+            lanes = [t.partition(":")[2] for t in h.tags if t.startswith("lane:")]
+            where = _cell(f"relaxes {', '.join(relaxed_rules(h))}"
+                          + "".join(f"; lane {lane}" for lane in lanes))  # fmt: skip
+            lines.append(f"- {_cell(h.title)} ({where}): {_cell(h.rationale)}")
+    heading = "**Proposals for a human (rule-relaxing; never trialled or delivered)**"
+    return [heading, "", *lines, ""] if lines else []
+
+
 def _ideas_section(state: EngineState) -> list[str]:
     """Parked ideas and understand's quality proposal (never active, D40)."""
     lines = [
         f"- {_cell(h.title)}: {_cell(h.parked_reason or 'parked')}"
         for h in state["parked"]
+        if not is_proposal(h)
     ]
     understanding = state["understanding"]
     proposal = None if understanding is None else understanding.quality_proposal
@@ -2285,9 +2339,9 @@ def _report(
 ) -> str:
     """The markdown report: title, baseline, total time, one row per verdict,
     kept with each gain (D42), the review branch, retry notes, parked ideas,
-    conditions. A verdict carrying a shadow judge's result adds its column,
-    "Op calls (shadow)" (G6a) then "Growth (shadow)" (G6b): a column, never
-    a decision."""
+    the proposals for a human (G3), conditions. A verdict carrying a shadow
+    judge's result adds its column, "Op calls (shadow)" (G6a) then "Growth
+    (shadow)" (G6b): a column, never a decision."""
     project = state["project"]
     hypotheses = _by_id(state["hypotheses"])
     decided = decided_verdicts(state["verdicts"], state["approval"])
@@ -2324,6 +2378,7 @@ def _report(
     lines += [*_combination_line(state, prefix), ""]
     lines += _review_section(state, prefix, quality)
     lines += [*_retry_section(state), *_ideas_section(state)]
+    lines += _proposals_section(state)
     lines += [*_run_conditions(state, prefix, confirm=confirm, quality=quality), ""]
     return "\n".join(lines)
 
@@ -2759,6 +2814,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             pool = turn.hypotheses
         # The pool keeps the model's order and is re-ranked every round with
         # the current lessons, as caller candidates are (D8).
+        quarantined = _quarantine(ctx, state)
         generated = rank_generated(pool, lessons)
         ordered = [*rank_hypotheses(candidates, lessons), *generated]
         limit = ctx.max_hypotheses_per_round
@@ -2787,6 +2843,8 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
         }
         if state["candidate_pool"] or rest:
             delta["candidate_pool"] = rest
+        if quarantined:
+            delta["parked"] = [*state["parked"], *turn.parked, *quarantined]
         return delta
 
     def run_one(
@@ -2839,9 +2897,20 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
         proposed = [
             h for h in state["hypotheses"] if h.status is HypothesisStatus.proposed
         ]
+        warned: list[EngineEvent] = []
+        held = [h for h in proposed if is_proposal(h)]  # never trialled (G3)
+        if held:
+            proposed = [h for h in proposed if not is_proposal(h)]
+            named = ", ".join(shown(h.title) for h in held)
+            warned.append(_note(
+                state, RunPhase.trials, "proposal_quarantined",
+                f"skipped {len(held)} quarantined proposal(s): {named}",
+                level=EventLevel.warning, data={"skipped": len(held)},
+            ))  # fmt: skip
         new_trials: list[Trial] = []
         stopped: list[EngineEvent] = []
-        records, warned = _recorded_fix_retries(ctx, state)
+        records, retry_warnings = _recorded_fix_retries(ctx, state)
+        warned += retry_warnings
         for index, hypothesis in enumerate(proposed):
             remaining = state["max_cost_usd"] - cost_usd
             if remaining <= 0 or remaining < ctx.min_trial_budget_usd:
@@ -3102,9 +3171,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
     def combine(state: EngineState) -> NodeDelta:
         # An approved novel change whose output changed is in the review set,
         # never the run set (D35, _delivery_sets), with or without a combiner.
-        kept, review = _delivery_sets(
-            decided_verdicts(state["verdicts"], state["approval"])
-        )
+        kept, review = _delivery_sets(_deliverable(state))
         combiner = ctx.combiner
         if combiner is None:
             data: ScalarDict = {"kept": len(kept)}
@@ -3324,7 +3391,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
 
     def learn(state: EngineState) -> NodeDelta:
         known = _by_id(state["hypotheses"])
-        decided = decided_verdicts(state["verdicts"], state["approval"])
+        decided = _deliverable(state)  # no lesson from a proposal (G3)
         context = tuple(sorted({tag for hs in state["hotspots"] for tag in hs.tags}))
         lessons = lessons_from_verdicts(
             [_two_look_gain(v) for v in decided],

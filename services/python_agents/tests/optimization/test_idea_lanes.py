@@ -69,6 +69,7 @@ from autonomous_ai_agents.optimization.idea_prompts import (
 )
 from autonomous_ai_agents.optimization.idea_types import (
     LENS_LANES,
+    RELAXING_LANES,
     Anchor,
     CodeContext,
     GenerateEvent,
@@ -840,7 +841,7 @@ def test_with_no_lane_models_every_lane_uses_its_roles_transport() -> None:
 
     found = lane_transports(roles, {}, cfg)
 
-    assert set(found) == {*LANE_ROLE_LANES, Lane.leap}
+    assert set(found) == {*LANE_ROLE_LANES, *RELAXING_LANES, Lane.leap}
     assert found[Lane.leap] is roles["leap"]
     assert all(found[lane] is roles["lane"] for lane in LANE_ROLE_LANES)
 

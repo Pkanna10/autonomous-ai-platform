@@ -16,7 +16,9 @@ N2; spec amendment 3.4, 4.2b.2, 4.2b.7, D45, D50, D59, D60).
   (whitespace collapsed, case-folded) or, outside S1, when its quote is not
   grounded (D50). An S1 idea with no grounding is kept without an anchor.
   Hotspots resolve against the shown profile only; ``lane`` comes from the
-  request; numbers are clamped as today's generator clamps them.
+  request, and so does ``proposal`` (G3: a rule-relaxing lane's rule, set
+  here and never read from the reply, whose schema has no such field);
+  numbers are clamped as today's generator clamps them.
 - ``grounded``: the quote, without ``L123:`` prefixes and with whitespace
   collapsed, must occur in the named shown document's grounding text inside
   a hot function, and one of its lines must hold code, not only a comment or
@@ -72,6 +74,7 @@ from autonomous_ai_agents.optimization.idea_prompts import (
     MIN_QUOTE_CHARS,
 )
 from autonomous_ai_agents.optimization.idea_types import (
+    RELAXING_LANES,
     Anchor,
     CodeContext,
     CodeDocument,
@@ -139,15 +142,17 @@ def lane_transports(
     config: Settings,
 ) -> dict[Lane, LLMTransport]:
     """Every lane's transport (G1): ``given``'s for a lane of
-    ``LANE_ROLE_LANES``, else its role's (``leap`` or ``lane``). Each must
+    ``LANE_ROLE_LANES``, else its role's (``leap`` or ``lane``; a
+    rule-relaxing lane always the ``lane`` role's, G3). Each must
     bill ``lane_chain(config, lane)``, so a lane that names its own model
     never runs, or is priced, on the lane role's transport (``ValueError``)."""
     for lane in given:
         if lane not in LANE_ROLE_LANES:
-            raise ValueError(f"the {lane.value} lane runs on the {lane.value} "
+            served = "leap" if lane is Lane.leap else "lane"
+            raise ValueError(f"the {lane.value} lane runs on the {served} "
                              "transport, never a per-lane one")  # fmt: skip
     found: dict[Lane, LLMTransport] = {}
-    for lane in (*LANE_ROLE_LANES, Lane.leap):
+    for lane in (*LANE_ROLE_LANES, *RELAXING_LANES, Lane.leap):
         role: Role = "leap" if lane is Lane.leap else "lane"
         transport = given.get(lane, transports[role])
         expected = lane_chain(config, lane)
@@ -339,6 +344,7 @@ def _candidate(
         tier=item.tier,
         typicality=item.typicality,
         anchor=anchor,
+        proposal=RELAXING_LANES.get(lane),  # the lane's, never the reply's (G3)
     )
 
 

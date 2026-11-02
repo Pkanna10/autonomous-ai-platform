@@ -23,7 +23,11 @@ from autonomous_ai_agents.common.models import (
     ModelPrice,
 )
 from autonomous_ai_agents.common.refnames import branch_prefix_problem
-from autonomous_ai_agents.optimization.idea_types import LENS_LANES, Lane
+from autonomous_ai_agents.optimization.idea_types import (
+    LENS_LANES,
+    RELAXING_LANES,
+    Lane,
+)
 
 IsolationMode = Literal["required", "best_effort", "off"]
 """``required`` fails closed; ``best_effort`` records what was applied; ``off``."""
@@ -318,6 +322,10 @@ class Settings(BaseSettings):
     IDEAS_LANE_MAX_TOKENS: int = Field(default=12000, ge=1)
     IDEAS_LANE_N: int = Field(default=6, ge=1, le=10)
     IDEAS_LENSES: tuple[Lane, ...] = LENS_LANES
+    IDEAS_RELAX_LANES: tuple[Lane, ...] = ()
+    """Rule-relaxing lanes (G3), off when empty: each lifts one frozen rule,
+    runs on the lane role and writes quarantined proposals only (tagged at
+    birth, parked for a human, never trialled, delivered or counted)."""
     IDEAS_LANE_WORKERS: int = Field(default=4, ge=1, le=8)
     IDEAS_LEAP_MODEL: str = "claude-opus-5-5"
     IDEAS_LEAP_EFFORT: Effort | None = "high"
@@ -363,6 +371,20 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"IDEAS_LENSES must name each lens at most once, from {names}; "
                 f"got {[lane.value for lane in value]}"
+            )
+        return value
+
+    @field_validator("IDEAS_RELAX_LANES")
+    @classmethod
+    def _relax_lanes_are_distinct_relaxing_lanes(
+        cls, value: tuple[Lane, ...]
+    ) -> tuple[Lane, ...]:
+        """Each rule-relaxing lane at most once, nothing else (G3)."""
+        if len(set(value)) != len(value) or not set(value) <= set(RELAXING_LANES):
+            names = ", ".join(lane.value for lane in RELAXING_LANES)
+            raise ValueError(
+                f"IDEAS_RELAX_LANES must name each rule-relaxing lane at most "
+                f"once, from {names}; got {[lane.value for lane in value]}"
             )
         return value
 
