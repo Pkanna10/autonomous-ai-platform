@@ -1,0 +1,5 @@
+# G9 held-out OSS set (sealed 2026-11-02 by the owner in a separate, non-tuning session)
+# scheme: sha256(salt + "\n" + json.dumps(sorted(entries, key=library), sort_keys=True, separators=(",", ":"), ensure_ascii=True))
+# entries: {library, repo, commit, workload, domain}; the list and salt stay with the owner until the K run
+n=8
+d8e055f6700b3092522c25c67426ae381804b96cff644799359de6e19daa8520
