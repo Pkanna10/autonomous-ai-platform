@@ -254,12 +254,39 @@ def _loadavg() -> str:
 
 
 def _head(cwd: Path) -> str:
-    """The commit ``cwd``'s worktree sits at, or ``?``; never raises."""
-    proc = subprocess.run(
-        ["git", "-C", str(cwd), "rev-parse", "--short=10", "HEAD"],
-        env=_GIT_ENV, capture_output=True, check=False,
-    )  # fmt: skip
-    return proc.stdout.decode().strip() if proc.returncode == 0 else "?"
+    """The commit ``cwd``'s worktree sits at, or ``?``; never raises.
+
+    Read from the worktree's ``.git`` file and HEAD (a detached SHA, or a ref
+    in the gitdir, the common dir or ``packed-refs``) with no subprocess, and
+    only after the launch returns: the diagnostic adds no gap between
+    back-to-back launches.
+    """
+    try:
+        dot = cwd / ".git"
+        gitdir = dot
+        if dot.is_file():
+            gitdir = Path(dot.read_text().split(":", 1)[1].strip())
+            gitdir = gitdir if gitdir.is_absolute() else cwd / gitdir
+        head = (gitdir / "HEAD").read_text().strip()
+        if not head.startswith("ref: "):
+            return head[:10]
+        ref = head[5:]
+        common = gitdir / "commondir"
+        dirs = [gitdir]
+        if common.is_file():
+            dirs.append(gitdir / common.read_text().strip())
+        for where in dirs:
+            if (where / ref).is_file():
+                return (where / ref).read_text().strip()[:10]
+        for where in dirs:
+            packed = where / "packed-refs"
+            if packed.is_file():
+                for line in packed.read_text().splitlines():
+                    if line.endswith(" " + ref):
+                        return line[:10]
+    except (OSError, IndexError):
+        pass
+    return "?"
 
 
 class LaunchLog:
@@ -300,17 +327,18 @@ class LaunchLog:
         fresh_dirs: Sequence[Path] = (),
     ) -> RunSample:
         where = Path(os.path.realpath(cwd)).relative_to(settings.WORKTREE_ROOT)
-        commit, command = _head(cwd), " ".join(argv[-3:])
-        phase, load, start = where.parts[1], _loadavg(), time.time()
+        command, phase, start = " ".join(argv[-3:]), where.parts[1], time.time()
         try:
             sample = procrun.run_once(
                 argv, cwd, env, sandbox, timeout_s, caps, fresh_dirs=fresh_dirs
             )
         except procrun.RunFailure as failure:
+            commit, load = _head(cwd), _loadavg()  # after the launch: no gap
             self.failures.append(f"{phase}@{commit} {command}: {failure} (load {load})")
             self._share({"phase": phase, "start": start, "end": time.time(),
                          "load": load, "failure": str(failure)})  # fmt: skip
             raise
+        commit, load = _head(cwd), _loadavg()  # after the launch: no gap
         self._share({"phase": phase, "start": start, "end": time.time(), "load": load,
                      "child_cpu": sample.child_cpu_s, "strays": sample.strays})  # fmt: skip
         launch = Launch(
