@@ -2928,18 +2928,39 @@ worktree", 4.4.0) or in the builder rules every brief carries.
   measured 5.8 % against the 5 % bound with an A/A gap of 0.3 % (base 0.655 s,
   twin 0.657 s, tempting 0.617 s CPU). The same family as auditchain (a CPU-
   seconds guard on a shared vCPU); the bar stays (the owner agreed).
-- The combine re-test misses on CI, twice, both on CPython 3.11: E3-A
-  (`tests/e2e/test_step3.py`, `181f1ef`) delivered report only, and E3-J
-  (`tests/e2e/test_step3_ideas.py`, master `8b32afe` after the PR #22 merge,
-  same tree as the green `668165e`) delivered one of its two keeps: the stacked
-  re-test did not hold and the fallback shipped the best single change, as
-  designed. Neither reproduced: E3-J held 10 of 10 locally (3.13 quiet, 3.13 at
-  2x CPU oversubscription, 3.11 with Postgres under load). Each idea gains about
-  96 % against a 4 % noise floor and peak RSS moves under 1 % of its 10 %
-  allowance, so the speed and memory judges are not the margin; the workload and
-  suite timeouts (600 s, 900 s) are not either. Both assertions now print the
-  combine summary, which names the failing judge, so a third miss is diagnosable
-  rather than another unknown.
+- **The combine re-test miss on CI (not currently reproducible).** Four misses
+  in 36 hours, each a re-test of a large real gain (about 96 %, floor about 4 %)
+  that did not hold, all on the `Python CI` job (CPython 3.11, the only Linux
+  job running E2E): E3-A `181f1ef` (2026-10-31 05:24, delivered report only),
+  E3-J on master `8b32afe` (2026-11-01 16:00, one of two keeps), E2E-C on its
+  re-run (16:37, no keep, no combination), E2E-B on `34a6df0` re-run 2
+  (2026-11-02 03:00, the greedy re-test failed, the fallback shipped h5). Runner
+  image `ubuntu-22.04` 20261025.340.1 (provisioner 20261021.618), kernel
+  6.8.0-1070-azure, Landlock ABI 4 on every run checked, misses and clean alike,
+  before and after. 0 misses since: 160 repeated E2E instances and 16 plain runs
+  (at 1 in 7, about a 10 % outcome). Ruled out by reading or measurement: noise
+  (the judges' margins), langgraph 1.2.17, the CI caches, push vs PR, worktree
+  collisions, the live checkout's branch, cross-launch stray counting (each
+  launch has its own launcher; the workload is reaped before the drain),
+  teardown outliving `run_once`, and the diagnostics' gap between launches
+  (`34a6df0` already had it when E2E-B missed). Surviving hypothesis: a
+  transient host stall tripping a fixed wall-clock limit on the launch path. The
+  limits: `IO_GRACE_S` 2 s (the pump's read deadline after the wrapper exits; a
+  hard RunFailure on the report pipe, and, until the follow-up PR, only a note
+  plus a partial stdout hash on stdout), `PROBE_TIMEOUT_S` 2 s (the launcher's
+  isolation probe; RunFailure), `DRAIN_CAP_S` 3 s (a note), the 3 s thread join,
+  then `GIT_TIMEOUT_S` 60 s, the LLM and quality timeouts 300 s, the workload
+  600 s, `TEST_TIMEOUT_S` 900 s. The trap stays in `tests/e2e/conftest.py`
+  (prints only on failure): every combine re-test (offered, applied, held, the
+  judges that did not pass), each side's commit and mean, every RunFailure and
+  run note, `/proc/loadavg`, and every overlapping launch of other workers.
+  **Rule (recorded now, not only on a caught stall):** the fixed short limits on
+  the launch path become proportional to the measured run (for example max(the
+  constant, a multiple of the run's wall time)), `IO_GRACE_S` first: once an
+  output pipe still open after the grace is a RunFailure (the follow-up PR), a
+  workload whose children print at exit (ML training with worker processes)
+  depends on that 2 s window. Not built yet (its own unit); nothing is widened
+  on a guess meanwhile, and a caught stall names the limit to change first.
 - Wave 2 batch 3 reviewers' open nits: N2's line-by-line fallback (a hot
   function that no longer tokenizes) can let a docstring-only quote ground an
   idea, against D50 (b); N0b's re-edit reuses the D14 notice that says the
