@@ -4,6 +4,7 @@ N2; spec amendment 3.4, 4.2b.2, 4.2b.7, D45, D50, D59, D60).
 - ``lane_request``: the system prompt, the data block as its own text block
   (the cached prefix: a 5-minute breakpoint for S1 and the lenses, none for
   the leap, whose prompt is sent once on another model) and the instruction.
+- ``lane_transports``: each lane's transport, a per-lane model's own (G1).
 - ``on_the_table``: titles as ASCII-escaped JSON data lines, so no title can
   forge an element; a title holding a live token or a tag shape is withheld.
 - ``read_lane_reply``: the reply is untrusted. ``read_reply`` refuses a cut,
@@ -46,8 +47,14 @@ from autonomous_ai_agents.clients.structured import (
     structured_request,
     text_problem,
 )
-from autonomous_ai_agents.clients.transport import LLMRequest, LLMResult
-from autonomous_ai_agents.common.config import Effort
+from autonomous_ai_agents.clients.transport import LLMRequest, LLMResult, LLMTransport
+from autonomous_ai_agents.common.config import (
+    LANE_ROLE_LANES,
+    Effort,
+    Role,
+    Settings,
+    lane_chain,
+)
 from autonomous_ai_agents.common.models import ChangeClass
 from autonomous_ai_agents.common.paths import normalize_path
 from autonomous_ai_agents.optimization.generate import (
@@ -121,6 +128,32 @@ def lane_request(
         cache=lane is not Lane.leap,
         prefix=prefix,
     )
+
+
+def lane_transports(
+    transports: Mapping[Role, LLMTransport],
+    given: Mapping[Lane, LLMTransport],
+    config: Settings,
+) -> dict[Lane, LLMTransport]:
+    """Every lane's transport (G1): ``given``'s for a lane of
+    ``LANE_ROLE_LANES``, else its role's (``leap`` or ``lane``). Each must
+    bill ``lane_chain(config, lane)``, so a lane that names its own model
+    never runs, or is priced, on the lane role's transport (``ValueError``)."""
+    for lane in given:
+        if lane not in LANE_ROLE_LANES:
+            raise ValueError(f"the {lane.value} lane runs on the {lane.value} "
+                             "transport, never a per-lane one")  # fmt: skip
+    found: dict[Lane, LLMTransport] = {}
+    for lane in (*LANE_ROLE_LANES, Lane.leap):
+        role: Role = "leap" if lane is Lane.leap else "lane"
+        transport = given.get(lane, transports[role])
+        expected = lane_chain(config, lane)
+        if tuple(transport.chain) != expected:
+            raise ValueError(f"the {lane.value} lane's transport bills "
+                             f"{list(transport.chain)}, not its chain "
+                             f"{list(expected)}")  # fmt: skip
+        found[lane] = transport
+    return found
 
 
 def on_the_table(titles: Sequence[str], fence: Fence, notes: list[str]) -> str:

@@ -30,7 +30,12 @@ from autonomous_ai_agents.clients.transport import (
     ScriptedReply,
     ScriptedTransport,
 )
-from autonomous_ai_agents.common.config import Role, Settings, role_settings
+from autonomous_ai_agents.common.config import (
+    Role,
+    Settings,
+    lane_settings,
+    role_settings,
+)
 from autonomous_ai_agents.common.errors import (
     BudgetExceeded,
     LLMConfigError,
@@ -55,6 +60,7 @@ from autonomous_ai_agents.optimization.hypothesis_source import (
 )
 from autonomous_ai_agents.optimization.idea_pipeline import IdeaPipelineGenerator
 from autonomous_ai_agents.optimization.idea_portfolio import rotation
+from autonomous_ai_agents.optimization.idea_prompts import THINK_LINE
 from autonomous_ai_agents.optimization.idea_review import REVIEW_SYSTEM_PROMPT
 from autonomous_ai_agents.optimization.idea_types import (
     LENS_LANES,
@@ -350,6 +356,7 @@ class _Run:
         cfg: Settings = BASE,
         fallback: HypothesisGenerator | None = None,
         reader: Callable[[Project], RepoReader] | None = _reader,
+        lanes: Mapping[Lane, Sequence[ScriptedReply]] | None = None,
     ) -> None:
         self.cfg = cfg
         self.transports: dict[Role, ScriptedTransport] = {
@@ -357,8 +364,13 @@ class _Run:
             "leap": ScriptedTransport(leap, cfg=role_settings(cfg, "leap")),
             "reviewer": ScriptedTransport(reviewer, cfg=role_settings(cfg, "reviewer")),
         }
+        self.lanes = {
+            name: ScriptedTransport(replies, cfg=lane_settings(cfg, name))
+            for name, replies in (lanes or {}).items()
+        }
         self.generator = IdeaPipelineGenerator(
             dict(self.transports),
+            lane_transports=dict(self.lanes),
             reader=reader,
             config=cfg,
             sleep=lambda _s: None,
@@ -1061,6 +1073,56 @@ def test_construction_refuses_a_missing_or_miswired_role() -> None:
         IdeaPipelineGenerator(
             {"lane": lane, "leap": leap, "reviewer": reviewer}, config=bad
         )
+
+
+FABLE_5 = "claude-fable-5"
+LAB = Settings.model_validate(
+    {
+        **BASE.model_dump(),
+        "IDEAS_LANE_MODELS": {"eliminate": FABLE_5},
+        "ALLOW_RETENTION_MODELS": True,  # O15: the live harness's pinned OSS
+    }
+)
+
+
+def test_a_lane_on_its_own_model_is_sent_and_billed_on_that_model() -> None:
+    """
+    GIVEN eliminate on Fable 5 (G1) with its own transport, every other
+          lane on the lane model
+    WHEN the pipeline runs
+    THEN eliminate's one request goes to its transport, written for its
+         model (no Sonnet 5.5 think line), the other lanes' to the lane
+         role's; its idea is kept and the spend prices it at Fable 5's rate
+    """
+    others = [_ideas(*LENS[lane]) for lane in LENS_LANES if lane is not Lane.eliminate]
+    fable = _ideas(*LENS[Lane.eliminate], model=FABLE_5)
+    run = _Run(
+        lane=[S1_REPLY, *others],
+        leap=[LEAP],
+        reviewer=[REVIEW],
+        cfg=LAB,
+        lanes={Lane.eliminate: [fable]},
+    )
+
+    result = run()
+
+    (sent,) = run.lanes[Lane.eliminate].requests
+    assert THINK_LINE not in _texts(sent)[-1]
+    assert len(run.requests("lane")) == len(LENS_LANES)  # S1 and five lenses
+    assert all(THINK_LINE in _texts(r)[-1] for r in run.requests("lane")[1:])
+    assert TITLE_OF[Lane.eliminate] in {h.title for h in result.hypotheses}
+    expected = 6 * _bill(SONNET) + _bill(FABLE_5) + 2 * _bill(OPUS)
+    assert run.budget.spent_usd == pytest.approx(expected)
+    assert _bill(FABLE_5) == pytest.approx(5 * _bill(SONNET))
+
+
+def test_construction_refuses_a_lane_model_without_its_transport() -> None:
+    transports: dict[Role, ScriptedTransport] = {
+        role: ScriptedTransport([], cfg=role_settings(LAB, role))
+        for role in ("lane", "leap", "reviewer")
+    }
+    with pytest.raises(ValueError, match="eliminate lane's transport bills"):
+        IdeaPipelineGenerator(dict(transports), config=LAB)
 
 
 def test_ideas_the_reviewer_may_not_be_shown_are_dropped_unsent() -> None:

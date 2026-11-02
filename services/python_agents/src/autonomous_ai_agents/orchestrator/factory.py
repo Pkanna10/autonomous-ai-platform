@@ -47,6 +47,12 @@ project's checkout, at the base commit it is given). The discovery share is
 ``DISCOVERY_MAX_SHARE``; ``portfolio_rounds`` is ``PORTFOLIO_ROUNDS`` either
 way. With the pipeline off no pipeline transport is resolved or built.
 
+Idea lab (G1). A lane that names its own model (``IDEAS_LANE_MODELS``, a
+model other than the lane role's) gets its own transport, resolved as a
+role's: ``lane_transports[lane]``; else none when the engine's transport is
+injected; else, with a key, ``transport_factory(lane_settings(settings,
+lane))``. Such a lane with no transport is refused by name, as a role is.
+
 Everything that launches repository code (preflight's probe, the profiler,
 both runners, the combiner, the quality scorer) is passed the context's
 isolation modes and one launcher (``run``, ``procrun.run_once`` unless a
@@ -87,9 +93,12 @@ import structlog
 from autonomous_ai_agents.clients.cost import preflight_estimate
 from autonomous_ai_agents.clients.transport import AnthropicTransport, LLMTransport
 from autonomous_ai_agents.common.config import (
+    LANE_ROLE_LANES,
     IsolationMode,
     Role,
     Settings,
+    lane_chain,
+    lane_settings,
     role_chain,
     role_settings,
     settings,
@@ -140,6 +149,7 @@ from autonomous_ai_agents.optimization.hypothesis_source import (
     ClaudeTechniqueMatcher,
 )
 from autonomous_ai_agents.optimization.idea_pipeline import IdeaPipelineGenerator
+from autonomous_ai_agents.optimization.idea_types import Lane
 from autonomous_ai_agents.optimization.judges import Judge, default_judges
 from autonomous_ai_agents.optimization.sources import HypothesisGenerator
 from autonomous_ai_agents.orchestrator.events import emit, make_event
@@ -212,6 +222,22 @@ def role_transport(
     return found
 
 
+def lane_transport(
+    lane: Lane,
+    given: Mapping[Lane, LLMTransport],
+    injected: LLMTransport | None,
+    transport_factory: TransportFactory,
+) -> LLMTransport | None:
+    """``lane``'s own transport (module docstring): built only for a lane
+    whose model is not the lane role's; the pipeline checks its chain."""
+    found = given.get(lane)
+    own = lane_chain(settings, lane) != role_chain(settings, "lane")
+    keyed = settings.ANTHROPIC_API_KEY is not None
+    if found is None and own and injected is None and keyed:
+        found = transport_factory(lane_settings(settings, lane))
+    return found
+
+
 def repo_reader(project: Project) -> RepoReader:
     """The idea pipeline's reader: the project's git objects, never its
     working tree (D44), as the understander reads them."""
@@ -227,11 +253,13 @@ def idea_pipeline(
     fallback: HypothesisGenerator | None,
     *,
     sleep: Callable[[float], None],
+    lane: Callable[[Lane], LLMTransport | None] = lambda _lane: None,
 ) -> IdeaPipelineGenerator:
     """The pipeline on every one of its roles' transports, or ``ValueError``
     naming the first role with none (C11): a captured run never gains an
     uncaptured transport, and a missing role never quietly means today's
-    generator or none."""
+    generator or none. The same holds for a lane that names its own model
+    (``lane``, G1)."""
     transports: dict[Role, LLMTransport] = {}
     for name in PIPELINE_ROLES:
         found = role(name)
@@ -241,8 +269,24 @@ def idea_pipeline(
                 f" give role_transports[{name!r}] or set ANTHROPIC_API_KEY"
             )
         transports[name] = found
+    lanes: dict[Lane, LLMTransport] = {}
+    for each in LANE_ROLE_LANES:
+        model = lane_chain(settings, each)
+        own = lane(each)
+        if own is not None:
+            lanes[each] = own
+        elif model != role_chain(settings, "lane"):
+            raise ValueError(
+                f"IDEA_PIPELINE is on and the {each.value} lane runs on {model[0]}:"
+                f" give lane_transports[{each.value!r}] or set ANTHROPIC_API_KEY"
+            )
     return IdeaPipelineGenerator(
-        transports, reader=repo_reader, config=settings, sleep=sleep, fallback=fallback
+        transports,
+        lane_transports=lanes,
+        reader=repo_reader,
+        config=settings,
+        sleep=sleep,
+        fallback=fallback,
     )
 
 
@@ -464,6 +508,7 @@ def build_context(
     max_hypotheses_per_round: int = 3,
     transport: LLMTransport | None = None,
     role_transports: Mapping[Role, LLMTransport] | None = None,
+    lane_transports: Mapping[Lane, LLMTransport] | None = None,
     transport_factory: TransportFactory = AnthropicTransport,
     editor: EditorFactory | None = None,
     min_trial_budget_usd: float | None = None,
@@ -479,7 +524,8 @@ def build_context(
     ``role_transports`` without ``transport=`` and with a key set builds the
     engine's transport and every role missing from it from the key; with
     ``transport=`` it builds none (module docstring). Unknown roles, ``None``
-    and ``editor=`` beside an editor transport are refused with ``ValueError``.
+    and ``editor=`` beside an editor transport are refused with ``ValueError``;
+    so is a ``lane_transports`` key outside ``LANE_ROLE_LANES``, or ``None`` (G1).
     """
     _refuse_overlap(project)
     _pin_sdk_logger()
@@ -491,6 +537,13 @@ def build_context(
             raise ValueError(
                 f"unknown role transport {name!r}: give a transport for any of"
                 f" {', '.join(_ROLE_TRANSPORTS)}"
+            )
+    lanes = dict(lane_transports or {})
+    for each, found in lanes.items():
+        if each not in LANE_ROLE_LANES or found is None:
+            raise ValueError(
+                f"unknown lane transport {str(each)!r}: give a transport for any"
+                f" of {', '.join(lane.value for lane in LANE_ROLE_LANES)}"
             )
     if editor is not None and "editor" in given:
         raise ValueError("pass editor= or an editor transport, not both")
@@ -516,7 +569,12 @@ def build_context(
     )
     pipeline = settings.IDEA_PIPELINE
     if pipeline:
-        generator = idea_pipeline(role, generator, sleep=sleep)
+        generator = idea_pipeline(
+            role,
+            generator,
+            sleep=sleep,
+            lane=lambda each: lane_transport(each, lanes, transport, transport_factory),
+        )
     matched = settings.RESEARCH_RETRIEVAL == "matched"
     matching = role("matcher") if matched else None
     matcher = (

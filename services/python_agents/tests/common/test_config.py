@@ -10,8 +10,19 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from autonomous_ai_agents.common.config import EFFORT_LEVELS, Settings
+from autonomous_ai_agents.clients.cost import chain
+from autonomous_ai_agents.common.config import (
+    EFFORT_LEVELS,
+    RETENTION_REQUIRED_MODELS,
+    Settings,
+    lane_chain,
+    lane_models,
+    lane_settings,
+    role_chain,
+    role_settings,
+)
 from autonomous_ai_agents.common.models import LongContextPrice, ModelPrice
+from autonomous_ai_agents.optimization.idea_types import LENS_LANES, Lane
 
 
 def test_settings_loads_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1034,3 +1045,229 @@ def test_a_long_context_tier_can_be_overridden_as_json(
     price = Settings(_env_file=None).MODEL_PRICING["claude-haiku-5-5"]
 
     assert price.long_context == LongContextPrice.model_validate(long)
+
+
+# ---------------------------------------------------------------------------
+# The idea lab's price rows and per-lane models (G1; O15, O31)
+# ---------------------------------------------------------------------------
+
+SONNET_5, FABLE_5, HAIKU_4_5 = "claude-sonnet-5", "claude-fable-5", "claude-haiku-4-5"
+
+
+def _cfg(**values: object) -> Settings:
+    return Settings(_env_file=None, **values)  # type: ignore[arg-type]
+
+
+def test_the_idea_lab_price_rows_are_the_live_pricing_page_rates(
+    clean_env: Path,
+) -> None:
+    """Should carry the three G1 rows exactly as the pricing page lists them.
+
+    GIVEN the default pricing table
+    WHEN read
+    THEN Sonnet 5 is $2/$10 (footnote 3: now the standard price), writes
+         $2.50, hits $0.20; Fable 5 $10/$50, writes $12.50, hits $1.00 (the
+         standard 0.1x, not Fable 5.1's $0.25); Haiku 4.5 $1/$5, writes
+         $1.25, hits $0.10 (pricing page, read 2026-11-02); none has a long
+         tier, so a placeholder or a typo fails here
+    """
+    pricing = Settings(_env_file=None).MODEL_PRICING
+
+    assert pricing[SONNET_5] == ModelPrice(
+        input=2.0, output=10.0, cache_write=2.5, cache_read=0.20
+    )
+    assert pricing[FABLE_5] == ModelPrice(
+        input=10.0, output=50.0, cache_write=12.5, cache_read=1.00
+    )
+    assert pricing[HAIKU_4_5] == ModelPrice(
+        input=1.0, output=5.0, cache_write=1.25, cache_read=0.10
+    )
+    assert pricing[FABLE_5] != pricing["claude-fable-5-1"]
+
+
+def test_with_no_lane_models_every_lane_runs_on_the_lane_model(
+    clean_env: Path,
+) -> None:
+    """Should keep today's behaviour exactly while IDEAS_LANE_MODELS is empty."""
+    cfg = _cfg()
+
+    assert cfg.IDEAS_LANE_MODELS == {}
+    assert lane_models(cfg) == (cfg.IDEAS_LANE_MODEL,)
+    for lane in (Lane.obvious, *LENS_LANES):
+        assert lane_chain(cfg, lane) == role_chain(cfg, "lane")
+        assert lane_settings(cfg, lane) == role_settings(cfg, "lane")
+    assert lane_chain(cfg, Lane.leap) == role_chain(cfg, "leap")
+    assert lane_settings(cfg, Lane.leap) == role_settings(cfg, "leap")
+
+
+def test_a_lane_may_name_its_own_model_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch, clean_env: Path
+) -> None:
+    """Should read per-lane models as JSON and route only the named lanes.
+
+    GIVEN IDEAS_LANE_MODELS naming Sonnet 5 for eliminate and Opus 5.5 for far
+    WHEN the settings load
+    THEN those two lanes bill their model alone, every other lane the lane
+         model, and a lane's settings copy is a transport's for that model
+    """
+    models = {"eliminate": SONNET_5, "far": "claude-opus-5-5"}
+    monkeypatch.setenv("IDEAS_LANE_MODELS", json.dumps(models))
+
+    cfg = Settings(_env_file=None)
+
+    assert cfg.IDEAS_LANE_MODELS == {Lane.eliminate: SONNET_5, Lane.far: models["far"]}
+    assert lane_chain(cfg, Lane.eliminate) == (SONNET_5,)
+    assert lane_chain(cfg, Lane.far) == ("claude-opus-5-5",)
+    assert lane_chain(cfg, Lane.obvious) == ("claude-sonnet-5-5",)
+    assert lane_models(cfg) == ("claude-sonnet-5-5", SONNET_5, "claude-opus-5-5")
+    copy = lane_settings(cfg, Lane.eliminate)
+    assert chain(copy) == (SONNET_5,)
+    assert copy.IDEAS_LANE_EFFORT == cfg.IDEAS_LANE_EFFORT
+    assert role_chain(copy, "lane") == (SONNET_5,)
+
+
+@pytest.mark.parametrize(
+    ("models", "extra", "match"),
+    [
+        pytest.param(
+            {"sideways": SONNET_5}, {}, "IDEAS_LANE_MODELS names 'sideways'",
+            id="unknown lane",
+        ),
+        pytest.param(
+            {"leap": SONNET_5}, {}, "IDEAS_LEAP_MODEL", id="leap has its own model"
+        ),
+        pytest.param(
+            {"far": SONNET_5}, {"IDEAS_LENSES": ("eliminate",)},
+            "far.*not in IDEAS_LENSES", id="lane that never runs",
+        ),
+        pytest.param(
+            {"far": "claude-unpriced-9"}, {},
+            "far.*claude-unpriced-9.*MODEL_PRICING", id="no price row",
+        ),
+        pytest.param(
+            {"far": HAIKU_4_5}, {}, "far.*claude-haiku-4-5.*deferred.*O31",
+            id="Haiku 4.5 deferred",
+        ),
+        pytest.param(
+            {"far": HAIKU_4_5}, {"IDEAS_LANE_EFFORT": None},
+            "claude-haiku-4-5.*deferred.*O31", id="Haiku 4.5 deferred without effort",
+        ),
+    ],
+)  # fmt: skip
+def test_a_lane_model_the_engine_cannot_serve_is_refused(
+    clean_env: Path,
+    models: dict[str, str],
+    extra: dict[str, object],
+    match: str,
+) -> None:
+    """Should refuse, at load and with the pipeline off too, a lane override
+    that names no running lane, no priced model, or Haiku 4.5 (O31)."""
+    with pytest.raises(ValidationError, match=match):
+        _cfg(IDEAS_LANE_MODELS=models, **extra)
+
+
+def test_lane_models_that_are_not_a_mapping_are_refused(clean_env: Path) -> None:
+    with pytest.raises(ValidationError, match="IDEAS_LANE_MODELS"):
+        _cfg(IDEAS_LANE_MODELS=["eliminate", SONNET_5])
+
+
+def test_a_lane_model_with_no_effort_row_is_refused(clean_env: Path) -> None:
+    """Should refuse a priced lane model the effort docs list no levels for,
+    with or without IDEAS_LANE_EFFORT (every lane model must take effort)."""
+    pricing = {
+        **_cfg().MODEL_PRICING,
+        "claude-custom-1": ModelPrice.model_validate(RATE),
+    }
+    for effort in ("medium", None):
+        with pytest.raises(
+            ValidationError, match="far.*claude-custom-1.*no effort levels"
+        ):
+            _cfg(
+                MODEL_PRICING=pricing,
+                IDEAS_LANE_EFFORT=effort,
+                IDEAS_LANE_MODELS={"far": "claude-custom-1"},
+            )
+
+
+def test_the_lane_effort_must_suit_every_lane_model(clean_env: Path) -> None:
+    """Should check IDEAS_LANE_EFFORT against each lane's own model.
+
+    GIVEN Sonnet 4.6 (no xhigh) priced and named for one lane
+    WHEN IDEAS_LANE_EFFORT is xhigh, then high
+    THEN xhigh is refused naming Sonnet 4.6; high loads
+    """
+    pricing = {
+        **_cfg().MODEL_PRICING,
+        "claude-sonnet-4-6": ModelPrice.model_validate(RATE),
+    }
+    values: dict[str, object] = {
+        "MODEL_PRICING": pricing,
+        "IDEAS_LANE_MODELS": {"recombine": "claude-sonnet-4-6"},
+    }
+    with pytest.raises(
+        ValidationError, match="IDEAS_LANE_EFFORT 'xhigh'.*claude-sonnet-4-6"
+    ):
+        _cfg(IDEAS_LANE_EFFORT="xhigh", **values)
+    assert _cfg(IDEAS_LANE_EFFORT="high", **values).IDEAS_LANE_EFFORT == "high"
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "ENGINE_MODEL",
+        "EDITOR_MODEL",
+        "GENERATOR_MODEL",
+        "MATCHER_MODEL",
+        "IDEAS_LANE_MODEL",
+        "IDEAS_LEAP_MODEL",
+        "IDEAS_REVIEWER_MODEL",
+        "TRIAGE_MODEL",
+    ],
+)
+def test_haiku_4_5_is_refused_wherever_a_model_is_named(
+    clean_env: Path, key: str
+) -> None:
+    """Should not let the new price row admit a model whose request shape
+    (thinking budget_tokens, no effort) is not built (O31)."""
+    efforts = {
+        name: None
+        for name in (
+            "GENERATOR_EFFORT",
+            "MATCHER_EFFORT",
+            "IDEAS_LANE_EFFORT",
+            "IDEAS_LEAP_EFFORT",
+            "IDEAS_REVIEWER_EFFORT",
+        )
+    }
+    with pytest.raises(ValidationError, match=f"{key}.*claude-haiku-4-5.*O31"):
+        _cfg(**{key: HAIKU_4_5}, **efforts)
+
+
+def test_haiku_4_5_is_refused_among_the_engine_fallbacks(clean_env: Path) -> None:
+    with pytest.raises(ValidationError, match="ENGINE_FALLBACK_MODELS.*O31"):
+        _cfg(ENGINE_FALLBACKS=False, ENGINE_FALLBACK_MODELS=(HAIKU_4_5,))
+
+
+def test_a_retention_model_on_a_lane_needs_the_flag(clean_env: Path) -> None:
+    """Should run the existing retention guard (D63, O15) over every lane.
+
+    GIVEN Fable 5 (30-day retention) named for the eliminate lane
+    WHEN the settings load without, then with, ALLOW_RETENTION_MODELS
+    THEN without the flag validation fails naming the lane, the model and
+         the flag; with it the lane bills Fable 5, and the lane's settings
+         copy keeps the flag (re-validated, so dropping it fails)
+    """
+    models = {"eliminate": FABLE_5}
+    with pytest.raises(
+        ValidationError, match="eliminate.*claude-fable-5.*ALLOW_RETENTION_MODELS"
+    ):
+        _cfg(IDEAS_LANE_MODELS=models)
+
+    cfg = _cfg(IDEAS_LANE_MODELS=models, ALLOW_RETENTION_MODELS=True)
+
+    assert lane_chain(cfg, Lane.eliminate) == (FABLE_5,)
+    copy = lane_settings(cfg, Lane.eliminate)
+    assert (copy.ENGINE_MODEL, copy.ALLOW_RETENTION_MODELS) == (FABLE_5, True)
+    assert FABLE_5 in RETENTION_REQUIRED_MODELS
+    with pytest.raises(ValidationError, match="ALLOW_RETENTION_MODELS"):
+        Settings.model_validate({**copy.model_dump(), "ALLOW_RETENTION_MODELS": False})

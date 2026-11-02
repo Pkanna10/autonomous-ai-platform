@@ -94,7 +94,15 @@ _MIB = 1024 * _KIB
 # prompt (every input token, cache reads and writes included) is over 100,000
 # tokens pays $0.50 / $2.50, 5-minute writes $0.625 and hits $0.05 on all of
 # its tokens; ``clients/cost.py`` applies it per attempt. Every other model
-# bills one price across its whole context window.
+# bills one price across its whole context window. The idea lab's rows (G1)
+# from the pricing page, read 2026-11-02 (platform.claude.com/docs/en/
+# about-claude/pricing, "Model pricing"): Sonnet 5 $2/$10 (footnote 3: the
+# launch price is now the standard one), 5-minute writes $2.50, hits $0.20;
+# Fable 5 $10/$50, writes $12.50, hits $1 (the standard 0.1x, not Fable
+# 5.1's 0.025x); Haiku 4.5 $1/$5, writes $1.25, hits $0.10 (1-hour writes
+# $2, not stored: only 5-minute breakpoints are sent). None of the three has
+# a long-context tier. Haiku 4.5 is priced only: its request shape is
+# deferred (O31, ``DEFERRED_SHAPE_MODELS``).
 _DEFAULT_PRICING: dict[str, ModelPrice] = {
     "claude-opus-5-5": ModelPrice(
         input=4.0, output=20.0, cache_write=5.0, cache_read=0.20
@@ -110,6 +118,15 @@ _DEFAULT_PRICING: dict[str, ModelPrice] = {
     ),
     "claude-fable-5-1": ModelPrice(
         input=10.0, output=50.0, cache_write=12.5, cache_read=0.25
+    ),
+    "claude-sonnet-5": ModelPrice(
+        input=2.0, output=10.0, cache_write=2.5, cache_read=0.20
+    ),
+    "claude-fable-5": ModelPrice(
+        input=10.0, output=50.0, cache_write=12.5, cache_read=1.00
+    ),
+    "claude-haiku-4-5": ModelPrice(
+        input=1.0, output=5.0, cache_write=1.25, cache_read=0.10
     ),
     "claude-haiku-5-5": ModelPrice(
         input=0.10,
@@ -144,6 +161,16 @@ RETENTION_REQUIRED_MODELS: Final = frozenset(
 """Models whose use requires 30-day data retention (D63; the advisor-tool docs
 name all four): refused in every role that sends repository text unless
 ``ALLOW_RETENTION_MODELS`` is set."""
+DEFERRED_SHAPE_MODELS: Final = frozenset({"claude-haiku-4-5"})
+"""Priced models whose request shape is not built (O31): Haiku 4.5 takes no
+effort and wants ``thinking: {type: "enabled", budget_tokens: N}``. Refused
+wherever a model is named, so its price row admits it nowhere."""
+_DEFERRED: Final = (
+    "its request shape (no effort; thinking with budget_tokens) is deferred "
+    "(O31): it has a price row for cost tables only"
+)
+LANE_ROLE_LANES: Final[tuple[Lane, ...]] = (Lane.obvious, *LENS_LANES)
+"""The lanes the ``lane`` role serves, each of which may name its own model."""
 
 
 class Settings(BaseSettings):
@@ -271,6 +298,11 @@ class Settings(BaseSettings):
     """Rounds before a keep ends exploration (D54); 0 keeps today's router."""
     IDEAS_LANE_MODEL: str = "claude-sonnet-5-5"
     IDEAS_LANE_EFFORT: Effort | None = "medium"
+    IDEAS_LANE_MODELS: dict[Lane, str] = Field(default_factory=dict)
+    """Per-lane models (G1): a lane of ``LANE_ROLE_LANES`` named here runs on
+    its model alone, every other one on ``IDEAS_LANE_MODEL``; empty keeps one
+    lane model. Each needs a price and an effort row, checked with the
+    pipeline off too; the leap's model is ``IDEAS_LEAP_MODEL``."""
     IDEAS_LANE_MAX_TOKENS: int = Field(default=12000, ge=1)
     IDEAS_LANE_N: int = Field(default=6, ge=1, le=10)
     IDEAS_LENSES: tuple[Lane, ...] = LENS_LANES
@@ -320,6 +352,21 @@ class Settings(BaseSettings):
                 f"IDEAS_LENSES must name each lens at most once, from {names}; "
                 f"got {[lane.value for lane in value]}"
             )
+        return value
+
+    @field_validator("IDEAS_LANE_MODELS", mode="before")
+    @classmethod
+    def _lane_models_name_lane_role_lanes(cls, value: object) -> object:
+        """A clear refusal for a key that is not a lane the lane role serves."""
+        if isinstance(value, Mapping):
+            names = [lane.value for lane in LANE_ROLE_LANES]
+            for key in value:
+                if key == Lane.leap:
+                    raise ValueError("IDEAS_LANE_MODELS names 'leap': the leap "
+                                     "lane's model is IDEAS_LEAP_MODEL")  # fmt: skip
+                if key not in names:
+                    raise ValueError(f"IDEAS_LANE_MODELS names {key!r}, which is "
+                                     f"not a lane; name any of {', '.join(names)}")  # fmt: skip
         return value
 
     @model_validator(mode="after")
@@ -515,6 +562,34 @@ class Settings(BaseSettings):
         return value
 
     @model_validator(mode="after")
+    def _every_named_model_has_a_built_shape(self) -> Self:
+        """No model whose request shape is deferred (O31) anywhere; and each
+        lane model runs, is priced and takes effort (G1), pipeline on or off."""
+        named: list[tuple[str, str | None]] = [
+            (key, getattr(self, key))
+            for key in ("ENGINE_MODEL", "EDITOR_MODEL", "GENERATOR_MODEL",
+                        "MATCHER_MODEL", "IDEAS_LANE_MODEL", "IDEAS_LEAP_MODEL",
+                        "IDEAS_REVIEWER_MODEL", "TRIAGE_MODEL")
+        ]  # fmt: skip
+        named += [("ENGINE_FALLBACK_MODELS", m) for m in self.ENGINE_FALLBACK_MODELS]
+        for key, model in named:
+            if model in DEFERRED_SHAPE_MODELS:
+                raise ValueError(f"{key} {model!r}: {_DEFERRED}")
+        for lane, model in self.IDEAS_LANE_MODELS.items():
+            where = f"IDEAS_LANE_MODELS[{lane.value}] {model!r}"
+            if lane is not Lane.obvious and lane not in self.IDEAS_LENSES:
+                raise ValueError(f"{where}: the {lane.value} lane is not in "
+                                 "IDEAS_LENSES, so it never runs")  # fmt: skip
+            if model in DEFERRED_SHAPE_MODELS:
+                raise ValueError(f"{where}: {_DEFERRED}")
+            if model not in self.MODEL_PRICING:
+                raise ValueError(f"{where}: MODEL_PRICING has no price for it")
+            if model not in EFFORT_LEVELS:
+                raise ValueError(f"{where}: the effort docs list no effort levels "
+                                 "for it, and every lane model must take effort")  # fmt: skip
+        return self
+
+    @model_validator(mode="after")
     def _every_billed_model_is_priced(self) -> Self:
         """Every model a request may bill needs a price, or no estimate is a bound.
 
@@ -541,7 +616,8 @@ class Settings(BaseSettings):
 
         Each chain is ``role_chain``'s: understanding uses the engine's (the
         engine model, plus the fallbacks when they are sent; a fallback re-runs
-        the same body, effort included), every other key its own role's.
+        the same body, effort included), every other key its own role's; the
+        lane effort every lane model's (``lane_models``).
         """
         keys: tuple[tuple[str, Role], ...] = (
             ("UNDERSTAND_EFFORT", "engine"),
@@ -554,7 +630,7 @@ class Settings(BaseSettings):
         )
         for key, role in keys:
             level: Effort | None = getattr(self, key)
-            serving = role_chain(self, role)
+            serving = lane_models(self) if role == "lane" else role_chain(self, role)
             for model in dict.fromkeys(serving) if level is not None else ():
                 accepted = EFFORT_LEVELS.get(model)
                 if accepted is None:
@@ -581,6 +657,8 @@ class Settings(BaseSettings):
             (role, role_chain(self, role)) for role in _ROLES
         ]
         chains.append(("engine fallback", self.ENGINE_FALLBACK_MODELS))
+        chains += [(f"{lane.value} lane", (model,))
+                   for lane, model in self.IDEAS_LANE_MODELS.items()]  # fmt: skip
         for role, models in chains:
             for model in models:
                 if model in RETENTION_REQUIRED_MODELS:
@@ -655,6 +733,34 @@ def role_chain(cfg: Settings, role: Role) -> tuple[str, ...]:
     if cfg.ENGINE_FALLBACKS:
         return (cfg.ENGINE_MODEL, *cfg.ENGINE_FALLBACK_MODELS)
     return (cfg.ENGINE_MODEL,)
+
+
+def lane_chain(cfg: Settings, lane: Lane) -> tuple[str, ...]:
+    """Every model one request of ``lane`` may bill (G1): the leap's role
+    chain; any other lane its ``IDEAS_LANE_MODELS`` model, else the lane
+    role's chain."""
+    if lane is Lane.leap:
+        return role_chain(cfg, "leap")
+    model = cfg.IDEAS_LANE_MODELS.get(lane)
+    return role_chain(cfg, "lane") if model is None else (model,)
+
+
+def lane_models(cfg: Settings) -> tuple[str, ...]:
+    """Every model a ``lane`` role request may bill: the lane model, then each
+    per-lane model, once each."""
+    return tuple(
+        dict.fromkeys((*role_chain(cfg, "lane"), *cfg.IDEAS_LANE_MODELS.values()))
+    )
+
+
+def lane_settings(base: Settings, lane: Lane) -> Settings:
+    """``role_settings`` for one lane: a validated copy whose engine chain is
+    ``lane_chain(base, lane)``, so a transport built from it serves that
+    lane. With no per-lane model it is the lane role's (or the leap's) copy."""
+    if lane is Lane.leap:
+        return role_settings(base, "leap")
+    model = lane_chain(base, lane)[0]
+    return role_settings(base.model_copy(update={"IDEAS_LANE_MODEL": model}), "lane")
 
 
 def role_settings(base: Settings, role: Role, **update: object) -> Settings:

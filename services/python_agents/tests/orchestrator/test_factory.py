@@ -30,7 +30,13 @@ from autonomous_ai_agents.clients.transport import (
     LLMTransport,
     ScriptedTransport,
 )
-from autonomous_ai_agents.common.config import Settings, role_settings, settings
+from autonomous_ai_agents.common.config import (
+    Role,
+    Settings,
+    lane_settings,
+    role_settings,
+    settings,
+)
 from autonomous_ai_agents.common.errors import (
     DeliveryError,
     EngineError,
@@ -75,6 +81,7 @@ from autonomous_ai_agents.execution.trial_runner import (
     GitTrialRunner,
 )
 from autonomous_ai_agents.optimization.anticheat import DEFAULT_PROTECTED_PATTERNS
+from autonomous_ai_agents.optimization.idea_types import Lane
 from autonomous_ai_agents.optimization.judges import default_judges
 from autonomous_ai_agents.orchestrator import factory
 from autonomous_ai_agents.orchestrator.factory import (
@@ -927,3 +934,130 @@ def test_inside_a_graph_a_runner_note_reaches_the_live_stream(
         EventLevel.warning,
     )
     assert event.data == {"code": "runner_note", "note": f"baseline: {NOTE}"}
+
+
+# ---------------------------------------------------------------------------
+# Per-lane models (G1): the factory gives each such lane its own transport
+# ---------------------------------------------------------------------------
+
+LANE_MODEL = "claude-sonnet-5"
+PIPELINE: tuple[Role, ...] = ("lane", "leap", "reviewer")
+
+
+@pytest.fixture
+def lab(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The pipeline on, with eliminate on Sonnet 5 and far on the lane model."""
+    monkeypatch.setattr(settings, "IDEA_PIPELINE", True)
+    lanes = {Lane.eliminate: LANE_MODEL, Lane.far: settings.IDEAS_LANE_MODEL}
+    monkeypatch.setattr(settings, "IDEAS_LANE_MODELS", lanes)
+
+
+def _roles() -> dict[Role, LLMTransport]:
+    return {r: ScriptedTransport([], cfg=role_settings(settings, r)) for r in PIPELINE}
+
+
+@pytest.mark.usefixtures("lab")
+def test_with_a_key_a_lane_with_its_own_model_gets_a_transport_built_for_it(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    GIVEN a key, the pipeline on, eliminate on Sonnet 5 and far naming the
+          lane model itself
+    WHEN the context is built
+    THEN one more transport is built, from eliminate's lane settings (it
+         bills Sonnet 5 alone), and only eliminate gets it
+    """
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", SecretStr(FAKE_KEY))
+    built: dict[str, Settings] = {}
+
+    def make(cfg: Settings) -> LLMTransport:
+        transport = ScriptedTransport([], cfg=cfg)
+        built[cfg.ENGINE_MODEL] = cfg
+        return transport
+
+    pipelines = _record(monkeypatch, "IdeaPipelineGenerator")
+    build_context(project, transport_factory=make)
+
+    ((kwargs,),) = [pipelines]
+    lanes = cast(Mapping[Lane, LLMTransport], kwargs["lane_transports"])
+    assert set(lanes) == {Lane.eliminate}
+    assert tuple(lanes[Lane.eliminate].chain) == (LANE_MODEL,)
+    assert built[LANE_MODEL] == lane_settings(settings, Lane.eliminate)
+
+
+@pytest.mark.usefixtures("lab")
+def test_given_lane_transports_reach_the_pipeline(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    given = {
+        Lane.eliminate: ScriptedTransport(
+            [], cfg=lane_settings(settings, Lane.eliminate)
+        )
+    }
+    pipelines = _record(monkeypatch, "IdeaPipelineGenerator")
+
+    build_context(
+        project,
+        transport=_scripted(),
+        role_transports=_roles(),
+        lane_transports=given,
+        transport_factory=_no_real_transport,
+    )
+
+    ((kwargs,),) = [pipelines]
+    assert kwargs["lane_transports"] == given
+
+
+@pytest.mark.usefixtures("lab")
+def test_a_captured_run_without_a_lanes_transport_is_refused_by_name(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An injected engine transport (even with a key): a lane that names its
+    own model and has no given transport is refused by name, never built."""
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", SecretStr(FAKE_KEY))
+    with pytest.raises(
+        ValueError,
+        match=r"the eliminate lane runs on claude-sonnet-5: give "
+        r"lane_transports\['eliminate'\] or set ANTHROPIC_API_KEY",
+    ):
+        build_context(
+            project,
+            transport=_scripted(),
+            role_transports=_roles(),
+            transport_factory=_no_real_transport,
+        )
+
+
+@pytest.mark.parametrize("key", [Lane.leap, "sideways"])
+def test_an_unknown_lane_transport_is_refused(project: Project, key: object) -> None:
+    with pytest.raises(ValueError, match="unknown lane transport"):
+        build_context(
+            project,
+            transport=_scripted(),
+            lane_transports={key: _scripted()},  # type: ignore[dict-item]
+        )
+
+
+def test_a_none_lane_transport_is_refused(project: Project) -> None:
+    with pytest.raises(ValueError, match="unknown lane transport"):
+        build_context(
+            project,
+            transport=_scripted(),
+            lane_transports={Lane.far: None},  # type: ignore[dict-item]
+        )
+
+
+def test_with_the_pipeline_off_no_lane_transport_is_built(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", SecretStr(FAKE_KEY))
+    monkeypatch.setattr(settings, "IDEAS_LANE_MODELS", {Lane.eliminate: LANE_MODEL})
+    built: list[str] = []
+
+    def make(cfg: Settings) -> LLMTransport:
+        built.append(cfg.ENGINE_MODEL)
+        return ScriptedTransport([], cfg=cfg)
+
+    build_context(project, transport_factory=make)
+
+    assert LANE_MODEL not in built

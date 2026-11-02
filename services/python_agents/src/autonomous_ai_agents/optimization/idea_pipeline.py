@@ -89,6 +89,9 @@ from autonomous_ai_agents.optimization.idea_lanes import (
     on_the_table,
     read_lane_reply,
 )
+from autonomous_ai_agents.optimization.idea_lanes import (
+    lane_transports as resolve_lanes,
+)
 from autonomous_ai_agents.optimization.idea_portfolio import (
     deterministic_filter,
     lesson_titles,
@@ -185,13 +188,15 @@ class IdeaPipelineGenerator:
     ``reader`` gives the project's git objects (``None``: no code context);
     ``fallback`` is today's generator for the no-code path (``None``: an
     empty result, noted). Each transport must bill its role's chain and
-    accept its effort, checked here, before any spend.
+    accept its effort, checked here, before any spend; ``lane_transports``
+    serve the lanes that name their own model (G1, ``lane_transports``).
     """
 
     def __init__(
         self,
         transports: Mapping[Role, LLMTransport],
         *,
+        lane_transports: Mapping[Lane, LLMTransport] | None = None,
         reader: Callable[[Project], RepoReader] | None = None,
         config: Settings = settings,
         sleep: Callable[[float], None] = time.sleep,
@@ -214,6 +219,7 @@ class IdeaPipelineGenerator:
                                  f", not the {role} chain {list(expected)}")  # fmt: skip
             self._efforts[role] = check_effort(efforts[role], transport.chain)
             self._transports[role] = transport
+        self._lanes = resolve_lanes(self._transports, lane_transports or {}, config)
         self._reader, self._cfg, self._sleep = reader, config, sleep
         self._fallback = fallback
 
@@ -394,7 +400,7 @@ class IdeaPipelineGenerator:
         """The reviewed ideas, or ``None`` and why the review is not used."""
         if not shown_ids:
             return None, "no idea could be shown to the reviewer"
-        job = self._job("reviewer", "reviewer", request)
+        job = self._job("reviewer", self._transports["reviewer"], request)
         try:
             c.budget.check(job.estimate)
         except BudgetExceeded:
@@ -433,11 +439,10 @@ class IdeaPipelineGenerator:
         examples: Sequence[Example],
     ) -> _Job:
         role: Role = "leap" if lane is Lane.leap else "lane"
-        leap = lane is Lane.leap
+        leap, transport = lane is Lane.leap, self._lanes[lane]
         instruction = lane_instruction(
             lane, table=table, examples=examples, n=n,
-            floor=c.objective.min_relative_gain,
-            model=self._transports[role].chain[0],
+            floor=c.objective.min_relative_gain, model=transport.chain[0],
         )  # fmt: skip
         request = lane_request(
             lane, system=c.research.system, prefix=c.prefix, instruction=instruction,
@@ -445,11 +450,10 @@ class IdeaPipelineGenerator:
             max_tokens=self._cfg.IDEAS_LEAP_MAX_TOKENS if leap
             else self._cfg.IDEAS_LANE_MAX_TOKENS,
         )  # fmt: skip
-        return self._job(lane.value, role, request)
+        return self._job(lane.value, transport, request)
 
-    def _job(self, label: str, role: Role, request: LLMRequest) -> _Job:
+    def _job(self, label: str, transport: LLMTransport, request: LLMRequest) -> _Job:
         """Count once (free) and price the worst case; the child's cap."""
-        transport = self._transports[role]
         estimate = preflight_estimate(
             transport.count_input_tokens(request),
             request.max_tokens,
