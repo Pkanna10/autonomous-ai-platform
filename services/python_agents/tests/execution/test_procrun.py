@@ -388,6 +388,7 @@ def finished(
     overflow: str | None = None,
     stderr_tail: bytes = b"tail",
     group_leftover: bool = False,
+    open_outputs: tuple[str, ...] = (),
 ) -> RunOutcome:
     return RunOutcome(
         outer=outer,
@@ -403,6 +404,7 @@ def finished(
         stdout_bytes=3,
         stderr_tail=stderr_tail,
         group_leftover=group_leftover,
+        open_outputs=open_outputs,
     )
 
 
@@ -540,23 +542,17 @@ def test_judge_carries_the_run_notes_on_a_failure(
     tmp_path: Path, run: RunOutcome
 ) -> None:
     """
-    GIVEN a failed run whose group outlived the drain cap and whose output
-        pipe stayed open
+    GIVEN a failed run whose group outlived the drain cap
     WHEN it is judged
-    THEN the RunFailure still carries both notes, so the caller knows a group
+    THEN the RunFailure still carries the note, so the caller knows a group
         may be alive before it starts the next run
     """
-    left_over = RunOutcome(
-        **{**run.__dict__, "group_drained": False, "outputs_complete": False}
-    )
+    left_over = RunOutcome(**{**run.__dict__, "group_drained": False})
 
     with pytest.raises(RunFailure) as caught:
         judge(left_over, make_policy(tmp_path))
 
-    assert caught.value.notes == (
-        "process group still alive after 3 s",
-        "an output pipe was still open after the run",
-    )
+    assert caught.value.notes == ("process group still alive after 3 s",)
 
 
 def test_judge_carries_only_the_run_notes_on_an_isolation_failure(
@@ -721,13 +717,71 @@ def test_judge_adds_no_note_for_parts_that_are_off(tmp_path: Path) -> None:
     assert sample.notes == ()
 
 
-def test_judge_notes_a_live_group_and_an_open_output_pipe(tmp_path: Path) -> None:
-    run = finished(group_drained=False, outputs_complete=False)
-    sample = judge(run, make_policy(tmp_path))
-    assert sample.notes == (
-        "process group still alive after 3 s",
-        "an output pipe was still open after the run",
+def test_judge_notes_a_live_group(tmp_path: Path) -> None:
+    sample = judge(finished(group_drained=False), make_policy(tmp_path))
+    assert sample.notes == ("process group still alive after 3 s",)
+
+
+@pytest.mark.parametrize(
+    "names", [("stdout",), ("stderr",), ("stdout", "stderr")], ids="+".join
+)
+def test_judge_refuses_a_run_whose_output_pipe_stayed_open(
+    tmp_path: Path, names: tuple[str, ...]
+) -> None:
+    """
+    GIVEN a run whose stdout or stderr pipe was still open when the grace
+        period ended (a stalled host, or a process holding it), its report
+        complete
+    WHEN it is judged
+    THEN RunFailure names the pipe: a truncated output is never hashed into a
+        sample's fingerprint; the drain note still rides along
+    """
+    run = finished(outputs_complete=False, open_outputs=names, group_drained=False)
+
+    with pytest.raises(RunFailure) as caught:
+        judge(run, make_policy(tmp_path))
+
+    assert caught.value.reason == (
+        f"the {' and '.join(names)} pipe was still open {procrun.IO_GRACE_S:g} s"
+        " after the run: the output is incomplete"
     )
+    assert caught.value.notes == ("process group still alive after 3 s",)
+
+
+def test_stdout_arriving_after_the_grace_deadline_fails_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    GIVEN a finished wrapper and a complete report, but stdout still held open
+        past IO_GRACE_S, with more bytes arriving after the deadline
+    WHEN the run is supervised and judged
+    THEN the outcome names stdout as open and judging raises RunFailure: no
+        sample, so no fingerprint of the partial output
+    """
+    monkeypatch.setattr(procrun, "IO_GRACE_S", 0.2)
+    out_r, out_w = os.pipe()
+    err_r, err_w = os.pipe()
+    rep_r, rep_w = os.pipe()
+    os.write(rep_w, encode(GOOD))
+    os.close(rep_w)
+    os.close(err_w)
+    os.write(out_w, b"partial")
+    pump = OutputPump(
+        CAPS, stdout=out_r, stderr=err_r, report=rep_r, on_overflow=lambda: None
+    )
+    proc = subprocess.Popen(["true"], start_new_session=True)  # nosec B603 B607
+    try:
+        outcome = procrun._supervise(proc, time.perf_counter_ns(), 30.0, pump)
+    finally:
+        os.write(out_w, b" and more after the deadline")
+        os.close(out_w)
+        for fd in (out_r, err_r, rep_r):
+            os.close(fd)
+
+    assert (outcome.report_complete, outcome.open_outputs) == (True, ("stdout",))
+    with pytest.raises(RunFailure) as caught:
+        judge(outcome, make_policy(tmp_path))
+    assert caught.value.reason.startswith("the stdout pipe was still open")
 
 
 def test_a_workload_that_exits_125_is_a_sample_not_a_refusal(tmp_path: Path) -> None:
@@ -1857,31 +1911,32 @@ ESCAPED_ORPHAN = r"""
 import subprocess, sys
 child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(10)"],
                          start_new_session=True)
+open("orphan.pid", "w").write(str(child.pid))
 print(child.pid)
 """
 
 
 @darwin_only
-def test_real_run_notes_an_output_pipe_held_by_an_escaped_orphan(
+def test_real_run_fails_when_an_escaped_orphan_holds_stdout(
     dirs: Dirs, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """
     GIVEN darwin (no PID namespace, no subreaper) and a workload whose setsid
         grandchild keeps stdout open (the documented limitation there)
     WHEN it runs
-    THEN run_once returns after the grace period instead of hanging, with a
-        note that an output pipe was still open
+    THEN run_once returns after the grace period instead of hanging, and the
+        run fails naming stdout: its output may be incomplete
     """
     monkeypatch.setattr(procrun, "IO_GRACE_S", 0.3)
     started = time.monotonic()
 
-    sample = run(dirs, [sys.executable, "-c", ESCAPED_ORPHAN])
+    with pytest.raises(RunFailure) as caught:
+        run(dirs, [sys.executable, "-c", ESCAPED_ORPHAN])
 
-    orphan = int(sample.stdout_head)
+    orphan = int((dirs.wt / "orphan.pid").read_text())
     try:
         assert time.monotonic() - started < 5.0
-        assert sample.exit == 0
-        assert sample.notes == ("an output pipe was still open after the run",)
+        assert caught.value.reason.startswith("the stdout pipe was still open")
     finally:
         try:
             os.kill(orphan, signal.SIGKILL)

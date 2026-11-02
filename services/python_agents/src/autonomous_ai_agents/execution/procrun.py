@@ -37,8 +37,10 @@ group still populated after the wrapper's reap (a process that outlived the
 launcher, darwin's only stray signal) counts one stray more.
 
 Known limitation: on darwin (no PID namespace, no subreaper) a ``setsid``
-grandchild escapes ``killpg`` and may hold the output pipes open (a note). On
-Linux the launcher, the child subreaper, kills it before it reports.
+grandchild escapes ``killpg`` and may hold the output pipes open: the run fails
+(an output pipe still open after ``IO_GRACE_S`` is a ``RunFailure`` naming it,
+never a fingerprint of partial output). On Linux the launcher, the child
+subreaper, kills it before it reports.
 """
 
 from __future__ import annotations
@@ -220,6 +222,8 @@ class RunOutcome:
     stdout_bytes: int
     stderr_tail: bytes
     group_leftover: bool = False
+    open_outputs: tuple[str, ...] = ()
+    """The output pipes (``stdout``, ``stderr``) still open after the grace."""
 
 
 def maxrss_scale(platform: str) -> int:
@@ -289,8 +293,6 @@ def judge(outcome: RunOutcome, policy: SandboxPolicy) -> RunSample:
     notes: list[str] = []
     if not outcome.group_drained:
         notes.append(f"process group still alive after {DRAIN_CAP_S:g} s")
-    if not outcome.outputs_complete:
-        notes.append("an output pipe was still open after the run")
     try:
         return _judge(outcome, policy, list(notes))
     except RunFailure as failure:
@@ -306,6 +308,12 @@ def _judge(outcome: RunOutcome, policy: SandboxPolicy, notes: list[str]) -> RunS
         raise RunFailure(outcome.overflow)
     if not outcome.report_complete:
         raise RunFailure("the measurement report pipe was still open after the run")
+    if not outcome.outputs_complete:  # truncated output is never a fingerprint
+        names = " and ".join(outcome.open_outputs) or "output"
+        raise RunFailure(
+            f"the {names} pipe was still open {IO_GRACE_S:g} s after the run:"
+            " the output is incomplete"
+        )
     if not outcome.report:
         lines = outcome.stderr_tail.decode(errors="replace").strip().splitlines()
         last = _quote(lines[-1]) if lines else "no stderr"
@@ -395,6 +403,7 @@ class OutputPump:
             stderr: self._stderr,
             report: self._report,
         }
+        self.names = {stdout: "stdout", stderr: "stderr"}
         self.open = set(self.sinks)
         self.sha256 = hashlib.sha256()
         self.head, self.tail, self.report = bytearray(), bytearray(), bytearray()
@@ -694,6 +703,7 @@ def _supervise(
         report=bytes(pump.report),
         report_complete=pump.report_fd not in pump.open,
         outputs_complete=pump.open <= {pump.report_fd},
+        open_outputs=tuple(name for fd, name in pump.names.items() if fd in pump.open),
         group_drained=drained,
         timed_out=timed_out.is_set(),
         timeout_s=timeout_s,
