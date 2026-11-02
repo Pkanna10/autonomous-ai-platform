@@ -491,26 +491,3 @@ def pytest_runtest_makereport(
     log = args.get("launches")
     if isinstance(log, LaunchLog):
         report.sections.append(("launches", log.report()))
-
-
-# TEMPORARY (PR #29 probe, reverted before merge): E2E_REPEAT=<n> runs the
-# four tests the CI combine re-test misses hit n times each in the suite.
-_REPEATED = frozenset({
-    "test_e3_a_a_generated_idea_is_delivered_across_a_resume",
-    "test_e3_j_the_pipeline_drops_five_ideas_and_two_portfolio_rounds_stack_two_keeps",
-    "test_e2e_b_git_side_defence",
-    "test_e2e_c_budget_stops_the_second_trial",
-})  # fmt: skip
-
-
-@pytest.fixture(autouse=True)
-def e2e_repeat(request: pytest.FixtureRequest) -> int:
-    return int(getattr(request, "param", 0))
-
-
-def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
-    count = int(os.environ.get("E2E_REPEAT", "0") or "0")
-    if count > 1 and metafunc.function.__name__ in _REPEATED:
-        metafunc.parametrize(
-            "e2e_repeat", range(count), ids=[f"x{i}" for i in range(count)]
-        )
