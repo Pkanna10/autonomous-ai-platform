@@ -2923,6 +2923,11 @@ worktree", 4.4.0) or in the builder rules every brief carries.
   there, which points at the measurement (CPU seconds vary with the vCPU's clock
   and steal) rather than the fixture. Left unchanged (the owner agreed); if CI
   repeats it, compare against these numbers before widening the slowdown.
+- `test_a_decoy_tempting_idea_gains_nothing[sitebackup]` failed once in the
+  Lead's container (2026-11-02, full 3.11 suite, `-n 4`): the tempting idea
+  measured 5.8 % against the 5 % bound with an A/A gap of 0.3 % (base 0.655 s,
+  twin 0.657 s, tempting 0.617 s CPU). The same family as auditchain (a CPU-
+  seconds guard on a shared vCPU); the bar stays (the owner agreed).
 - The combine re-test misses on CI, twice, both on CPython 3.11: E3-A
   (`tests/e2e/test_step3.py`, `181f1ef`) delivered report only, and E3-J
   (`tests/e2e/test_step3_ideas.py`, master `8b32afe` after the PR #22 merge,
