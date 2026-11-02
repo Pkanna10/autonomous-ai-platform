@@ -243,6 +243,8 @@ class Launch:
     child_cpu_s: float | None = None
     strays: int | None = None
     loadavg: str = ""
+    notes: tuple[str, ...] = ()  # run_once's notes (an output pipe or the
+    # group still open at IO_GRACE_S / DRAIN_CAP_S): they never fail a run
 
 
 def _loadavg() -> str:
@@ -340,7 +342,8 @@ class LaunchLog:
             raise
         commit, load = _head(cwd), _loadavg()  # after the launch: no gap
         self._share({"phase": phase, "start": start, "end": time.time(), "load": load,
-                     "child_cpu": sample.child_cpu_s, "strays": sample.strays})  # fmt: skip
+                     "child_cpu": sample.child_cpu_s, "strays": sample.strays,
+                     "notes": list(sample.notes)})  # fmt: skip
         launch = Launch(
             where.parts[1],
             sandbox.network,
@@ -353,6 +356,7 @@ class LaunchLog:
             child_cpu_s=sample.child_cpu_s,
             strays=sample.strays,
             loadavg=load,
+            notes=sample.notes,
         )
         self.launches.append(launch)
         return sample
@@ -375,6 +379,10 @@ class LaunchLog:
                 f" child_cpu_max={child:.3f}s strays={strays}"
             )
         lines.extend(f"FAILED {failure}" for failure in self.failures)
+        noted = {(run.phase, run.commit, n) for run in self.launches for n in run.notes}
+        lines.extend(
+            f"NOTE {phase}@{commit}: {note}" for phase, commit, note in sorted(noted)
+        )
         loads = sorted({launch.loadavg for launch in self.launches})
         lines.append(f"load at launches: {loads[:1]}..{loads[-1:]}; now: {_loadavg()}")
         lines.extend(self._concurrent())
