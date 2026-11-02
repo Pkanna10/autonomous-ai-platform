@@ -243,8 +243,13 @@ counted run per side (Python and C call counts from cProfile, run by
 `execution/_opcount_shim.py` from the engine's own package, outside every
 worktree) and always returns `not_applicable`; `derive_verdict` leaves every
 shadow judge out of the rules and the gain, and the report shows its column only
-when a verdict carries it. Promotion needs the owner and the A/A, controls and
-gaming checks (idea-lab spec section 2).
+when a verdict carries it. `default_judges(..., scaling=True)` (setting
+`SCALING_JUDGE`, off by default, G6b) adds `ScalingJudge`: a workload's `scale`
+(`ScaleSetting`: an environment variable and 2-3 increasing sizes, defined with
+the workload, so no trial can change it) runs at each size on both sides,
+interleaved, and the judge records the least-squares slope of log time against
+log size for base and trial (`GROWTH_TOLERANCE` 0.15). Promotion needs the owner
+and the A/A, controls and gaming checks (idea-lab spec section 2).
 
 `derive_verdict(trial, hypothesis, judge_results, violations)` is pure and
 ordered:

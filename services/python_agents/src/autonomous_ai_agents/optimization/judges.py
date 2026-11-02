@@ -19,7 +19,8 @@ violations into one :class:`Verdict`, in a fixed order.
 
 Shadow judges (``SHADOW_JUDGES``, spec section 2) record, never decide,
 until the owner promotes them: :class:`OpCountJudge` (G6a) records the
-operation counts of one counted run per side. ``derive_verdict`` leaves
+operation counts of one counted run per side, :class:`ScalingJudge` (G6b)
+how run time grows with input size on each side. ``derive_verdict`` leaves
 their results out of every rule and of the gain, and keeps them on the
 verdict for the report's column.
 """
@@ -27,6 +28,7 @@ verdict for the report's column.
 from __future__ import annotations
 
 import math
+import statistics
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
@@ -62,7 +64,9 @@ from autonomous_ai_agents.common.models import (
 from autonomous_ai_agents.execution.measure import (
     C_CALLS_KEY,
     METRIC_OP_CALLS,
+    METRIC_SCALE_WALL_S,
     PYTHON_CALLS_KEY,
+    SCALE_SIZE_KEY,
 )
 from autonomous_ai_agents.optimization.anticheat import (
     compare_fingerprints,
@@ -724,9 +728,15 @@ class TestSuiteJudge:
 
 
 OP_COUNT_JUDGE = "op_count"
-SHADOW_JUDGES: frozenset[str] = frozenset({OP_COUNT_JUDGE})
+SCALING_JUDGE = "scaling"
+SHADOW_JUDGES: frozenset[str] = frozenset({OP_COUNT_JUDGE, SCALING_JUDGE})
 """Judge names whose results ``derive_verdict`` never reads (record only)."""
 _SHADOW = "shadow, records only"
+GROWTH_TOLERANCE = 0.15
+"""Growth rates closer than this are the same growth (``ScalingJudge``):
+a 5 % wobble of each size's median over the narrowest span (4x, two sizes)
+moves a rate by at most about 0.07, and an algorithmic change (n^2 to
+n log n or n) by 0.8 or more."""
 
 
 def _split_of(row: Measurement, key: str) -> int | None:
@@ -805,14 +815,121 @@ class OpCountJudge:
         )
 
 
+def growth_rate(points: Sequence[tuple[int, float]]) -> float:
+    """The least-squares slope of log(time) against log(size) over
+    ``points`` (two or more distinct positive sizes, positive times): 1 for
+    time growing linearly with size, 2 quadratically."""
+    xs = [math.log(size) for size, _ in points]
+    ys = [math.log(seconds) for _, seconds in points]
+    mx, my = sum(xs) / len(xs), sum(ys) / len(ys)
+    spread = sum((x - mx) ** 2 for x in xs)
+    return sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=True)) / spread
+
+
+def _tidy(value: float) -> float:
+    """Rounded to 6 places (float noise is no growth), never ``-0.0``."""
+    return round(value, 6) + 0.0
+
+
+def _medians(rows: Sequence[Measurement]) -> dict[str, dict[int, float]]:
+    """Per workload, each size's median scaling time: the first row per
+    (workload, size), only a positive int size and a positive median."""
+    found: dict[str, dict[int, float]] = {}
+    for row in rows:
+        size = row.hardware.get(SCALE_SIZE_KEY)
+        if row.metric != METRIC_SCALE_WALL_S or type(size) is not int or size < 1:
+            continue
+        sizes = found.setdefault(row.workload_id, {})
+        if size not in sizes and (median := statistics.median(row.samples)) > 0:
+            sizes[size] = median
+    return found
+
+
+@dataclass(frozen=True)
+class ScalingJudge:
+    """Records how run time grows with input size on both sides (G6b).
+
+    Per workload scaled on both sides (``scale_wall_time_s`` rows), the
+    growth rate of each side (``growth_rate`` over the medians of the sizes
+    both ran, two at least); recorded: the mean rates (``baseline`` and
+    ``trial`` hold the per-workload rates, unit ``rate``), their difference
+    ``change`` (negative: slower growth), the ``largest_change`` of one
+    workload, and ``same_growth`` (every change within
+    ``GROWTH_TOLERANCE``). A real algorithmic change alters the rate, a
+    constant-factor speed-up does not. The outcome is always
+    ``not_applicable`` and ``gain`` ``None`` (``derive_verdict`` ignores it
+    anyway).
+    """
+
+    @property
+    def name(self) -> str:
+        """Judge name as it appears in results."""
+        return SCALING_JUDGE
+
+    def applies_to(self, objective: Objective) -> bool:
+        """It records whatever the objective is."""
+        return True
+
+    def evaluate(self, baseline: Baseline, trial: Trial) -> JudgeResult:
+        """Fit both sides' growth per workload and record the rates."""
+        after = _medians(trial.measurements)
+        rates: list[tuple[float, float]] = []
+        before = _medians(baseline.measurements)
+        for workload_id, base in before.items():
+            mine = after.get(workload_id, {})
+            shared = sorted(set(base) & set(mine))
+            if len(shared) >= 2:
+                rates.append((
+                    growth_rate([(size, base[size]) for size in shared]),
+                    growth_rate([(size, mine[size]) for size in shared]),
+                ))  # fmt: skip
+        unscaled = len(before) - len(rates)
+        if not rates:
+            return JudgeResult(
+                judge=self.name,
+                outcome=JudgeOutcome.not_applicable,
+                reason=f"{_SHADOW}: no scaling runs on both sides",
+                details={"shadow": True, "workloads": 0, "unscaled": unscaled},
+            )
+        changes = [_tidy(t - b) for b, t in rates]
+        base_rate = _tidy(statistics.fmean(b for b, _ in rates))
+        trial_rate = _tidy(statistics.fmean(t for _, t in rates))
+        change = _tidy(trial_rate - base_rate)
+        missing = f"; {unscaled} not scaled on both sides" if unscaled else ""
+        return JudgeResult(
+            judge=self.name,
+            outcome=JudgeOutcome.not_applicable,
+            metric=METRIC_SCALE_WALL_S,
+            baseline=RunStats.from_samples([b for b, _ in rates], unit="rate"),
+            trial=RunStats.from_samples([t for _, t in rates], unit="rate"),
+            reason=(
+                f"{_SHADOW}: growth rate {trial_rate:.2f} against the base's"
+                f" {base_rate:.2f} ({change:+.2f}) over {len(rates)} workload(s){missing}"
+            ),
+            details={
+                "shadow": True,
+                "workloads": len(rates),
+                "unscaled": unscaled,
+                "base_rate": base_rate,
+                "trial_rate": trial_rate,
+                "change": change,
+                "largest_change": max(changes, key=abs),
+                "tolerance": GROWTH_TOLERANCE,
+                "same_growth": all(abs(c) <= GROWTH_TOLERANCE for c in changes),
+            },
+        )
+
+
 def default_judges(
     noise_multiplier: float = 2.0,
     *,
     quality: QualityCheck | None = None,
     op_count: bool = False,
+    scaling: bool = False,
 ) -> tuple[Judge, ...]:
     """The frozen judge set in evaluation order (``quality``: the confirmed
-    check; ``op_count``: the shadow :class:`OpCountJudge` last).
+    check; ``op_count`` and ``scaling``: the shadow :class:`OpCountJudge`
+    and :class:`ScalingJudge` last, in that order).
 
     Keep ``EquivalenceJudge`` in any judge set: it is the only judge that sets
     ``output_changed``, which rule 6 of :func:`derive_verdict` relies on to
@@ -825,7 +942,8 @@ def default_judges(
         GuardrailMetricJudge(quality=quality),
         TestSuiteJudge(),
     )
-    return (*judges, OpCountJudge()) if op_count else judges
+    shadow = (OpCountJudge(),) * op_count + (ScalingJudge(),) * scaling
+    return (*judges, *shadow)
 
 
 # ---------------------------------------------------------------------------

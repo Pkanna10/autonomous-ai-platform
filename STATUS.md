@@ -2941,6 +2941,14 @@ worktree", 4.4.0) or in the builder rules every brief carries.
   400 commits): fine once a call, costly if rebuilt often; callers are found by
   name, so a generic name can give false positives; the reviewer gets up to
   twice the code cap.
+- G6b review nits, left as they are: `ScaleSetting.env_var` refuses only PATH,
+  HOME, TMPDIR and the PYTHON, LD_ and DYLD_ prefixes, so a name the sandbox
+  denies (a token-shaped one) or one only passed through (LANG, TZ) is caught at
+  run time as a note, not at definition; with `PAIRED_TRIALS` on, the baseline
+  runner's scaling rows are never read (the judges use each trial's twin), so
+  `SCALING_JUDGE` spends sizes x runs extra base launches for nothing (cost
+  only, as G6a's counted base run). No migration was needed: a `Workload` lives
+  in the run state's JSONB, never the 003 `workloads` table.
 - G6a review nits, left as they are: `OpCountJudge` counts a workload as
   uncounted only from the base side (a trial-side-only count is dropped
   silently); `measure.counted_argv` imports the profiler's private `_split`

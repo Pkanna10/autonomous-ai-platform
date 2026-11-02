@@ -612,6 +612,7 @@ def build_context(
                 scorer=scorer,
                 scorer_notes=tap,
                 count_ops=settings.OP_COUNT_JUDGE,
+                scaling=settings.SCALING_JUDGE,
             ),
             GitTrialRunner(
                 bound,
@@ -627,6 +628,7 @@ def build_context(
                 paired=settings.PAIRED_TRIALS,
                 scorer=scorer,
                 count_ops=settings.OP_COUNT_JUDGE,
+                scaling=settings.SCALING_JUDGE,
             ),
         )
 
@@ -647,6 +649,7 @@ def build_context(
                 settings.NOISE_MULTIPLIER,
                 quality=quality,
                 op_count=settings.OP_COUNT_JUDGE,
+                scaling=settings.SCALING_JUDGE,
             )
             if judges is None
             else tuple(judges)

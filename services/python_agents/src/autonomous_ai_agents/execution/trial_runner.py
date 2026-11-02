@@ -88,6 +88,13 @@ run per side (``measure.count_workload``): a paired trial on its twin (an
 on itself, the baseline on the base. A counted run that cannot count is a
 note, never a failed trial or an ``EngineError``: the operation-count judge
 only records.
+
+Scaling runs (G6b, ``scaling``; off by default, the factory's setting): after
+the counted runs, every workload with a ``Workload.scale`` setting runs at
+its sizes (``measure.measure_scaling``): a paired trial interleaved with its
+twin (``scale_wall_time_s`` rows in ``base_measurements``), an unpaired trial
+on itself, the baseline on the base. A scaling run that fails is a note,
+never a failed trial or an ``EngineError``: the scaling judge only records.
 """
 
 from __future__ import annotations
@@ -167,6 +174,7 @@ from autonomous_ai_agents.execution.measure import (
     count_workload,
     make_phase,
     measure_abab,
+    measure_scaling,
     measure_workload,
     python_module,
     run_tests,
@@ -526,9 +534,10 @@ class _PhaseOwner:
         scorer: RunnerScorer | None = None,
         scorer_notes: NoteTap | None = None,
         count_ops: bool = False,
+        scaling: bool = False,
     ) -> None:
         self._project = project
-        self._count_ops = count_ops
+        self._count_ops, self._scaling = count_ops, scaling
         self._quality, self._scorer_notes = QualityHooks(scorer), scorer_notes
         self._git = GitWorkspace(Path(project.root_path)) if git is None else git
         self._phase = functools.partial(
@@ -603,7 +612,10 @@ class _PhaseOwner:
             raise
         self._note(prefix, suite.notes)
         counted_base, counted = self._count(phase, twin, workloads, prefix, trial_id)
-        return (*base, *counted_base), (*rows, *suite.measurements, *counted)
+        scaled_base, scaled = self._scale(phase, twin, workloads, prefix, trial_id)
+        return (*base, *counted_base, *scaled_base), (
+            *rows, *suite.measurements, *counted, *scaled,
+        )  # fmt: skip
 
     def _count(
         self,
@@ -628,6 +640,26 @@ class _PhaseOwner:
             b = count_workload(phase, workload, trial_id=trial_id, side=side)
             rows.extend(b.rows)
             self._note(prefix, b.notes)
+        return tuple(base), tuple(rows)
+
+    def _scale(
+        self,
+        phase: Phase,
+        twin: Phase | None,
+        workloads: Sequence[Workload],
+        prefix: str,
+        trial_id: str | None,
+    ) -> tuple[tuple[Measurement, ...], tuple[Measurement, ...]]:
+        """With ``scaling``, the scaling runs of every workload that has a
+        size setting, interleaved with the twin (A): (the twin's rows,
+        ``phase``'s rows); notes emitted."""
+        base: list[Measurement] = []
+        rows: list[Measurement] = []
+        for workload in workloads if self._scaling else ():
+            scaled = measure_scaling(phase, workload, twin=twin, trial_id=trial_id)
+            base.extend(scaled.a)
+            rows.extend(scaled.b)
+            self._note(prefix, scaled.notes)
         return tuple(base), tuple(rows)
 
     def _checked_out(self, ref: str) -> bool:
@@ -660,7 +692,8 @@ class _PhaseOwner:
 class GitBaselineRunner(_PhaseOwner):
     """The real ``BaselineRunner``: every workload at ``commit``, then the suite
     once (its ``tests_passed`` rows record the passing count trials must reach),
-    then with ``count_ops`` one counted run per workload (G6a).
+    then with ``count_ops`` one counted run per workload (G6a), then with
+    ``scaling`` the scaling runs (G6b).
     A ``RunFailure`` is an ``EngineError`` once F1 held. Notes go to
     ``on_note`` prefixed ``baseline:``; with a ``scorer`` (module docstring),
     ``scorer_notes``, the scorer's ``NoteTap``, adds its run notes once."""
@@ -795,7 +828,8 @@ class GitTrialRunner(_PhaseOwner):
     ``fix_retries`` (0-1, default 0: off) and ``retry_floor_usd`` bound the fix
     retry (module docstring). ``paired`` (default off: Step 2; the factory
     passes ``PAIRED_TRIALS``) measures every attempt against a twin of the
-    base (module docstring); ``count_ops`` adds the counted runs (G6a). Notes (``RunSample``, ``RunFailure``,
+    base (module docstring); ``count_ops`` adds the counted runs (G6a),
+    ``scaling`` the scaling runs (G6b). Notes (``RunSample``, ``RunFailure``,
     ``Measured``) go to ``on_note``
     prefixed ``trial for hypothesis <id>:``. ``prefix`` is the engine branch
     prefix (default the setting's; the factory passes the context's): the
@@ -822,6 +856,7 @@ class GitTrialRunner(_PhaseOwner):
         paired: bool = False,
         scorer: RunnerScorer | None = None,
         count_ops: bool = False,
+        scaling: bool = False,
     ) -> None:
         if not 0 <= fix_retries <= FIX_RETRIES_MAX:
             raise ValueError(
@@ -836,7 +871,7 @@ class GitTrialRunner(_PhaseOwner):
         super().__init__(
             project, git=git, network=network, fs=fs, platform=platform,
             base_env=base_env, run=run, on_note=on_note, scorer=scorer,
-            count_ops=count_ops,
+            count_ops=count_ops, scaling=scaling,
         )  # fmt: skip
         self._prefix = settings.TRIAL_BRANCH_PREFIX if prefix is None else prefix
         problem = branch_prefix_problem(self._prefix)

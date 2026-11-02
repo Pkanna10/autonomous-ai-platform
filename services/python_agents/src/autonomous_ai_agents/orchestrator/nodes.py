@@ -154,6 +154,7 @@ from autonomous_ai_agents.optimization.anticheat import (
 )
 from autonomous_ai_agents.optimization.judges import (
     OP_COUNT_JUDGE,
+    SCALING_JUDGE,
     Judge,
     derive_verdict,
     drop_text,
@@ -2254,6 +2255,25 @@ def op_count_cell(results: Sequence[JudgeResult]) -> str:
     return cell if base <= 0 else f"{cell} ({after / base - 1:+.1%})"
 
 
+def scaling_cell(results: Sequence[JudgeResult]) -> str:
+    """The report's shadow cell (G6b): the scaling judge's growth rates and
+    their change, "n^base → n^trial (+x.xx)", or "not scaled"."""
+    found = next((r for r in results if r.judge == SCALING_JUDGE), None)
+    details = {} if found is None else found.details
+    base, after = details.get("base_rate"), details.get("trial_rate")
+    change = details.get("change")
+    if not (isinstance(base, float) and isinstance(after, float) and isinstance(change, float)):  # fmt: skip
+        return "not scaled"
+    return f"n^{base:.2f} → n^{after:.2f} ({change:+.2f})"
+
+
+_SHADOW_COLUMNS: tuple[tuple[str, str, Callable[[Sequence[JudgeResult]], str]], ...] = (
+    (OP_COUNT_JUDGE, "Op calls (shadow)", op_count_cell),
+    (SCALING_JUDGE, "Growth (shadow)", scaling_cell),
+)
+"""The shadow judges' report columns, in order: (judge, heading, cell)."""
+
+
 def _report(
     state: EngineState,
     prefix: str,
@@ -2264,13 +2284,15 @@ def _report(
 ) -> str:
     """The markdown report: title, baseline, total time, one row per verdict,
     kept with each gain (D42), the review branch, retry notes, parked ideas,
-    conditions. A verdict carrying the shadow operation-count result adds
-    the "Op calls (shadow)" column (G6a: a column, never a decision)."""
+    conditions. A verdict carrying a shadow judge's result adds its column,
+    "Op calls (shadow)" (G6a) then "Growth (shadow)" (G6b): a column, never
+    a decision."""
     project = state["project"]
     hypotheses = _by_id(state["hypotheses"])
     decided = decided_verdicts(state["verdicts"], state["approval"])
     decided_by_id = {verdict.id: verdict for verdict in decided}
-    shadow = any(r.judge == OP_COUNT_JUDGE for v in decided for r in v.judge_results)
+    ran = {r.judge for v in decided for r in v.judge_results}
+    shadow = [column for column in _SHADOW_COLUMNS if column[0] in ran]
     lines = [
         *_head(
             state,
@@ -2278,12 +2300,12 @@ def _report(
             now or utc_now(),
         ),
         "| Hypothesis | Outcome | Gain | Summary |"
-        + (" Op calls (shadow) |" if shadow else ""),
-        "| --- | --- | --- | --- |" + (" --- |" if shadow else ""),
+        + "".join(f" {heading} |" for _, heading, _ in shadow),
+        "| --- | --- | --- | --- |" + " --- |" * len(shadow),
     ]
     for verdict in decided:
         gain = "n/a" if verdict.gain is None else f"{verdict.gain:+.1%}"
-        extra = f" {_cell(op_count_cell(verdict.judge_results))} |" if shadow else ""
+        extra = "".join(f" {_cell(cell(verdict.judge_results))} |" for *_, cell in shadow)  # fmt: skip
         lines.append(
             f"| {_cell(_title_for(hypotheses, verdict))} | {verdict.outcome.value} "
             f"| {gain} | {_cell(verdict.summary)} |{extra}"

@@ -117,7 +117,7 @@ def test_the_judge_is_a_frozen_shadow_judge_that_applies_to_every_objective() ->
 
     assert isinstance(judge, Judge)
     assert judge.name == OP_COUNT_JUDGE == "op_count"
-    assert SHADOW_JUDGES == frozenset({OP_COUNT_JUDGE})
+    assert OP_COUNT_JUDGE in SHADOW_JUDGES  # with the scaling judge (G6b)
     assert judge.applies_to(OBJECTIVE)
     with pytest.raises(AttributeError):
         judge.name = "x"  # type: ignore[misc]

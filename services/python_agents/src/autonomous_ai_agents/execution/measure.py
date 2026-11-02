@@ -35,6 +35,21 @@ cannot run, a failed run or unusable output is a note and no row. The row is
 the operation-count judge's input only (shadow mode), and the workload
 controls the interpreter, so its count is a hint, never proof.
 
+The scaling runs (G6b, ``measure_scaling``): a workload whose
+``Workload.scale`` is set runs at each of its sizes, the size in the
+setting's environment variable on top of the phase's (a variable the phase
+sets or the sandbox denies is a note and no run), ``runs`` timed launches
+per size and side, each after its reset and mask like any workload run. With
+a twin they interleave: the sizes forward on an even run and backward on an
+odd one, the sides swapping order on every other turn, so neither a side nor
+a size always runs first. One ``scale_wall_time_s`` row per side and size
+(its size in ``hardware``, no fingerprint: outputs differ by size). A failed
+launch at any size is a note and no rows on either side (a fit over the
+sizes one side reached would compare unlike ranges). Wall time includes the
+interpreter's start-up, which flattens the growth rate when the smallest
+size's run is not well above it: the setter picks the sizes. The rows are
+the scaling judge's input only (shadow mode).
+
 ``tests_passed`` needs the runner's own summary, never the exit code alone:
 unittest's last ``Ran N tests`` line followed by ``OK`` (the suite keeps a
 larger stderr tail), or the JUnit XML pytest writes into the scratch root
@@ -93,7 +108,7 @@ from autonomous_ai_agents.execution.procrun import (
     run_once,
 )
 from autonomous_ai_agents.execution.protocols import WorktreeHandle
-from autonomous_ai_agents.execution.sandbox import SandboxPolicy, child_env
+from autonomous_ai_agents.execution.sandbox import SandboxPolicy, child_env, denied
 
 JUNIT_NAME = "junit.xml"
 """pytest's report, in the phase's scratch root (wiped before every run)."""
@@ -126,6 +141,10 @@ OPCOUNT_TIMEOUT_FACTOR = 3.0
 """The counted run's timeout is the workload's times this (cProfile's
 overhead, as for the profile run; the run is not timed)."""
 MAX_CALLS = 2**53
+METRIC_SCALE_WALL_S = "scale_wall_time_s"
+"""The scaling runs' rows (G6b): one per workload, side and size."""
+SCALE_SIZE_KEY = "scale_size"
+"""The ``scale_wall_time_s`` row's ``hardware`` key of its size."""
 
 
 class RunOnce(Protocol):
@@ -855,3 +874,73 @@ def count_workload(
     total = (float(counts.total),)
     row = _row(workload, trial_id, METRIC_OP_CALLS, "calls", total, hardware)
     return Counted((row,), tuple(said))
+
+
+@dataclass(frozen=True)
+class Scaled:
+    """Scaling rows (G6b): ``a`` the base side (the twin), ``b`` the measured
+    phase, each one row per size; the notes."""
+
+    a: tuple[Measurement, ...]
+    b: tuple[Measurement, ...]
+    notes: tuple[str, ...] = ()
+
+
+def _scaling_order(
+    runs: int, sizes: Sequence[int], sides: Sequence[tuple[str, Phase]]
+) -> list[tuple[int, int, str, Phase]]:
+    """``(run, size, side, phase)`` launches: sizes forward on an even run
+    and backward on an odd one, the sides swapping on every other turn."""
+    order: list[tuple[int, int, str, Phase]] = []
+    turn = 0
+    for index in range(runs):
+        for size in sizes[::-1] if index % 2 else sizes:
+            for side, phase in sides[::-1] if turn % 2 else sides:
+                order.append((index, size, side, phase))
+            turn += 1
+    return order
+
+
+def measure_scaling(
+    phase: Phase,
+    workload: Workload,
+    *,
+    twin: Phase | None = None,
+    trial_id: str | None = None,
+) -> Scaled:
+    """The scaling runs of ``workload`` (module docstring), interleaved with
+    ``twin`` (the base side, `` A``) when given; nothing without a setting."""
+    setting = workload.scale
+    if setting is None:
+        return Scaled((), ())
+    label, var = f"workload {workload.name!r}", setting.env_var
+    if denied(var) or var in phase.env or (twin is not None and var in twin.env):
+        why = f"the size variable {var} is one the engine sets or keeps from workloads"  # fmt: skip
+        return Scaled((), (), (f"{label} is not scaled: {why}",))
+    sides = [("", phase)] if twin is None else [(" A", twin), (" B", phase)]
+    sized = {
+        (side, size): replace(at, env={**at.env, var: str(size)})
+        for side, at in sides for size in setting.sizes
+    }  # fmt: skip
+    walls: dict[tuple[str, int], list[float]] = {key: [] for key in sized}
+    isolated: dict[tuple[str, int], list[int]] = {key: [0, 0] for key in sized}
+    notes: list[str] = []
+    try:
+        for index, size, side, _ in _scaling_order(setting.runs, setting.sizes, sides):
+            where = f"{label}{side} size {size} run {index + 1}/{setting.runs}"
+            sample = _run(sized[side, size], workload, where, notes)
+            walls[side, size].append(sample.wall_ns / 1e9)
+            isolated[side, size][0] += sample.fs_isolated
+            isolated[side, size][1] += sample.net_isolated
+    except RunFailure as failure:
+        return Scaled((), (), (*failure.notes, f"{label} is not scaled: {failure.reason}"))  # fmt: skip
+    rows: dict[str, tuple[Measurement, ...]] = {}
+    for side, at in sides:
+        found: list[Measurement] = []
+        for size in setting.sizes:
+            fs, net = isolated[side, size]
+            hardware = _host(at.policy, setting.runs, fs, net) | {SCALE_SIZE_KEY: size}
+            owner = None if side == " A" else trial_id
+            found.append(_row(workload, owner, METRIC_SCALE_WALL_S, "s", walls[side, size], hardware))  # fmt: skip
+        rows[side] = tuple(found)
+    return Scaled(rows.get(" A", ()), rows[sides[-1][0]], tuple(dict.fromkeys(notes)))

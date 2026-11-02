@@ -507,6 +507,12 @@ class Settings(BaseSettings):
     call counts) and the operation-count judge, a report column that never
     decides a verdict. Off by default: each counted run costs about 1.5-3x
     one workload run."""
+    SCALING_JUDGE: bool = False
+    """G6b, shadow mode: every workload with a size setting
+    (``Workload.scale``) runs at its 2-3 sizes on both sides, and the scaling
+    judge records how run time grows with size, a report column that never
+    decides a verdict. Off by default: it adds sizes x runs launches per
+    workload and side."""
     NOISE_CALIBRATION_BLOCKS: int = Field(
         default=3, ge=0, le=NOISE_CALIBRATION_BLOCKS_MAX
     )
