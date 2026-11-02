@@ -35,7 +35,9 @@ import pytest
 from autonomous_ai_agents.common.config import IsolationMode, settings
 from autonomous_ai_agents.execution import launcher, procrun
 from autonomous_ai_agents.execution.procrun import OutputCaps, RunSample
+from autonomous_ai_agents.execution.protocols import Combiner, KeptChange
 from autonomous_ai_agents.execution.sandbox import UNSHARE_ARGV, SandboxPolicy
+from autonomous_ai_agents.orchestrator import combine_node
 from autonomous_ai_agents.persistence.repository import (
     InMemoryRepository,
     Repository,
@@ -358,3 +360,66 @@ def e2e_repository() -> Iterator[Repository]:
     finally:
         with psycopg.connect(server, autocommit=True) as admin:
             admin.execute(drop)
+
+
+def _retest_line(retest: combine_node.Retest, offered: Sequence[str]) -> str:
+    """One re-test for a failure report: what it was offered and applied,
+    whether it held and why, the judges that did not pass, each side's
+    mean wall time."""
+    measured, verdict = retest.measured, retest.verdict
+
+    def mean(rows: Sequence[object]) -> str:
+        walls = [s for m in rows if getattr(m, "metric", "") == "wall_time_s"
+                 for s in getattr(m, "samples", ())]  # fmt: skip
+        return f"{sum(walls) / len(walls):.3f}s n={len(walls)}" if walls else "none"
+
+    judges = [
+        f"{j.judge}={j.outcome.value} ({j.reason})"
+        for j in verdict.judge_results
+        if j.outcome.value != "passed"
+    ]
+    return (
+        f"offered={[t[:8] for t in offered]} applied={[t[:8] for t in measured.applied]}"
+        f" tip={measured.tip_commit[:10]} holds={retest.holds}: {retest.reason};"
+        f" base={mean(measured.baseline)} tip={mean(measured.combined)};"
+        f" not passed={judges}; violations={[v.message for v in verdict.violations]}"
+    )
+
+
+@pytest.fixture(autouse=True)
+def retests(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Every combine re-test (confirmation second looks included), for the
+    failure report: ``_retest`` is wrapped, never changed."""
+    seen: list[str] = []
+    real = combine_node._retest
+
+    def spy(
+        combiner: Combiner,
+        offered: Sequence[KeptChange],
+        rules: combine_node.CombineRules,
+        target: combine_node.CombineTarget,
+    ) -> combine_node.Retest:
+        result = real(combiner, offered, rules, target)
+        seen.append(_retest_line(result, [c.trial_id for c in offered]))
+        return result
+
+    monkeypatch.setattr(combine_node, "_retest", spy)
+    return seen
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[None]
+) -> Iterator[None]:
+    """On a failed E2E test: append its combine re-tests and launch table."""
+    outcome = yield
+    report = outcome.get_result()  # type: ignore[attr-defined]
+    if report.when != "call" or not report.failed:
+        return
+    args = getattr(item, "funcargs", {})
+    seen = args.get("retests")
+    if seen:
+        report.sections.append(("combine re-tests", "\n".join(seen)))
+    log = args.get("launches")
+    if isinstance(log, LaunchLog):
+        report.sections.append(("launches", log.report()))
