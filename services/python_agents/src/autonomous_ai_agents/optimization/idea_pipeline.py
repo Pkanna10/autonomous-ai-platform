@@ -150,6 +150,7 @@ from autonomous_ai_agents.optimization.generate import lessons_block
 from autonomous_ai_agents.optimization.idea_context import (
     HistoryReader,
     IdeaReadLimits,
+    LaneView,
     ViewSource,
     amdahl_ceiling,
     build_view,
@@ -242,6 +243,9 @@ _CLASS_ORDER: Final = {
     ChangeClass.behaviour: 1,
     ChangeClass.novel: 2,
 }
+ViewBuilder = Callable[[IdeaView, ViewSource, list[str]], LaneView | None]
+"""``build_view``'s signature: what builds a viewed lens's view (G2); a live
+harness may give a recorded one instead (the idea lab's views pass, Va)."""
 
 
 @dataclass
@@ -308,7 +312,8 @@ class IdeaPipelineGenerator:
     ``fallback`` is today's generator for the no-code path (``None``: an
     empty result, noted). Each transport must bill its role's chain and
     accept its effort, checked here, before any spend; ``lane_transports``
-    serve the lanes that name their own model (G1, ``lane_transports``).
+    serve the lanes that name their own model (G1, ``lane_transports``);
+    ``view_builder`` builds each viewed lens's view (``build_view``).
     """
 
     def __init__(
@@ -320,6 +325,7 @@ class IdeaPipelineGenerator:
         config: Settings = settings,
         sleep: Callable[[float], None] = time.sleep,
         fallback: HypothesisGenerator | None = None,
+        view_builder: ViewBuilder = build_view,
     ) -> None:
         efforts = {
             "lane": config.IDEAS_LANE_EFFORT,
@@ -340,7 +346,7 @@ class IdeaPipelineGenerator:
             self._transports[role] = transport
         self._lanes = resolve_lanes(self._transports, lane_transports or {}, config)
         self._reader, self._cfg, self._sleep = reader, config, sleep
-        self._fallback = fallback
+        self._fallback, self._build_view = fallback, view_builder
         self._sequential = _switch(config, "IDEAS_SEQUENTIAL_LANES")
         self._dedupe = _switch(config, "IDEAS_MECHANISM_DEDUPE")
         self._frameworks = config.IDEAS_LANE_FRAMEWORKS
@@ -477,7 +483,7 @@ class IdeaPipelineGenerator:
         readers = Counter(wanted.values())
         built: dict[IdeaView, _Seen | None] = {}
         for name in readers:
-            view = build_view(name, source, c.notes)
+            view = self._build_view(name, source, c.notes)
             built[name] = None if view is None else _Seen(
                 render_data_block(
                     view.context, project=c.project, objective=c.objective,

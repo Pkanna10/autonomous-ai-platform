@@ -3030,6 +3030,22 @@ worktree", 4.4.0) or in the builder rules every brief carries.
   no input file. Vb's 2 minutes a marker request is unmeasured; a re-run after a
   cut job costs the full 24 USD. Vc's labeller is Opus 5, outside E1's writers
   derived from its rows.
+- V suite Vd (the X1 configurations): `ideas_arms=X1` runs arm A plus X1-0 to
+  X1-4 on E1's facts and Va's recorded views (through the new
+  `IdeaPipelineGenerator(view_builder=...)` seam; default path byte-identical).
+  X1-1's Latin square: lens j gets `SQUARE_MODELS[(row + j) % 6]`, the 8
+  libraries on rows 1-6 then 1-2. X1-3's views: eliminate callers, assume_less
+  input_shape, name_the_problem data_structures, recombine whole_module,
+  resolve_tradeoff next_hotspots, far history. Need 16.20 USD a library worst
+  case (two dispatches of four at 65, under the 80 USD fuse), about 5-5.5 USD a
+  library expected. New `ideas-idea` rows carry every idea (lane, model, label
+  for the join to its reply, mechanism, target lines, change). Open before X1:
+  `tests/fixtures/ideas_probe/views.jsonl` must be committed from an
+  `ideas-views` run (the plan refuses until then). Review nits for the owner:
+  X1-4 runs the baseline lanes beside its four relaxing lanes (about 5 USD
+  expected over 8 libraries of ideas never scored); in X1-1 the pipeline's think
+  line (D58) reaches only the Sonnet 5.5 lens, so table 2's model effect
+  includes it.
 - G2 fix found by Va: `count_note` noted negative cuts, so every callers view
   under its limits said e.g. "-199 file(s) not scanned for callers"; it now
   notes only positive counts. Requests were byte-identical; the six viewed

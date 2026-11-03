@@ -6,12 +6,15 @@ the job's minutes; a library left out is skipped before it spends), one run
 capped at its worst case (``ideas_probe.run_library``):
 phase 1 on a fresh clone (or ``$LIVE_IDEAS_FACTS``'s recorded facts on a
 fresh clone at the same head), each arm of ``$LIVE_IDEAS_ARMS`` (``count``
-alone, or distinct of A-E, ``C-low``, ``C-high``; default A-E) generating
-once from those facts, and with an E1 arm one auditor pass.
+alone, ``X1``, or distinct of A-E, ``C-low``, ``C-high`` and X1's
+configurations; default A-E) generating once from those facts, and with an
+E1 or X1 arm one auditor pass. X1 (Vd) reads E1's facts and Va's recorded
+views (``$LIVE_IDEAS_VIEWS``), never building a view live.
 
 The plan is read in the module fixture, before any test spends: one past
-the 150 USD ceiling or the job's minutes, or recorded facts that miss a
-planned library, is refused. Rows, replies, facts and verdicts go to ``$LIVE_RESULTS_PATH``, a
+the 150 USD ceiling, the job's minutes or (X1) the 80 USD fuse, recorded
+facts that miss a planned library, or views missing or recorded from
+another source than this run builds, is refused. Rows, replies, facts and verdicts go to ``$LIVE_RESULTS_PATH``, a
 note per library to the cost table and a summary to the job summary;
 nothing about the ideas is asserted. The job needs network access to
 github.com.

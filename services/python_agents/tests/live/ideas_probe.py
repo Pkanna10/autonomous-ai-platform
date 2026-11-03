@@ -19,25 +19,37 @@ library: the reviewer prompt on Opus 5.5 ``high`` at 20,000 tokens over at
 most 48 pooled ideas (each arm's returned non-obvious ideas, its own
 reviewer's removals, then the rest), neutral ids, its cost in the cap.
 
-Minutes: each sequential model stage counts ``STAGE_MINUTES`` (S1, two lens
-rounds on four workers, the reviewer: four a pipeline call; with
-``IDEAS_SEQUENTIAL_LANES`` (G4) each lens and the leap is its own stage:
-nine a pipeline call on the defaults), phase 1
-``PHASE_ONE_MINUTES`` (re-pinned from E0b: a count-mode library took about
-47 s; the stage minutes stay until E1's recorded seconds re-pin them, as E0b
-timed only count mode's Sonnet sends, 9-18 s); a plan past ci.yml's
-``JOB_MINUTES`` is refused, so E1 (56 minutes a library) runs four
-libraries a dispatch (``$LIVE_IDEAS_REPOS``, 224; five would take 280).
-Count mode (8 minutes a library) also counts the reviewer request with its
-ideas repeated under fresh ids up to ``IDEAS_REVIEW_MAX_IDEAS`` (D55's
-reviewer bound is for 16 ideas; S1 and one lens give fewer).
+X1 (Vd, spec-idea-lab 6.2; ``$LIVE_IDEAS_ARMS`` ``X1``, or its keys): arm A
+and five configurations, one lever each, on E1's facts (``$LIVE_IDEAS_FACTS``)
+and Va's recorded views (``$LIVE_IDEAS_VIEWS``, checked against the source
+this run builds before any spend): X1-0 arm C again; X1-1 each lens on a
+model of a cyclic 6x6 Latin square (``square_models``, rows 1-6 then 1-2 over
+``E1_REPOS``); X1-2 sequential lanes and the mechanism dedupe (G4); X1-3 a
+different view per lens (``X1_VIEWS``) with its framework (G2 + G5, two
+factors, labelled so), the views given through the pipeline's
+``view_builder`` seam and never built live; X1-4 the four rule-relaxing lanes
+(G3, proposals only: never pooled or scored). An X1 dispatch's worst case
+stays under ``X1_FUSE_USD``.
+
+Minutes, re-pinned from E1's recorded seconds (``E1_SECONDS``, the slowest
+sent request per role and model; an unmeasured lane model reads as the
+nearest measured request): a request takes ``TIME_MARGIN`` times that, a
+parallel stage the slowest of each round of ``IDEAS_LANE_WORKERS`` (one lane
+a round with ``IDEAS_SEQUENTIAL_LANES``, G4), phase 1 ``PHASE_ONE_MINUTES``
+(E0b: a count-mode library about 47 s); a plan past ci.yml's ``JOB_MINUTES``
+is refused: E1 41 minutes a library, X1 52 or 57 (the row of its square),
+four a dispatch. Count mode also counts the reviewer request with its ideas
+repeated under fresh ids up to ``IDEAS_REVIEW_MAX_IDEAS`` (D55's reviewer
+bound is for 16 ideas; S1 and one lens give fewer).
 
 Caps: an arm's cap is the sum of its requests' worst cases on D55's bounds,
 re-derived from E0b's counted maxima (D61; the E1 row: B 1.99, C 2.475, D
 4.53, E 1.045, the auditor 0.69; A on the oss-ab suite's measured blind
-bound, 0.27), count mode's real spend is ``COUNT_SENT`` lane requests (0.43,
-the tap refuses past it); a library's run is phase 1, its arms and the
-auditor, rounded up (E1 11.40, count 0.85, C-low/C-high 4.95); a plan past
+bound, 0.27; X1-1 4.206, X1-2 2.539 and X1-3 2.675 on wider bounds for the
+mechanisms block and the views, X1-4 3.335), count mode's real spend is
+``COUNT_SENT`` lane requests (0.43, the tap refuses past it); a library's
+run is phase 1, its arms and the auditor, rounded up (E1 11.40, count 0.85,
+C-low/C-high 4.95, X1 16.20 on recorded facts); a plan past
 the 150 USD ceiling is refused in the module fixture. Fable (30-day
 retention) gets ``ALLOW_RETENTION_MODELS`` only in arm D's copy and only for
 a library of the pinned OSS manifests (O15); the flag is cleared in every
@@ -49,10 +61,15 @@ Recorded, never asserted (``$LIVE_RESULTS_PATH``): per library the facts
 pooled auditor's cross-arm duplicates and good strict (STATUS 2026-10-31),
 auditor and own-reviewer counts, the auditor's error (then no arm's good
 count is known), cost, ``IdeaStats``, ``stop_reason``, cache reads and
-counted tokens per request), every request's reply (``ideas-reply``,
-redacted, chunked, with its shown ideas and seconds) and every pooled idea's
-review (``ideas-audit``: its id, the auditor's verdict, reason and
-``duplicate_of``); a cost-table note per library and a summary table.
+counted tokens per request; X1: the lever, the lens models and views),
+every idea every lane reply proposed and every idea today's generator
+returned (``ideas-idea``: lane, the exchange label its ``ideas-reply`` row
+carries, model, title, change summary, mechanism, cells, target lines in the
+file at the commit, returned, the proposal flag), every request's
+reply (``ideas-reply``, redacted, chunked, with its shown ideas and seconds)
+and every pooled idea's review (``ideas-audit``: its id, the auditor's
+verdict, reason and ``duplicate_of``); a cost-table note per library and a
+summary table.
 Quarantined proposals (G3, rule-relaxing lanes) are never pooled, scored or
 counted as ideas (X1-4): each is recorded apart for the owner to read
 (``ideas-proposal``: its title, lane, rules and rationale) and counted in
@@ -72,7 +89,7 @@ from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 from anthropic.types.beta import BetaMessage, BetaMessageParam
 from e2e.conftest import Isolation
@@ -85,8 +102,11 @@ from autonomous_ai_agents.clients.transport import LLMRequest, LLMTransport, cal
 from autonomous_ai_agents.common.config import (
     RETENTION_REQUIRED_MODELS,
     Effort,
+    IdeaView,
     Role,
     Settings,
+    lane_chain,
+    lane_settings,
     role_chain,
     role_settings,
     settings,
@@ -100,22 +120,34 @@ from autonomous_ai_agents.common.models import (
     Objective,
     Project,
     ProjectUnderstanding,
+    Workload,
 )
+from autonomous_ai_agents.common.paths import normalize_path
 from autonomous_ai_agents.common.repo_read import RepoReader
+from autonomous_ai_agents.execution.git import GitError
 from autonomous_ai_agents.optimization.hypothesis_source import (
     ClaudeHypothesisGenerator,
 )
 from autonomous_ai_agents.optimization.idea_context import (
     IdeaReadLimits,
+    ViewSource,
+    build_view,
     read_code_context,
     render_data_block,
 )
+from autonomous_ai_agents.optimization.idea_dedupe import (
+    _Reply,
+    _ReplyIdea,
+    quote_lines,
+)
 from autonomous_ai_agents.optimization.idea_pipeline import (
     IdeaPipelineGenerator,
+    ViewBuilder,
     framework_labels,
 )
 from autonomous_ai_agents.optimization.idea_review import read_review, review_request
 from autonomous_ai_agents.optimization.idea_types import (
+    LENS_LANES,
     RELAXING_LANES,
     Anchor,
     IdeaCandidate,
@@ -166,32 +198,60 @@ from .discovery_oss import (
 )
 from .oss import OSS_CORPUS, PRODUCTION, GitPolicy, OssRepo, prepare_repo
 
+if TYPE_CHECKING:  # ideas_views imports this module
+    from .ideas_views import RecordedViews
+
 ARMS_ENV: Final = "LIVE_IDEAS_ARMS"
 REPOS_ENV: Final = "LIVE_IDEAS_REPOS"
 FACTS_ENV: Final = "LIVE_IDEAS_FACTS"
+VIEWS_ENV: Final = "LIVE_IDEAS_VIEWS"
 SERVICE_DIR: Final = TESTS_DIR.parent
 FACTS_FIXTURE: Final = "tests/fixtures/ideas_probe/facts.jsonl"  # E1b's (from E1)
+VIEWS_FIXTURE: Final = "tests/fixtures/ideas_probe/views.jsonl"  # Va's rows, for X1
 ROW_EXPERIMENT: Final = "ideas-probe"
 FACTS_EXPERIMENT: Final = "ideas-facts"
 REPLY_EXPERIMENT: Final = "ideas-reply"
 AUDIT_EXPERIMENT: Final = "ideas-audit"
 PROPOSAL_EXPERIMENT: Final = "ideas-proposal"
+IDEA_EXPERIMENT: Final = "ideas-idea"
 HAIKU: Final = "claude-haiku-5-5"
+SONNET_5: Final = "claude-sonnet-5"
+FABLE_5: Final = "claude-fable-5"
 # D55's lane and reviewer bounds are discovery_ab's (one source, re-derived
 # from E0b, D61); the auditor's over 48 ideas: about 33.1k base + 48 x ~420
 # a reviewed idea = 53.3k, + margin
 LANE_PROMPT_BOUND: Final = IDEAS_LANE_PROMPT_BOUND
 REVIEW_PROMPT_BOUND: Final = IDEAS_REVIEW_PROMPT_BOUND
 AUDIT_PROMPT_BOUND: Final = 58_000
+# X1, unmeasured until X1 counts them: G4's mechanisms block, at most 48 lines
+# of about 60 tokens and its lead-in, on each S2 lane in sequence; a lens on
+# its own view (G2: capped at the code cap like the shared block, plus its
+# facts); the reviewer with the views' code (up to twice the 64 KiB code cap,
+# about 22k tokens more)
+TAKEN_PROMPT_EXTRA: Final = 3_200
+VIEW_PROMPT_BOUND: Final = LANE_PROMPT_BOUND + 6_000
+VIEW_REVIEW_PROMPT_BOUND: Final = REVIEW_PROMPT_BOUND + 22_000
+X1_FUSE_USD: Final = 80.0  # spec-idea-lab 6.4: each X1 dispatch's worst case
 AUDIT_MAX_TOKENS: Final = 20_000
 AUDIT_MAX_IDEAS: Final = 48
 AUDIT_EFFORT: Final[Effort] = "high"
 RETENTION_MAX_TOKENS: Final = 20_000  # arm D's Fable leap and reviewer (D58)
 COUNT_SENT: Final = 2  # count mode sends S1 and the first lens lane
-JOB_MINUTES: Final = 240  # ci.yml's ideas-probe timeout: E1 four libraries
-# one long request: kept until E1's recorded seconds re-pin it (E0b timed only
-# count mode's Sonnet sends, 8.8-18.4 s; Opus and Fable at 16-20k unmeasured)
-STAGE_MINUTES: Final = 3
+JOB_MINUTES: Final = 240  # ci.yml's ideas-probe timeout: four libraries
+TIME_MARGIN: Final = 2  # over E1's slowest request (the timing-guard rule)
+E1_SECONDS: Final[Mapping[tuple[str, str], float]] = {
+    ("generator", SONNET): 11.772, ("lane", SONNET): 23.866,
+    ("lane", HAIKU): 34.72, ("leap", SONNET): 63.328, ("leap", OPUS): 97.648,
+    ("leap", FABLE): 234.283, ("reviewer", SONNET): 69.121,
+    ("reviewer", OPUS): 65.35, ("reviewer", FABLE): 138.737,
+    ("auditor", OPUS): 108.613,
+}  # fmt: skip
+"""E1's slowest sent request per (role, model), both dispatches' replies."""
+_AS_MEASURED: Final[Mapping[tuple[str, str], tuple[str, str]]] = {
+    ("lane", SONNET_5): ("lane", SONNET), ("lane", OPUS): ("leap", OPUS),
+    ("lane", FABLE): ("leap", FABLE), ("lane", FABLE_5): ("leap", FABLE),
+}  # fmt: skip
+"""X1-1's unmeasured lane models, read as the nearest measured (slower) one."""
 PHASE_ONE_MINUTES: Final = 2  # E0b: a whole count-mode library about 47 s
 CLONE_MINUTES: Final = 1  # recorded facts: a fresh clone only
 NOTE_CHARS: Final = _CELL_MAX
@@ -217,9 +277,11 @@ class IdeaArm:
     pipeline: bool  # False: today's generator
     update: tuple[tuple[str, object], ...] = ()
     e1: bool = True  # an E1 arm: the auditor pools its ideas
+    square: bool = False  # X1-1: each lens on its row's model (``square_models``)
+    lever: str = ""  # X1: what the configuration moves, as the report labels it
 
 
-ARM_A: Final = IdeaArm("A", pipeline=False)
+ARM_A: Final = IdeaArm("A", pipeline=False, lever="today's generator, one request")
 ARM_B: Final = IdeaArm(
     "B", True, (("IDEAS_LEAP_MODEL", SONNET), ("IDEAS_REVIEWER_MODEL", SONNET))
 )
@@ -241,23 +303,90 @@ ARM_COUNT: Final = IdeaArm("count", True, (("IDEAS_LANE_WORKERS", 1),), e1=False
 IDEA_ARMS: Final = (ARM_COUNT, ARM_A, ARM_B, ARM_C, ARM_D, ARM_E, ARM_C_LOW, ARM_C_HIGH)
 E1_ARMS: Final = (ARM_A, ARM_B, ARM_C, ARM_D, ARM_E)
 
+SQUARE_MODELS: Final = (SONNET_5, HAIKU, OPUS, FABLE_5, FABLE, SONNET)
+"""X1-1's lens models (spec-idea-lab 6.2), one column of the square each."""
+X1_VIEWS: Final[Mapping[Lane, IdeaView]] = {
+    Lane.eliminate: "callers",  # work a caller repeats, or memoised across calls
+    Lane.assume_less: "input_shape",  # assume only the inputs the workload passes
+    Lane.name_the_problem: "data_structures",  # the representation's misfit
+    Lane.recombine: "whole_module",  # work two functions of the module repeat
+    Lane.resolve_tradeoff: "next_hotspots",  # trade across the 2nd and 3rd
+    Lane.far: "history",  # the project's own past speed-ups as prior art
+}
+"""X1-3's fixed lens-to-view map (Vd's choice): each lens a different view."""
+
+
+def square_row(repo: str) -> int:
+    """X1-1's row for ``repo``: rows 1-6 over the first six of ``E1_REPOS``,
+    then rows 1-2 again (0-based here)."""
+    if repo not in E1_REPOS:
+        raise ValueError(f"X1-1's Latin square: {repo!r} is not one of the 8 "
+                         "development libraries")  # fmt: skip
+    return E1_REPOS.index(repo) % len(SQUARE_MODELS)
+
+
+def square_models(row: int) -> dict[Lane, str]:
+    """Row ``row`` of the cyclic 6x6 Latin square: lens j on model row + j."""
+    n = len(SQUARE_MODELS)
+    return {lane: SQUARE_MODELS[(row + j) % n] for j, lane in enumerate(LENS_LANES)}
+
+
+ARM_X1_0: Final = IdeaArm("X1-0", True, lever="baseline: arm C's settings again")
+ARM_X1_1: Final = IdeaArm(
+    "X1-1", True, square=True,
+    lever="who thinks (G1): S1 on Sonnet 5.5, each lens on its square's model",
+)  # fmt: skip
+ARM_X1_2: Final = IdeaArm(
+    "X1-2", True,
+    (("IDEAS_SEQUENTIAL_LANES", True), ("IDEAS_MECHANISM_DEDUPE", True)),
+    lever="what is taken (G4): sequential lanes, mechanism dedupe",
+)  # fmt: skip
+ARM_X1_3: Final = IdeaArm(
+    "X1-3", True,
+    (("IDEAS_LANE_VIEWS", dict(X1_VIEWS)), ("IDEAS_LANE_FRAMEWORKS", True)),
+    lever="what they see and how they think (G2 + G5): two factors, a view per "
+    "lens and its framework; split in X2 if it wins",
+)  # fmt: skip
+ARM_X1_4: Final = IdeaArm(
+    "X1-4", True, (("IDEAS_RELAX_LANES", tuple(RELAXING_LANES)),), e1=False,
+    lever="what they may change (G3): four rule-relaxing lanes, proposals only, "
+    "reported, never scored",
+)  # fmt: skip
+X1_CONFIGS: Final = (ARM_X1_0, ARM_X1_1, ARM_X1_2, ARM_X1_3, ARM_X1_4)
+X1_ARMS: Final = (ARM_A, *X1_CONFIGS)  # arm A: today's generator, same day
+X1_KEY: Final = "X1"  # ``$LIVE_IDEAS_ARMS`` for all of ``X1_ARMS``
+_X1_KEYS: Final = frozenset(arm.key for arm in X1_CONFIGS)
+_KNOWN_ARMS: Final = (*IDEA_ARMS, *X1_CONFIGS)
+
+
+def arm_update(arm: IdeaArm, repo: str | None = None) -> dict[str, object]:
+    """The arm's overrides; X1-1's lens models are ``repo``'s row (row 1 for
+    ``None``: every row holds the same models, so the same cap)."""
+    update = dict(arm.update)
+    if arm.square:
+        row = 0 if repo is None else square_row(repo)
+        update["IDEAS_LANE_MODELS"] = square_models(row)
+    return update
+
 
 def arm_config(arm: IdeaArm, project: Project, base: Settings = settings) -> Settings:
     """The arm's validated settings copy. A retention model (D63) is admitted
     only for a library of the pinned OSS manifests (O15), by setting the flag
     in this copy; every other copy has it off, whatever ``base`` says."""
-    raw = base.model_copy(update=dict(arm.update))
+    overrides = arm_update(arm, project.name)
+    raw = base.model_copy(update=overrides)
     needs = sorted(
-        {m for role in _ROLES for m in role_chain(raw, role)}
+        ({m for role in _ROLES for m in role_chain(raw, role)}
+         | set(raw.IDEAS_LANE_MODELS.values()))
         & RETENTION_REQUIRED_MODELS
-    )
+    )  # fmt: skip
     if needs and project.name not in OSS_NAMES:
         raise ValueError(
             f"arm {arm.key}: {', '.join(needs)} keeps data 30 days and may see code "
             f"only on a pinned OSS library (O15), not {project.name!r}"
         )
     update = {
-        **dict(arm.update),
+        **overrides,
         "IDEA_PIPELINE": arm.pipeline,
         "ALLOW_RETENTION_MODELS": bool(needs),
     }
@@ -270,24 +399,37 @@ def request_usd(bound: int, max_tokens: int, model: str) -> float:
     return preflight_estimate(bound, max_tokens, (model,), settings.MODEL_PRICING)
 
 
+def s2_lanes(cfg: Settings) -> tuple[Lane, ...]:
+    """S2's requests in the order the pipeline submits them."""
+    leap = (Lane.leap,) if cfg.IDEAS_LEAP_N else ()
+    return (*cfg.IDEAS_LENSES, *leap, *cfg.IDEAS_RELAX_LANES)
+
+
+def lane_bound(cfg: Settings, lane: Lane) -> int:
+    """D55's prompt bound of one lane request: a lens on its own view (G2)
+    the view bound, an S2 lane in sequence (G4) the mechanisms block more."""
+    bound = VIEW_PROMPT_BOUND if lane in cfg.IDEAS_LANE_VIEWS else LANE_PROMPT_BOUND
+    if cfg.IDEAS_SEQUENTIAL_LANES and lane is not Lane.obvious:
+        bound += TAKEN_PROMPT_EXTRA
+    return bound
+
+
 def pipeline_usd(cfg: Settings) -> float:
-    """One pipeline call at its worst: S1 and the lenses, the leap, the reviewer."""
-    lane = request_usd(
-        LANE_PROMPT_BOUND, cfg.IDEAS_LANE_MAX_TOKENS, cfg.IDEAS_LANE_MODEL
-    )
-    leap = request_usd(
-        LANE_PROMPT_BOUND, cfg.IDEAS_LEAP_MAX_TOKENS, cfg.IDEAS_LEAP_MODEL
-    )
-    review = request_usd(
-        REVIEW_PROMPT_BOUND, cfg.IDEAS_REVIEWER_MAX_TOKENS, cfg.IDEAS_REVIEWER_MODEL
-    )
-    return math.fsum(
-        (
-            (1 + len(cfg.IDEAS_LENSES)) * lane,
-            leap if cfg.IDEAS_LEAP_N else 0.0,
-            review if cfg.IDEAS_REVIEW else 0.0,
-        )
-    )
+    """One pipeline call at its worst: S1, each S2 lane on its own model (G1)
+    and bound, the reviewer (with the views' code, G2)."""
+    lanes = [
+        request_usd(
+            lane_bound(cfg, lane),
+            cfg.IDEAS_LEAP_MAX_TOKENS
+            if lane is Lane.leap
+            else cfg.IDEAS_LANE_MAX_TOKENS,
+            lane_chain(cfg, lane)[0],
+        )  # fmt: skip
+        for lane in (Lane.obvious, *s2_lanes(cfg))
+    ]
+    bound = VIEW_REVIEW_PROMPT_BOUND if cfg.IDEAS_LANE_VIEWS else REVIEW_PROMPT_BOUND
+    review = request_usd(bound, cfg.IDEAS_REVIEWER_MAX_TOKENS, cfg.IDEAS_REVIEWER_MODEL)
+    return math.fsum((*lanes, review if cfg.IDEAS_REVIEW else 0.0))
 
 
 def count_usd(cfg: Settings) -> float:
@@ -296,10 +438,10 @@ def count_usd(cfg: Settings) -> float:
     )
 
 
-def arm_usd(arm: IdeaArm, base: Settings = settings) -> float:
+def arm_usd(arm: IdeaArm, base: Settings = settings, repo: str | None = None) -> float:
     """What the arm may spend: today's generator on the OSS blind bound, a
     pipeline call, or count mode's sent requests."""
-    raw = base.model_copy(update=dict(arm.update))
+    raw = base.model_copy(update=arm_update(arm, repo))
     if not arm.pipeline:
         return worst_usd(
             OSS_BLIND_PROMPT_BOUND, raw.GENERATOR_MAX_TOKENS, raw.GENERATOR_MODEL
@@ -310,17 +452,43 @@ def arm_usd(arm: IdeaArm, base: Settings = settings) -> float:
 AUDIT_USD: Final = request_usd(AUDIT_PROMPT_BOUND, AUDIT_MAX_TOKENS, OPUS)
 
 
-def arm_stages(arm: IdeaArm, base: Settings = settings) -> int:
-    """The arm's model requests in sequence: one for today's generator,
-    count mode's sends, or S1, the lens rounds (the lenses and the leap on
-    ``IDEAS_LANE_WORKERS``, or one lane a round with
-    ``IDEAS_SEQUENTIAL_LANES``, G4) and the reviewer."""
-    if not arm.pipeline or arm is ARM_COUNT:
-        return 1 if not arm.pipeline else COUNT_SENT
-    cfg = base.model_copy(update=dict(arm.update))
-    fan = len(cfg.IDEAS_LENSES) + (1 if cfg.IDEAS_LEAP_N else 0)
-    workers = 1 if cfg.IDEAS_SEQUENTIAL_LANES else cfg.IDEAS_LANE_WORKERS
-    return 1 + math.ceil(fan / workers) + (1 if cfg.IDEAS_REVIEW else 0)
+def request_seconds(role: str, model: str) -> float:
+    """``TIME_MARGIN`` times E1's slowest such request; none measured: refused."""
+    key = _AS_MEASURED.get((role, model), (role, model))
+    if key not in E1_SECONDS:
+        raise ValueError(f"no E1 seconds for a {role} request on {model}")
+    return TIME_MARGIN * E1_SECONDS[key]
+
+
+def arm_seconds(
+    arm: IdeaArm, base: Settings = settings, repo: str | None = None
+) -> float:
+    """The arm's wall time at worst: today's generator, count mode's sends,
+    or S1, S2's rounds of ``IDEAS_LANE_WORKERS`` in submission order (one
+    lane a round with ``IDEAS_SEQUENTIAL_LANES``, G4), each its slowest
+    request, and the reviewer."""
+    cfg = base.model_copy(update=arm_update(arm, repo))
+    if not arm.pipeline:
+        return request_seconds("generator", cfg.GENERATOR_MODEL)
+    if arm is ARM_COUNT:
+        return COUNT_SENT * request_seconds("lane", cfg.IDEAS_LANE_MODEL)
+
+    def one(lane: Lane) -> float:
+        return request_seconds("leap" if lane is Lane.leap else "lane",
+                               lane_chain(cfg, lane)[0])  # fmt: skip
+
+    s2 = [one(lane) for lane in s2_lanes(cfg)]
+    k = 1 if cfg.IDEAS_SEQUENTIAL_LANES else cfg.IDEAS_LANE_WORKERS
+    rounds = [max(s2[i : i + k]) for i in range(0, len(s2), k)]
+    review = (
+        request_seconds("reviewer", cfg.IDEAS_REVIEWER_MODEL)
+        if cfg.IDEAS_REVIEW
+        else 0.0
+    )
+    return math.fsum((one(Lane.obvious), *rounds, review))
+
+
+AUDIT_SECONDS: Final = request_seconds("auditor", OPUS)
 
 
 @dataclass(frozen=True)
@@ -328,36 +496,56 @@ class ProbePlan:
     arms: tuple[IdeaArm, ...]
     repos: tuple[OssRepo, ...]
     facts: Path | None = None  # recorded facts: no phase 1
+    views: Path | None = None  # Va's recorded views (X1)
 
     @property
     def audit(self) -> bool:
         return any(arm.e1 for arm in self.arms)
 
-    def library_cap(self) -> float:
+    def library_cap(self, repo: str | None = None) -> float:
         phase = 0.0 if self.facts is not None else OSS_PHASE_ONE_WORST_USD
         audit = AUDIT_USD if self.audit else 0.0
-        return ceil_usd(math.fsum((phase, audit, *map(arm_usd, self.arms))))
+        arms = (arm_usd(arm, repo=repo) for arm in self.arms)
+        return ceil_usd(math.fsum((phase, audit, *arms)))
 
-    def library_minutes(self) -> int:
+    def library_minutes(self, repo: str | None = None) -> int:
         phase = CLONE_MINUTES if self.facts is not None else PHASE_ONE_MINUTES
-        stages = sum(map(arm_stages, self.arms)) + (1 if self.audit else 0)
-        return phase + STAGE_MINUTES * stages
+        arms = (arm_seconds(arm, repo=repo) for arm in self.arms)
+        audit = AUDIT_SECONDS if self.audit else 0.0
+        return phase + math.ceil(math.fsum((*arms, audit)) / 60)
 
     def minutes(self) -> int:
-        return len(self.repos) * self.library_minutes()
+        return sum(self.library_minutes(repo.name) for repo in self.repos)
 
 
 def probe_need(plan: ProbePlan) -> float:
-    return len(plan.repos) * plan.library_cap()
+    return math.fsum(plan.library_cap(repo.name) for repo in plan.repos)
+
+
+X1_LIBRARY_CENTS: Final = round(
+    100 * ProbePlan(X1_ARMS, (), Path(FACTS_FIXTURE)).library_cap()
+)
+"""ci.yml's need of one X1 library (every row of the square alike)."""
+
+
+def check_fuse(plan: ProbePlan) -> None:
+    """An X1 dispatch's worst case stays under ``X1_FUSE_USD`` (spec 6.4)."""
+    need = probe_need(plan)
+    if any(arm.key in _X1_KEYS for arm in plan.arms) and need > X1_FUSE_USD:
+        raise ValueError(f"X1 on {len(plan.repos)} libraries needs {need:.2f} USD, "
+                         f"past the {X1_FUSE_USD:g} USD fuse of an X1 dispatch: "
+                         f"name fewer in {REPOS_ENV}")  # fmt: skip
 
 
 def probe_arms(environ: Mapping[str, str]) -> tuple[IdeaArm, ...]:
-    keys = _keys(environ, ARMS_ENV, [arm.key for arm in IDEA_ARMS])
+    if environ.get(ARMS_ENV) == X1_KEY:
+        return X1_ARMS
+    keys = _keys(environ, ARMS_ENV, [arm.key for arm in _KNOWN_ARMS])
     if keys is None:
         return E1_ARMS
     if ARM_COUNT.key in keys and len(keys) > 1:
         raise ValueError(f"{ARMS_ENV}: count runs alone, got {environ[ARMS_ENV]!r}")
-    return tuple(arm for arm in IDEA_ARMS if arm.key in keys)
+    return tuple(arm for arm in _KNOWN_ARMS if arm.key in keys)
 
 
 def probe_repos(
@@ -373,13 +561,15 @@ def probe_repos(
     return tuple(repo for repo in OSS_SELECTABLE if repo.name in names)
 
 
-def facts_path(environ: Mapping[str, str]) -> Path | None:
-    raw = environ.get(FACTS_ENV, "")
+def facts_path(
+    environ: Mapping[str, str], name: str = FACTS_ENV, what: str = "facts"
+) -> Path | None:
+    raw = environ.get(name, "")
     if not raw:
         return None
     path = Path(raw) if Path(raw).is_absolute() else SERVICE_DIR / raw
     if not path.is_file():
-        raise ValueError(f"{FACTS_ENV}: no recorded facts at {raw!r} (an E1 run's)")
+        raise ValueError(f"{name}: no recorded {what} at {raw!r}")
     return path
 
 
@@ -387,7 +577,13 @@ def probe_plan(environ: Mapping[str, str]) -> ProbePlan:
     """Every knob, strictly, and a plan past the ceiling or the job's
     minutes refused (in the module fixture, before any spend)."""
     arms = probe_arms(environ)
-    plan = ProbePlan(arms, probe_repos(environ, arms), facts_path(environ))
+    plan = ProbePlan(arms, probe_repos(environ, arms), facts_path(environ),
+                     facts_path(environ, VIEWS_ENV, "views"))  # fmt: skip
+    if any(arm.key in _X1_KEYS for arm in arms):
+        if plan.facts is None:
+            raise ValueError(f"X1 reads E1's facts: set {FACTS_ENV} ({FACTS_FIXTURE})")
+        if plan.views is None:
+            raise ValueError(f"X1 reads Va's views: set {VIEWS_ENV} ({VIEWS_FIXTURE})")
     need, minutes = probe_need(plan), plan.minutes()
     what = f"{len(plan.repos)} libraries x arms {','.join(a.key for a in arms)}"
     fewer = f"name fewer in {REPOS_ENV} or {ARMS_ENV}"
@@ -401,6 +597,7 @@ def probe_plan(environ: Mapping[str, str]) -> ProbePlan:
             f"{what} take about {minutes} minutes, past the {JOB_MINUTES}-minute "
             f"job (a killed job loses the rest): {fewer}"
         )
+    check_fuse(plan)
     return plan
 
 
@@ -529,6 +726,7 @@ class Exchange:
     usage: tuple[int, int, int, int] = (0, 0, 0, 0)  # in, out, cache read, write
     reply: str = ""
     seconds: float = 0.0  # the send's wall time
+    model: str = ""  # the tap's model (its chain's first)
 
 
 class Tap:
@@ -564,7 +762,9 @@ class Tap:
         with self._lock:
             k = len(self.exchanges)
             label = self._labels[k] if k < len(self._labels) else f"{self.role}-{k + 1}"
-            self.exchanges.append(Exchange(self.role, label, counted, request))
+            self.exchanges.append(
+                Exchange(self.role, label, counted, request, model=self.chain[0])
+            )
         return counted
 
     def send(self, request: LLMRequest) -> BetaMessage:
@@ -610,23 +810,29 @@ class ArmRun:
     models: tuple[str, ...]  # what the recorder billed
     billable: tuple[str, ...]  # the arm's role chains
     exchanges: tuple[Exchange, ...]
+    lane_models: dict[str, str] = field(default_factory=dict)  # G1, X1-1
+    views: dict[str, str] = field(default_factory=dict)  # G2, X1-3
 
 
-def _taps(arm: IdeaArm, cfg: Settings, run: LiveRun) -> dict[Role, Tap]:
+def _taps(
+    arm: IdeaArm, cfg: Settings, run: LiveRun
+) -> tuple[dict[Role, Tap], dict[Lane, Tap]]:
+    """The role taps, and a tap per lane that names its own model (G1)."""
     if not arm.pipeline:
         inner = run.transport(role_settings(cfg, "generator"))
-        return {"generator": Tap(inner, "generator", ("generator",))}
+        return {"generator": Tap(inner, "generator", ("generator",))}, {}
+    own = cfg.IDEAS_LANE_MODELS
     labels = {
-        "lane": (
-            "obvious",
-            *(lane.value for lane in cfg.IDEAS_LENSES),
-            *(lane.value for lane in cfg.IDEAS_RELAX_LANES),  # G3: sent last
+        "lane": tuple(
+            lane.value
+            for lane in (Lane.obvious, *cfg.IDEAS_LENSES, *cfg.IDEAS_RELAX_LANES)
+            if lane not in own  # G3's lanes are sent last
         ),
         "leap": ("leap",),
         "reviewer": ("reviewer", f"reviewer-{cfg.IDEAS_REVIEW_MAX_IDEAS}"),
     }
     counting = arm is ARM_COUNT
-    return {
+    roles: dict[Role, Tap] = {
         role: Tap(
             run.transport(role_settings(cfg, role)),
             role,
@@ -636,6 +842,11 @@ def _taps(arm: IdeaArm, cfg: Settings, run: LiveRun) -> dict[Role, Tap]:
         )  # fmt: skip
         for role in PIPELINE_ROLES
     }
+    lanes = {
+        lane: Tap(run.transport(lane_settings(cfg, lane)), "lane", (lane.value,))
+        for lane in own
+    }
+    return roles, lanes
 
 
 def _count_full_review(tap: Tap, n: int) -> None:
@@ -653,15 +864,29 @@ def run_arm(
     base: Settings = settings,
     reader: Callable[[Project], RepoReader] = repo_reader,
     cap: float | None = None,
+    views: ViewBuilder | None = None,
+    workloads: Sequence[Workload] = (),
 ) -> ArmRun:
     """One generation from ``facts`` on the arm's own transports, under its
     cap (``arm_usd``; a pipeline arm's reservations need the whole call's,
-    count mode's real spend is bounded by its taps)."""
+    count mode's real spend is bounded by its taps). An arm with lane views
+    (G2) takes them from ``views`` (Va's recorded rows, through the
+    pipeline's ``view_builder`` seam) with the run's ``workloads``, which
+    decide the input-shape view; none given is refused before any spend."""
     f = facts.facts
     cfg = arm_config(arm, f.project, base)
-    taps = _taps(arm, cfg, run)
+    if cfg.IDEAS_LANE_VIEWS and views is None:
+        raise ValueError(f"arm {arm.key}: views are never built live; give the "
+                         "recorded views (Va)")  # fmt: skip
+    taps, lane_taps = _taps(arm, cfg, run)
     generator: HypothesisGenerator = (
-        IdeaPipelineGenerator(taps, reader=reader, config=cfg)
+        IdeaPipelineGenerator(
+            dict(taps),
+            lane_transports=dict(lane_taps),
+            reader=reader,
+            config=cfg,
+            view_builder=views or build_view,
+        )  # fmt: skip
         if arm.pipeline
         else ClaudeHypothesisGenerator(taps["generator"], config=cfg)
     )
@@ -676,20 +901,24 @@ def run_arm(
             objective=f.objective, techniques=(), lessons=(), avoid_titles=(),
             n=cfg.GENERATOR_N, budget=Budget(cap), commit=facts.commit,
             run_id=facts.run_id, protected=facts.protected,
+            workloads=tuple(workloads) if cfg.IDEAS_LANE_VIEWS else (),
         )  # fmt: skip
         if arm is ARM_COUNT:  # D55's reviewer bound is for 16 ideas
             _count_full_review(taps["reviewer"], cfg.IDEAS_REVIEW_MAX_IDEAS)
     except ARM_ERRORS as exc:
         error = f"{type(exc).__name__}: {exc}"
     records = run.records[first:]
+    every = (*taps.values(), *lane_taps.values())
     return ArmRun(
         arm=arm,
         result=result,
         error=error,
         cost_usd=math.fsum(r.cost_usd for r in records),
         models=tuple(dict.fromkeys(r.model for r in records)),
-        billable=tuple(dict.fromkeys(m for t in taps.values() for m in t.chain)),
-        exchanges=tuple(e for tap in taps.values() for e in tap.exchanges),
+        billable=tuple(dict.fromkeys(m for t in every for m in t.chain)),
+        exchanges=tuple(e for tap in every for e in tap.exchanges),
+        lane_models={k.value: v for k, v in cfg.IDEAS_LANE_MODELS.items()},
+        views={k.value: v for k, v in cfg.IDEAS_LANE_VIEWS.items()},
     )
 
 
@@ -1131,9 +1360,128 @@ class ProbeRow:
     # None); empty with IDEAS_LANE_FRAMEWORKS off, so X1-3 labels its two
     # factors (``sent_frameworks``)
     frameworks: dict[str, str | None] = field(default_factory=dict)
+    lever: str = ""  # X1: what the configuration moves (X1-3: two factors)
+    lane_models: dict[str, str] = field(default_factory=dict)  # X1-1's row
+    views: dict[str, str] = field(default_factory=dict)  # X1-3's lens views
 
     def record(self) -> dict[str, object]:
         return {"experiment": ROW_EXPERIMENT, **asdict(self)}
+
+
+# ---------------------------------------------------------------------------
+# Every idea, one row each (X1's full lists, Vf's input)
+# ---------------------------------------------------------------------------
+
+_LENS_TAG: Final = re.compile(r'<lens name="([a-z_]+)"')
+
+
+def request_lane(request: LLMRequest) -> Lane:
+    """The lane a lane request is for, from its instruction (the last block):
+    its lens tag (a lens, a rule-relaxing lane, the leap), none for S1. A
+    sequential re-priced lane's tap label is ``lane-N``, so the label is not
+    read."""
+    content = request.messages[0]["content"]
+    blocks = cast(Sequence[Mapping[str, object]], content)
+    last = content if isinstance(content, str) else str(blocks[-1].get("text", ""))
+    found = _LENS_TAG.search(last)
+    return Lane.obvious if found is None else Lane(found.group(1))
+
+
+def read_text_of(reader: RepoReader, commit: str) -> Callable[[str], str | None]:
+    """Each file's text at ``commit``, read once (``None``: not tracked there
+    or not readable); git objects only, never the work tree."""
+
+    @functools.cache
+    def tracked() -> frozenset[str]:
+        try:
+            return frozenset(reader.ls_tree(commit))
+        except GitError:
+            return frozenset()
+
+    @functools.cache
+    def read(path: str) -> str | None:
+        if path not in tracked():
+            return None
+        try:
+            data = reader.read_blob(commit, path, limit=settings.IDEAS_PARSE_MAX_BYTES)
+        except GitError:
+            return None
+        return data.decode("utf-8", errors="replace")
+
+    return read
+
+
+def _no_text(_path: str) -> str | None:
+    return None
+
+
+def reply_ideas(
+    reply: str, read: Callable[[str], str | None]
+) -> list[tuple[_ReplyIdea, dict[str, int] | None]]:
+    """A lane reply's ideas (``IDEAS_SCHEMA``, strictly; unreadable: none),
+    each with its target lines: the quote's first match in the file it names,
+    as E1's recorded ideas are keyed (``idea_dedupe.load_recorded``)."""
+    try:
+        items = _Reply.model_validate_json(reply).hypotheses
+    except ValidationError:
+        return []
+    found: list[tuple[_ReplyIdea, dict[str, int] | None]] = []
+    for item in items:
+        try:
+            text = read(normalize_path(item.depends_on_path))
+        except ValueError:
+            text = None
+        lines = None if text is None else quote_lines(text, item.depends_on_quote)
+        target = None if lines is None else {"first": lines[0], "last": lines[1]}
+        found.append((item, target))
+    return found
+
+
+def idea_records(
+    repo: str, run: ArmRun, read: Callable[[str], str | None]
+) -> list[dict[str, object]]:
+    """Every idea the arm proposed: each sent lane reply's (S1, the lenses,
+    the leap, the rule-relaxing lanes; returned or not), or the ideas today's
+    generator returned; the proposal flag is the lane's (G3). ``label`` is
+    the exchange's: (repo, arm, label) names its sent ``ideas-reply`` row,
+    also for a sequential lane re-priced under a generic ``lane-N`` label."""
+    hypotheses = () if run.result is None else run.result.hypotheses
+    returned = {h.title for h in hypotheses}
+    rows: list[dict[str, object]] = []
+
+    def row(
+        lane: Lane | None, e: Exchange | None, k: int, title: str, change: str
+    ) -> dict[str, object]:
+        rule = None if lane is None else RELAXING_LANES.get(lane)
+        return {
+            "experiment": IDEA_EXPERIMENT, "repo": repo, "arm": run.arm.key,
+            "lane": "today" if lane is None else lane.value,
+            "label": "generator" if e is None else e.label,
+            "model": "" if e is None else e.model, "position": k,
+            "title": redact_keys(title), "change": _fit(redact_keys(change)),
+            "returned": title in returned, "proposal": rule is not None,
+            "relaxes": None if rule is None else rule.value,
+        }  # fmt: skip
+
+    if not run.arm.pipeline:
+        first = next(iter(run.exchanges), None)  # today's one generator request
+        for k, h in enumerate(hypotheses, 1):
+            change = h.rationale.split("\n", 1)[0]  # today's change_summary line
+            rows.append({**row(None, first, k, h.title, change), "mechanism": None,
+                         "cells": [], "path": None, "target": None})  # fmt: skip
+        return rows
+    for e in run.exchanges:
+        if e.role not in ("lane", "leap") or not e.sent:
+            continue
+        lane = request_lane(e.request)
+        for k, (item, target) in enumerate(reply_ideas(e.reply, read), 1):
+            rows.append({
+                **row(lane, e, k, item.title, item.change_summary),
+                "mechanism": item.mechanism.value,
+                "cells": [c.value for c in item.morph_cells],
+                "path": redact_keys(item.depends_on_path), "target": target,
+            })  # fmt: skip
+    return rows
 
 
 def _reply(repo: str, arm: str, e: Exchange) -> dict[str, object]:
@@ -1169,6 +1517,7 @@ class ProbeRecorder:
     sink: ResultsSink
     recorded: dict[str, FactsBody] = field(default_factory=dict)
     rows: list[ProbeRow] = field(default_factory=list)
+    views: dict[str, RecordedViews] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.plan.facts is not None and not self.recorded:
@@ -1177,6 +1526,14 @@ class ProbeRecorder:
             for repo in self.plan.repos:
                 if repo.name not in self.recorded:
                     raise ValueError(f"{FACTS_ENV}: no recorded facts for {repo.name}")
+        viewed = [
+            a.key for a in self.plan.arms if arm_update(a).get("IDEAS_LANE_VIEWS")
+        ]
+        if viewed and self.plan.views is None:
+            raise ValueError(f"{VIEWS_ENV}: {viewed[0]}'s views are never built live; "
+                             "name the recorded views (Va)")  # fmt: skip
+        if self.plan.views is not None:
+            self.views = checked_views(self.plan, self.recorded)
 
     def record(
         self,
@@ -1185,7 +1542,11 @@ class ProbeRecorder:
         pooled: Sequence[Pooled],
         audit: Audit | None,
         run: LiveRun,
+        *,
+        read: Callable[[str], str | None] = _no_text,
     ) -> None:
+        """Rows, replies, proposals and every idea (``read``: a file's text
+        at the commit, for target lines), then the audit's records."""
         n = len(pooled)
         reviewed = (  # every pooled idea's record, or a short audit refused here
             []
@@ -1215,10 +1576,13 @@ class ProbeRecorder:
                 cache_reads={e.label: e.usage[2] for e in ex},
                 counted={e.label: e.counted for e in ex},
                 sent=tuple(e.label for e in ex if e.sent), audit_error=audit_error,
-                frameworks=sent_frameworks(a),
+                frameworks=sent_frameworks(a), lever=a.arm.lever,
+                lane_models=a.lane_models, views=a.views,
             )  # fmt: skip
             self.rows.append(row)
             self.sink.write(row.record())
+            for idea in idea_records(repo, a, read):
+                self.sink.write(idea)
             for e in ex:
                 self.sink.write(_reply(repo, a.arm.key, e))
             for h in kept:
@@ -1264,6 +1628,33 @@ class ProbeRecorder:
         write_markdown("Ideas probe", "\n".join(lines), self.sink.environ, echo)
 
 
+def checked_views(
+    plan: ProbePlan, recorded: Mapping[str, FactsBody], base: Settings = settings
+) -> dict[str, RecordedViews]:
+    """Va's views for every planned library, each recorded from exactly the
+    source this run builds (the facts' commit, run, profile and patterns, no
+    read-deny, ``base``'s limits, the corpus workload), or refused: before any
+    spend, not when a lane asks for its view after S1 has spent."""
+    from . import ideas_views as iv  # it imports this module
+
+    loaded = iv.load_views(cast(Path, plan.views), recorded)
+    limits = IdeaReadLimits.from_settings(base)
+    for repo in plan.repos:
+        views = loaded.get(repo.name)
+        if views is None:
+            raise ValueError(f"{VIEWS_ENV}: no recorded views for {repo.name}")
+        body = recorded[repo.name]
+        source = ViewSource(
+            cast(RepoReader, None),  # the digest reads no git object
+            body.commit, body.hotspots, Fence.new(), body.protected, (), limits,
+            (iv.recorded_workload(repo, body),),
+        )  # fmt: skip
+        if (views.limits, views.source_sha256) != (limits, iv.source_digest(source)):
+            raise ValueError(f"{VIEWS_ENV}: {repo.name}'s views are not the source "
+                             "this run builds (limits, profile, patterns or workload)")  # fmt: skip
+    return loaded
+
+
 def _known(value: int | None) -> str:
     return "-" if value is None else str(value)
 
@@ -1305,7 +1696,7 @@ def run_library(
     """Phase 1 (or the recorded facts), every arm, the auditor; recorded,
     then guarded. A breach is noted on the run, then raised."""
     plan = recorder.plan
-    run = live(plan.library_cap())
+    run = live(plan.library_cap(repo.name))
     try:
         body = recorder.recorded.get(repo.name)
         if body is None:
@@ -1317,12 +1708,19 @@ def run_library(
         else:
             facts = clone_facts(repo, body, root / "user", policy)
             untouched = _nothing
-        arms = [run_arm(a, run, facts, base=base, reader=reader) for a in plan.arms]
+        views = recorder.views.get(repo.name)
+        workloads = () if views is None or body is None else _workload(repo, body)
+        arms = [
+            run_arm(a, run, facts, base=base, reader=reader,
+                    views=None if views is None else views.build, workloads=workloads)
+            for a in plan.arms
+        ]  # fmt: skip
         pooled = pool(arms, facts) if plan.audit else []
         audit = (
             run_audit(pooled, run, facts, base=base, reader=reader) if pooled else None
         )
-        recorder.record(repo.name, arms, pooled, audit, run)
+        read = read_text_of(reader(facts.facts.project), facts.commit)
+        recorder.record(repo.name, arms, pooled, audit, run, read=read)
         untouched()
         check_spend(run, arms, audit)
     except BaseException as exc:
@@ -1332,3 +1730,10 @@ def run_library(
 
 def _nothing() -> None:
     return None
+
+
+def _workload(repo: OssRepo, body: FactsBody) -> tuple[Workload]:
+    """The workload Va's views were built with (the input shape is its)."""
+    from . import ideas_views as iv  # it imports this module
+
+    return (iv.recorded_workload(repo, body),)

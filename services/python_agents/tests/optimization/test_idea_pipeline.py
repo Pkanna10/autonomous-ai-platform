@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import inspect
 import itertools
 import json
 import re
@@ -35,6 +36,7 @@ from autonomous_ai_agents.clients.transport import (
     ScriptedTransport,
 )
 from autonomous_ai_agents.common.config import (
+    IdeaView,
     Role,
     Settings,
     lane_settings,
@@ -62,9 +64,15 @@ from autonomous_ai_agents.common.models import (
 )
 from autonomous_ai_agents.common.repo_read import RepoReader
 from autonomous_ai_agents.execution.git import GitError
+from autonomous_ai_agents.optimization import idea_context, idea_pipeline
 from autonomous_ai_agents.optimization import idea_dedupe as dd
 from autonomous_ai_agents.optimization.hypothesis_source import (
     ClaudeHypothesisGenerator,
+)
+from autonomous_ai_agents.optimization.idea_context import (
+    LaneView,
+    ViewSource,
+    build_view,
 )
 from autonomous_ai_agents.optimization.idea_dedupe import TAKEN_TAG
 from autonomous_ai_agents.optimization.idea_pipeline import (
@@ -2490,3 +2498,87 @@ def test_a_lesson_holding_a_live_token_is_withheld_from_every_lane(
                cfg=cfg)  # fmt: skip
     result = run(lessons=[*many, *hostile])
     assert _noted(result.notes, "3 lesson line(s) withheld")
+
+
+# --------------------------------------------------------------------------
+# Vd: the view-builder seam (a recorded view in place of build_view)
+# --------------------------------------------------------------------------
+
+_Builder = Callable[[IdeaView, ViewSource, list[str]], "LaneView | None"]
+
+
+def _seam_run(cfg: Settings, builder: _Builder) -> tuple[_Run, GenerateResult]:
+    """``_g5_run``'s replies on a generator given ``builder``."""
+    relax = [_ideas(_idea(RELAX_TITLE, "find_all")) for _ in cfg.IDEAS_RELAX_LANES]
+    run = _Run(lane=[S1_REPLY, *_lens_replies(), *relax], leap=[LEAP],
+               reviewer=[REVIEW], cfg=cfg)  # fmt: skip
+    run.generator = IdeaPipelineGenerator(
+        dict(run.transports), lane_transports=dict(run.lanes), reader=_reader,
+        config=cfg, sleep=lambda _s: None, view_builder=builder,
+    )  # fmt: skip
+    return run, run()
+
+
+def test_the_view_builder_defaults_to_build_view() -> None:
+    parameters = inspect.signature(IdeaPipelineGenerator).parameters
+    assert "view_builder" in parameters
+    found = parameters["view_builder"]
+    assert found.kind is inspect.Parameter.KEYWORD_ONLY
+    assert found.default is build_view
+
+
+@pytest.mark.parametrize("name", list(_G5_CONFIGS))
+def test_a_builder_that_delegates_to_build_view_keeps_the_golden_bytes(
+    name: str,
+) -> None:
+    """
+    GIVEN the four golden configurations and a builder that records each
+          call, then returns ``build_view``'s view
+    WHEN the pipeline runs on the golden replies
+    THEN every request and the whole result hash to the golden, and the
+         builder was asked once per distinct view, at the call's commit
+    """
+    calls: list[tuple[IdeaView, str, tuple[str, ...]]] = []
+
+    def recording(
+        view: IdeaView, source: ViewSource, notes: list[str]
+    ) -> LaneView | None:
+        calls.append((view, source.commit, source.protected))
+        return build_view(view, source, notes)
+
+    cfg = _g5_settings(name)
+    run, result = _seam_run(cfg, recording)
+    assert _fingerprint(run, result) == _G5_GOLDEN[name]
+    wanted = list(dict.fromkeys(cfg.IDEAS_LANE_VIEWS.values()))
+    assert calls == [(view, SHA, ()) for view in wanted]
+
+
+def test_a_given_builder_replaces_build_view(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A builder's view is what the lane sees; ``build_view`` is never called."""
+
+    def never(*_args: object) -> LaneView | None:
+        raise AssertionError("build_view was called")
+
+    monkeypatch.setattr(idea_pipeline, "build_view", never)
+    shown: dict[IdeaView, LaneView] = {}
+
+    def recorded(
+        view: IdeaView, source: ViewSource, notes: list[str]
+    ) -> LaneView | None:
+        if view == "callers":
+            return None  # the lane then sees the shared block
+        built = idea_context.build_view(view, source, notes)
+        assert built is not None
+        shown[view] = dataclasses.replace(
+            built, facts=(*built.facts, 'seam: "recorded"')
+        )
+        return shown[view]
+
+    run, result = _seam_run(_g5_settings("views"), recorded)
+    assert set(shown) == {"next_hotspots", "whole_module"}
+    assert _noted(result.notes, "lane recombine: no callers view")
+    lanes = {_lane_of(r): _texts(r)[0] for r in run.requests("lane")}
+    for lane in (Lane.eliminate, Lane.far):
+        assert 'seam: "recorded"' in lanes[lane], lane
+    assert 'seam: "recorded"' not in lanes[Lane.recombine]
+    assert lanes[Lane.recombine] == lanes[Lane.obvious]  # the shared block

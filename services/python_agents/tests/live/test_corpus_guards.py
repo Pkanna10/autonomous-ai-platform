@@ -1139,7 +1139,7 @@ AB_V2_ENV = {"LIVE_AB_SET": "v2", "LIVE_AB_ARMS": "A,B"}  # L5b, ab_arms A,B
 AB_V2_BLIND_ENV = {"LIVE_AB_SET": "v2", "LIVE_AB_ARMS": "A", "LIVE_AB_REPS": "1"}
 OSS_AB_DISPATCH_REPO = "tabulate"  # oss-ab runs one library a dispatch
 MARKER_CAP = {"LIVE_SUITE_CAP_USD": "24"}  # the marker plan refuses a cap below
-# E1: four a dispatch (4 x 56 of ideas_probe.JOB_MINUTES' 240)
+# E1: four a dispatch (4 x 41 of ideas_probe.JOB_MINUTES' 240)
 IDEAS_E1_DISPATCH = {"LIVE_IDEAS_REPOS": "pyparsing,tomli,mistune,idna"}
 SWEEP_RECORD_ENV = {  # one arm, recorded for hand labels and offline replay
     "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
