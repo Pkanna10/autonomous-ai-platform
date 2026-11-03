@@ -767,16 +767,19 @@ blocks it.
   key or column name), because a lane that sees the benchmark's literal input
   can specialise for it and pass every frozen judge; other inputs keep their
   five-line head.
-- **D64. A seeded second generator call re-runs the lanes (Lead, under O36).**
+- **D64. A seeded second generator call re-runs the lanes; supersedes D48 for
+  seeded runs only (owner, 2026-11-03, confirming the Lead's call under O36).**
   D48 makes every second call S1 only, and the node calls the generator again
   only once the pool is empty, so lens lanes never run after round 1 and seeds
   could never reach one. With `IDEAS_ROUND_SEEDS` on and at least one seed, a
   second call runs S1, the lenses, the leap and the reviewer again, reserved
   whole under D55's share (skipped with `discovery_unaffordable` if it does not
-  fit); seeds off or nothing to seed keeps D48 exactly. _Why:_ it is the only
-  way the approved seeds work; the cost appears only when the setting is on. The
-  owner may veto it; the veto patch (every second call S1 only again) is kept
-  ready.
+  fit). D48 still holds for every run that is not seeded (seeds off, or nothing
+  to seed). _Why:_ seeds without a second lane pass are inert, and the change is
+  off by default and budget-gated. _Condition (owner):_ the seeded second call
+  is its own line in the run's cost (the run report and an engine event) and in
+  the lab's per-round reports, so its cost per win is visible once evolution
+  rounds are a varied factor.
 
 ### 2026-11-01 (owner: E1's answers and the idea lab, O23-O30)
 

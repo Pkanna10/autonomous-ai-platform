@@ -186,7 +186,11 @@ near-miss compounds). Owner decisions of 2026-11-03 fix G5b below.
   second generator call with at least one seed re-runs S1, the lenses, the leap
   and the reviewer, reserved whole under D55's share (skipped with
   `discovery_unaffordable` if it does not fit); with seeds off or nothing to
-  seed it stays S1 only (D48).
+  seed it stays S1 only (D48). D64 supersedes D48 for seeded runs only. The seeded call
+  is its own cost line: an engine event and a line in the run report's
+  conditions (calls and USD, inside the discovery total), and a column in the
+  lab's per-round reports (the V suite), so its cost per win is visible once
+  evolution rounds are varied.
   **One fenced block, not two:** the seeds and G4's mechanisms block
   (`taken_block`) are merged into one fenced block with one lead-in, one line
   per distinct mechanism key, a trialled key carrying its outcome and gain, so
@@ -214,6 +218,31 @@ near-miss compounds). Owner decisions of 2026-11-03 fix G5b below.
   lesson discount) become G11, the lab's learning mechanism: each round's
   verdicts become lessons that steer the next round's lanes. W3 (hotspot tags)
   is deferred.
+
+### G11 — The lab's learning mechanism (W1 and W2 folded in)
+
+Built after G5 (Lead, 2026-11-03, from D13 and D21 as approved in Wave 1's
+design):
+
+- **Lessons in the prompts (W1, D21).** The project's last 20 lessons and
+  `avoid_titles` reach today's generator (`optimization/generate.py`) and the
+  idea pipeline's S1 and lens lanes as one fenced untrusted block. A lesson line
+  holds its outcome, its weight and its text; a line holding a fence token is
+  withheld, titles are reduced to one plain line and capped, and lesson text
+  carries timing gains only, never a quality value (spec.md, the W1 row). In
+  the pipeline the block sits in the shared, cached data so every lane sees the
+  same bytes and the per-lane prompt does not grow; the leap and the reviewer
+  never get it. A setting, off by default; off keeps every request
+  byte-identical.
+- **Combine-failed discount (W2, D13).** `learn` weights each kept verdict's
+  lesson by what the combine did with it: delivered or skipped 1.0, applied in
+  a failed greedy re-test while another fallback held 0.5 (`combine:unconfirmed`),
+  not reproduced 0.25 (`combine:not_reproduced`), no combiner 1.0. The outcome
+  stays the verdict's; the text gains `(combine: not reproduced)` and so on.
+  No schema change (`chk_lesson_weight > 0` holds). Always on: it changes only
+  how much a keep counts in the next ranking, never a verdict.
+- No lesson from a proposal (G3) or a refused compound replay (G5b).
+
 
 ---
 
