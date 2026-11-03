@@ -777,6 +777,15 @@ blocks it.
   lab's learning mechanism, W3 deferred. Budget: X1 (~42 USD) is ~28 % of Window
   1's 148.73 USD; read every idea list in full; some confirmatory rungs may
   spill into Window 2.
+- **O42. X1-1's lane output cap (owner, 2026-11-03).** After run 1's three Fable
+  lens requests stopped at 12,000 output tokens with no idea, X1-1 alone sets
+  the lane output cap to 32,000 (`IDEAS_LANE_MAX_TOKENS`, a configuration
+  setting); X1-1 is re-run alone on run 1's four libraries, then run 2 runs with
+  the new cap. The re-derived need and caps go to the owner before either
+  dispatch. Condition 2 stands after the change: a request stopping at
+  max_tokens at 32,000 is a finding about that model, not a reason to raise the
+  cap again. The X1-1 report shows cost per unique new mechanism per model
+  beside the counts.
 - **O41. The pooled ranking's rules (owner, 2026-11-03).** (1) X1-1's Opus 5.5
   lens ideas are left out of the validated pool (the marker never ranks its own
   model's ideas), and a second ranking of the whole pool by Opus 5, marked
