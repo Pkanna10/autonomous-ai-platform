@@ -3128,6 +3128,19 @@ worktree", 4.4.0) or in the builder rules every brief carries.
   them) and clipped titles past Vb's 300-character bound in the marker request
   only. Sizes accepted: Ve about 1.5x, Vf about 2x (harness code). O39's grading
   and labels follow as their own unit.
+- V-O39 (O39 in the slice and the report). Ve's trial and marker rows say
+  whether their grader passed O37, read from Vb's verdict row (a results file
+  whose verdict row disagrees with Vb's recomputed decision is refused). Vf:
+  marker-feasible counts an idea in the top 3 of its grader's shown set (the
+  slice's pick depth), only over the slice's marker sets; the headline counts
+  lens-lane ideas graded by the marker that passed O37, with Opus 5's grades of
+  Opus 5.5's ideas (the leap, X1-1's Opus 5.5 lens) in their own columns marked
+  unvalidated, and an all-lanes column beside. "Unique mechanisms" (the G4
+  dedupe) and "share new to today's generator" (the auditor's duplicate links)
+  are labelled by the dedupe's measured direction from Vc's score row (upper
+  bound while it under-merges; the label drops once a dedupe passes), and
+  measures.md names the 380 pairs as the development set before X2. Size about
+  2.4x its row (the marker loader the report lacked), accepted as harness code.
 - G2 fix found by Va: `count_note` noted negative cuts, so every callers view
   under its limits said e.g. "-199 file(s) not scanned for callers"; it now
   notes only positive counts. Requests were byte-identical; the six viewed

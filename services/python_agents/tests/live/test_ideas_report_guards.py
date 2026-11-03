@@ -13,10 +13,12 @@ real X1 results prove: that Vd's and Ve's rows carry these fields as named.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -29,6 +31,7 @@ from autonomous_ai_agents.common.models import (
     Project,
 )
 from autonomous_ai_agents.optimization import idea_dedupe as dd
+from autonomous_ai_agents.optimization.idea_types import Lane
 
 from . import ideas_probe as ip
 from . import ideas_report as ir
@@ -106,7 +109,8 @@ def _audit(
 def _score(passed: bool) -> Row:
     score = dd.DedupeScore(
         labelled=10, agreed=9 if passed else 5, agreement=0.9 if passed else 0.5,
-        same_pairs=5, same_merged=5, different_pairs=5, different_merged=0,
+        same_pairs=5, same_merged=5 if passed else 0, different_pairs=5,
+        different_merged=0,
         different_merged_share=0.0, passed=passed, show_raw=not passed,
         why="passed the fixed bar" if passed else "agreement 50.0% is under 85%",
     )  # fmt: skip
@@ -199,12 +203,14 @@ TRIALS: list[Row] = [  # Ve's rows as ``SliceRecorder.record`` writes them
      "label": "eliminate", "position": 1, "lane": "eliminate", "model": SN,
      "title": "Cache the parse table", "verdict": "keep", "gain_pct": 12.0,
      "floor_pct": 3.0, "guard": "ok", "rationale": ["why"],
+     "grader": "opus-5-5", "grader_validated": True,
      "op_count": {"present": True, "cell": "-20.0%", "base": 10.0, "trial": 8.0,
                   "change": -0.2}},
     {"experiment": "ideas-slice-trial", "repo": "tomli", "arm": "X1-0",
      "label": "obvious", "position": 1, "lane": "obvious", "model": SN,
      "title": "Use a dict", "verdict": "reject", "gain_pct": None,
      "floor_pct": 3.0, "guard": "ok", "rationale": [],
+     "grader": "opus-5-5", "grader_validated": True,
      "op_count": {"present": True, "cell": None, "base": None, "trial": None,
                   "change": None}},
 ]  # fmt: skip
@@ -613,3 +619,202 @@ def test_the_committed_e1_results_load_as_the_noise_and_the_facts() -> None:
     assert sorted({(p.repo, p.arm) for p in noise}) == sorted(
         (repo, arm) for repo in ip.E1_REPOS for arm in ir.NOISE_ARMS
     )
+
+
+# ---------------------------------------------------------------------------
+# O39: the marker-feasible headline, the unvalidated grades, the dedupe's bound
+# ---------------------------------------------------------------------------
+
+O55, O5 = "claude-opus-5-5", "claude-opus-5"
+UPPER = "upper bound, the dedupe under-merges (O39)"
+LEAP = _idea("tomli", "X1-0", "leap", O55, 1, "Leap idea")
+LENS_55 = _idea("tomli", "X1-1", "far", O55, 1, "Opus lens idea")  # X1-1's Opus lens
+LEAP_TRIAL: Row = {**TRIALS[0], "label": "leap", "lane": "leap", "model": O55,
+                   "title": "Leap idea", "grader": "opus-5",
+                   "grader_validated": False}  # fmt: skip
+VALIDATION = SERVICE.parents[1] / ".claude/handoff/step3/idea-lab/x1-validation"
+
+
+def _shown(*keys: tuple[str, int]) -> list[Row]:
+    return [{"label": label, "position": n} for label, n in keys]
+
+
+def _marker(arm: str, marker: str, model: str, shown: list[Row],
+            grades: list[bool], scores: list[float] | None, validated: bool) -> Row:  # fmt: skip
+    return {"experiment": "ideas-slice-marker", "repo": "tomli", "arm": arm,
+            "marker": marker, "model": model, "shown": shown, "grades": grades,
+            "scores": scores, "error": None, "cost_usd": 0.01, "counted": 9,
+            "sent": True, "chunks": [], "validated": validated}  # fmt: skip
+
+
+X0_SET = _shown(("eliminate", 1), ("far", 1), ("obvious", 1), ("leap", 1))
+X1_SET = _shown(("far", 1), ("eliminate", 1))
+MARKERS: list[Row] = [  # as Ve writes them under O39: Opus 5 grades Opus 5.5's ideas
+    _marker("X1-0", "opus-5-5", O55, X0_SET, [True, True, True, False],
+            [4.0, 1.0, 3.0, 2.0], True),
+    _marker("X1-0", "opus-5", O5, X0_SET, [False, False, False, True],
+            [1.0, 2.0, 3.0, 4.0], False),
+    _marker("X1-1", "opus-5", O5, X1_SET, [True, False], [2.0, 1.0], False),
+    _marker("X1-1", "opus-5-5", O55, X1_SET, [False, True], [2.0, 1.0], True),
+]  # fmt: skip
+
+
+def _marked(**override: list[Row]) -> list[Row]:
+    return _x1(**{"other": [LEAP, LENS_55], "markers": MARKERS, **override})
+
+
+def test_the_marker_feasible_headline_counts_lens_lane_ideas_only(
+    tmp_path: Path,
+) -> None:
+    report = _report(tmp_path, _marked())
+    # X1-0: lens eliminate (4 of 4, in the top 3) and far (1 of 4, not); S1's
+    # obvious (3) and the leap (Opus 5's 4) count only in the all-lanes figure
+    # validated grades (Opus 5.5's) apart from the unvalidated (Opus 5 grading
+    # Opus 5.5's leap and X1-1's Opus 5.5 lens), never merged into one figure
+    assert report.marked["X1-0"] == (ir.Marked(1, 2, 0, 0), ir.Marked(2, 3, 1, 1))
+    assert report.marked["X1-1"] == (ir.Marked(1, 1, 1, 1), ir.Marked(1, 1, 1, 1))
+    assert set(report.marked) == {"X1-0", "X1-1"}  # configurations with a grade
+    relaxing = {lane.value for lane in Lane if lane.value.startswith("relax_")}
+    assert not set(ir.LENSES) & {"obvious", "leap", *relaxing} and len(relaxing) == 4
+    assert ir.MARKER_TOP == sl.TOP
+    text = ir.render(report)["measures.md"]
+    section = text[text.index("## Marker-feasible") :]
+    assert "S1, the leap and the rule-relaxing lanes are left out" in section
+    lines = section.splitlines()
+    assert "Opus 5.5's leap and X1-1's Opus 5.5 lens" in section
+    assert ("| configuration | lens lanes (headline, validated grades) | lens lanes "
+            "graded by a marker that failed O37 (unvalidated) | all lanes "
+            "(validated) | all lanes (unvalidated) |") in lines  # fmt: skip
+    assert "| X1-0 | 1/2 | - | 2/3 | 1/1 unvalidated |" in lines
+    assert "| X1-1 | 1/1 | 1/1 unvalidated | 1/1 | 1/1 unvalidated |" in lines
+    assert not any(x.startswith(("| A |", "| X1-4 |")) for x in lines)
+    unanswered = [{**MARKERS[1], "scores": None}, *MARKERS[2:]]  # Opus 5 failed
+    assert _report(tmp_path, _marked(markers=[MARKERS[0], *unanswered])).marked[
+        "X1-0"] == (ir.Marked(1, 2, 0, 0), ir.Marked(2, 3, 0, 0))  # fmt: skip
+    only_opus_5 = _report(tmp_path, _marked(markers=MARKERS[:3]))  # X1-1: no 5.5 grade
+    assert only_opus_5.marked["X1-1"] == (ir.Marked(0, 0, 1, 1),) * 2
+    text = ir.render(only_opus_5)["measures.md"]
+    assert "| X1-1 | - | 1/1 unvalidated | - | 1/1 unvalidated |" in text.splitlines()
+
+
+def test_without_a_marker_row_there_is_no_marker_feasible_count(
+    tmp_path: Path,
+) -> None:
+    report = _report(tmp_path)
+    assert report.marked == {}
+    assert "no marker-feasible count" in ir.render(report)["measures.md"]
+
+
+def test_an_opus_5_5_idea_graded_by_opus_5_is_unvalidated_in_its_file(
+    tmp_path: Path,
+) -> None:
+    files = ir.render(_report(tmp_path, _marked(trials=[*TRIALS, LEAP_TRIAL])))
+    lines = files["tomli-X1-0.md"].splitlines()
+    leap = next(x for x in lines if "Leap idea" in x)
+    assert "| keep (graded by opus-5, unvalidated) |" in leap
+    assert sum("unvalidated" in x for x in lines) == 1
+    validated = ir.TrialLine.model_validate({k: v for k, v in TRIALS[0].items()
+                                             if k in ir.TrialLine.model_fields})  # fmt: skip
+    assert ir.trial_cell(validated) == "keep"
+    fallback = validated.model_copy(update={"grader": None, "grader_validated": None})
+    assert ir.trial_cell(fallback) == "keep"
+
+
+@pytest.mark.parametrize(
+    ("override", "match"),
+    [
+        ({"markers": [{**MARKERS[0], "grades": [True]}]}, "malformed.*marker"),
+        ({"markers": [{**MARKERS[0], "scores": [1.0]}]}, "malformed.*marker"),
+        ({"markers": [{**MARKERS[0], "scores": []}]}, "malformed.*marker"),
+        ({"markers": [{k: v for k, v in MARKERS[0].items() if k != "validated"}]},
+         "malformed.*validated"),
+        ({"trials": [{k: v for k, v in TRIALS[0].items()
+                      if k != "grader_validated"}]}, "malformed.*grader_validated"),
+        ({"trials": [{**TRIALS[0], "grader": None}]}, "malformed.*grader"),
+        ({"markers": [{**MARKERS[0], "arm": "B"}]}, "not an X1 arm"),
+    ],
+)  # fmt: skip
+def test_a_malformed_o39_row_is_refused(
+    tmp_path: Path, override: dict[str, list[Row]], match: str
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        _report(tmp_path, _marked(**override))
+
+
+def test_a_grade_of_an_idea_with_no_ideas_idea_row_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="leap #1: a graded idea with no ideas-idea"):
+        _report(tmp_path, _x1(markers=MARKERS))
+
+
+def test_the_upper_bound_labels_sit_where_the_two_measures_appear(
+    tmp_path: Path,
+) -> None:
+    files = ir.render(_report(tmp_path))  # Vc's score: failed by under-merging
+    measures = files["measures.md"]
+    assert measures.count(UPPER) == 2
+    head = next(x for x in measures.splitlines()
+                if x.startswith("| configuration | ideas proposed"))  # fmt: skip
+    assert f"unique mechanisms ({UPPER}) | raw titles |" in head  # the raw count
+    assert f"new to today's generator ({UPPER})" in head
+    tables = files["tables.md"]
+    assert tables.count(UPPER) == 2 + 2 * len(ir.LEVERS)
+    assert f"## 1 Mechanism x configuration overlap ({UPPER})" in tables
+    assert f"unique mechanisms ({UPPER})/ceilings" in tables
+    for lever in ir.LEVERS:
+        for m in ("unique", "new"):
+            assert f"| {lever} | {m} ({UPPER}) |" in tables, (lever, m)
+    libraries = {n: t for n, t in files.items() if n.startswith(("tomli-", "idna-"))}
+    assert len(libraries) == 12 and all(t.count(UPPER) == 1 for t in libraries.values())
+    assert UPPER not in files["owner-sample.md"] + files["ceilings.svg"]
+    assert "10 labelled pairs are the dedupe's development set" in measures
+    passed = ir.render(_report(tmp_path, _x1(score=[_score(True)])))
+    for name, text in passed.items():
+        assert "upper bound" not in text and "development set" not in text, name
+
+
+def _scored(**update: object) -> dd.DedupeScore:
+    failed = _score(False)["score"]
+    assert isinstance(failed, dict)
+    return dd.DedupeScore.model_validate({**failed, **update})
+
+
+def test_the_bound_is_read_from_vcs_score_row(tmp_path: Path) -> None:
+    real = ir._parsed(list(VALIDATION.glob("ideas-validate-*.jsonl")),
+                      ["ideas-validate-score"])["ideas-validate-score"]  # fmt: skip
+    (row,) = [r for r in real if isinstance(r, ir.DedupeLine)]
+    assert row.score is not None and row.score.labelled == 380
+    assert ir.bound(row.score) == UPPER  # 42 of 116 merged, 2.3 % different
+    over = _scored(same_merged=5, different_merged=2, different_merged_share=0.4)
+    both = _scored(different_merged=2, different_merged_share=0.4)
+    assert ir.bound(over) == "lower bound, the dedupe over-merges"
+    assert ir.bound(both) == "unvalidated, the dedupe failed its bar"
+    assert ir.bound(None) == "unvalidated, no pair labelled"
+    assert ir.bound(_scored(passed=True, show_raw=False)) is None
+
+
+GOLDEN = {  # sha256 of HEAD 8633ee3's render on these fixtures
+    "failed": "fd2abae22b3b00e645f0f4b02cdba7a354a363b3f7f3728a7218de67fd118aca",
+    "passed": "3b70392f04ef75d18ec2d1fb80ab2ea40020552e264a6168ff57d2d287bcaad1",
+}
+
+
+def _head_view(files: Mapping[str, str]) -> str:
+    """O39's additions taken out: the bound tags, the two note lines (each
+    with its blank line), the marker section at the end of measures.md."""
+    out = {}
+    for name, text in files.items():
+        text = text.replace(f" ({UPPER})", "")
+        if "\n## Marker-feasible" in text:
+            text = text[: text.index("\n## Marker-feasible")]
+        lines = text.split("\n")
+        keep = [x for k, x in enumerate(lines)
+                if not x.startswith(ir.NOTE_PREFIXES)
+                and not (k and lines[k - 1].startswith(ir.NOTE_PREFIXES))]  # fmt: skip
+        out[name] = "\n".join(keep)
+    return hashlib.sha256(json.dumps(out, sort_keys=True).encode()).hexdigest()
+
+
+@pytest.mark.parametrize("score", ["failed", "passed"])
+def test_every_other_number_is_heads(tmp_path: Path, score: str) -> None:
+    rows = _x1(score=[_score(score == "passed")])
+    assert _head_view(ir.render(_report(tmp_path, rows))) == GOLDEN[score]

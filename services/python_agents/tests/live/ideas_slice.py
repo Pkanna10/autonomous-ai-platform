@@ -24,7 +24,13 @@ Vb's own blind request (``ideas_marker.ask``: counted, capped); an idea
 takes its grader's score, ties and unanswered ideas fall to pool order;
 the top ``TOP`` run. With no candidate past O37 the pool's order (the
 pipeline's own: each configuration's ideas as its reviewer was shown them)
-is the fallback, and every row says so (``selection``).
+is the fallback, and every row says so (``selection``). O39: Opus 5.5 passed
+O37 and Opus 5 did not, so an idea whose recorded model is Opus 5.5 (the
+leap in every configuration, X1-1's Opus 5.5 lens) takes Opus 5's grade;
+each trial and marker row says whether its grader passed O37
+(``grader_validated``, ``validated``: Vb's ``passed``, never a constant,
+checked against Vb's verdict row when the job wrote one), and each marker
+row which shown ideas take its score (``grades``).
 
 Each pick is a ``Hypothesis`` of its lane idea (the pipeline's rationale
 layout; the reviewer's plan line is not in Vd's rows) and each
@@ -100,6 +106,7 @@ COMBINE_EXPERIMENT: Final = "ideas-slice-combine"
 MARKER_EXPERIMENT: Final = "ideas-slice-marker"
 FALLBACK: Final = "the pipeline's order (the auditor's pool ids), no marker"
 NO_IDEA: Final = "no eligible idea: no loop"
+NO_DECISION: Final = im.Decision(None, im.NO_MARKER, (), ())
 
 # ---------------------------------------------------------------------------
 # The plan: need, minutes, fuse, refused before any spend
@@ -346,13 +353,40 @@ def load_ideas(
 
 
 def grader_order(decision: im.Decision) -> tuple[im.Marker, ...]:
-    """O37's choice first, then the other candidate (6.1's runner-up)."""
+    """O37's choice first, then the other candidate (6.1's runner-up): under
+    O39 Opus 5.5, then Opus 5 for the ideas Opus 5.5 wrote (``grader``)."""
     chosen = next((m for m in im.MARKERS if m.key == decision.chosen), None)
     return () if chosen is None else (chosen, *(m for m in im.MARKERS if m != chosen))
 
 
 def grader(idea: Idea, order: Sequence[im.Marker]) -> im.Marker | None:
+    """The first marker in ``order`` whose model is not the idea's recorded one."""
     return next((m for m in order if m.model != idea.row.model), None)
+
+
+class _Verdict(_Strict):  # Vb's ``ideas-marker-verdict`` row, as ``finish`` writes it
+    experiment: Literal["ideas-marker-verdict"]
+    chosen: str | None
+    reason: str
+    passed: tuple[str, ...]
+    baseline_ties: tuple[str, ...]
+    positives: int
+    comparable: int
+    generator: dict[str, float | int | None]
+    bar: dict[str, float | int]
+
+
+def check_verdict(path: Path, decision: im.Decision) -> im.Decision:
+    """The scorer's decision, refused when Vb's verdict row says otherwise."""
+    rows = [_Verdict.model_validate_json(x)
+            for x in path.read_text(encoding="utf-8").splitlines()
+            if f'"experiment": "{im.VERDICT_EXPERIMENT}"' in x]  # fmt: skip
+    if len(rows) > 1:
+        raise ValueError(f"{path}: {im.VERDICT_EXPERIMENT} row twice")
+    if rows and (rows[0].chosen, rows[0].passed) != (decision.chosen, decision.passed):
+        raise ValueError(f"{path}: its {im.VERDICT_EXPERIMENT} row disagrees with "
+                         "the score of its reply rows")  # fmt: skip
+    return decision
 
 
 def shown(ideas: Sequence[Idea]) -> tuple[Idea, ...]:
@@ -470,7 +504,8 @@ class SliceRecorder:
         if self.ideas is None:
             self.ideas = load_ideas(self.plan.ideas, [r.name for r in self.plan.repos])
         if self.decision is None and self.plan.marker is not None:
-            self.decision = im.score_results(self.plan.marker)[1]
+            marker = self.plan.marker
+            self.decision = check_verdict(marker, im.score_results(marker)[1])
 
     @property
     def order(self) -> tuple[im.Marker, ...]:
@@ -478,10 +513,14 @@ class SliceRecorder:
 
     @property
     def selection(self) -> str:
-        d = self.decision or im.Decision(None, im.NO_MARKER, (), ())
+        d = self.decision or NO_DECISION
         if d.chosen is None:
             return f"fallback ({d.reason}): {FALLBACK}"
         return f"marker {d.chosen} ({d.reason})"
+
+    def validated(self, key: str | None) -> bool | None:
+        """Whether the grader ``key`` passed O37 (None: no grader)."""
+        return None if key is None else key in (self.decision or NO_DECISION).passed
 
     def eligible(self, repo: str, config: str) -> tuple[Idea, ...]:
         return (self.ideas or {}).get((repo, config), ())
@@ -494,6 +533,8 @@ class SliceRecorder:
             "experiment": MARKER_EXPERIMENT, "repo": repo, "arm": config,
             "marker": r.marker.key, "model": r.marker.model,
             "shown": [{"label": i.row.label, "position": i.row.position} for i in ideas],
+            "grades": [grader(i, self.order) == r.marker for i in ideas],
+            "validated": self.validated(r.marker.key),
             "scores": None if r.scores is None else list(r.scores),
             "error": None if r.error is None else _fit(redact_keys(r.error)),
             "cost_usd": r.cost_usd, "counted": 0 if e is None else e.counted,
@@ -516,6 +557,7 @@ class SliceRecorder:
                 "label": row.label, "position": row.position, "lane": row.lane,
                 "model": row.model, "audit_id": f"i{p.idea.pool:02d}",
                 "selection": self.selection, "grader": p.grader, "score": p.score,
+                "grader_validated": self.validated(p.grader),
                 "rank": p.rank, "title": redact_keys(item.title),
                 "mechanism": item.mechanism.value, "cells": list(row.cells),
                 "path": row.path, "target": row.target,

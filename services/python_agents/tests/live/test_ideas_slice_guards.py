@@ -27,6 +27,7 @@ orders, the engine's verdicts, gains and op counts on the four libraries.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import os
 import re
@@ -765,3 +766,94 @@ def test_a_title_past_the_markers_bound_is_clipped_not_refused(x1: Path) -> None
     (row,) = sl.rank_set("tomli", "X1-0", clipped).rows
     assert row.title == long[:300]
     assert clipped[0].row.title == long  # only the request is clipped, never the record
+
+
+# ---------------------------------------------------------------------------
+# O39: each row says whether its grader passed O37, read from Vb's verdict
+# ---------------------------------------------------------------------------
+
+O39 = im.Decision("opus-5-5", im.ONE, ("opus-5-5",), ())  # Vb's verdict, 2026-11-03
+VALIDATION = TESTS_DIR.parents[2] / ".claude/handoff/step3/idea-lab/x1-validation"
+VB_RESULTS = VALIDATION / "ideas-marker-41642619744.jsonl"
+O39_FIELDS = ("grader_validated", "validated", "grades")
+# sha256 of the slice rows HEAD 8633ee3 wrote for ``slice_run(O39)``, without
+# the random hypothesis ids (and O39's new fields, which HEAD did not write)
+SLICE_GOLDEN = "eb1820c901a2c99b6b170216f3f855a14f37005838ac36cf91d7709a7d18a196"
+
+
+def test_an_opus_5_5_idea_is_graded_by_opus_5_and_marked_unvalidated(
+    slice_run: Any,
+) -> None:
+    _, _, _, out = slice_run(O39)
+    trials = _records(out, sl.TRIAL_EXPERIMENT)
+    leap = next(t for t in trials if t["title"] == "leap-new")
+    assert (leap["lane"], leap["model"], leap["grader"], leap["grader_validated"]) == (
+        "leap", OPUS, "opus-5", False)  # fmt: skip
+    others = {(t["grader"], t["grader_validated"]) for t in trials if t is not leap}
+    assert others == {("opus-5-5", True)}
+    markers = _records(out, sl.MARKER_EXPERIMENT)
+    assert [(m["arm"], m["marker"], m["validated"], m["grades"]) for m in markers] == [
+        ("X1-0", "opus-5-5", True, [True, False, True, True]),
+        ("X1-0", "opus-5", False, [False, True, False, False]),  # the leap's grade
+        ("X1-1", "opus-5-5", True, [True]),
+    ]  # fmt: skip
+    # the report reads both fields as Ve writes them, through to its table cell
+    parsed = report._parsed([out], [sl.TRIAL_EXPERIMENT, sl.MARKER_EXPERIMENT])
+    (line,) = [t for t in parsed[sl.TRIAL_EXPERIMENT]
+               if isinstance(t, report.TrialLine) and t.title == "leap-new"]  # fmt: skip
+    assert report.trial_cell(line) == "keep (graded by opus-5, unvalidated)"
+    assert {(m.marker, m.validated) for m in parsed[sl.MARKER_EXPERIMENT]
+            if isinstance(m, report.MarkerLine)} == {("opus-5-5", True),
+                                                     ("opus-5", False)}  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("decision", "graders"),
+    [
+        (CHOSEN_55, {("opus-5-5", True), ("opus-5", True)}),  # both passed
+        (CHOSEN_5, {("opus-5", True)}),  # Opus 5 alone passed: it grades all
+        (NO_MARKER, {(None, None)}),  # the fallback: no grader, nothing validated
+    ],
+)
+def test_the_validated_field_follows_vbs_verdict_never_a_constant(
+    slice_run: Any, decision: im.Decision, graders: set[tuple[str | None, bool | None]]
+) -> None:
+    _, _, _, out = slice_run(decision)
+    trials = _records(out, sl.TRIAL_EXPERIMENT)
+    assert {(t["grader"], t["grader_validated"]) for t in trials} == graders
+    assert all(m["validated"] == (m["marker"] in decision.passed)
+               for m in _records(out, sl.MARKER_EXPERIMENT))  # fmt: skip
+
+
+def test_vbs_verdict_row_is_read_and_a_disagreeing_one_refused(
+    x1: Path, tmp_path: Path
+) -> None:
+    tomli = tuple(r for r in dx.OSS_SELECTABLE if r.name == REPO)
+    real = sl.SliceRecorder(sl.SlicePlan(tomli, (x1,), VB_RESULTS), ResultsSink({}),
+                            base=_base())  # fmt: skip
+    assert real.decision == O39
+    assert (real.validated("opus-5-5"), real.validated("opus-5")) == (True, False)
+    assert real.validated(None) is None
+    lines = VB_RESULTS.read_text(encoding="utf-8").splitlines()
+    verdict = next(x for x in lines if f'"{im.VERDICT_EXPERIMENT}"' in x)
+    forged = verdict.replace(
+        '"passed": ["opus-5-5"]', '"passed": ["opus-5-5", "opus-5"]'
+    )
+    for name, body, match in (
+        ("forged", [x for x in lines if x != verdict] + [forged], "disagrees"),
+        ("twice", [*lines, verdict], "twice"),
+    ):
+        path = tmp_path / f"{name}.jsonl"
+        path.write_text("\n".join(body) + "\n", encoding="utf-8")
+        with pytest.raises(ValueError, match=f"{im.VERDICT_EXPERIMENT}.*{match}"):
+            sl.SliceRecorder(sl.SlicePlan(tomli, (x1,), path), ResultsSink({}),
+                             base=_base())  # fmt: skip
+
+
+def test_every_other_slice_field_is_heads(slice_run: Any) -> None:
+    _, _, _, out = slice_run(O39)
+    rows = [{k: v for k, v in json.loads(x).items()
+             if k not in (*O39_FIELDS, "hypothesis_id")}
+            for x in out.read_text(encoding="utf-8").splitlines()]  # fmt: skip
+    digest = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
+    assert digest == SLICE_GOLDEN

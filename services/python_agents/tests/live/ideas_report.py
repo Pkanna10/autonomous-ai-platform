@@ -24,7 +24,20 @@ report reads (optional rows, as ``ideas_slice.SliceRecorder`` writes them):
 ran; title, verdict, gain_pct, floor_pct, op_count; ``keep`` is a win) and
 one ``ideas-slice-combine`` per (configuration, library) engine run (repo,
 arm, summary chunks, cost_usd of the whole run and D64's seeded_calls and
-seeded_cost_usd from its state, both required: 0 when no seeded call ran).
+seeded_cost_usd from its state, both required: 0 when no seeded call ran);
+O39's fields: the trial's grader and ``grader_validated``, and each
+``ideas-slice-marker`` row (repo, arm, marker, shown, grades, scores,
+``validated``: whether that grader passed O37, as Vb's verdict said).
+
+O39 (owner, 2026-11-03): marker-feasible is an idea its grader (the marker
+that did not write it) placed in the top ``MARKER_TOP`` of its shown set,
+the slice's pick depth; the headline across configurations counts lens-lane
+ideas only, the all-lanes figure beside it; grades by a marker that failed
+O37 sit in their own columns, each cell "unvalidated", never merged into the
+validated figures. Until Vc's dedupe passes its
+bar, unique mechanisms and the share new to today's generator carry
+``bound``'s label (read from the score row: under-merging makes them upper
+bounds), the raw lists and counts beside them.
 
 Readings: a configuration's ideas are its result, the returned non-proposal
 ``ideas-idea`` rows (``ProbeRow.ideas``' and the slice's population; "lane
@@ -56,6 +69,8 @@ from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
 from autonomous_ai_agents.optimization.idea_context import _totals
 from autonomous_ai_agents.optimization.idea_dedupe import (
+    MAX_DIFFERENT_MERGED,
+    MIN_AGREEMENT,
     DedupeScore,
     MechanismKey,
     Target,
@@ -90,6 +105,9 @@ from .ideas_validate import SCORE_EXPERIMENT as DEDUPE_EXPERIMENT
 REPORT_DIR: Final = SERVICE_DIR.parents[1] / ".claude/handoff/step3/idea-lab/x1"
 TRIAL_EXPERIMENT: Final = "ideas-slice-trial"
 COMBINE_EXPERIMENT: Final = "ideas-slice-combine"
+MARKER_EXPERIMENT: Final = "ideas-slice-marker"
+MARKER_TOP: Final = 3  # ideas_slice.TOP: the picks a set
+NOTE_PREFIXES: Final = ("Vc's ", "These rows are the raw list")
 CONFIGS: Final = tuple(a.key for a in X1_ARMS)  # A, then X1-0 to X1-4
 TODAY, BASELINE = "A", "X1-0"
 LEVERS: Final = CONFIGS[2:]
@@ -200,6 +218,39 @@ class TrialLine(_Row):
     gain_pct: float | None
     floor_pct: float | None
     op_count: OpCount
+    grader: str | None  # None: the fallback order, no marker
+    grader_validated: bool | None
+
+    @model_validator(mode="after")
+    def _graded(self) -> Self:
+        if (self.grader is None) != (self.grader_validated is None):
+            raise ValueError("grader and grader_validated: both or neither")
+        return self
+
+
+class Shown(_Row):
+    label: str
+    position: int
+
+
+class MarkerLine(_Row):
+    repo: str
+    arm: str
+    marker: str
+    shown: tuple[Shown, ...]
+    grades: tuple[bool, ...]  # which shown ideas take this marker's score
+    scores: tuple[float, ...] | None
+    validated: bool
+
+    @model_validator(mode="after")
+    def _aligned(self) -> Self:
+        n = len(self.shown)
+        if (
+            len(self.grades) != n
+            or len(self.shown if self.scores is None else self.scores) != n
+        ):
+            raise ValueError("a marker row's grades or scores do not match its shown")
+        return self
 
 
 class CombineLine(_Row):
@@ -219,6 +270,7 @@ _KINDS: Final[Mapping[str, type[_Row]]] = {
     IDEA_EXPERIMENT: IdeaLine, ROW_EXPERIMENT: ProbeLine, AUDIT_EXPERIMENT: AuditLine,
     PROPOSAL_EXPERIMENT: ProposalLine, TRIAL_EXPERIMENT: TrialLine,
     COMBINE_EXPERIMENT: CombineLine, DEDUPE_EXPERIMENT: DedupeLine,
+    MARKER_EXPERIMENT: MarkerLine,
 }  # fmt: skip
 
 
@@ -258,6 +310,7 @@ class Rows:
     trials: tuple[TrialLine, ...]
     combines: tuple[CombineLine, ...]
     dedupe: DedupeScore | None
+    markers: tuple[MarkerLine, ...] = ()
 
 
 def load_rows(paths: Sequence[Path]) -> Rows:
@@ -267,7 +320,7 @@ def load_rows(paths: Sequence[Path]) -> Rows:
         _of(f, IDEA_EXPERIMENT, IdeaLine), _of(f, ROW_EXPERIMENT, ProbeLine),
         _of(f, AUDIT_EXPERIMENT, AuditLine), _of(f, PROPOSAL_EXPERIMENT, ProposalLine),
         _of(f, TRIAL_EXPERIMENT, TrialLine), _of(f, COMBINE_EXPERIMENT, CombineLine),
-        None,
+        None, _of(f, MARKER_EXPERIMENT, MarkerLine),
     )  # fmt: skip
     for kind, found in ((IDEA_EXPERIMENT, rows.ideas), (ROW_EXPERIMENT, rows.probes)):
         if not found:
@@ -276,8 +329,10 @@ def load_rows(paths: Sequence[Path]) -> Rows:
     if len(scores) != 1:
         raise ValueError(f"no {DEDUPE_EXPERIMENT} row (Vc's dedupe validation)"
                          if not scores else f"{DEDUPE_EXPERIMENT} row twice")  # fmt: skip
-    keyed: Sequence[ProbeLine | IdeaLine | AuditLine | TrialLine | CombineLine]
-    for keyed in (rows.ideas, rows.probes, rows.audits, rows.trials, rows.combines):
+    keyed: Sequence[ProbeLine | IdeaLine | AuditLine | TrialLine | CombineLine
+                    | MarkerLine]  # fmt: skip
+    for keyed in (rows.ideas, rows.probes, rows.audits, rows.trials, rows.combines,
+                  rows.markers):  # fmt: skip
         for r in keyed:
             if r.arm not in CONFIGS or r.repo not in E1_REPOS:
                 raise ValueError(f"{r.repo} {r.arm!r}: not an X1 arm on one of the "
@@ -405,6 +460,21 @@ class Cost:
 
 
 @dataclass(frozen=True)
+class Marked:
+    feasible: int  # in its grader's top ``MARKER_TOP``, grader passed O37
+    graded: int
+    feasible_unvalidated: int  # the same for a grader that failed O37
+    graded_unvalidated: int
+
+
+def _marked(graded: Sequence[tuple[IdeaLine, bool, bool]]) -> Marked:
+    def part(ok: bool) -> list[bool]:
+        return [f for _, f, v in graded if v is ok]
+
+    return Marked(sum(part(True)), len(part(True)), sum(part(False)), len(part(False)))
+
+
+@dataclass(frozen=True)
 class Report:
     rows: Rows
     facts: dict[str, FactsBody]
@@ -416,6 +486,7 @@ class Report:
     deltas: dict[tuple[str, str], tuple[float | None, float | None]]
     costs: dict[str, Cost]
     sample: tuple[IdeaLine, ...]
+    marked: dict[str, tuple[Marked, Marked]]  # (lens lanes, all lanes)
 
 
 def _order(i: IdeaLine) -> tuple[object, ...]:
@@ -528,6 +599,20 @@ def report_of(results: Sequence[Path], e1_dir: Path = E1_DIR) -> Report:
             measures(arm).cost_usd, usd, sum(c.seeded_calls for c in runs),
             math.fsum(c.seeded_cost_usd for c in runs), wins, usd / wins if wins else None,
         )  # fmt: skip
+    at = {(i.repo, i.arm, i.label, i.position): i for i in rows.ideas}
+    graded: list[tuple[IdeaLine, bool, bool]] = []  # idea, feasible, validated
+    for row in (x for x in rows.markers if x.scores is not None):  # None: no order
+        for one, takes, score in zip(
+            row.shown, row.grades, row.scores or (), strict=True
+        ):
+            if not takes:
+                continue
+            if (idea := at.get((row.repo, row.arm, one.label, one.position))) is None:
+                raise ValueError(f"{row.repo} {row.arm} {one.label} #{one.position}: "
+                                 "a graded idea with no ideas-idea row")  # fmt: skip
+            graded.append((idea, score > len(row.shown) - MARKER_TOP, row.validated))
+    marked = {a: (_marked([g for g in mine if g[0].lane in LENSES]), _marked(mine))
+              for a in CONFIGS if (mine := [g for g in graded if g[0].arm == a])}  # fmt: skip
     return Report(
         rows=rows, facts=facts, measures={a: measures(a) for a in CONFIGS},
         proposals=dict(sorted(Counter(i.relaxes.value for i in rows.ideas
@@ -535,7 +620,7 @@ def report_of(results: Sequence[Path], e1_dir: Path = E1_DIR) -> Report:
         overlap=tuple(clusters), square=square,
         margins={a: tuple(sorted(v for i, v in over.items() if i.arm == a))
                  for a in CONFIGS},
-        deltas=deltas, costs=costs, sample=owner_sample(scored),
+        deltas=deltas, costs=costs, sample=owner_sample(scored), marked=marked,
     )  # fmt: skip
 
 
@@ -561,6 +646,32 @@ def _num(value: float | None, digits: int = 2) -> str:
     return "-" if value is None else f"{value:.{digits}f}"
 
 
+def bound(score: DedupeScore | None) -> str | None:
+    """What unique mechanisms and the new share are while the dedupe fails
+    its bar, by the direction Vc's score row shows; None once it passes."""
+    if score is None:
+        return "unvalidated, no pair labelled"
+    if score.passed:
+        return None
+    under = (
+        score.same_pairs > 0 and score.same_merged < MIN_AGREEMENT * score.same_pairs
+    )
+    over = (score.different_merged_share or 0.0) > MAX_DIFFERENT_MERGED
+    if under != over:
+        return ("upper bound, the dedupe under-merges (O39)" if under
+                else "lower bound, the dedupe over-merges")  # fmt: skip
+    return "unvalidated, the dedupe failed its bar"
+
+
+def _tag(label: str | None) -> str:
+    return "" if label is None else f" ({label})"
+
+
+def trial_cell(t: TrialLine) -> str:
+    unvalidated = t.grader_validated is False
+    return t.verdict + (f" (graded by {t.grader}, unvalidated)" if unvalidated else "")
+
+
 def _library_file(r: Report, repo: str, arm: str) -> str:
     rows = r.rows
     audit = {(a.repo, a.arm, a.title): a for a in rows.audits}
@@ -578,15 +689,18 @@ def _library_file(r: Report, repo: str, arm: str) -> str:
             "-" if a is None else a.auditor or "not reviewed",
             "-" if a is None or a.duplicate_of is None
             else a.duplicate_of if dup is None else f"{dup.title} ({dup.arm})",
-            "-" if t is None else t.verdict,
+            "-" if t is None else trial_cell(t),
             "-" if t is None else f"{_num(t.gain_pct, 1)}% / {_num(t.floor_pct, 1)}%",
             "-" if t is None else t.op_count.cell or "-",
             i.lane, i.model or "-", i.returned,
         ])  # fmt: skip
     floor = r.facts[repo].objective.min_relative_gain
+    label = bound(r.rows.dedupe)
     return "\n".join([
         f"# X1 ideas: {repo}, {arm}", "",
         f"Floor {_pct(floor)}; ceilings predicted from E1's profile.", "",
+        *([f"These rows are the raw list behind unique mechanisms and the share "
+           f"new to today's generator{_tag(label)}.", ""] if label else []),
         *_table(("#", "title", "mechanism", "target lines", "ceiling", "audit",
                  "duplicate of", "trial", "gain / floor", "op count", "lane", "model",
                  "returned"), body),
@@ -598,8 +712,39 @@ def _library_file(r: Report, repo: str, arm: str) -> str:
     ])  # fmt: skip
 
 
+def _marker_section(r: Report) -> list[str]:
+    def cell(feasible: int, graded: int, tag: str = "") -> str:
+        return f"{feasible}/{graded}{tag}" if graded else "-"  # "-": no such grade
+
+    def cells(m: Marked) -> list[str]:
+        return [cell(m.feasible, m.graded),
+                cell(m.feasible_unvalidated, m.graded_unvalidated, " unvalidated")]  # fmt: skip
+
+    if not r.marked:
+        return ["No marker grade recorded (no ideas-slice-marker row): no "
+                "marker-feasible count."]  # fmt: skip
+    return [
+        f"An idea its grader (the marker that did not write it) placed in the top "
+        f"{MARKER_TOP} of its shown set, of the ideas graded (the slice's sets). "
+        "The headline counts lens-lane ideas only: S1, the leap and the "
+        "rule-relaxing lanes are left out (O39). The headline holds validated "
+        "grades only; Opus 5's grades of Opus 5.5's ideas (Opus 5.5's leap and "
+        "X1-1's Opus 5.5 lens) sit in their own columns, marked unvalidated "
+        "(Opus 5 failed O37).", "",
+        *_table(("configuration", "lens lanes (headline, validated grades)",
+                 "lens lanes graded by a marker that failed O37 (unvalidated)",
+                 "all lanes (validated)", "all lanes (unvalidated)"),
+                [[a, *cells(lens), *cells(every)]
+                 for a, (lens, every) in r.marked.items()]),
+    ]  # fmt: skip
+
+
 def _measures_file(r: Report, show_raw: bool, verdict: str) -> str:
     raw = ("raw titles",) if show_raw else ()
+    tag, score = _tag(bound(r.rows.dedupe)), r.rows.dedupe
+    note = [] if score is None or score.passed else [
+        f"Vc's {score.labelled} labelled pairs are the dedupe's development set "
+        "for a fix before X2 (O39); X1 is not held for it.", ""]  # fmt: skip
     body = [[a, m.proposed, m.lane, m.unique, *((m.raw,) if show_raw else ()),
              "-" if m.new is None else f"{m.new}/{m.audited}", f"{m.above}/{m.known}",
              m.families, f"{m.feasible}/{m.audited}", f"{m.cost_usd:.4f}"]
@@ -610,6 +755,7 @@ def _measures_file(r: Report, show_raw: bool, verdict: str) -> str:
     return "\n".join([
         "# X1 idea measures (spec-idea-lab 6.2)", "",
         *_table(("dedupe (G4)", "verdict"), [["Vc's validation", verdict]]), "",
+        *note,
         "Ideas: each configuration's result (returned, not a proposal: "
         "ideas-probe's and the slice's population); lane ideas: every lane-reply "
         "idea, its reviewers' removals included; audited: reviewed audits with "
@@ -617,7 +763,7 @@ def _measures_file(r: Report, show_raw: bool, verdict: str) -> str:
         "unique, new, ceilings and families have no A/A band offline, so a "
         "ranking on them is provisional (6.3).", "",
         *_table(("configuration", "ideas proposed", "lane ideas",
-                 "unique mechanisms", *raw, "new to today's generator",
+                 f"unique mechanisms{tag}", *raw, f"new to today's generator{tag}",
                  "ceiling over the floor (of known)", "mechanism families",
                  "auditor-feasible (of audited)", "USD"), body),
         "", "## X1-4 proposals by rule relaxed (no score)", "",
@@ -627,11 +773,12 @@ def _measures_file(r: Report, show_raw: bool, verdict: str) -> str:
         "slice's USD is its engine runs', D64's seeded calls included.", "",
         *_table(("configuration", "ideas USD", "slice USD", "seeded calls",
                  "seeded USD", "wins", "slice USD per win"), costs), "",
+        "## Marker-feasible ideas (6.2, O39)", "", *_marker_section(r), "",
     ])  # fmt: skip
 
 
 def _tables_file(r: Report, show_raw: bool) -> str:
-    levers = CONFIGS[1:]
+    levers, tag = CONFIGS[1:], _tag(bound(r.rows.dedupe))
     overlap = [[c.repo, c.key.mechanism.value, c.key.cell.value,
                 f"{c.key.target.path}:{c.key.target.first}-{c.key.target.last}",
                 *(c.counts.get(a, 0) for a in levers),
@@ -645,18 +792,19 @@ def _tables_file(r: Report, show_raw: bool) -> str:
     ceil = [[a, len(v), r.measures[a].proposed - len(v), sum(x >= 0 for x in v),
              *(_pct(x) for x in quantiles(v) or (None,) * 5)]
             for a, v in r.margins.items()]  # fmt: skip
-    deltas = [[a, m, _num(d), _num(s),
+    deltas = [[a, f"{m}{tag}" if m in ("unique", "new") else m, _num(d), _num(s),
                "-" if d is None else "no A/A band (provisional)" if s is None
                else "inside the noise" if abs(d) <= s else "beyond the noise"]
               for (a, m), (d, s) in r.deltas.items()]  # fmt: skip
     return "\n".join([
         "# X1 comparison tables (spec-idea-lab 6.5)", "",
-        "## 1 Mechanism x configuration overlap", "",
+        f"## 1 Mechanism x configuration overlap{tag}", "",
         "Each deduplicated mechanism (keyed ideas only) and how many ideas of "
         "each configuration it holds.", "",
         *_table(("library", "mechanism", "cell", "target", *levers, "unique to",
                  *(("raw titles",) if show_raw else ())), overlap),
-        "", "## 2 X1-1 model x lens (ideas/unique mechanisms/ceilings over floor)", "",
+        "", f"## 2 X1-1 model x lens (ideas/unique mechanisms{tag}/ceilings over "
+        "floor)", "",
         *_table(("model", *LENSES, "all lenses"), square),
         "", "## 3 Predicted ceilings against the floor (ceiling - floor)", "",
         *_table(("configuration", "with a ceiling", "unknown", "over the floor",
