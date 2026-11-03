@@ -754,6 +754,16 @@ blocks it.
   lab's learning mechanism, W3 deferred. Budget: X1 (~42 USD) is ~28 % of Window
   1's 148.73 USD; read every idea list in full; some confirmatory rungs may
   spill into Window 2.
+- **O38. X1 dispatch and configurations (owner, 2026-11-03).** Dispatch
+  approved: `ideas-views` first, then `ideas-marker` and `ideas-validate` (about
+  32 USD). The marker report gives the count of rows with a real verdict and the
+  number of positives before the AUC; under about 20 positives the validation
+  decides nothing and the execution slice decides instead. X1-4 is trimmed to S1
+  plus the four rule-relaxing lanes (X1-0 is the baseline). X1-1 equalises D58's
+  think line across every lane, on for all six models, so it matches X1-0 on the
+  line and differs by the models alone (a model x lens table with one model
+  carrying an extra instruction is not readable). Vb's and Vc's size overruns
+  accepted (harness code).
 - **D25 amended (G11, W2, D13): a kept verdict's lesson weight follows its
   combine.** Held or skipped 1.0, applied in a failed greedy re-test while
   another fallback held 0.5 (`combine:unconfirmed`), not reproduced 0.25
