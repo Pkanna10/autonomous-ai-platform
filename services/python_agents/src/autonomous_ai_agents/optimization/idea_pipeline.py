@@ -9,8 +9,8 @@ S2 sends the lens lanes and the leap in parallel; S4a filters
 deterministically; S3, the reviewer, may only remove, and is shown the
 shared code plus whatever the views of the surviving ideas' lanes showed;
 S4b picks the portfolio and interleaves it with S1. A second call in a run
-is S1 only. The run's ``workloads`` reach the input-shape view through
-``generate``.
+is S1 only, unless it is seeded (G5b, D64). The run's ``workloads`` reach the
+input-shape view through ``generate``.
 
 What is already taken (G4), two switches, both off by default (off keeps
 the parallel lanes and the portfolio exactly as they were):
@@ -47,6 +47,11 @@ sequential lanes are off), so the prompt grows once. No verdict (round 1) is
 no seed; a second call with a seed runs its lanes again instead of S1 only.
 Seeds on, the result records each hypothesis's key as a ``KEY_EVENT`` event,
 which the node reads back (``idea_dedupe.recorded_keys``) next round.
+A seeded second call is its own cost line (D64): its result carries a
+``SEEDED_CALL`` event (the seeds shown, the S2 lanes sent), and an error
+raised inside it after a request was sent carries ``SEEDED_NOTE``
+(``seeded_failure``), so the node can charge the call's whole spend, S1's
+included, to its own counters either way.
 
 What they may change (G3): ``IDEAS_RELAX_LANES`` (off by default) adds
 rule-relaxing lanes to S2, after every other lane (in sequence, no other lane
@@ -219,6 +224,10 @@ _FRAMEWORK_NOTE: Final = re.compile(
     r"framework (none|(?:view|rule) [a-z_]+)"
 )
 """A note ``generate`` writes per S2 lane with frameworks on (G5)."""
+SEEDED_CALL: Final = "seeded_second_call"
+"""The code of the event a seeded second call's result carries (D64)."""
+SEEDED_NOTE: Final = "D64: raised inside a seeded second generator call"
+"""The note an error raised inside a seeded second call carries (D64)."""
 _CLASS_ORDER: Final = {
     ChangeClass.efficiency: 0,
     ChangeClass.behaviour: 1,
@@ -277,6 +286,8 @@ class _Call:
     keys: dict[str, MechanismKey] = field(default_factory=dict)
     frameworks: dict[Lane, str] = field(default_factory=dict)
     seeds: tuple[Seed, ...] = ()
+    seeded: bool = False
+    """A second call with a seed to show: it runs its lanes again (D64)."""
 
 
 class IdeaPipelineGenerator:
@@ -386,9 +397,10 @@ class IdeaPipelineGenerator:
                   understanding=understanding)  # fmt: skip
         if self._seeded:
             c.seeds = _round_seeds(verdicts, notes)
+        c.seeded = call_index >= 1 and bool(c.seeds)
         named = [*avoid_titles, *(t.name for t in research.by_slug.values())]
         s1 = self._s1(c, n, named)
-        if call_index >= 1 and not c.seeds:
+        if call_index >= 1 and not c.seeded:
             notes.append("second generator call: S1 only, earlier titles avoided (D48)")
             return self._result(c, s1, n)
         if call_index >= 1:
@@ -416,6 +428,10 @@ class IdeaPipelineGenerator:
         table = on_the_table([*(i.title for i in s1), *named], fence, notes)
         found = self._s2(c, lanes, order, table, examples)
         if found is None:
+            if c.seeded:  # S1 alone is what D48 spends anyway: no seeded call
+                c.seeded = False
+                notes.append("seeded second call: its lanes were unaffordable, "
+                             "counted as S1 only (D48)")  # fmt: skip
             return self._result(c, s1, n)
         others = [i for i in found if i.proposal is None]
         proposals = self._proposals(c, found, avoid_titles, lessons)
@@ -489,7 +505,7 @@ class IdeaPipelineGenerator:
         table = on_the_table(named, c.fence, c.notes)
         job = self._lane_job(c, Lane.obvious, n, table, ())
         c.budget.check(job.estimate)  # BudgetExceeded: unaffordable, as today
-        self._run([job], c.budget)
+        self._run(c, [job])
         return self._read(c, Lane.obvious, job, n)
 
     def _s2(
@@ -525,7 +541,7 @@ class IdeaPipelineGenerator:
             return None
         if self._sequential:
             return self._in_sequence(c, order, jobs, sizes, table, examples)
-        self._run(list(jobs.values()), c.budget)
+        self._run(c, list(jobs.values()))
         found: list[IdeaCandidate] = []
         for lane in order:  # the run's lane order decides dedup (D52)
             found += self._read(c, lane, jobs[lane], sizes[lane])
@@ -566,7 +582,7 @@ class IdeaPipelineGenerator:
                               "estimate_usd": job.estimate},
                     ))  # fmt: skip
                     break
-            self._run([job], c.budget)
+            self._run(c, [job])
             found += self._read(c, lane, job, sizes[lane])
         return found
 
@@ -683,7 +699,7 @@ class IdeaPipelineGenerator:
             c.budget.check(job.estimate)
         except BudgetExceeded:
             return None, "the reviewer is unaffordable"
-        self._run([job], c.budget)
+        self._run(c, [job])
         self._stopped(c, job)
         if job.result is None:
             return None, f"the reviewer failed: {_failure(job)}"
@@ -744,12 +760,13 @@ class IdeaPipelineGenerator:
         )
         return _Job(label, transport, request, estimate, Budget(cap_usd=estimate))
 
-    def _run(self, jobs: Sequence[_Job], parent: Budget) -> None:
+    def _run(self, c: _Call, jobs: Sequence[_Job]) -> None:
         """Send ``jobs`` on their child budgets, up to ``IDEAS_LANE_WORKERS`` at
-        once; record every child on ``parent`` here, then raise the first
-        error that is not a lane failure. After such an error, lanes not yet
-        started are not sent."""
-        stop = threading.Event()
+        once; record every child on the call's budget here, then raise the
+        first error that is not a lane failure, noted ``SEEDED_NOTE`` in a
+        seeded call (D64). After such an error, lanes not yet started are
+        not sent."""
+        parent, stop = c.budget, threading.Event()
 
         def work(job: _Job) -> None:
             if stop.is_set():
@@ -776,10 +793,12 @@ class IdeaPipelineGenerator:
                 except BudgetExceeded as exc:
                     overrun = overrun or exc
         fatal = [e for j in jobs if (e := j.error) and not isinstance(e, _SOFT)]
-        if fatal:
-            raise fatal[0]
-        if overrun is not None:
-            raise overrun
+        raised = fatal[0] if fatal else overrun
+        if raised is None:
+            return
+        if c.seeded:  # the node charges this call's spend to its line (D64)
+            raised.add_note(SEEDED_NOTE)
+        raise raised
 
     def _read(self, c: _Call, lane: Lane, job: _Job, n: int) -> list[IdeaCandidate]:
         """The lane's validated ideas; a failed or unusable lane gives none."""
@@ -858,6 +877,15 @@ class IdeaPipelineGenerator:
                    f"novel idea(s) past the result's bound of {bound} dropped")  # fmt: skip
         ideas = (*head, *tail[:room], *proposals)
         hypotheses = tuple(self._hypothesis(c, i) for i in ideas)
+        if c.seeded:  # the node's own cost line for this call (D64)
+            sent = [lane.value for lane in c.per_lane if lane is not Lane.obvious]
+            lanes = f"lanes {', '.join(sent)}" if sent else "no lane sent"
+            c.events.append(GenerateEvent(
+                code=SEEDED_CALL,
+                message=f"seeded second generator call (D64): {len(c.seeds)} "
+                        f"seed(s), {lanes}",
+                data={"seeds": len(c.seeds), "lanes": ",".join(sent)},
+            ))  # fmt: skip
         if self._seeded:  # the keys the next round seeds from (G5b)
             for idea, hypothesis in zip(ideas, hypotheses, strict=True):
                 key = c.keys.get(idea.id)
@@ -958,6 +986,12 @@ def _round_seeds(verdicts: RunVerdicts | None, notes: list[str]) -> tuple[Seed, 
     count_note(notes, unkeyed, "verdict(s) not seeded: no mechanism key recorded")
     found.sort(key=lambda seed: seed.outcome is not VerdictOutcome.keep)
     return tuple(found)
+
+
+def seeded_failure(exc: BaseException) -> bool:
+    """Whether ``exc`` was raised inside a seeded second call (D64)."""
+    notes: list[str] = getattr(exc, "__notes__", [])
+    return SEEDED_NOTE in notes
 
 
 def _switch(config: Settings, name: str) -> bool:

@@ -50,7 +50,7 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Literal, Protocol, runtime_checkable
+from typing import Literal, Protocol, cast, runtime_checkable
 
 from langgraph.types import interrupt
 from pydantic import ValidationError
@@ -163,6 +163,10 @@ from autonomous_ai_agents.optimization.evolve import (
     used_pairs,
 )
 from autonomous_ai_agents.optimization.idea_dedupe import recorded_keys
+from autonomous_ai_agents.optimization.idea_pipeline import (
+    SEEDED_CALL,
+    seeded_failure,
+)
 from autonomous_ai_agents.optimization.idea_types import is_proposal, relaxed_rules
 from autonomous_ai_agents.optimization.judges import (
     OP_COUNT_JUDGE,
@@ -1064,6 +1068,31 @@ def _discovery_spend(state: EngineState, budget: Budget, *, called: bool) -> Nod
     }
 
 
+def _seeded_totals(state: EngineState) -> tuple[int, float]:
+    """D64's counters; a checkpoint written before them reads zeros."""
+    return state.get("seeded_calls", 0), state.get("seeded_cost_usd", 0.0)
+
+
+def _seeded_line(
+    state: EngineState, spend: NodeDelta, seeded: bool
+) -> tuple[NodeDelta, list[EngineEvent]]:
+    """D64's own cost line: a seeded second call's whole spend (what
+    ``_discovery_spend`` added to discovery) on the seeded counters, and an
+    event with the call's USD and the run's seeded totals."""
+    if not seeded:
+        return spend, []
+    discovery = cast(float, spend["discovery_cost_usd"])
+    usd = discovery - state["discovery_cost_usd"]
+    calls, total = _seeded_totals(state)
+    calls, total = calls + 1, total + usd
+    message = (f"seeded second generator call (D64): {usd:.6f} USD; {calls} call(s)"
+               f", {total:.6f} USD of {discovery:.6f} USD discovery")  # fmt: skip
+    data: ScalarDict = {"cost_usd": usd, "seeded_calls": calls,
+                        "seeded_cost_usd": total, "discovery_cost_usd": discovery}  # fmt: skip
+    event = _note(state, RunPhase.hypotheses, "seeded_call_cost", message, data=data)
+    return {**spend, "seeded_calls": calls, "seeded_cost_usd": total}, [event]
+
+
 def _sift(
     ctx: NodeContext, state: EngineState, generated: Sequence[Hypothesis]
 ) -> tuple[list[Hypothesis], list[Hypothesis], list[str]]:
@@ -1168,18 +1197,28 @@ def _generate(
             verdicts=_run_verdicts(state),
         )
     except BudgetExceeded as exc:  # the reserve or the share refused it (D7)
-        spend = _discovery_spend(state, budget, called=budget.spent_usd > cost)
+        called = budget.spent_usd > cost
+        spend, line = _seeded_line(
+            state, _discovery_spend(state, budget, called=called),
+            called and seeded_failure(exc),
+        )  # fmt: skip
         event = _note(state, phase, unaffordable, str(exc)[:300], level=warn)
-        return _Generated([], {**spend, "discovery_exhausted": True}, [event])
+        return _Generated([], {**spend, "discovery_exhausted": True}, [event, *line])
     except _SOFT_DISCOVERY as exc:
         message = f"{type(exc).__name__}: {str(exc)[:300]}"
         event = _note(state, phase, "generate_failed", message, level=warn)
-        return _Generated([], _discovery_spend(state, budget, called=True), [event])
+        spend, line = _seeded_line(state, _discovery_spend(state, budget, called=True),
+                                   seeded_failure(exc))  # fmt: skip
+        return _Generated([], spend, [event, *line])
     except Exception as exc:  # LLMConfigError or a bug: the run ends, charged
-        keep_progress(exc, _discovery_spend(state, budget, called=True))
+        spend = _discovery_spend(state, budget, called=True)
+        keep_progress(exc, _seeded_line(state, spend, seeded_failure(exc))[0])
         raise
     kept, parked, notes = _sift(ctx, state, result.hypotheses)
-    delta = _discovery_spend(state, budget, called=True)
+    seeded = any(found.code == SEEDED_CALL for found in result.events)
+    delta, line = _seeded_line(
+        state, _discovery_spend(state, budget, called=True), seeded
+    )
     delta["parked"] = [*state["parked"], *parked]
     proposals = sum(1 for h in parked if is_proposal(h))
     counts: ScalarDict = {"kept": len(kept), "parked": len(parked),
@@ -1191,6 +1230,7 @@ def _generate(
         events.append(
             _note(state, phase, found.code, found.message, level=level, data=data)
         )
+    events += line
     for note in (*result.notes, *notes):
         events.append(_note(state, phase, "generate_note", note))
     return _Generated(kept, delta, events, tuple(parked))
@@ -2005,6 +2045,7 @@ def _run_conditions(
         )
     )
     lines += [*_step3_conditions(state), *_output_conditions(state, quality)]
+    lines += _seeded_conditions(state)
     lines.append(f"- Peak RSS: {_RSS_DEFINITION}")
     refs = list(
         dict.fromkeys(
@@ -2396,6 +2437,16 @@ def _step3_conditions(state: EngineState) -> list[str]:
         said = "; ".join(str(e.data.get("notes")) for e in notes)
         lines.append(f"- Combiner notes: {_cell(said, limit=_NOTES_LIMIT)}")
     return lines
+
+
+def _seeded_conditions(state: EngineState) -> list[str]:
+    """D64's report line, only once a seeded second call was made."""
+    calls, usd = _seeded_totals(state)
+    if calls == 0:
+        return []
+    discovery = state["discovery_cost_usd"]
+    return [f"- Seeded second generator calls (D64): {calls}, {usd:.4f} USD of "
+            f"{discovery:.4f} USD discovery"]  # fmt: skip
 
 
 def _combination_line(state: EngineState, prefix: str) -> list[str]:

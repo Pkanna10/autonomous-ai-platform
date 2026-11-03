@@ -80,6 +80,7 @@ from autonomous_ai_agents.optimization.idea_prompts import (
 from autonomous_ai_agents.optimization.idea_review import REVIEW_SYSTEM_PROMPT
 from autonomous_ai_agents.optimization.idea_types import (
     LENS_LANES,
+    GenerateEvent,
     Lane,
     Mechanism,
     MorphCell,
@@ -2228,3 +2229,94 @@ def test_a_trials_own_primary_gain_and_judge_floor_set_its_ratio() -> None:
     run, _result = _seeded(SEEDS, RunVerdicts(trialled=(fallback,), noise_floor=0.04))
     (line,) = _taken(_lens_request(run, Lane.far)) or []
     assert isinstance(line, dict) and line["gain_over_floor"] == 0.75
+
+
+# --------------------------------------------------------------------------
+# D64's own cost line: the pipeline marks a seeded second call for the node
+# --------------------------------------------------------------------------
+
+SEEDED_CODE = "seeded_second_call"
+SEEDED_NOTE = "D64: raised inside a seeded second generator call"
+
+
+def _marks(result: GenerateResult) -> list[GenerateEvent]:
+    return [e for e in result.events if e.code == SEEDED_CODE]
+
+
+def _noted_seeded(exc: BaseException) -> bool:
+    return SEEDED_NOTE in getattr(exc, "__notes__", ())
+
+
+def test_a_seeded_second_call_is_marked_with_its_seeds_and_lanes_sent() -> None:
+    """
+    GIVEN seeds on and a second call with three seeds to show
+    THEN the result carries one info ``seeded_second_call`` event naming the
+         seeds shown and the S2 lanes sent, in the run's rotation
+    """
+    _run, result = _seeded(SEEDS, VERDICTS, call_index=1)
+    (event,) = _marks(result)
+    assert event.level is EventLevel.info
+    assert event.data == {"seeds": 3, "lanes": ",".join(x.value for x in ROTATION)}
+    assert event.message.startswith("seeded second generator call (D64): 3 seed(s)")
+
+
+@pytest.mark.parametrize(
+    ("cfg", "call_index", "verdicts"),
+    [
+        pytest.param(SEEDS, 0, VERDICTS, id="seeds on, first call"),
+        pytest.param(SEEDS, 1, RunVerdicts(trialled=(PROP, NOKEY)), id="nothing to seed"),
+        pytest.param(BASE, 1, VERDICTS, id="seeds off, second call"),
+    ],
+)  # fmt: skip
+def test_no_other_call_is_marked(
+    cfg: Settings, call_index: int, verdicts: RunVerdicts
+) -> None:
+    _run, result = _seeded(cfg, verdicts, call_index=call_index)
+    assert _marks(result) == []
+
+
+def test_a_seeded_call_whose_lanes_are_unaffordable_counts_as_s1_only() -> None:
+    """S2 skipped whole (``discovery_unaffordable``): the call spent S1 alone,
+    what D48 spends anyway, so it is no seeded call: no mark, and a note says
+    so; the seeded cost line holds only calls whose lanes ran again."""
+    probe = _Run(lane=[S1_REPLY])
+    probe(call_index=1)
+    s1_estimate = _estimate(probe.transports["lane"], probe.requests("lane")[0])
+    run = _Run(lane=[S1_REPLY, *_lens_replies()], leap=[LEAP], reviewer=[REVIEW],
+               cfg=SEEDS)  # fmt: skip
+    result = run(budget=Budget(s1_estimate * 2), call_index=1, verdicts=VERDICTS)
+    assert len(run.requests("lane")) == 1
+    assert _marks(result) == []
+    assert any("counted as S1 only (D48)" in note for note in result.notes)
+
+
+def test_an_error_inside_a_seeded_call_carries_the_d64_note() -> None:
+    """
+    GIVEN a lane whose bill overruns the parent budget, or a leap refused
+          for its configuration, inside a seeded second call
+    THEN the error raised carries the D64 note after the spend is recorded;
+         the same overrun on a call that is not seeded carries none
+    """
+    huge = _message(
+        {"hypotheses": []}, usage={"input_tokens": 10, "output_tokens": 400_000}
+    )
+
+    def overrun(cfg: Settings, call_index: int) -> tuple[BudgetExceeded, Budget]:
+        run = _Run(lane=[S1_REPLY, *_lens_replies(eliminate=huge)], leap=[LEAP],
+                   cfg=cfg)  # fmt: skip
+        budget = Budget(4.0)
+        with pytest.raises(BudgetExceeded, match="recorded spend") as caught:
+            run(budget=budget, call_index=call_index, verdicts=VERDICTS)
+        return caught.value, budget
+
+    error, budget = overrun(SEEDS, 1)
+    assert _noted_seeded(error) and budget.spent_usd > 4.0
+    for cfg, call_index in ((SEEDS, 0), (BASE, 0)):
+        error, _budget = overrun(cfg, call_index)
+        assert not _noted_seeded(error)
+    denied = LLMConfigError("Claude API HTTP 401: check ANTHROPIC_API_KEY")
+    run = _Run(lane=[S1_REPLY, *_lens_replies()], leap=[denied], cfg=SEEDS)
+    with pytest.raises(LLMConfigError) as caught:
+        run(call_index=1, verdicts=VERDICTS)
+    assert _noted_seeded(caught.value)
+    assert caught.value.__notes__.count(SEEDED_NOTE) == 1
