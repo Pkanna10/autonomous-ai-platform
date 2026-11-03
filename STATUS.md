@@ -777,6 +777,18 @@ blocks it.
   lab's learning mechanism, W3 deferred. Budget: X1 (~42 USD) is ~28 % of Window
   1's 148.73 USD; read every idea list in full; some confirmatory rungs may
   spill into Window 2.
+- **O40. Marker-feasible pooled; run 2 pre-approved (owner, 2026-11-03).**
+  Marker-feasible is redefined: per library, every configuration's lens-lane
+  ideas form one pool, the validated marker ranks the pool, and the measure is
+  how many of the pool's top 3 each configuration supplied, with the full pooled
+  ranking reported beside the count. _Why:_ a within-set top 3 gives every
+  configuration the same count and measures the pick depth, not the ideas.
+  Share-new from the auditor's duplicate links, labelled an upper bound, is
+  confirmed; V-O39's size is accepted. X1's configuration run 2 (mistune,
+  sqlparse, markdown, idna) is pre-approved on three conditions from run 1:
+  every library and configuration ran, no request stopped at max_tokens or was
+  refused, and cost per configuration is within range of the estimate; if all
+  hold it is dispatched without asking, else the Lead stops and reports.
 - **O39. The marker, the dedupe and X1's cost (owner, 2026-11-03).** Opus 5.5 is
   the marker (passed O37 at AUC 0.671). Independence: ideas written by Opus 5.5
   (the leap in every configuration, the Opus 5.5 lens in X1-1) are graded by
