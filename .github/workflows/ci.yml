@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: 'Live suite: stage-a, corpus, attack, hard, oss, or an experiment (probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, ab-v2-p, ab-v2, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, evolve-p, heal-hard, build, grader, upstream-verify, upstream, agent-probes, heal-agent, research-agent, watch, watch-cleanup, ideas-probe, ideas-views, ideas-marker, ideas-validate) (one at a time: together they need more than the 150 USD ceiling)'
+        description: 'Live suite: stage-a, corpus, attack, hard, oss, or an experiment (probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, ab-v2-p, ab-v2, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, evolve-p, heal-hard, build, grader, upstream-verify, upstream, agent-probes, heal-agent, research-agent, watch, watch-cleanup, ideas-probe, ideas-views, ideas-marker, ideas-validate, ideas-slice) (one at a time: together they need more than the 150 USD ceiling)'
         type: choice
         options:
           [
@@ -56,6 +56,7 @@ on:
             ideas-views,
             ideas-marker,
             ideas-validate,
+            ideas-slice,
           ]
         default: stage-a
       mode:
@@ -74,7 +75,7 @@ on:
         options: [default, claude-sonnet-5-5]
         default: default
       suite_cap_usd:
-        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75 (corpus_select controls 15), hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 112, sweep-fable 41, sweep-record 24, ab 140, ab-v2-p 59, ab-v2 68 (L5b; ab_arms A, L5a, 17), escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, evolve-p 56, heal-hard 8, build 27, grader 2, upstream-verify 0 (no request, but the cap must be above 0), upstream 50, agent-probes 1, heal-agent 8, research-agent 8, watch 2, watch-cleanup 2, ideas-probe 46 (E1, four libraries of ideas_repos, one 12; ideas_arms count 9, C-low,C-high 20; X1 56 for four libraries of ideas_repos, under the 80 USD fuse, one 14), ideas-views 0 (no request, but the cap must be above 0), ideas-marker 24 (Vb: 48 rank sets x Opus 5.5 and Opus 5), ideas-validate 8 (Vc: the Sonnet 5 and Fable 5 smoke requests, 17 Opus 5 label requests)'
+        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75 (corpus_select controls 15), hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 112, sweep-fable 41, sweep-record 24, ab 140, ab-v2-p 59, ab-v2 68 (L5b; ab_arms A, L5a, 17), escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, evolve-p 56, heal-hard 8, build 27, grader 2, upstream-verify 0 (no request, but the cap must be above 0), upstream 50, agent-probes 1, heal-agent 8, research-agent 8, watch 2, watch-cleanup 2, ideas-probe 46 (E1, four libraries of ideas_repos, one 12; ideas_arms count 9, C-low,C-high 20; X1 56 for four libraries of ideas_repos, under the 80 USD fuse, one 14), ideas-views 0 (no request, but the cap must be above 0), ideas-marker 24 (Vb: 48 rank sets x Opus 5.5 and Opus 5), ideas-validate 8 (Vc: the Sonnet 5 and Fable 5 smoke requests, 17 Opus 5 label requests), ideas-slice 64 (Ve: two libraries of slice_repos x (4 configurations x 3 trials x 2.50 + the markers 2.00), one 32; under the 80 USD fuse)'
         type: string
         default: '12'
       oss_repo:
@@ -115,6 +116,10 @@ on:
         type: choice
         options: ['A,B', A]
         default: 'A,B'
+      slice_repos:
+        description: 'ideas-slice only, and required there: LIVE_SLICE_REPOS, one or two of sqlparse, pyparsing, tomli and sortedcontainers (the control), comma-separated (two dispatches: sqlparse,pyparsing then tomli,sortedcontainers); the need is the libraries x 32'
+        type: string
+        default: ''
 
 # Least privilege by default; a job that needs more says so itself.
 permissions:
@@ -641,8 +646,12 @@ jobs:
     # each, about twice one short structured reply: 209 minutes. ideas-validate 60
     # (ideas_validate.JOB_MINUTES): 2 smoke requests and 17 label requests
     # at 2 minutes each (one reply of about 3k output tokens at medium
-    # effort, 2x margin), 38 minutes, no clone.
-    timeout-minutes: ${{ inputs.suite == 'sweep' && 240 || inputs.suite == 'sweep-fable' && 180 || inputs.suite == 'sweep-record' && 150 || inputs.suite == 'ab' && 360 || inputs.suite == 'noise' && 90 || inputs.suite == 'oss-ab' && 120 || inputs.suite == 'evolve' && 300 || inputs.suite == 'evolve-more' && 300 || inputs.suite == 'evolve-p' && 300 || inputs.suite == 'ab-v2-p' && 300 || inputs.suite == 'ab-v2' && 300 || inputs.suite == 'build' && 120 || inputs.suite == 'upstream-verify' && 150 || inputs.suite == 'upstream' && 300 || inputs.suite == 'heal-agent' && 120 || inputs.suite == 'research-agent' && 45 || inputs.suite == 'ideas-probe' && 240 || inputs.suite == 'ideas-views' && 30 || inputs.suite == 'ideas-marker' && 240 || inputs.suite == 'ideas-validate' && 60 || inputs.suite == 'watch' && 90 || inputs.suite == 'escalation' && 90 || inputs.suite == 'triage' && 90 || inputs.suite == 'papers' && 60 || inputs.suite == 'web' && 90 || inputs.suite == 'corpus' && 120 || inputs.suite == 'oss' && 300 || inputs.suite == 'hard' && 90 || inputs.suite == 'attack' && 45 || 30 }}
+    # effort, 2x margin), 38 minutes, no clone. ideas-slice 150
+    # (ideas_slice.JOB_MINUTES): two libraries, each a pinned clone (1
+    # minute), 8 marker requests at Vb's 2 minutes and 4 engine loops of up
+    # to 3 trials at 9 minutes (L2b: 42 minutes for 10 OSS loops of up to 3
+    # trials under the Step 3 noise rule, 4.2 a loop, twice that): 106.
+    timeout-minutes: ${{ inputs.suite == 'sweep' && 240 || inputs.suite == 'sweep-fable' && 180 || inputs.suite == 'sweep-record' && 150 || inputs.suite == 'ab' && 360 || inputs.suite == 'noise' && 90 || inputs.suite == 'oss-ab' && 120 || inputs.suite == 'evolve' && 300 || inputs.suite == 'evolve-more' && 300 || inputs.suite == 'evolve-p' && 300 || inputs.suite == 'ab-v2-p' && 300 || inputs.suite == 'ab-v2' && 300 || inputs.suite == 'build' && 120 || inputs.suite == 'upstream-verify' && 150 || inputs.suite == 'upstream' && 300 || inputs.suite == 'heal-agent' && 120 || inputs.suite == 'research-agent' && 45 || inputs.suite == 'ideas-probe' && 240 || inputs.suite == 'ideas-views' && 30 || inputs.suite == 'ideas-marker' && 240 || inputs.suite == 'ideas-validate' && 60 || inputs.suite == 'ideas-slice' && 150 || inputs.suite == 'watch' && 90 || inputs.suite == 'escalation' && 90 || inputs.suite == 'triage' && 90 || inputs.suite == 'papers' && 60 || inputs.suite == 'web' && 90 || inputs.suite == 'corpus' && 120 || inputs.suite == 'oss' && 300 || inputs.suite == 'hard' && 90 || inputs.suite == 'attack' && 45 || 30 }}
     defaults:
       run:
         working-directory: ./services/python_agents
@@ -752,13 +761,14 @@ jobs:
           INPUT_IDEAS_ARMS: ${{ inputs.ideas_arms }}
           INPUT_IDEAS_REPOS: ${{ inputs.ideas_repos }}
           INPUT_AB_ARMS: ${{ inputs.ab_arms }}
+          INPUT_SLICE_REPOS: ${{ inputs.slice_repos }}
           LIVE_RESULTS_PATH: ${{ runner.temp }}/live-results.jsonl
         run: |
           if [ -z "${ANTHROPIC_API_KEY}" ]; then
             echo "::error::the ANTHROPIC_API_KEY secret of environment 'live' is not set"
             exit 1
           fi
-          corpus=(--ignore=tests/live/test_corpus_live.py --ignore=tests/live/test_attack_corpus_live.py --ignore=tests/live/test_hard_corpus_live.py --ignore=tests/live/test_oss_live.py --ignore=tests/live/experiments --ignore=tests/live/test_sweep_live.py --ignore=tests/live/test_ab_live.py --ignore=tests/live/test_escalation_live.py --ignore=tests/live/test_noise_live.py --ignore=tests/live/test_oss_ab_live.py --ignore=tests/live/test_evolution_live.py --ignore=tests/live/test_build_live.py --ignore=tests/live/test_grader_agreement_live.py --ignore=tests/live/test_upstream_verify_live.py --ignore=tests/live/test_upstream_live.py --ignore=tests/live/test_ideas_probe_live.py --ignore=tests/live/test_ideas_views_live.py --ignore=tests/live/test_ideas_marker_live.py --ignore=tests/live/test_ideas_validate_live.py)
+          corpus=(--ignore=tests/live/test_corpus_live.py --ignore=tests/live/test_attack_corpus_live.py --ignore=tests/live/test_hard_corpus_live.py --ignore=tests/live/test_oss_live.py --ignore=tests/live/experiments --ignore=tests/live/test_sweep_live.py --ignore=tests/live/test_ab_live.py --ignore=tests/live/test_escalation_live.py --ignore=tests/live/test_noise_live.py --ignore=tests/live/test_oss_ab_live.py --ignore=tests/live/test_evolution_live.py --ignore=tests/live/test_build_live.py --ignore=tests/live/test_grader_agreement_live.py --ignore=tests/live/test_upstream_verify_live.py --ignore=tests/live/test_upstream_live.py --ignore=tests/live/test_ideas_probe_live.py --ignore=tests/live/test_ideas_views_live.py --ignore=tests/live/test_ideas_marker_live.py --ignore=tests/live/test_ideas_validate_live.py --ignore=tests/live/test_ideas_slice_live.py)
           # need: the sum of the caps the suite's live tests ask the ledger for
           # (Stage A 8.55, corpus 15 x 5, attack 3 x 4, hard 10 x 5, oss at most
           # 10 x 5; the Window 0 experiments under tests/live/experiments: probes
@@ -805,6 +815,9 @@ jobs:
           # ideas-validate 8.0 (Vc: the smokes 0.05 Sonnet
           # 5 + 0.15 Fable 5, each 3,000 counted tokens at 2,048, and 17 Opus 5
           # label requests x 0.45625, 25,000 counted tokens at 12,000, 7.80),
+          # ideas-slice 64.0 (Ve: 2 libraries a dispatch x (4 configurations x
+          # 3 trials x 2.50, E2's per-trial worst case, + the markers' 2.00:
+          # 4 sets x (Opus 5.5 0.22 + Opus 5 0.275) rounded up); one 32),
           # rounded up; a smaller cap would refuse, and fail, the later
           # tests of the suite.
           case "${INPUT_SUITE}" in
@@ -846,8 +859,9 @@ jobs:
             ideas-views) paths=(tests/live/test_ideas_views_live.py); need=0 ;;
             ideas-marker) paths=(tests/live/test_ideas_marker_live.py); need=24 ;;
             ideas-validate) paths=(tests/live/test_ideas_validate_live.py); need=8 ;;
+            ideas-slice) paths=(tests/live/test_ideas_slice_live.py); need=64 ;;
             *)
-              echo "::error::unknown suite input (stage-a, corpus, attack, hard, oss, probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, ab-v2-p, ab-v2, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, evolve-p, heal-hard, build, grader, upstream-verify, upstream, agent-probes, heal-agent, research-agent, watch, watch-cleanup, ideas-probe, ideas-views, ideas-marker or ideas-validate)"
+              echo "::error::unknown suite input (stage-a, corpus, attack, hard, oss, probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, ab-v2-p, ab-v2, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, evolve-p, heal-hard, build, grader, upstream-verify, upstream, agent-probes, heal-agent, research-agent, watch, watch-cleanup, ideas-probe, ideas-views, ideas-marker, ideas-validate or ideas-slice)"
               exit 1
               ;;
           esac
@@ -946,6 +960,27 @@ jobs:
             exit 1
           elif [ -n "${ideas_repos}" ]; then
             echo "::error::ideas_repos is only for the ideas-probe suite"
+            exit 1
+          fi
+          # The execution slice (Ve): X1's results (both X1 dispatches) and
+          # Vb's (the marker's verdict), committed by the Lead at
+          # tests/fixtures/ideas_slice/ (refused before any spend while
+          # missing), with the operation-count judge on (spec 6.5) and the
+          # Step 3 noise rule (normal engine trials). slice_repos names the
+          # dispatch's one or two libraries; the need is their count x 32.
+          slice_repos="${INPUT_SLICE_REPOS-}"
+          if [ "${INPUT_SUITE}" = ideas-slice ]; then
+            if ! [[ "${slice_repos}" =~ ^[a-z][a-z0-9_]{0,39}(,[a-z][a-z0-9_]{0,39})?$ ]]; then
+              echo "::error::ideas-slice needs slice_repos, one or two OSS library names (lower case, comma-separated)"
+              exit 1
+            fi
+            commas="${slice_repos//[^,]/}"
+            need=$(((${#commas} + 1) * 32))
+            export LIVE_SLICE_REPOS="${slice_repos}" OP_COUNT_JUDGE=true
+            export LIVE_SLICE_IDEAS=tests/fixtures/ideas_slice/x1-1.jsonl,tests/fixtures/ideas_slice/x1-2.jsonl
+            export LIVE_SLICE_MARKER=tests/fixtures/ideas_slice/marker.jsonl
+          elif [ -n "${slice_repos}" ]; then
+            echo "::error::slice_repos is only for the ideas-slice suite"
             exit 1
           fi
           if [ "${INPUT_SUITE}" = sweep-fable ]; then
@@ -1061,7 +1096,7 @@ jobs:
           # suites (their timeouts and Window 0 comparisons; an A/A floor of a
           # millisecond workload can pass 100 % and stop the run).
           case "${INPUT_SUITE}" in
-            noise | corpus | hard | oss | upstream-verify | upstream) noise_rule=step3 ;;
+            noise | corpus | hard | oss | upstream-verify | upstream | ideas-slice) noise_rule=step3 ;;
             stage-a | attack | probes | triage | papers | web | prescreen) noise_rule=step2 ;;
             sweep | sweep-fable | sweep-record | ab | ab-v2-p | ab-v2 | escalation | acquire) noise_rule=step2 ;;
             heal | oss-ab | evolve | evolve-more | evolve-p | heal-hard | build | grader | agent-probes | heal-agent | research-agent) noise_rule=step2 ;;

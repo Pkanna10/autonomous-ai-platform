@@ -1080,6 +1080,7 @@ SUITES = (
     "ideas-views",  # Va: the views pass, no request
     "ideas-marker",  # Vb: the marker validation (O36.1, O37)
     "ideas-validate",  # Vc: the smoke requests and the dedupe labels
+    "ideas-slice",  # Ve: X1's execution slice
 )
 DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_sweep_live.py",
@@ -1096,6 +1097,7 @@ DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_ideas_views_live.py",  # Va: the views pass
     "tests/live/test_ideas_marker_live.py",  # Vb: the marker validation
     "tests/live/test_ideas_validate_live.py",  # Vc: smoke and dedupe labels
+    "tests/live/test_ideas_slice_live.py",  # Ve: the execution slice
 )
 EXPERIMENT_MINUTES = {
     # the sweeps on 37 repositories (v1 + hard + v2), from the Window 0 jobs on
@@ -1125,6 +1127,7 @@ EXPERIMENT_MINUTES = {
     "ideas-views": 30,  # ideas_views.VIEWS_JOB_MINUTES: 8 libraries, no request
     "ideas-marker": 240,  # ideas_marker.JOB_MINUTES: 17 clones, 96 requests
     "ideas-validate": 60,  # ideas_validate.JOB_MINUTES: 19 requests
+    "ideas-slice": 150,  # ideas_slice.JOB_MINUTES: two libraries, 8 loops
 }  # batch wait; 5 papers; 18 web runs
 SWEEP_FABLE_ENV = {  # Fable 5.1 beside the one arm whose run phase 1 shares
     "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
@@ -1141,6 +1144,12 @@ OSS_AB_DISPATCH_REPO = "tabulate"  # oss-ab runs one library a dispatch
 MARKER_CAP = {"LIVE_SUITE_CAP_USD": "24"}  # the marker plan refuses a cap below
 # E1: four a dispatch (4 x 41 of ideas_probe.JOB_MINUTES' 240)
 IDEAS_E1_DISPATCH = {"LIVE_IDEAS_REPOS": "pyparsing,tomli,mistune,idna"}
+# Ve: two libraries a dispatch; the slice plan refuses a cap below its need
+SLICE_DISPATCH = {"LIVE_SLICE_REPOS": "sqlparse,pyparsing", "LIVE_SUITE_CAP_USD": "64"}
+SLICE_IDEAS = (
+    "tests/fixtures/ideas_slice/x1-1.jsonl,tests/fixtures/ideas_slice/x1-2.jsonl"
+)
+SLICE_MARKER = "tests/fixtures/ideas_slice/marker.jsonl"
 SWEEP_RECORD_ENV = {  # one arm, recorded for hand labels and offline replay
     "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
     "LIVE_SWEEP_RECORD": "1",
@@ -1816,6 +1825,7 @@ def _suite_needs() -> dict[str, float]:
     views = importlib.import_module(f"{__package__}.ideas_views")
     marker = importlib.import_module(f"{__package__}.ideas_marker")
     validate = importlib.import_module(f"{__package__}.ideas_validate")
+    slice_ = importlib.import_module(f"{__package__}.ideas_slice")
     one_library = {oss_ab.REPOS_ENV: OSS_AB_DISPATCH_REPO}
     return {
         "noise": noise.noise_need(noise.noise_plan({})),
@@ -1842,6 +1852,7 @@ def _suite_needs() -> dict[str, float]:
         "ideas-views": views.views_need(),
         "ideas-marker": marker.marker_need(marker.marker_plan(MARKER_CAP)),
         "ideas-validate": validate.validate_need(validate.validate_plan({})),
+        "ideas-slice": slice_.slice_need(slice_.slice_plan(SLICE_DISPATCH)),
         "sweep": sweep.sweep_need(sweep.sweep_plan({})),
         "sweep-fable": sweep.sweep_need(sweep.sweep_plan(SWEEP_FABLE_ENV)),
         "sweep-record": sweep.sweep_need(sweep.sweep_plan(SWEEP_RECORD_ENV)),
@@ -1927,6 +1938,7 @@ def _dispatch(
     editor_model: str = "default",
     upstream_batch: str = "1",
     ab_arms: str | None = None,
+    slice_repos: str | None = None,
 ) -> tuple[int, str, str]:
     """The run step under bash -e with a fake ``uv`` that records its call
     (and, in ``rule.txt``, the noise rule, the editor and the noise path; in
@@ -1947,7 +1959,10 @@ def _dispatch(
         f'> "{tmp_path / "rule.txt"}"\n'
         f'printf "%s" "${{LIVE_UPSTREAM_BATCH-unset}}" > "{tmp_path / "batch.txt"}"\n'
         f'printf "%s " "${{LIVE_AB_SET-unset}}" "${{LIVE_AB_ARMS-unset}}" '
-        f'"${{LIVE_AB_REPS-unset}}" > "{tmp_path / "ab.txt"}"\n',
+        f'"${{LIVE_AB_REPS-unset}}" > "{tmp_path / "ab.txt"}"\n'
+        f'printf "%s " "${{LIVE_SLICE_REPOS-unset}}" "${{OP_COUNT_JUDGE-unset}}" '
+        f'"${{LIVE_SLICE_IDEAS-unset}}" "${{LIVE_SLICE_MARKER-unset}}" '
+        f'> "{tmp_path / "slice.txt"}"\n',
         encoding="utf-8",
     )
     fake.chmod(0o755)
@@ -1968,6 +1983,8 @@ def _dispatch(
     }
     if ab_arms is not None:
         env["INPUT_AB_ARMS"] = ab_arms
+    if slice_repos is not None:
+        env["INPUT_SLICE_REPOS"] = slice_repos
     proc = subprocess.run(
         ["bash", "-e", str(script)],
         env=env,
@@ -2006,6 +2023,47 @@ def test_the_run_step_refuses_a_cap_below_the_suite_need(
     assert code == 1 and calls == "", output
     assert f"::error::suite_cap_usd {cap} is below" in output
     assert not (tmp_path / "results.jsonl").exists()
+
+
+@pytest.mark.parametrize(
+    ("repos", "need"), [("sqlparse,pyparsing", "64"), ("tomli", "32")]
+)
+def test_the_slice_exports_its_libraries_inputs_and_the_op_count_judge(
+    repos: str, need: str, tmp_path: Path
+) -> None:
+    """Ve: slice_repos, the committed X1 and marker results, OP_COUNT_JUDGE
+    on (spec 6.5), the Step 3 noise rule, the need the libraries' count x 32."""
+    for name in ("ok", "below"):
+        (tmp_path / name).mkdir()
+    code, output, calls = _dispatch(
+        tmp_path / "ok", "ideas-slice", "claude-opus-5-5", need, slice_repos=repos
+    )
+    assert code == 0, output
+    argv = "run pytest tests/live/test_ideas_slice_live.py -m live --no-cov -n 0 -rA"
+    assert calls.splitlines()[0] == argv
+    slice_env = (tmp_path / "ok" / "slice.txt").read_text(encoding="utf-8").split()
+    assert slice_env == [repos, "true", SLICE_IDEAS, SLICE_MARKER]
+    rule = (tmp_path / "ok" / "rule.txt").read_text(encoding="utf-8").split()
+    assert rule[:3] == ["true", "true", "3"]  # step3: normal engine trials
+    below = f"{int(need) - 1}.99"
+    code, output, calls = _dispatch(
+        tmp_path / "below", "ideas-slice", "claude-opus-5-5", below, slice_repos=repos
+    )
+    assert (code, calls) == (1, "") and f"suite_cap_usd {below} is below" in output
+
+
+def test_slice_repos_is_required_strict_and_for_the_slice_only(
+    tmp_path: Path,
+) -> None:
+    for index, bad in enumerate((None, "", "Tomli", "a,b,c", "tomli;id", ",")):
+        (tmp_path / f"bad-{index}").mkdir()
+        code, output, calls = _dispatch(tmp_path / f"bad-{index}", "ideas-slice",
+                                        "claude-opus-5-5", "64", slice_repos=bad)  # fmt: skip
+        assert (code, calls) == (1, "") and "needs slice_repos" in output, bad
+    (tmp_path / "other").mkdir()
+    code, output, calls = _dispatch(tmp_path / "other", "stage-a", "claude-opus-5-5",
+                                    "12", slice_repos="tomli")  # fmt: skip
+    assert (code, calls) == (1, "") and "slice_repos is only for" in output
 
 
 def test_every_suite_choice_fits_under_the_cap_ceiling(tmp_path: Path) -> None:
@@ -2309,7 +2367,8 @@ def test_the_ab_arms_input_is_a_strict_choice_reaching_the_run_via_env() -> None
     assert "INPUT_AB_ARMS: ${{ inputs.ab_arms }}" in step
     inputs = _ci_block("    inputs:\n", "\n\n")
     names = re.findall(r"^      (\w+):$", inputs, re.MULTILINE)
-    assert names[-1] == "ab_arms" and len(names) == len(set(names)) == 13 <= 25
+    assert names[-2:] == ["ab_arms", "slice_repos"]  # Ve's slice_repos after it
+    assert len(names) == len(set(names)) == 14 <= 25
 
 
 @pytest.mark.parametrize(

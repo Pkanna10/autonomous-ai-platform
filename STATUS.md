@@ -777,6 +777,35 @@ blocks it.
   lab's learning mechanism, W3 deferred. Budget: X1 (~42 USD) is ~28 % of Window
   1's 148.73 USD; read every idea list in full; some confirmatory rungs may
   spill into Window 2.
+- **O39. The marker, the dedupe and X1's cost (owner, 2026-11-03).** Opus 5.5 is
+  the marker (passed O37 at AUC 0.671). Independence: ideas written by Opus 5.5
+  (the leap in every configuration, the Opus 5.5 lens in X1-1) are graded by
+  Opus 5, and that column is marked unvalidated (Opus 5 failed O37); the
+  headline marker-feasible comparison across configurations uses lens-lane ideas
+  only. The dedupe failed its bar in the under-merging direction (42 of 116
+  same-mechanism pairs merged), so X1's "unique mechanisms" and "share new to
+  today's generator" are upper bounds and are labelled so, with the raw lists
+  beside them as the spec requires; the 380 labelled pairs are the dedupe's
+  development set for a fix before X2, and X1 is not held for it. X1's estimate
+  is re-derived from the three validation runs' measured per-request rates
+  before dispatch; the caps stay.
+- **X1 cost, re-derived (Lead, under O39).** Measured on 2026-11-03: an Opus 5.5
+  ranking request (about 4,070 input and 110 output tokens, no cache) costs
+  0.0185 USD on average (max 0.032) in 3.1 s; Opus 5 0.0267 (max 0.060) in 5.4
+  s; an Opus 5 labelling request (5,640 in, 1,850 out) 0.074 in 23 s; the Sonnet
+  5 and Fable 5 smokes cost exactly what G1's price rows give (0.00061 and
+  0.00306 for 246 in and 12 out), so the two new price rows are confirmed. These
+  runs measure no idea-lane request, so the lanes still rest on E1's measured
+  rates. Expected per library: arm A 0.025, X1-0 0.63, X1-1 about 2.0 (each lens
+  on its own model writes its own cache), X1-2 0.65, X1-3 0.80, X1-4 about 0.30
+  (S1 and four lanes, 5 of the old 11 requests), the auditor 0.35: about 4.75,
+  so about 38 USD for the 8 libraries. The slice: its marker requests at the
+  measured rates are about 0.05 a set pair, about 0.2 a library (against the
+  2.00 planned in its need), and its 32-48 trials at L2b's 0.10-0.15 each are
+  3-7 USD. X1 in all: about 42-46 USD expected, inside its caps (two
+  configuration dispatches at 56, two slice dispatches at 64). Requests took
+  3-23 s, not the 2 minutes the job-minute plans assume, so every timeout has
+  ample room.
 - **O38. X1 dispatch and configurations (owner, 2026-11-03).** Dispatch
   approved: `ideas-views` first, then `ideas-marker` and `ideas-validate` (about
   32 USD). The marker report gives the count of rows with a real verdict and the
@@ -3082,6 +3111,23 @@ worktree", 4.4.0) or in the builder rules every brief carries.
   expected over 8 libraries of ideas never scored); in X1-1 the pipeline's think
   line (D58) reaches only the Sonnet 5.5 lens, so table 2's model effect
   includes it.
+- V suite Vd2, Ve, Vf. Vd2 (O38): `IDEAS_THINK_LINE_ALL` for X1-1 (a guard shows
+  the line once at the end of every X1-1 lane's ask on all six models, every
+  other request field unchanged); X1-4 sends S1 and its four relaxing lanes only
+  (`IDEAS_LENSES` may be empty only beside relaxing lanes, the reviewer off), so
+  X1's need drops to 56 a dispatch. Ve (`ideas-slice`, need 64 for two
+  libraries, 150 minutes, a new `slice_repos` input, Step 3 noise rule): newness
+  from the auditor's duplicate classes against arm A, picks graded by the first
+  marker that did not write them, the pipeline's order as the no-marker
+  fallback, each pick a normal engine trial through the OSS harness,
+  `OP_COUNT_JUDGE` asserted before spend. Vf (offline report, no suite): the
+  per-library files, the 6.2 measures, the four tables, the seeded-call column
+  and the owner sample; its fix round made the new-share join both directions
+  and counted only each configuration's returned ideas. The Lead's integration
+  added D64's counters to Ve's combine rows (Vf refused real slice files without
+  them) and clipped titles past Vb's 300-character bound in the marker request
+  only. Sizes accepted: Ve about 1.5x, Vf about 2x (harness code). O39's grading
+  and labels follow as their own unit.
 - G2 fix found by Va: `count_note` noted negative cuts, so every callers view
   under its limits said e.g. "-199 file(s) not scanned for callers"; it now
   notes only positive counts. Requests were byte-identical; the six viewed
