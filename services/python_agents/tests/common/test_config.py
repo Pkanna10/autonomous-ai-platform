@@ -1383,3 +1383,41 @@ def test_lessons_in_the_prompts_turn_on_from_the_environment(
     assert Settings(_env_file=None).GENERATOR_LESSONS is True
     with pytest.raises(ValidationError, match="GENERATOR_LESSONS"):
         _cfg(GENERATOR_LESSONS="sometimes")
+
+
+# --------------------------------------------------------------------------
+# O38: the think line on every idea lane (IDEAS_THINK_LINE_ALL), and a
+# proposal-only configuration with no lens (X1-4)
+# --------------------------------------------------------------------------
+
+
+def test_the_think_line_on_every_lane_is_off_by_default(clean_env: Path) -> None:
+    """Should keep D58 (the line on Sonnet 5.5 only) until X1-1 turns it on."""
+    assert _cfg().IDEAS_THINK_LINE_ALL is False
+
+
+def test_the_think_line_on_every_lane_turns_on_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch, clean_env: Path
+) -> None:
+    monkeypatch.setenv("IDEAS_THINK_LINE_ALL", "true")
+    assert Settings(_env_file=None).IDEAS_THINK_LINE_ALL is True
+    with pytest.raises(ValidationError, match="IDEAS_THINK_LINE_ALL"):
+        _cfg(IDEAS_THINK_LINE_ALL="sometimes")
+
+
+def test_no_lens_is_admitted_only_beside_a_rule_relaxing_lane(
+    clean_env: Path,
+) -> None:
+    """
+    GIVEN IDEAS_LENSES empty
+    WHEN a rule-relaxing lane is on (X1-4: S1 and the relaxing lanes alone)
+    THEN the settings load; with no relaxing lane they are refused, so S2
+         never runs with nothing but the leap by accident (D46)
+    """
+    cfg = _cfg(IDEAS_LENSES=(), IDEAS_RELAX_LANES=("relax_dependency",))
+    assert cfg.IDEAS_LENSES == ()
+    assert cfg.IDEAS_RELAX_LANES == (Lane.relax_dependency,)
+    with pytest.raises(ValidationError, match="IDEAS_LENSES may be empty only"):
+        _cfg(IDEAS_LENSES=())
+    with pytest.raises(ValidationError, match="IDEAS_LENSES may be empty only"):
+        _cfg(IDEAS_LENSES=(), IDEAS_LEAP_N=0)

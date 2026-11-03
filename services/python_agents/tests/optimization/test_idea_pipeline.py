@@ -89,6 +89,7 @@ from autonomous_ai_agents.optimization.idea_prompts import (
 from autonomous_ai_agents.optimization.idea_review import REVIEW_SYSTEM_PROMPT
 from autonomous_ai_agents.optimization.idea_types import (
     LENS_LANES,
+    RELAXING_LANES,
     GenerateEvent,
     Lane,
     Mechanism,
@@ -2582,3 +2583,93 @@ def test_a_given_builder_replaces_build_view(monkeypatch: pytest.MonkeyPatch) ->
         assert 'seam: "recorded"' in lanes[lane], lane
     assert 'seam: "recorded"' not in lanes[Lane.recombine]
     assert lanes[Lane.recombine] == lanes[Lane.obvious]  # the shared block
+
+
+# --------------------------------------------------------------------------
+# O38: the think line on every idea lane (X1-1), and no lens (X1-4)
+# --------------------------------------------------------------------------
+
+HAIKU = "claude-haiku-5-5"
+_ON_HAIKU = Settings.model_validate(
+    {
+        **BASE.model_dump(),
+        "IDEAS_LANE_MODEL": HAIKU,
+        "IDEAS_RELAX_LANES": [Lane.relax_dependency.value],
+    }
+)
+
+
+def _haiku_run(think: bool, monkeypatch: pytest.MonkeyPatch) -> _Run:
+    _reset_tokens(monkeypatch)  # both runs draw the same fence tokens
+    cfg = _ON_HAIKU.model_copy(update={"IDEAS_THINK_LINE_ALL": think})
+    lanes = [_ideas(*LENS[lane], model=HAIKU) for lane in LENS_LANES]
+    relax = _ideas(_idea(RELAX_TITLE, "find_all"), model=HAIKU)
+    run = _Run(lane=[_ideas(O1, O2, O3, model=HAIKU), *lanes, relax],
+               leap=[LEAP], reviewer=[REVIEW], cfg=cfg)  # fmt: skip
+    run()
+    return run
+
+
+def _but_the_ask(request: LLMRequest) -> object:
+    """Everything a request sends except its last text block."""
+    fields = {f.name: getattr(request, f.name)
+              for f in dataclasses.fields(request) if f.name != "messages"}  # fmt: skip
+    return fields, _texts(request)[:-1], len(request.messages)
+
+
+def test_the_think_line_on_every_lane_closes_s1_the_lenses_and_relaxing_lanes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    GIVEN every idea lane on Haiku 5.5 (no D58 line) and
+          IDEAS_THINK_LINE_ALL on (O38, X1-1)
+    WHEN the pipeline runs
+    THEN S1, every lens and the rule-relaxing lane end their ask with the
+         think line once, and nothing else in their requests changes; the
+         Opus leap and the reviewer are sent exactly as with the switch off
+    """
+    off, on = _haiku_run(False, monkeypatch), _haiku_run(True, monkeypatch)
+    lanes_off, lanes_on = off.requests("lane"), on.requests("lane")
+    assert len(lanes_on) == len(lanes_off) == 1 + len(LENS_LANES) + 1
+    assert {_lane_of(r) for r in lanes_on} == {
+        Lane.obvious, *LENS_LANES, Lane.relax_dependency,
+    }  # fmt: skip
+    for before, after in zip(lanes_off, lanes_on, strict=True):
+        assert THINK_LINE not in json.dumps(before.messages)
+        assert _texts(after)[-1] == f"{_texts(before)[-1]} {THINK_LINE}"
+        assert json.dumps(after.messages).count(THINK_LINE) == 1
+        assert _but_the_ask(after) == _but_the_ask(before)
+    for role in ("leap", "reviewer"):
+        assert on.requests(role) == off.requests(role), role
+        assert THINK_LINE not in json.dumps(on.requests(role)[0].messages)
+
+
+def test_no_lens_sends_s1_and_the_relaxing_lanes_alone() -> None:
+    """
+    GIVEN no lens, no leap, no reviewer and the four rule-relaxing lanes
+          (O38's X1-4)
+    WHEN the pipeline runs
+    THEN only S1 and the four relaxing lanes are sent; S1's ideas come back
+         with the four tagged proposals after them
+    """
+    cfg = Settings.model_validate({
+        **BASE.model_dump(), "IDEAS_LENSES": [], "IDEAS_LEAP_N": 0,
+        "IDEAS_REVIEW": False,
+        "IDEAS_RELAX_LANES": [lane.value for lane in RELAXING_LANES],
+    })  # fmt: skip
+    where = ("find_all", "merge_runs", "join_lines", "count_words")
+    relax = [_ideas(_idea(f"Relaxed idea {i} on {w}", w)) for i, w in enumerate(where)]
+    run = _Run(lane=[S1_REPLY, *relax], cfg=cfg)
+
+    result = run()
+
+    sent = run.requests("lane")
+    assert [_lane_of(r) for r in sent][0] is Lane.obvious
+    assert {_lane_of(r) for r in sent[1:]} == set(RELAXING_LANES)
+    assert len(sent) == 5
+    assert run.requests("leap") == run.requests("reviewer") == []
+    proposals = [h for h in result.hypotheses if is_proposal(h)]
+    assert len(proposals) == 4
+    assert [h.title for h in result.hypotheses if not is_proposal(h)] == [
+        str(O1["title"]), str(O2["title"]), str(O3["title"]),
+    ]  # fmt: skip

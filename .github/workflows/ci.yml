@@ -74,7 +74,7 @@ on:
         options: [default, claude-sonnet-5-5]
         default: default
       suite_cap_usd:
-        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75 (corpus_select controls 15), hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 112, sweep-fable 41, sweep-record 24, ab 140, ab-v2-p 59, ab-v2 68 (L5b; ab_arms A, L5a, 17), escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, evolve-p 56, heal-hard 8, build 27, grader 2, upstream-verify 0 (no request, but the cap must be above 0), upstream 50, agent-probes 1, heal-agent 8, research-agent 8, watch 2, watch-cleanup 2, ideas-probe 46 (E1, four libraries of ideas_repos, one 12; ideas_arms count 9, C-low,C-high 20; X1 65 for four libraries of ideas_repos, under the 80 USD fuse, one 17), ideas-views 0 (no request, but the cap must be above 0), ideas-marker 24 (Vb: 48 rank sets x Opus 5.5 and Opus 5), ideas-validate 8 (Vc: the Sonnet 5 and Fable 5 smoke requests, 17 Opus 5 label requests)'
+        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75 (corpus_select controls 15), hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 112, sweep-fable 41, sweep-record 24, ab 140, ab-v2-p 59, ab-v2 68 (L5b; ab_arms A, L5a, 17), escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, evolve-p 56, heal-hard 8, build 27, grader 2, upstream-verify 0 (no request, but the cap must be above 0), upstream 50, agent-probes 1, heal-agent 8, research-agent 8, watch 2, watch-cleanup 2, ideas-probe 46 (E1, four libraries of ideas_repos, one 12; ideas_arms count 9, C-low,C-high 20; X1 56 for four libraries of ideas_repos, under the 80 USD fuse, one 14), ideas-views 0 (no request, but the cap must be above 0), ideas-marker 24 (Vb: 48 rank sets x Opus 5.5 and Opus 5), ideas-validate 8 (Vc: the Sonnet 5 and Fable 5 smoke requests, 17 Opus 5 label requests)'
         type: string
         default: '12'
       oss_repo:
@@ -102,12 +102,12 @@ on:
         options: [all, controls]
         default: all
       ideas_arms:
-        description: 'ideas-probe only: LIVE_IDEAS_ARMS, the arms each library runs (A,B,C,D,E: E1 with the auditor, four of its 8 libraries a dispatch named in ideas_repos, need 11.40 a library, 46 for four; count: E0b on the 10 OSS libraries, need 9; C-low,C-high: E1b on the facts E1 recorded, need 20; X1: arm A and X1-0 to X1-4 with the auditor on the facts E1 recorded and the views Va recorded, four of the 8 libraries a dispatch named in ideas_repos, need 16.20 a library, 65 for four)'
+        description: 'ideas-probe only: LIVE_IDEAS_ARMS, the arms each library runs (A,B,C,D,E: E1 with the auditor, four of its 8 libraries a dispatch named in ideas_repos, need 11.40 a library, 46 for four; count: E0b on the 10 OSS libraries, need 9; C-low,C-high: E1b on the facts E1 recorded, need 20; X1: arm A and X1-0 to X1-4 with the auditor on the facts E1 recorded and the views Va recorded, four of the 8 libraries a dispatch named in ideas_repos, need 13.95 a library, 56 for four)'
         type: choice
         options: ['A,B,C,D,E', count, 'C-low,C-high', X1]
         default: 'A,B,C,D,E'
       ideas_repos:
-        description: 'ideas-probe only, and required for E1 and X1: LIVE_IDEAS_REPOS, comma-separated OSS library names (E1 or X1 at most four a dispatch, e.g. pyparsing,tomli,mistune,idna; X1 more_itertools,pyparsing,tomli,sortedcontainers then mistune,sqlparse,markdown,idna; empty: the libraries of the arms); the need is the libraries x 11.40 (E1), 0.85 (count), 4.95 (C-low,C-high) or 16.20 (X1), rounded up'
+        description: 'ideas-probe only, and required for E1 and X1: LIVE_IDEAS_REPOS, comma-separated OSS library names (E1 or X1 at most four a dispatch, e.g. pyparsing,tomli,mistune,idna; X1 more_itertools,pyparsing,tomli,sortedcontainers then mistune,sqlparse,markdown,idna; empty: the libraries of the arms); the need is the libraries x 11.40 (E1), 0.85 (count), 4.95 (C-low,C-high) or 13.95 (X1), rounded up'
         type: string
         default: ''
       ab_arms:
@@ -628,10 +628,10 @@ jobs:
     # request twice E1's slowest of its role and model (ideas_probe.E1_SECONDS,
     # re-pinned from E1's recorded seconds; a parallel stage the slowest of
     # each round of four workers) and 2 minutes for phase 1 (E0b: a
-    # count-mode library about 47 s): E1 41 a library (164 for four); X1 52
-    # or 57 a library on recorded facts (the row of X1-1's square: both Fable
-    # lenses in one round of four, or one in each), so four a dispatch (213
-    # and 218 minutes for its two); E0b's ten 4 each, E1b's four 16 each.
+    # count-mode library about 47 s): E1 41 a library (164 for four); X1 46
+    # or 51 a library on recorded facts (the row of X1-1's square: both Fable
+    # lenses in one round of four, or one in each), so four a dispatch (189
+    # and 194 minutes for its two); E0b's ten 4 each, E1b's four 16 each.
     # ideas-views 30
     # (ideas_views.VIEWS_JOB_MINUTES): no request, 8 libraries at 2 minutes
     # each (a fresh clone with its tag's history, then six views of seconds),
@@ -793,11 +793,12 @@ jobs:
           # on D55's bounds re-derived from E0b's counts: phase 1 0.38, arms A
           # 0.27, B 1.99, C 2.475, D 4.53, E 1.045, the auditor 0.69), E0b
           # count 8.5 (10 x 0.85, 0.38 + 2 x 0.215), E1b 19.8 (4 x 2 x 2.475
-          # on recorded facts), X1 64.8 (Vd: 4 libraries a dispatch x 16.20 on
+          # on recorded facts), X1 55.8 (Vd: 4 libraries a dispatch x 13.95 on
           # E1's facts: A 0.27, X1-0 2.475, X1-1 4.206 with each lens on its
           # square's model, X1-2 2.539 with the mechanisms block, X1-3 2.675 on
-          # the views' bounds, X1-4 3.335 with four rule-relaxing lanes, the
-          # auditor 0.69; under the 80 USD fuse), ideas-views 0 (Va: no request, the views pass),
+          # the views' bounds, X1-4 1.075 for S1 and its four rule-relaxing
+          # lanes alone (O38), the auditor 0.69, rounded up to 0.05; under the
+          # 80 USD fuse), ideas-views 0 (Va: no request, the views pass),
           # ideas-marker 24.0 (Vb: 17 libraries, each its
           # rank sets with a kept idea and a rival x (Opus 5.5 0.22 + Opus 5
           # 0.275, 12,000 counted tokens at 8,000) rounded up to 0.05; 48 sets),
@@ -920,8 +921,8 @@ jobs:
                 export LIVE_IDEAS_FACTS=tests/fixtures/ideas_probe/facts.jsonl
                 ;;
               X1)
-                cents=1620
-                need=65
+                cents=1395
+                need=56
                 export LIVE_IDEAS_FACTS=tests/fixtures/ideas_probe/facts.jsonl
                 export LIVE_IDEAS_VIEWS=tests/fixtures/ideas_probe/views.jsonl
                 ;;

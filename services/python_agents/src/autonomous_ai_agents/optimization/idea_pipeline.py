@@ -761,7 +761,7 @@ class IdeaPipelineGenerator:
         instruction = lane_instruction(
             lane, table=table, examples=examples, n=n,
             floor=c.objective.min_relative_gain, model=transport.chain[0],
-            framework=c.frameworks.get(lane),
+            framework=c.frameworks.get(lane), think=self._cfg.IDEAS_THINK_LINE_ALL,
         )  # fmt: skip
         request = lane_request(
             lane, system=c.research.system, instruction=instruction,

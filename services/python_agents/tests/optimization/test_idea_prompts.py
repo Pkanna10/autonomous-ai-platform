@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator
+from typing import TypedDict, Unpack
 
 import pytest
 
@@ -264,6 +265,43 @@ def test_the_think_line_closes_the_ask_only_on_sonnet_5_5(
         f"{reviewer_ask} {THINK_LINE}" if thinks else reviewer_ask
     )
     assert THINK_LINE == "Think the problem through before you answer."
+
+
+@pytest.mark.parametrize(
+    "model",
+    [SONNET, "claude-sonnet-5", OPUS, "claude-haiku-5-5", "claude-fable-5",
+     "claude-fable-5-1"],
+)  # fmt: skip
+def test_think_closes_every_idea_lanes_ask_on_any_model_but_the_leaps(
+    model: str,
+) -> None:
+    """
+    GIVEN ``think`` (O38, ``IDEAS_THINK_LINE_ALL``)
+    WHEN S1, a lens or a rule-relaxing lane's instruction is written for
+         any of X1-1's six models
+    THEN its ask ends with the think line exactly once; the leap keeps D58
+         (the line on Sonnet 5.5 only, so X1-1's Opus leap is X1-0's); with
+         ``think`` off every lane is as it was
+    """
+    for lane in (Lane.obvious, *LENS_LANES, *RELAXING_LANES, Lane.leap):
+
+        def written(*, think: bool | None, lane: Lane = lane) -> str:
+            if think is None:  # the default
+                return lane_instruction(
+                    lane, table=TABLE, examples=(), n=4, floor=0.05, model=model
+                )
+            return lane_instruction(
+                lane, table=TABLE, examples=(), n=4, floor=0.05, model=model,
+                think=think,
+            )  # fmt: skip
+
+        on, off = written(think=True), written(think=None)
+        assert written(think=False) == off
+        bare = off.removesuffix(f" {THINK_LINE}")
+        if lane is Lane.leap:
+            assert on == off == f"{bare}{f' {THINK_LINE}' * (model == SONNET)}"
+            continue
+        assert on == f"{bare} {THINK_LINE}" and on.count(THINK_LINE) == 1, lane
 
 
 def test_the_obvious_lane_has_no_lens_and_asks_for_n_best_first() -> None:
@@ -519,7 +557,10 @@ def test_a_framework_sits_after_the_lens_and_before_the_examples() -> None:
     """
     examples = EXAMPLE_BANK[:2]
 
-    def far(**framework: str | None) -> str:
+    class _Framework(TypedDict, total=False):
+        framework: str | None
+
+    def far(**framework: Unpack[_Framework]) -> str:
         return lane_instruction(Lane.far, table=TABLE, examples=examples, n=4,
                                 floor=0.04, model=SONNET, **framework)  # fmt: skip
 

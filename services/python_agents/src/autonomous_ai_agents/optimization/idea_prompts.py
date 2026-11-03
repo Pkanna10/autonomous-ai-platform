@@ -16,7 +16,8 @@
 - The four rule-relaxing goals (G3, ``RELAX_TEXT``): each names the one rule
   it lifts; its ideas are proposals for a human, quarantined by their tag.
 - ``lane_instruction``: everything after the cached data block, ending with
-  the ask; the think line closes it only on Sonnet 5.5 (D58).
+  the ask; the think line closes it only on Sonnet 5.5 (D58), or on every
+  lane but the leap with ``think`` (O38, ``IDEAS_THINK_LINE_ALL``).
 - ``VIEW_HEADINGS``: what each lane view (G2) shows, stated in the view's
   own data block in place of the shared hot-code heading.
 - ``VIEW_FRAMEWORKS`` and ``RELAX_FRAMEWORKS`` (G5): how a viewed lens or a
@@ -524,11 +525,13 @@ def lane_instruction(
     floor: float,
     model: str,
     framework: str | None = None,
+    think: bool = False,
 ) -> str:
     """The user turn after the cached data block (4.2b.2-4.2b.4): the table
     (``idea_lanes.on_the_table``), the lens (none for S1), the lane's
     ``framework`` block if any (G5, ``lane_framework``), the examples and
-    the ask for ``n`` ideas, closed by the think line on Sonnet 5.5."""
+    the ask for ``n`` ideas, closed by the think line on Sonnet 5.5, or
+    with ``think`` on any model but the leap's (O38: it keeps D58)."""
     n = check_count("n", n, MAX_REPLY_ITEMS)
     if lane is Lane.obvious:
         lens, ask = "", OBVIOUS_ASK.format(n=n)
@@ -538,7 +541,11 @@ def lane_instruction(
         lens, ask = RELAX_TEXT[lane], RELAX_ASK.format(n=n)
     else:
         lens, ask = LENS_TEXT[lane], LENS_ASK.format(n=n)
-    parts = (table, lens, framework, examples_block(examples), with_think(ask, model))
+    if think and lane is not Lane.leap:  # O38: every idea lane, any model
+        ask = f"{ask} {THINK_LINE}"
+    else:
+        ask = with_think(ask, model)
+    parts = (table, lens, framework, examples_block(examples), ask)
     return "\n".join(part for part in parts if part)
 
 

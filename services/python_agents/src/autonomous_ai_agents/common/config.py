@@ -325,9 +325,17 @@ class Settings(BaseSettings):
     rule-relaxing lane how to use its lifted rule, in the lane's own
     instruction after the cached data block. S1, the leap, the reviewer and a
     lens on the shared block never get one; off keeps every request as it is."""
+    IDEAS_THINK_LINE_ALL: bool = False
+    """D58's think line (``idea_prompts.THINK_LINE``) closes the ask of S1,
+    every lens and every rule-relaxing lane whatever its model (O38, X1-1),
+    not only on Sonnet 5.5. The leap keeps D58 (its Opus 5.5 ask has no line
+    in X1-0, so X1-1's leap matches it) and the reviewer is no idea lane;
+    off keeps every request as it is."""
     IDEAS_LANE_MAX_TOKENS: int = Field(default=12000, ge=1)
     IDEAS_LANE_N: int = Field(default=6, ge=1, le=10)
     IDEAS_LENSES: tuple[Lane, ...] = LENS_LANES
+    """The lens lanes (D46); empty only beside ``IDEAS_RELAX_LANES`` (O38's
+    X1-4: S1 and the rule-relaxing lanes alone)."""
     IDEAS_RELAX_LANES: tuple[Lane, ...] = ()
     """Rule-relaxing lanes (G3), off when empty: each lifts one frozen rule,
     runs on the lane role and writes quarantined proposals only (tagged at
@@ -398,12 +406,9 @@ class Settings(BaseSettings):
     def _lenses_are_distinct_lens_lanes(
         cls, value: tuple[Lane, ...]
     ) -> tuple[Lane, ...]:
-        """A non-empty subset of the six lenses, each once (D46)."""
-        if (
-            not value
-            or len(set(value)) != len(value)
-            or not set(value) <= set(LENS_LANES)
-        ):
+        """A subset of the six lenses, each once (D46); empty is checked
+        against ``IDEAS_RELAX_LANES`` below."""
+        if len(set(value)) != len(value) or not set(value) <= set(LENS_LANES):
             names = ", ".join(lane.value for lane in LENS_LANES)
             raise ValueError(
                 f"IDEAS_LENSES must name each lens at most once, from {names}; "
@@ -454,6 +459,13 @@ class Settings(BaseSettings):
                     raise ValueError(f"IDEAS_LANE_VIEWS names {key!r}, which is not "
                                      f"a lens; name any of {', '.join(names)}")  # fmt: skip
         return value
+
+    @model_validator(mode="after")
+    def _no_lens_only_beside_relaxing_lanes(self) -> Self:
+        if not self.IDEAS_LENSES and not self.IDEAS_RELAX_LANES:
+            raise ValueError("IDEAS_LENSES may be empty only beside IDEAS_RELAX_LANES "
+                             "(S1 and the rule-relaxing lanes alone, O38)")  # fmt: skip
+        return self
 
     @model_validator(mode="after")
     def _lane_views_name_running_lenses(self) -> Self:

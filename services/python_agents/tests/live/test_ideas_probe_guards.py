@@ -26,6 +26,7 @@ import itertools
 import json
 import os
 import re
+import secrets
 import subprocess
 from collections import Counter
 from collections.abc import Mapping, Sequence
@@ -63,6 +64,7 @@ from autonomous_ai_agents.optimization.idea_context import (
     build_view,
 )
 from autonomous_ai_agents.optimization.idea_pipeline import framework_labels
+from autonomous_ai_agents.optimization.idea_prompts import THINK_LINE
 from autonomous_ai_agents.optimization.idea_review import (
     REVIEW_SYSTEM_PROMPT,
     review_request,
@@ -1241,13 +1243,13 @@ def _dispatch(
         (
             "X1",
             "more_itertools,pyparsing,tomli,sortedcontainers",
-            "65",
+            "56",
             "X1",
             ip.FACTS_FIXTURE,
         ),
-        ("X1", "mistune,sqlparse,markdown,idna", "65", "X1", ip.FACTS_FIXTURE),
-        ("X1", "tomli", "17", "X1", ip.FACTS_FIXTURE),
-        ("X1", "", "65", "X1", ip.FACTS_FIXTURE),
+        ("X1", "mistune,sqlparse,markdown,idna", "56", "X1", ip.FACTS_FIXTURE),
+        ("X1", "tomli", "14", "X1", ip.FACTS_FIXTURE),
+        ("X1", "", "56", "X1", ip.FACTS_FIXTURE),
     ],
 )
 def test_the_ideas_inputs_set_the_arms_libraries_their_need_and_the_facts(
@@ -1303,7 +1305,7 @@ def test_the_ideas_inputs_are_strict_and_for_the_probe_only(tmp_path: Path) -> N
         assert code == 0 and calls[1] == "A,B,C,D,E" and calls[5] == "unset", output
         with pytest.raises(ValueError, match="past the 240-minute job"):
             ip.probe_plan({ip.ARMS_ENV: calls[1]})
-    code, output, calls = _dispatch(tmp_path / "x1", "X1", "65", repos="")
+    code, output, calls = _dispatch(tmp_path / "x1", "X1", "56", repos="")
     assert code == 0 and calls[1] == "X1" and calls[5] == "unset", output
     env = {ip.ARMS_ENV: calls[1], ip.FACTS_ENV: calls[2], ip.VIEWS_ENV: calls[2]}
     with pytest.raises(ValueError, match="past the 240-minute job"):  # all eight
@@ -1323,10 +1325,13 @@ def test_the_suite_row_timeout_noise_rule_and_stage_a_ignore() -> None:
     cap_help = _ci_block("      suite_cap_usd:", "\n\n")
     assert (
         "ideas-probe 46 (E1, four libraries of ideas_repos, one 12; "
-        "ideas_arms count 9, C-low,C-high 20; X1 65 for four libraries of "
-        "ideas_repos, under the 80 USD fuse, one 17)" in cap_help
+        "ideas_arms count 9, C-low,C-high 20; X1 56 for four libraries of "
+        "ideas_repos, under the 80 USD fuse, one 14)" in cap_help
     )
-    assert ip.X1_LIBRARY_CENTS == 1620 and "cents=1620" in _run_script()
+    assert ip.X1_LIBRARY_CENTS == 1395 and "cents=1395" in _run_script()
+    arms_help = _ci_block("      ideas_arms:", "\n\n")
+    assert "need 13.95 a library, 56 for four" in arms_help
+    assert "or 13.95 (X1), rounded up" in _ci_block("      ideas_repos:", "\n\n")
     block = _ci_block("  live-smoke:", "    defaults:")
     assert f"inputs.suite == 'ideas-probe' && {ip.JOB_MINUTES} ||" in block
     assert EXPERIMENT_MINUTES["ideas-probe"] == ip.JOB_MINUTES
@@ -1553,7 +1558,7 @@ X1_DISPATCHES = (
     "more_itertools,pyparsing,tomli,sortedcontainers",
     "mistune,sqlparse,markdown,idna",
 )
-X1_LIBRARY_CAP = 16.20  # 0.27 + 2.475 + 4.206 + 2.539 + 2.675 + 3.335 + 0.69
+X1_LIBRARY_CAP = 13.95  # 0.27 + 2.475 + 4.206 + 2.539 + 2.675 + 1.075 + 0.69 up
 SQUARE_MODELS = {
     "claude-sonnet-5", HAIKU, OPUS, "claude-fable-5", FABLE, SONNET,
 }  # fmt: skip
@@ -1574,14 +1579,18 @@ def test_each_x1_configuration_changes_exactly_its_own_lever() -> None:
     """X1-0 is arm C; X1-1 the per-lens models (and the retention flag its
     Fable lanes need); X1-2 sequential lanes with the dedupe; X1-3 a
     different view per lens with frameworks on; X1-4 the four rule-relaxing
-    lanes. Every other setting is arm C's, so one lever moves a config."""
+    lanes alone beside S1 (O38: no lens, no leap, no reviewer). X1-1 also
+    gives every lane the think line (O38), so it differs from X1-0 by the
+    models alone. Every other setting is arm C's, so one lever moves a
+    config."""
     tomli = _project()  # row 2 of the square
     assert _changed(ip.ARM_X1_0) == {}
     assert ip.ARM_X1_0.update == ip.ARM_C.update == ()
     assert _changed(ip.ARM_X1_1) == {
         "IDEAS_LANE_MODELS": {lane: m for lane, m in ip.square_models(2).items()},
-        "ALLOW_RETENTION_MODELS": True,
-    }
+        "ALLOW_RETENTION_MODELS": True, "IDEAS_THINK_LINE_ALL": True,
+    }  # fmt: skip
+    assert ip.arm_config(ip.ARM_X1_0, tomli).IDEAS_THINK_LINE_ALL is False
     assert ip.arm_config(ip.ARM_X1_1, tomli).IDEAS_LANE_MODELS == ip.square_models(2)
     assert _changed(ip.ARM_X1_2) == {
         "IDEAS_SEQUENTIAL_LANES": True, "IDEAS_MECHANISM_DEDUPE": True,
@@ -1591,13 +1600,17 @@ def test_each_x1_configuration_changes_exactly_its_own_lever() -> None:
     }  # fmt: skip
     assert set(ip.X1_VIEWS) == set(LENS_LANES)
     assert sorted(ip.X1_VIEWS.values()) == sorted(IDEA_VIEWS)  # one view each
-    assert _changed(ip.ARM_X1_4) == {"IDEAS_RELAX_LANES": tuple(RELAXING_LANES)}
+    assert _changed(ip.ARM_X1_4) == {
+        "IDEAS_RELAX_LANES": tuple(RELAXING_LANES), "IDEAS_LENSES": (),
+        "IDEAS_LEAP_N": 0, "IDEAS_REVIEW": False,
+    }  # fmt: skip
     assert len(RELAXING_LANES) == 4
     assert ip.X1_ARMS == (ip.ARM_A, *ip.X1_CONFIGS)
     assert [a.key for a in ip.X1_CONFIGS] == ["X1-0", "X1-1", "X1-2", "X1-3", "X1-4"]
     assert [a.e1 for a in ip.X1_ARMS] == [True, True, True, True, True, False]
     assert "two factors" in ip.ARM_X1_3.lever and "split in X2" in ip.ARM_X1_3.lever
-    assert "never scored" in ip.ARM_X1_4.lever
+    assert "never scored" in ip.ARM_X1_4.lever and "S1" in ip.ARM_X1_4.lever
+    assert "think line" in ip.ARM_X1_1.lever
     for arm in ip.X1_ARMS:
         cfg = ip.arm_config(arm, tomli)
         assert cfg.IDEA_PIPELINE is arm.pipeline and arm.lever, arm.key
@@ -1629,7 +1642,8 @@ def test_the_latin_square_meets_every_model_with_every_lens_once() -> None:
 def test_x1_caps_are_each_configurations_worst_case_and_a_dispatch_fits() -> None:
     """D55's bounds per request: X1-1 each lens on its model; X1-2 each S2
     lane with the 48-line mechanisms block; X1-3 each viewed lane and the
-    reviewer (the views' extra code) on wider bounds; X1-4 four more lanes.
+    reviewer (the views' extra code) on wider bounds; X1-4 S1 and its four
+    lanes alone (O38).
     A library's cap is equal on every row of the square; four libraries a
     dispatch stay under the 80 USD fuse."""
     lane = ip.request_usd(ip.LANE_PROMPT_BOUND, 12_000, SONNET)
@@ -1651,7 +1665,7 @@ def test_x1_caps_are_each_configurations_worst_case_and_a_dispatch_fits() -> Non
         lane + 6 * ip.request_usd(ip.VIEW_PROMPT_BOUND, 12_000, SONNET) + leap
         + ip.request_usd(ip.VIEW_REVIEW_PROMPT_BOUND, 16_000, OPUS)
     )  # fmt: skip
-    assert ip.arm_usd(ip.ARM_X1_4) == pytest.approx(2.475 + 4 * lane)
+    assert ip.arm_usd(ip.ARM_X1_4) == pytest.approx(5 * lane) == pytest.approx(1.075)
     assert ip.TAKEN_PROMPT_EXTRA >= 48 * 60  # MAX_TAKEN_LINES lines
     facts = Path(ip.SERVICE_DIR / ip.FACTS_FIXTURE)
     for dispatch in X1_DISPATCHES:
@@ -1659,7 +1673,7 @@ def test_x1_caps_are_each_configurations_worst_case_and_a_dispatch_fits() -> Non
         assert [plan.library_cap(r.name) for r in plan.repos] == [X1_LIBRARY_CAP] * 4
         assert ip.probe_need(plan) == pytest.approx(4 * X1_LIBRARY_CAP)
         assert ip.probe_need(plan) <= ip.X1_FUSE_USD == X1_FUSE
-    assert ip.X1_LIBRARY_CENTS == round(X1_LIBRARY_CAP * 100) == 1620
+    assert ip.X1_LIBRARY_CENTS == round(X1_LIBRARY_CAP * 100) == 1395
 
 
 def test_the_rule_relaxing_lanes_count_in_a_pipeline_calls_cap() -> None:
@@ -1673,26 +1687,40 @@ def test_the_rule_relaxing_lanes_count_in_a_pipeline_calls_cap() -> None:
 def test_x1_minutes_fit_the_job_four_libraries_a_dispatch() -> None:
     """E1's seconds (Vd): X1-1's Fable lenses dominate a round (twice E1's
     Fable 5.1 leap), so a row with both Fables in one round of four is
-    shorter (52 minutes) than one with them in both rounds (57)."""
+    shorter (46 minutes) than one with them in both rounds (51); X1-4 is S1
+    and one round of its four lanes (O38)."""
     facts = ip.SERVICE_DIR / ip.FACTS_FIXTURE
     plan = ip.ProbePlan(ip.X1_ARMS, _repos(ip.E1_REPOS), facts, facts)
     minutes = {name: plan.library_minutes(name) for name in ip.E1_REPOS}
     assert minutes == {
-        "more_itertools": 57, "pyparsing": 52, "tomli": 52, "sortedcontainers": 52,
-        "mistune": 57, "sqlparse": 52, "markdown": 57, "idna": 52,
+        "more_itertools": 51, "pyparsing": 46, "tomli": 46, "sortedcontainers": 46,
+        "mistune": 51, "sqlparse": 46, "markdown": 51, "idna": 46,
     }  # fmt: skip
     assert ip.arm_seconds(ip.ARM_X1_1, repo="more_itertools") == pytest.approx(
         47.732 + 2 * 468.566 + 130.7
     )
-    assert ip.arm_seconds(ip.ARM_X1_4) == pytest.approx(
-        47.732 + 47.732 + 195.296 + 47.732 + 130.7
-    )  # 11 S2 lanes on 4 workers: three rounds, the leap in the second
-    for dispatch, total in zip(X1_DISPATCHES, (213, 218), strict=True):
+    assert ip.arm_seconds(ip.ARM_X1_4) == pytest.approx(47.732 + 47.732)
+    # S1, then its four relaxing lanes in one round of 4 workers, no reviewer
+    for dispatch, total in zip(X1_DISPATCHES, (189, 194), strict=True):
         env = {ip.ARMS_ENV: "X1", ip.REPOS_ENV: dispatch,
                ip.FACTS_ENV: str(facts), ip.VIEWS_ENV: str(facts)}  # fmt: skip
         found = ip.probe_plan(env)
         assert found.arms == ip.X1_ARMS and found.minutes() == total <= ip.JOB_MINUTES
-    for repos in ({}, {ip.REPOS_ENV: ",".join(ip.E1_REPOS[:5])}):  # 8, 5: refused
+    # five libraries take exactly the job's 240 minutes since O38's X1-4 trim,
+    # no margin, and 69.75 USD is under the fuse: hence the explicit cap of
+    # four (ci.yml), refused before any spend; six and the eight are past the
+    # job's minutes, refused
+    five = ip.ProbePlan(ip.X1_ARMS, _repos(ip.E1_REPOS[:5]), facts, facts)
+    assert five.minutes() == ip.JOB_MINUTES and ip.probe_need(five) < X1_FUSE
+    for arms in ("X1", "X1-4", "A,X1-1"):  # any X1 configuration, alone too
+        with pytest.raises(
+            ValueError, match="X1 runs at most 4 libraries a dispatch .ci.yml., not 5"
+        ):
+            ip.probe_plan({ip.ARMS_ENV: arms, ip.FACTS_ENV: str(facts),
+                           ip.VIEWS_ENV: str(facts),
+                           ip.REPOS_ENV: ",".join(ip.E1_REPOS[:5])})  # fmt: skip
+    assert ip.X1_LIBRARIES_A_DISPATCH == 4
+    for repos in ({}, {ip.REPOS_ENV: ",".join(ip.E1_REPOS[:6])}):  # 8, 6: refused
         with pytest.raises(ValueError, match="past the 240-minute job"):
             ip.probe_plan({ip.ARMS_ENV: "X1", ip.FACTS_ENV: str(facts),
                            ip.VIEWS_ENV: str(facts), **repos})  # fmt: skip
@@ -1853,6 +1881,89 @@ def test_x1_1_sends_each_lens_on_its_square_model(dry: Path) -> None:
     assert {e.label: e.model for e in found.exchanges if e.role == "lane"} == {
         "obvious": SONNET, **{lane.value: m for lane, m in row.items()},
     }  # fmt: skip
+
+
+_FENCED = re.compile(r"<([a-z_]+) boundary=(\w+)>\n.*?\n</\1 boundary=\2>", re.S)
+_SAMPLING = ("thinking", "temperature", "top_p", "top_k")
+
+
+def _x1_1_bodies(arm: ip.IdeaArm, monkeypatch: pytest.MonkeyPatch) -> list[Json]:
+    """X1-1's requests on tomli's row, every fence token the same per run."""
+    tokens = itertools.cycle(
+        ("1a1a1a1a1a1a1a1a", "2b2b2b2b2b2b2b2b", "3c3c3c3c3c3c3c3c")
+    )
+    monkeypatch.setattr(secrets, "token_hex", lambda _n: next(tokens))
+    wire = dg.Wire(_Answers(), usages=[CACHED] * 12)
+    found = ip.run_arm(arm, wire.run(), _facts(), base=_base(), reader=_reader)
+    assert found.error is None and found.result is not None
+    return wire.bodies
+
+
+def _ask(body: Json) -> str:
+    text = body["messages"][0]["content"][-1]["text"]
+    assert isinstance(text, str)
+    return text
+
+
+def test_x1_1s_think_line_is_well_formed_on_every_models_request(
+    dry: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    GIVEN X1-1 (O38: the think line on every lane) and the same arm with it
+          off, on one row of the square: S1 on Sonnet 5.5, the six lenses on
+          Sonnet 5, Haiku 5.5, Opus 5.5, Fable 5, Fable 5.1 and Sonnet 5.5
+    WHEN their requests are built (dg.Wire, no spend)
+    THEN each idea lane's last text block holds THINK_LINE exactly once, at
+         the end of the ask, outside every fence, and the whole request
+         holds it once; every other field (model, max tokens, effort, the
+         schema, the system prompt, no thinking or sampling field: Fable's
+         thinking is always on, Haiku and Opus take the line as plain
+         instruction) is what the pipeline sends that model with it off;
+         the Opus leap and the reviewer are X1-0's, byte for byte
+    """
+    on = {_lens(b): b for b in _x1_1_bodies(ip.ARM_X1_1, monkeypatch)}
+    plain = dataclasses.replace(ip.ARM_X1_1, update=())
+    off = {_lens(b): b for b in _x1_1_bodies(plain, monkeypatch)}
+    assert ip.arm_config(plain, _project()).IDEAS_THINK_LINE_ALL is False
+    lanes = ("obvious", *(lane.value for lane in LENS_LANES))
+    assert set(on) == set(off) == {*lanes, "leap", "reviewer"}
+    assert {on[lane]["model"] for lane in lanes[1:]} == SQUARE_MODELS
+    for lane in lanes:
+        body, before = on[lane], off[lane]
+        ask = _ask(body)
+        assert ask.count(THINK_LINE) == 1 and ask.endswith(f" {THINK_LINE}")
+        assert json.dumps(body).count(THINK_LINE) == 1, lane
+        spans = [m.span() for m in _FENCED.finditer(ask)]
+        assert spans, lane  # <already_on_the_table> at least
+        at = ask.index(THINK_LINE)
+        assert all(not start <= at < end for start, end in spans), lane
+        assert at > max(end for _, end in spans), lane
+        sonnet_5_5 = body["model"] == SONNET
+        assert (THINK_LINE in _ask(before)) is sonnet_5_5, lane
+        bare = ask.removesuffix(f" {THINK_LINE}")
+        assert _ask(before) == (ask if sonnet_5_5 else bare), lane
+        rest = {k: v for k, v in body.items() if k != "messages"}
+        assert rest == {k: v for k, v in before.items() if k != "messages"}, lane
+        assert not set(_SAMPLING) & set(body), lane
+        assert (
+            body["messages"][0]["content"][:-1]
+            == (before["messages"][0]["content"][:-1])
+        ), lane
+    for role in ("leap", "reviewer"):
+        assert on[role] == off[role] and THINK_LINE not in json.dumps(on[role])
+
+
+def test_x1_4_sends_s1_and_its_four_relaxing_lanes_alone(dry: Path) -> None:
+    """O38: X1-4 is S1 and the four rule-relaxing lanes (X1-0 is the
+    baseline): no lens, no leap, no reviewer request."""
+    wire = dg.Wire(_Answers(), usages=[CACHED] * 5)
+    found = ip.run_arm(ip.ARM_X1_4, wire.run(), _facts(), base=_base(), reader=_reader)
+    assert found.error is None and found.result is not None
+    sent = [_lens(b) for b in wire.bodies]
+    assert sent[0] == "obvious" and len(sent) == 5
+    assert set(sent[1:]) == {lane.value for lane in RELAXING_LANES}
+    assert {b["model"] for b in wire.bodies} == {SONNET}
+    assert {e.label for e in found.exchanges} == {"obvious", *set(sent[1:])}
 
 
 def test_x1_4_proposals_are_reported_never_pooled_or_scored(

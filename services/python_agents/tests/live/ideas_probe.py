@@ -24,11 +24,13 @@ and five configurations, one lever each, on E1's facts (``$LIVE_IDEAS_FACTS``)
 and Va's recorded views (``$LIVE_IDEAS_VIEWS``, checked against the source
 this run builds before any spend): X1-0 arm C again; X1-1 each lens on a
 model of a cyclic 6x6 Latin square (``square_models``, rows 1-6 then 1-2 over
-``E1_REPOS``); X1-2 sequential lanes and the mechanism dedupe (G4); X1-3 a
+``E1_REPOS``) and the think line on every lane (O38: X1-0's lanes are all
+Sonnet 5.5, so all have it; the leap is X1-0's); X1-2 sequential lanes and the mechanism dedupe (G4); X1-3 a
 different view per lens (``X1_VIEWS``) with its framework (G2 + G5, two
 factors, labelled so), the views given through the pipeline's
-``view_builder`` seam and never built live; X1-4 the four rule-relaxing lanes
-(G3, proposals only: never pooled or scored). An X1 dispatch's worst case
+``view_builder`` seam and never built live; X1-4 S1 and the four
+rule-relaxing lanes alone (G3, O38: no lens, leap or reviewer; proposals
+only: never pooled or scored). An X1 dispatch's worst case
 stays under ``X1_FUSE_USD``.
 
 Minutes, re-pinned from E1's recorded seconds (``E1_SECONDS``, the slowest
@@ -37,8 +39,9 @@ nearest measured request): a request takes ``TIME_MARGIN`` times that, a
 parallel stage the slowest of each round of ``IDEAS_LANE_WORKERS`` (one lane
 a round with ``IDEAS_SEQUENTIAL_LANES``, G4), phase 1 ``PHASE_ONE_MINUTES``
 (E0b: a count-mode library about 47 s); a plan past ci.yml's ``JOB_MINUTES``
-is refused: E1 41 minutes a library, X1 52 or 57 (the row of its square),
-four a dispatch. Count mode also counts the reviewer request with its ideas
+is refused: E1 41 minutes a library, X1 46 or 51 (the row of its square),
+four a dispatch (``X1_LIBRARIES_A_DISPATCH``: five X1 fit the job exactly,
+so the cap is explicit). Count mode also counts the reviewer request with its ideas
 repeated under fresh ids up to ``IDEAS_REVIEW_MAX_IDEAS`` (D55's reviewer
 bound is for 16 ideas; S1 and one lens give fewer).
 
@@ -46,10 +49,10 @@ Caps: an arm's cap is the sum of its requests' worst cases on D55's bounds,
 re-derived from E0b's counted maxima (D61; the E1 row: B 1.99, C 2.475, D
 4.53, E 1.045, the auditor 0.69; A on the oss-ab suite's measured blind
 bound, 0.27; X1-1 4.206, X1-2 2.539 and X1-3 2.675 on wider bounds for the
-mechanisms block and the views, X1-4 3.335), count mode's real spend is
+mechanisms block and the views, X1-4 1.075), count mode's real spend is
 ``COUNT_SENT`` lane requests (0.43, the tap refuses past it); a library's
 run is phase 1, its arms and the auditor, rounded up (E1 11.40, count 0.85,
-C-low/C-high 4.95, X1 16.20 on recorded facts); a plan past
+C-low/C-high 4.95, X1 13.95 on recorded facts); a plan past
 the 150 USD ceiling is refused in the module fixture. Fable (30-day
 retention) gets ``ALLOW_RETENTION_MODELS`` only in arm D's copy and only for
 a library of the pinned OSS manifests (O15); the flag is cleared in every
@@ -238,6 +241,7 @@ AUDIT_EFFORT: Final[Effort] = "high"
 RETENTION_MAX_TOKENS: Final = 20_000  # arm D's Fable leap and reviewer (D58)
 COUNT_SENT: Final = 2  # count mode sends S1 and the first lens lane
 JOB_MINUTES: Final = 240  # ci.yml's ideas-probe timeout: four libraries
+X1_LIBRARIES_A_DISPATCH: Final = 4  # ci.yml; five fit 240 minutes exactly, no margin
 TIME_MARGIN: Final = 2  # over E1's slowest request (the timing-guard rule)
 E1_SECONDS: Final[Mapping[tuple[str, str], float]] = {
     ("generator", SONNET): 11.772, ("lane", SONNET): 23.866,
@@ -333,8 +337,9 @@ def square_models(row: int) -> dict[Lane, str]:
 
 ARM_X1_0: Final = IdeaArm("X1-0", True, lever="baseline: arm C's settings again")
 ARM_X1_1: Final = IdeaArm(
-    "X1-1", True, square=True,
-    lever="who thinks (G1): S1 on Sonnet 5.5, each lens on its square's model",
+    "X1-1", True, (("IDEAS_THINK_LINE_ALL", True),), square=True,
+    lever="who thinks (G1): S1 on Sonnet 5.5, each lens on its square's model, "
+    "the think line on every lane as X1-0's all-Sonnet 5.5 lanes have it (O38)",
 )  # fmt: skip
 ARM_X1_2: Final = IdeaArm(
     "X1-2", True,
@@ -348,9 +353,12 @@ ARM_X1_3: Final = IdeaArm(
     "lens and its framework; split in X2 if it wins",
 )  # fmt: skip
 ARM_X1_4: Final = IdeaArm(
-    "X1-4", True, (("IDEAS_RELAX_LANES", tuple(RELAXING_LANES)),), e1=False,
-    lever="what they may change (G3): four rule-relaxing lanes, proposals only, "
-    "reported, never scored",
+    "X1-4", True,
+    (("IDEAS_RELAX_LANES", tuple(RELAXING_LANES)), ("IDEAS_LENSES", ()),
+     ("IDEAS_LEAP_N", 0), ("IDEAS_REVIEW", False)),
+    e1=False,
+    lever="what they may change (G3): S1 and four rule-relaxing lanes alone "
+    "(O38: X1-0 is the baseline), proposals only, reported, never scored",
 )  # fmt: skip
 X1_CONFIGS: Final = (ARM_X1_0, ARM_X1_1, ARM_X1_2, ARM_X1_3, ARM_X1_4)
 X1_ARMS: Final = (ARM_A, *X1_CONFIGS)  # arm A: today's generator, same day
@@ -597,6 +605,12 @@ def probe_plan(environ: Mapping[str, str]) -> ProbePlan:
             f"{what} take about {minutes} minutes, past the {JOB_MINUTES}-minute "
             f"job (a killed job loses the rest): {fewer}"
         )
+    if (
+        any(a.key in _X1_KEYS for a in arms)
+        and len(plan.repos) > X1_LIBRARIES_A_DISPATCH
+    ):
+        raise ValueError(f"X1 runs at most {X1_LIBRARIES_A_DISPATCH} libraries a "
+                         f"dispatch (ci.yml), not {len(plan.repos)}: {fewer}")  # fmt: skip
     check_fuse(plan)
     return plan
 
