@@ -12,6 +12,8 @@ called. Spend is read from the parent budget's delta, as the node reads it.
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
 import itertools
 import json
 import re
@@ -61,12 +63,16 @@ from autonomous_ai_agents.optimization.hypothesis_source import (
     ClaudeHypothesisGenerator,
 )
 from autonomous_ai_agents.optimization.idea_dedupe import TAKEN_TAG
-from autonomous_ai_agents.optimization.idea_pipeline import IdeaPipelineGenerator
+from autonomous_ai_agents.optimization.idea_pipeline import (
+    IdeaPipelineGenerator,
+    framework_labels,
+)
 from autonomous_ai_agents.optimization.idea_portfolio import rotation
 from autonomous_ai_agents.optimization.idea_prompts import (
     RELAX_TEXT,
     THINK_LINE,
     VIEW_HEADINGS,
+    lane_framework,
 )
 from autonomous_ai_agents.optimization.idea_review import REVIEW_SYSTEM_PROMPT
 from autonomous_ai_agents.optimization.idea_types import (
@@ -1683,3 +1689,220 @@ def test_a_proposal_naming_a_shown_technique_is_dropped_like_any_lanes() -> None
     proposals = [h.title for h in result.hypotheses if is_proposal(h)]
     assert proposals == [RELAX_TITLE]
     assert _noted(result.notes, "Swap in the set membership trick", "shown technique")
+
+
+# --------------------------------------------------------------------------
+# G5a: per-lane frameworks (IDEAS_LANE_FRAMEWORKS)
+# --------------------------------------------------------------------------
+
+_G5_VIEWS: Mapping[str, str] = {
+    "eliminate": "next_hotspots", "far": "whole_module", "recombine": "callers",
+}  # fmt: skip
+_G5_RELAX = (Lane.relax_dependency, Lane.relax_api)
+_G5_CONFIGS: Mapping[str, Mapping[str, object]] = {
+    "base": {},
+    "views": {"IDEAS_LANE_VIEWS": _G5_VIEWS},
+    "views_relax": {"IDEAS_LANE_VIEWS": _G5_VIEWS, "IDEAS_RELAX_LANES": _G5_RELAX},
+    "sequential": {
+        "IDEAS_LANE_VIEWS": _G5_VIEWS, "IDEAS_RELAX_LANES": _G5_RELAX[:1],
+        "IDEAS_SEQUENTIAL_LANES": True,
+    },
+}  # fmt: skip
+_G5_GOLDEN: Mapping[str, str] = {
+    "base": "fcd2e2625bf35504896e556566ab791ddb9093088862e41487057c696cfe60fd",
+    "views": "5ffd355cec32e349bd3ae1bfd13e330aca29aa4d8ffa78b46dccd434b0ba0d1c",
+    "views_relax": "324a09949deb53b909c3e57d5ae4d50e3958921318c1d37ed683e4710e8eacfd",
+    "sequential": "27230523ec4a38c94d8e0a0a6e42b230c48260ea6ec95f135afc1029c4ab8e7f",
+}
+"""sha256 of every request and the whole result, recorded on ed6c557 before
+G5a changed anything: the setting off (or absent) must reproduce them."""
+
+
+def _g5_settings(name: str, **extra: object) -> Settings:
+    return Settings.model_validate({**BASE.model_dump(), **_G5_CONFIGS[name], **extra})
+
+
+def _g5_run(cfg: Settings) -> tuple[_Run, GenerateResult]:
+    relax = [_ideas(_idea(RELAX_TITLE, "find_all")) for _ in cfg.IDEAS_RELAX_LANES]
+    run = _Run(lane=[S1_REPLY, *_lens_replies(), *relax], leap=[LEAP],
+               reviewer=[REVIEW], cfg=cfg)  # fmt: skip
+    return run, run()
+
+
+def _fingerprint(run: _Run, result: GenerateResult) -> str:
+    record = {
+        "requests": {role: [dataclasses.asdict(r) for r in run.requests(role)]
+                     for role in ("lane", "leap", "reviewer")},
+        "hypotheses": [h.model_dump(mode="json", exclude={"id"})
+                       for h in result.hypotheses],
+        "notes": list(result.notes),
+        "events": [e.model_dump(mode="json") for e in result.events],
+        "stats": None if result.stats is None
+        else result.stats.model_dump(mode="json"),
+    }  # fmt: skip
+    text = json.dumps(record, sort_keys=True, default=str)
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+@pytest.mark.parametrize("name", list(_G5_CONFIGS))
+def test_frameworks_off_every_request_and_result_is_byte_identical(name: str) -> None:
+    """
+    GIVEN the pipeline with views, rule-relaxing lanes and sequential lanes
+          in four combinations, and frameworks left at their default
+    WHEN it runs on the same scripted replies
+    THEN every request and the whole result hash to what they did before
+         G5a existed
+    """
+    run, result = _g5_run(_g5_settings(name))
+    assert _fingerprint(run, result) == _G5_GOLDEN[name]
+
+
+def test_frameworks_set_off_explicitly_match_the_golden_too() -> None:
+    run, result = _g5_run(_g5_settings("views_relax", IDEAS_LANE_FRAMEWORKS=False))
+    assert _fingerprint(run, result) == _G5_GOLDEN["views_relax"]
+
+
+_LENS_NAME = re.compile(r'<lens name="([a-z_]+)"')
+
+
+def _lane_of(request: LLMRequest) -> Lane:
+    found = _LENS_NAME.search(_texts(request)[-1])
+    return Lane.obvious if found is None else Lane(found.group(1))
+
+
+def _frameworks_in(request: LLMRequest) -> int:
+    return f"{request.system}\n{json.dumps(request.messages)}".count("<framework ")
+
+
+def _expected_block(cfg: Settings, lane: Lane) -> str | None:
+    if lane in cfg.IDEAS_RELAX_LANES:
+        return lane_framework(lane, None)
+    view = cfg.IDEAS_LANE_VIEWS.get(lane)
+    return None if view is None else lane_framework(lane, view)
+
+
+@pytest.mark.parametrize("name", ["views_relax", "sequential"])
+def test_frameworks_on_each_viewed_lens_and_relaxing_lane_gets_its_own_once(
+    name: str,
+) -> None:
+    """
+    GIVEN three lenses on views (two others unviewed), rule-relaxing lanes,
+          parallel or sequential lanes, and IDEAS_LANE_FRAMEWORKS on
+    WHEN the pipeline runs
+    THEN each viewed lens's instruction holds its view's framework once and
+         each relaxing lane's its rule's once, never in the data block; S1,
+         the unviewed lenses, the leap and the reviewer hold none
+    """
+    cfg = _g5_settings(name, IDEAS_LANE_FRAMEWORKS=True)
+    run, _result = _g5_run(cfg)
+
+    lanes = [_lane_of(r) for r in run.requests("lane")]
+    assert set(lanes) == {Lane.obvious, *LENS_LANES, *cfg.IDEAS_RELAX_LANES}
+    framed = set()
+    for request in run.requests("lane"):
+        lane = _lane_of(request)
+        block = _expected_block(cfg, lane)
+        if block is None:
+            assert _frameworks_in(request) == 0, lane
+            continue
+        framed.add(lane)
+        assert _texts(request)[-1].count(block) == 1
+        assert block not in _texts(request)[0]
+        assert _frameworks_in(request) == 1, lane
+    assert framed == {*(Lane(k) for k in _G5_VIEWS), *cfg.IDEAS_RELAX_LANES}
+    for role in ("leap", "reviewer"):
+        assert run.requests(role)
+        assert all(_frameworks_in(r) == 0 for r in run.requests(role))
+
+
+@pytest.mark.parametrize("name", list(_G5_CONFIGS))
+def test_frameworks_leave_every_cached_and_shared_block_byte_identical(
+    name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    GIVEN the same call with frameworks off and on
+    THEN the system prompt, every data block (cached or not) and every
+         block carrying a cache breakpoint are the same bytes; a request
+         differs only in its last text block, by exactly its framework
+    """
+    off_run, _off = _g5_run(_g5_settings(name))
+    _reset_tokens(monkeypatch)
+    cfg = _g5_settings(name, IDEAS_LANE_FRAMEWORKS=True)
+    on_run, _on = _g5_run(cfg)
+
+    changed = 0
+    for role in ("lane", "leap", "reviewer"):
+        offs, ons = off_run.requests(role), on_run.requests(role)
+        assert len(offs) == len(ons)
+        for off, on in zip(offs, ons, strict=True):
+            assert (on.system, on.output_config, on.cache, on.max_tokens) == (
+                off.system, off.output_config, off.cache, off.max_tokens)  # fmt: skip
+            off_blocks = off.messages[0]["content"]
+            on_blocks = on.messages[0]["content"]
+            assert isinstance(off_blocks, list) and isinstance(on_blocks, list)
+            assert len(on_blocks) == len(off_blocks)
+            assert on_blocks[:-1] == off_blocks[:-1]
+            cached = [b for b in on_blocks if "cache_control" in b]
+            assert cached == [b for b in off_blocks if "cache_control" in b]
+            block = _expected_block(cfg, _lane_of(on)) if role == "lane" else None
+            on_last, off_last = _texts(on)[-1], _texts(off)[-1]
+            if block is None:
+                assert on_last == off_last
+            else:
+                changed += 1
+                assert on_last.count(block) == 1
+                assert on_last.replace(f"\n{block}", "", 1) == off_last
+    expected = (
+        0
+        if name == "base"
+        else len(_G5_VIEWS) + len(_g5_settings(name).IDEAS_RELAX_LANES)
+    )
+    assert changed == expected
+
+
+def test_frameworks_on_record_per_lane_whether_one_was_applied() -> None:
+    """
+    GIVEN frameworks on, three viewed lenses and two relaxing lanes
+    THEN the result's notes say, for every lane S2 sends, which framework
+         its request carries (a view's, a rule's or none), and
+         ``framework_labels`` reads them back; off, there is no such note
+    """
+    _run, result = _g5_run(_g5_settings("views_relax", IDEAS_LANE_FRAMEWORKS=True))
+    labels = framework_labels(result.notes)
+    assert labels == {
+        Lane.eliminate: "view next_hotspots", Lane.far: "view whole_module",
+        Lane.recombine: "view callers", Lane.assume_less: None,
+        Lane.name_the_problem: None, Lane.resolve_tradeoff: None, Lane.leap: None,
+        Lane.relax_dependency: "rule new_dependency", Lane.relax_api: "rule api_change",
+    }  # fmt: skip
+    assert _noted(result.notes, "lane recombine: framework view callers")
+    assert _noted(result.notes, "lane leap: framework none")
+    _run, off = _g5_run(_g5_settings("views_relax"))
+    assert framework_labels(off.notes) == {}
+
+
+def test_a_view_that_cannot_be_built_gets_no_framework() -> None:
+    """A lens whose view could not be built sees the shared block, so it is
+    not given that view's framework, and its label says so."""
+    cfg = _g5_settings("base", IDEAS_LANE_VIEWS={"far": "next_hotspots"},
+                       IDEAS_LANE_FRAMEWORKS=True)  # fmt: skip
+    run = _Run(lane=[S1_REPLY, *_lens_replies()], leap=[LEAP], reviewer=[REVIEW],
+               cfg=cfg)  # fmt: skip
+    result = run(hotspots=HOTSPOTS[:1])
+    assert all(_frameworks_in(r) == 0 for r in run.requests("lane"))
+    assert framework_labels(result.notes)[Lane.far] is None
+
+
+def test_a_second_call_carries_and_records_no_framework() -> None:
+    cfg = _g5_settings("views_relax", IDEAS_LANE_FRAMEWORKS=True)
+    run = _Run(lane=[S1_REPLY], cfg=cfg)
+    result = run(call_index=1)
+    (s1,) = run.requests("lane")
+    assert _frameworks_in(s1) == 0
+    assert framework_labels(result.notes) == {}
+
+
+def test_framework_labels_read_only_the_pipelines_own_notes() -> None:
+    notes = ("lane far: framework view history", "lane sideways: framework none",
+             "lane far failed (X): framework none", "lane eliminate: framework none")  # fmt: skip
+    assert framework_labels(notes) == {Lane.far: "view history", Lane.eliminate: None}

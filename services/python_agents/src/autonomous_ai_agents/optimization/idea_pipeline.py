@@ -26,6 +26,17 @@ S2 there (a ``discovery_unaffordable`` event naming it).
 matches an earlier admitted idea's (an ``idea_dropped`` event, reason
 ``mechanism_duplicate``, with ``duplicate_of``).
 
+How each lane thinks (G5): ``IDEAS_LANE_FRAMEWORKS`` (off by default; off
+keeps every request byte for byte) gives a lens whose view was built its
+view's framework and a rule-relaxing lane its rule's
+(``idea_prompts.lane_framework``), in the lane's own instruction after the
+cached data block, so every shared block is unchanged. S1, the leap, the
+reviewer and a lens on the shared block get none. A note per S2 lane records
+which framework it was assigned (``framework_labels`` reads them), whether or
+not its request was then sent (a budget stop, count mode): a report joins the
+labels with the lanes it sent, to tell a view alone from a view with its
+framework.
+
 What they may change (G3): ``IDEAS_RELAX_LANES`` (off by default) adds
 rule-relaxing lanes to S2, after every other lane (in sequence, no other lane
 sees their mechanisms). Their ideas carry ``proposal`` from birth
@@ -56,6 +67,7 @@ today's prompt plus code; the bank is for the lenses and the leap).
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from collections import Counter
@@ -143,6 +155,7 @@ from autonomous_ai_agents.optimization.idea_prompts import (
     IDEAS_SYSTEM_PROMPT,
     Example,
     example_rotation,
+    lane_framework,
     lane_instruction,
     with_think,
 )
@@ -153,6 +166,7 @@ from autonomous_ai_agents.optimization.idea_review import (
     unreviewed,
 )
 from autonomous_ai_agents.optimization.idea_types import (
+    RELAXING_LANES,
     CodeContext,
     GenerateEvent,
     IdeaCandidate,
@@ -181,6 +195,11 @@ _EQUIVALENCE_LABEL: Final = {
     False: "Why the output stays the same",
     True: "What the relaxed rule changes",  # a proposal (G3)
 }
+_FRAMEWORK_NOTE: Final = re.compile(
+    rf"lane ({'|'.join(lane.value for lane in Lane)}): "
+    r"framework (none|(?:view|rule) [a-z_]+)"
+)
+"""A note ``generate`` writes per S2 lane with frameworks on (G5)."""
 _CLASS_ORDER: Final = {
     ChangeClass.efficiency: 0,
     ChangeClass.behaviour: 1,
@@ -237,6 +256,7 @@ class _Call:
     views: dict[Lane, _Seen] = field(default_factory=dict)
     understanding: ProjectUnderstanding | None = None
     keys: dict[str, MechanismKey] = field(default_factory=dict)
+    frameworks: dict[Lane, str] = field(default_factory=dict)
 
 
 class IdeaPipelineGenerator:
@@ -281,6 +301,7 @@ class IdeaPipelineGenerator:
         self._fallback = fallback
         self._sequential = _switch(config, "IDEAS_SEQUENTIAL_LANES")
         self._dedupe = _switch(config, "IDEAS_MECHANISM_DEDUPE")
+        self._frameworks = config.IDEAS_LANE_FRAMEWORKS
 
     def generate(
         self,
@@ -361,6 +382,8 @@ class IdeaPipelineGenerator:
         relax = self._cfg.IDEAS_RELAX_LANES  # G3: after every other lane
         order = (*rotation(seed, lanes), *relax)
         lanes = (*lanes, *relax)
+        if self._frameworks:
+            self._frame(c, order)
         examples = example_rotation(seed, lanes, exclude=(project.name,))
         table = on_the_table([*(i.title for i in s1), *named], fence, notes)
         found = self._s2(c, lanes, order, table, examples)
@@ -414,6 +437,20 @@ class IdeaPipelineGenerator:
             else:
                 seen[lane] = found
         return seen
+
+    def _frame(self, c: _Call, order: Sequence[Lane]) -> None:
+        """Each S2 lane's framework block (G5), noted per lane in send order:
+        a relaxing lane's rule, a lens's view only when that view was built."""
+        for lane in order:
+            view = self._cfg.IDEAS_LANE_VIEWS.get(lane) if lane in c.views else None
+            block = lane_framework(lane, view)
+            if block is None:
+                label = "none"
+            else:
+                c.frameworks[lane] = block
+                rule = RELAXING_LANES.get(lane)
+                label = f"view {view}" if rule is None else f"rule {rule.value}"
+            c.notes.append(f"lane {lane.value}: framework {label}")
 
     # ----------------------------------------------------------------------
     # The stages
@@ -649,6 +686,7 @@ class IdeaPipelineGenerator:
         instruction = lane_instruction(
             lane, table=table, examples=examples, n=n,
             floor=c.objective.min_relative_gain, model=transport.chain[0],
+            framework=c.frameworks.get(lane),
         )  # fmt: skip
         request = lane_request(
             lane, system=c.research.system, instruction=instruction,
@@ -834,6 +872,20 @@ class IdeaPipelineGenerator:
             risk=idea.risk,
             tags=tuple(tags),
         )  # fmt: skip
+
+
+def framework_labels(notes: Sequence[str]) -> dict[Lane, str | None]:
+    """Which framework each S2 lane was assigned (G5), from a result's notes:
+    ``"view <name>"``, ``"rule <rule>"`` or ``None``; empty when frameworks
+    were off (or the call was S1 only). Assigned, not sent: a lane the budget
+    or count mode stopped is labelled too, so join with the lanes sent."""
+    labels: dict[Lane, str | None] = {}
+    for note in notes:
+        found = _FRAMEWORK_NOTE.fullmatch(note)
+        if found is not None:
+            label = found.group(2)
+            labels[Lane(found.group(1))] = None if label == "none" else label
+    return labels
 
 
 def _switch(config: Settings, name: str) -> bool:

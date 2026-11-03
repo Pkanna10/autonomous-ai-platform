@@ -319,6 +319,12 @@ class Settings(BaseSettings):
     (``idea_context.build_view``) instead of the shared hot-code block; S1,
     the leap and the reviewer always see the shared block. Empty keeps one
     block for every lane. Checked with the pipeline off too."""
+    IDEAS_LANE_FRAMEWORKS: bool = False
+    """Per-lane frameworks (G5, ``idea_prompts.lane_framework``): a lens that
+    sees its view (``IDEAS_LANE_VIEWS``) is told how to think with it, and a
+    rule-relaxing lane how to use its lifted rule, in the lane's own
+    instruction after the cached data block. S1, the leap, the reviewer and a
+    lens on the shared block never get one; off keeps every request as it is."""
     IDEAS_LANE_MAX_TOKENS: int = Field(default=12000, ge=1)
     IDEAS_LANE_N: int = Field(default=6, ge=1, le=10)
     IDEAS_LENSES: tuple[Lane, ...] = LENS_LANES

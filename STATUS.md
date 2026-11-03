@@ -2954,6 +2954,24 @@ worktree", 4.4.0) or in the builder rules every brief carries.
   prove the order); in sequential mode a re-priced lane's exchange carries a
   generic `lane-N` label in `ideas-reply` (scoring reads tags, not labels, and
   X1-4 is not sequential).
+- Dependabot alert #236 (moderate, on master, reported by the push of
+  2026-11-02): this session has no Dependabot API, so the alert page was not
+  opened; identified by audit instead. On master `pnpm audit` finds only
+  GHSA-g3hv-75wg-m249 (minimatch 3.1.5 and 10.2.6 through ESLint and
+  typescript-eslint, two paths, one advisory) and `pip-audit` on master's
+  `uv.lock` finds nothing, so #236 is the minimatch advisory already ignored in
+  `pnpm-workspace.yaml` (added 2026-11-01). That entry carries no expiry date:
+  it is removed when Dependabot brings an ESLint or typescript-eslint release
+  that accepts minimatch >= 11.0.1. To confirm, the owner can check that the
+  alert names minimatch.
+- G5a (frameworks) review nits: the per-lane label is a result note, not an
+  `IdeaStats` field (`idea_types.py` was not the unit's); the pipeline labels
+  the framework each lane was assigned, sent or not, and the probe row keeps
+  only lanes the pipeline's stop reasons show answered (`sent_frameworks`, so a
+  sequential re-priced lane counts under its lane, not its `lane-N` tap label);
+  the row's other per-request fields still carry `lane-N` keys in sequential
+  mode. The frameworks' wording checks are keyword heuristics; the Lead read all
+  ten against their rules.
 - G6b review nits, left as they are: `ScaleSetting.env_var` refuses only PATH,
   HOME, TMPDIR and the PYTHON, LD_ and DYLD_ prefixes, so a name the sandbox
   denies (a token-shaped one) or one only passed through (LANG, TZ) is caught at

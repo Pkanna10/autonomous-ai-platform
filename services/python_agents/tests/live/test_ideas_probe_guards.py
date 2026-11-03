@@ -49,6 +49,7 @@ from autonomous_ai_agents.common.models import (
     Project,
 )
 from autonomous_ai_agents.execution.git import GitError
+from autonomous_ai_agents.optimization.idea_pipeline import framework_labels
 from autonomous_ai_agents.optimization.idea_review import (
     REVIEW_SYSTEM_PROMPT,
     review_request,
@@ -1430,3 +1431,44 @@ def test_a_relaxing_arms_proposal_is_reported_never_pooled_or_scored(
     lines = [json.loads(x) for x in results.read_text("utf-8").splitlines()]
     (kept,) = [x for x in lines if x["experiment"] == ip.PROPOSAL_EXPERIMENT]
     assert (kept["title"], kept["relaxes"]) == (proposal.title, ["new_dependency"])
+
+
+def test_a_rows_frameworks_name_only_the_lanes_it_sent(
+    dry: Path, tmp_path: Path
+) -> None:
+    """G5: the pipeline labels every S2 lane's assigned framework, sent or
+    not; the row keeps only the sent lanes', so count mode (S1 and the first
+    lens sent) never reports the unsent relaxing lane's framework."""
+    base = _base().model_copy(update={
+        "IDEAS_LANE_FRAMEWORKS": True,
+        "IDEAS_RELAX_LANES": (Lane.relax_dependency,),
+    })  # fmt: skip
+    wire = dg.Wire(_Answers(), usages=[CACHED] * 14)
+    run = wire.run()
+    found = ip.run_arm(ip.ARM_COUNT, run, _facts(), base=base, reader=_reader)
+    assert found.error is None and found.result is not None
+    assigned = framework_labels(found.result.notes)
+    assert assigned[Lane.relax_dependency] == "rule new_dependency"
+    sink = ResultsSink({"LIVE_RESULTS_PATH": str(tmp_path / "r.jsonl")})
+    recorder = ip.ProbeRecorder(ip.ProbePlan((ip.ARM_COUNT,), _repos(("tomli",))), sink)
+    recorder.record("tomli", [found], [], None, run)
+    (row,) = recorder.rows
+    assert row.sent == ("obvious", LENS_LANES[0].value)
+    assert row.frameworks == {LENS_LANES[0].value: None}
+
+
+def test_a_sequential_rows_frameworks_keep_every_lane_it_sent(dry: Path) -> None:
+    """G5 with G4's sequential lanes: a re-priced lane is sent under a fresh
+    tap label (``lane-N``), so the row reads which lanes were answered from
+    the pipeline's own stop reasons, keyed by lane in every mode."""
+    base = _base().model_copy(update={
+        "IDEAS_LANE_FRAMEWORKS": True, "IDEAS_SEQUENTIAL_LANES": True,
+        "IDEAS_RELAX_LANES": (Lane.relax_dependency,),
+    })  # fmt: skip
+    wire = dg.Wire(_Answers(), usages=[CACHED] * 20)
+    found = ip.run_arm(ip.ARM_C, wire.run(), _facts(), base=base, reader=_reader)
+    assert found.error is None and found.result is not None
+    frameworks = ip.sent_frameworks(found)
+    assert frameworks["relax_dependency"] == "rule new_dependency"
+    assert set(frameworks) == {*(lane.value for lane in LENS_LANES), "leap",
+                               "relax_dependency"}  # fmt: skip

@@ -19,6 +19,11 @@
   the ask; the think line closes it only on Sonnet 5.5 (D58).
 - ``VIEW_HEADINGS``: what each lane view (G2) shows, stated in the view's
   own data block in place of the shared hot-code heading.
+- ``VIEW_FRAMEWORKS`` and ``RELAX_FRAMEWORKS`` (G5): how a viewed lens or a
+  rule-relaxing lane should think, one to three sentences each; a lens's
+  never invites a frozen change, a relaxing lane's speaks only of its own
+  rule. ``lane_framework`` renders one for ``lane_instruction``, never for
+  S1, the leap or a lens without a view.
 """
 
 from __future__ import annotations
@@ -518,9 +523,11 @@ def lane_instruction(
     n: int,
     floor: float,
     model: str,
+    framework: str | None = None,
 ) -> str:
     """The user turn after the cached data block (4.2b.2-4.2b.4): the table
-    (``idea_lanes.on_the_table``), the lens (none for S1), the examples and
+    (``idea_lanes.on_the_table``), the lens (none for S1), the lane's
+    ``framework`` block if any (G5, ``lane_framework``), the examples and
     the ask for ``n`` ideas, closed by the think line on Sonnet 5.5."""
     n = check_count("n", n, MAX_REPLY_ITEMS)
     if lane is Lane.obvious:
@@ -531,7 +538,7 @@ def lane_instruction(
         lens, ask = RELAX_TEXT[lane], RELAX_ASK.format(n=n)
     else:
         lens, ask = LENS_TEXT[lane], LENS_ASK.format(n=n)
-    parts = (table, lens, examples_block(examples), with_think(ask, model))
+    parts = (table, lens, framework, examples_block(examples), with_think(ask, model))
     return "\n".join(part for part in parts if part)
 
 
@@ -571,3 +578,91 @@ VIEW_CODE_HEADING: Final = (
     "code for this view at the base commit (line numbers are for reference; "
     "quote the code, not the numbers):"
 )
+
+
+# --------------------------------------------------------------------------
+# The frameworks (G5): how a viewed lens or a rule-relaxing lane thinks
+# --------------------------------------------------------------------------
+
+VIEW_FRAMEWORKS: Final[Mapping[IdeaView, str]] = {
+    "callers": (
+        "Think from the call sites outward: push work to the caller, hoist out "
+        "of a caller's loop what every call repeats, or memoise across calls "
+        "what is recomputed for the same arguments. Every caller must still "
+        "get exactly the values it gets now."
+    ),
+    "data_structures": (
+        "Think in representations: ask whether each structure the hot function "
+        "touches has the shape its use needs (a sequence searched for "
+        "membership, a mapping rebuilt on every call, a general object doing a "
+        "narrow job). Change the representation, never the values it holds."
+    ),
+    "input_shape": (
+        "Specialise for the shape the workload actually passes: a fast path "
+        "for the sizes, types and characters the real inputs hold, with the "
+        "general path kept for every other input. The result must be the same "
+        "for any input, not only for these."
+    ),
+    "whole_module": (
+        "Look across the module, not inside one function: work two functions "
+        "repeat, state rebuilt on every call that could be built once at "
+        "import, or a general helper whose full generality the hot path never "
+        "uses."
+    ),
+    "next_hotspots": (
+        "Leave the hottest function to the other lanes: find what the 2nd and "
+        "3rd hotspots waste on their own, and any work they repeat that one "
+        "change would remove from both."
+    ),
+    "history": (
+        "Treat each past speed-up as prior art: find where the same move "
+        "would pay again in the code as it is now, or a hot path the "
+        "project's earlier speed-ups never reached. An idea that only repeats "
+        "a listed commit is already taken."
+    ),
+}
+"""One framework per view (G2), keyed like ``VIEW_HEADINGS``."""
+
+RELAX_FRAMEWORKS: Final[Mapping[Lane, str]] = {
+    Lane.relax_dependency: (
+        "Think about which part of the hot path a mature package already does "
+        "in compiled code (parsing, matching, a specialised container), and "
+        "what swapping it in would save once the package is imported."
+    ),
+    Lane.relax_output_order: (
+        "Think about which work exists only to keep the current order: "
+        "sorting, ordered containers, merges that walk in sequence. With the "
+        "order free, ask what could be grouped, hashed or emitted as soon as "
+        "it is ready."
+    ),
+    Lane.relax_precompute: (
+        "Think about what the hot path derives from data that never changes "
+        "between runs, so it could be generated once at install time and "
+        "only read at run time."
+    ),
+    Lane.relax_api: (
+        "Think about what the public signature forces the hot path to do "
+        "(convert, copy, validate or return a general type) that a narrower "
+        "signature would not, and what each caller would then do instead."
+    ),
+}
+"""One framework per rule-relaxing lane (G3), keyed like ``RELAX_TEXT``."""
+
+
+def _framework(attribute: str, value: str, text: str) -> str:
+    return f'<framework {attribute}="{value}">\nHow to think: {text}\n</framework>'
+
+
+def lane_framework(lane: Lane, view: IdeaView | None) -> str | None:
+    """The ``<framework>`` block for ``lane`` seeing ``view`` (G5): a
+    rule-relaxing lane's rule framework, a lens's view framework, else
+    ``None`` (S1, the leap and a lens on the shared block never get one).
+    Only a lens has a view (``IDEAS_LANE_VIEWS``), so a view on any other
+    lane is a bug (``ValueError``)."""
+    if view is not None and lane not in LENS_TEXT:
+        raise ValueError(f"the {lane.value} lane never has a view, got {view!r}")
+    if lane in RELAX_FRAMEWORKS:
+        return _framework("rule", RELAXING_LANES[lane].value, RELAX_FRAMEWORKS[lane])
+    if view is None:
+        return None
+    return _framework("view", view, VIEW_FRAMEWORKS[view])

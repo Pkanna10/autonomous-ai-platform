@@ -1326,3 +1326,22 @@ def test_a_lane_view_the_pipeline_cannot_route_is_refused(
     lane that is no running lens, or a view that does not exist."""
     with pytest.raises(ValidationError, match=match):
         _cfg(IDEAS_LANE_VIEWS=views, **extra)
+
+
+# --------------------------------------------------------------------------
+# G5a: a framework per lane (IDEAS_LANE_FRAMEWORKS)
+# --------------------------------------------------------------------------
+
+
+def test_lane_frameworks_are_off_by_default(clean_env: Path) -> None:
+    """Should keep every request as it was until a configuration turns them on."""
+    assert _cfg().IDEAS_LANE_FRAMEWORKS is False
+
+
+def test_lane_frameworks_turn_on_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch, clean_env: Path
+) -> None:
+    monkeypatch.setenv("IDEAS_LANE_FRAMEWORKS", "true")
+    assert Settings(_env_file=None).IDEAS_LANE_FRAMEWORKS is True
+    with pytest.raises(ValidationError, match="IDEAS_LANE_FRAMEWORKS"):
+        _cfg(IDEAS_LANE_FRAMEWORKS="sometimes")

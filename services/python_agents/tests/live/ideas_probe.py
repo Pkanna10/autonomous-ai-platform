@@ -110,7 +110,10 @@ from autonomous_ai_agents.optimization.idea_context import (
     read_code_context,
     render_data_block,
 )
-from autonomous_ai_agents.optimization.idea_pipeline import IdeaPipelineGenerator
+from autonomous_ai_agents.optimization.idea_pipeline import (
+    IdeaPipelineGenerator,
+    framework_labels,
+)
 from autonomous_ai_agents.optimization.idea_review import read_review, review_request
 from autonomous_ai_agents.optimization.idea_types import (
     RELAXING_LANES,
@@ -1084,6 +1087,23 @@ def scores(
 # ---------------------------------------------------------------------------
 
 
+def sent_frameworks(run: ArmRun) -> dict[str, str | None]:
+    """The framework of each S2 lane this arm sent and got an answer for
+    (G5). The pipeline labels every lane it assigned one, sent or not, so the
+    labels are joined with the pipeline's own stop reasons, keyed by lane in
+    every mode (a sequential re-priced lane is sent under a fresh ``lane-N``
+    tap label). A lane the budget or count mode stopped, or whose request
+    failed after its retries, produced nothing and is left out."""
+    if run.result is None or run.result.stats is None:
+        return {}
+    answered = {k for k, v in run.result.stats.stop_reasons.items() if v is not None}
+    return {
+        lane.value: label
+        for lane, label in framework_labels(run.result.notes).items()
+        if lane.value in answered
+    }
+
+
 @dataclass(frozen=True)
 class ProbeRow:
     repo: str
@@ -1107,6 +1127,10 @@ class ProbeRow:
     sent: tuple[str, ...]
     audit_error: str | None
     proposals: int = 0  # returned quarantined proposals (G3): never scored
+    # G5: each sent S2 lane's framework ("view <name>", "rule <rule>" or
+    # None); empty with IDEAS_LANE_FRAMEWORKS off, so X1-3 labels its two
+    # factors (``sent_frameworks``)
+    frameworks: dict[str, str | None] = field(default_factory=dict)
 
     def record(self) -> dict[str, object]:
         return {"experiment": ROW_EXPERIMENT, **asdict(self)}
@@ -1191,6 +1215,7 @@ class ProbeRecorder:
                 cache_reads={e.label: e.usage[2] for e in ex},
                 counted={e.label: e.counted for e in ex},
                 sent=tuple(e.label for e in ex if e.sent), audit_error=audit_error,
+                frameworks=sent_frameworks(a),
             )  # fmt: skip
             self.rows.append(row)
             self.sink.write(row.record())
