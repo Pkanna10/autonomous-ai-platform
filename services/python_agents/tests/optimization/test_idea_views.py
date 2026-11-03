@@ -342,6 +342,19 @@ def test_call_sites_past_the_cap_and_files_past_the_scan_are_noted(
     assert _noted(notes, "1 file(s) not scanned for callers", "limit 6")
 
 
+def test_under_the_limits_no_cut_is_noted() -> None:
+    """
+    GIVEN fewer call sites and files than the limits
+    WHEN the callers view is built
+    THEN no cut is noted (a negative count is no cut)
+    """
+    blobs = {**PATHS, "pkg/use.py": "from pkg.core import score\nscore(1, None)\n"}
+    view, notes = _view("callers", _source(blobs))
+    assert 0 < len(_facts(view, "call site")) < CALL_SITES_MAX
+    assert not _noted(notes, "not listed") and not _noted(notes, "not scanned")
+    assert not any(note.startswith("-") for note in notes)
+
+
 def test_no_caller_found_still_shows_the_hot_function() -> None:
     view, _ = _view("callers", _source({"pkg/core.py": CORE}, (TOKENS,)))
     assert _facts(view, "call site") == []

@@ -206,7 +206,9 @@ def hotspot_rows(
 
 
 def count_note(notes: list[str], count: int, text: str) -> None:
-    if count:
+    """Note ``count`` items cut; nothing when none is (zero or below: a
+    caller's ``len(...) - LIMIT`` under the limit)."""
+    if count > 0:
         notes.append(f"{count} {text}")
 
 

@@ -1721,12 +1721,15 @@ _G5_CONFIGS: Mapping[str, Mapping[str, object]] = {
 }  # fmt: skip
 _G5_GOLDEN: Mapping[str, str] = {
     "base": "fcd2e2625bf35504896e556566ab791ddb9093088862e41487057c696cfe60fd",
-    "views": "5ffd355cec32e349bd3ae1bfd13e330aca29aa4d8ffa78b46dccd434b0ba0d1c",
-    "views_relax": "324a09949deb53b909c3e57d5ae4d50e3958921318c1d37ed683e4710e8eacfd",
-    "sequential": "27230523ec4a38c94d8e0a0a6e42b230c48260ea6ec95f135afc1029c4ab8e7f",
+    "views": "3be5e12e7c4b29d57657badcab7427fa8855c42fe5c3503072e93b73891566f2",
+    "views_relax": "4a8013ee60ce88e65b03dba2667d88f272fd53b8fe60a075d7a4a050a37ab2d4",
+    "sequential": "1b4d39dc6a6b2a3101ac2b9a8a9fee56eb5222b6904bc16bed893bd4e445d283",
 }
 """sha256 of every request and the whole result, recorded on ed6c557 before
-G5a changed anything: the setting off (or absent) must reproduce them."""
+G5a changed anything: the setting off (or absent) must reproduce them. The
+viewed configurations were re-recorded on d8e7a9f when the callers view
+stopped noting negative cuts (count_note): the requests are byte-identical,
+only two false notes left the result."""
 
 
 def _g5_settings(name: str, **extra: object) -> Settings:
@@ -2350,14 +2353,16 @@ G11_LESSONS = (
 G11_AVOID = ("Batch the regex scans", "Memoise the line splitter")
 _G11_GOLDEN: Mapping[str, str] = {
     "base": "77dee712d3c7f7d3c310951d00b8ff989c91ff29db82aa882e030661c38c172e",
-    "views": "47a0e4a1d99ca088227d3bfb878516aaf2c7644537107767cf1e5510c18717f8",
-    "views_relax": "291089dc614ad2dea7c39fc682c57487c90af6346548e10a516cc4d8c5acc951",
-    "sequential": "76bd502832f8c97b6bc8e57fa6c7ca7192ce389fc44f08e8d5cc09b49a2835c3",
+    "views": "a0da84b64c56bc0792c7c974d3ec64ca6f2de7fb00d0cb07660f725339cfe896",
+    "views_relax": "6508731ff1ea60ad7059e431e6acc98a1d569a705ec7139c82e7e295216f2723",
+    "sequential": "73bce1f97c3193871c5557d547873b2431bc84301c164214c4bf2e396e741509",
     "second": "91e472c6ce25e68bac35ffe36378f80574eb09f458690a9ae5ed6f5f33169fa2",
 }
 """sha256 of every request and the whole result with lessons and
 ``avoid_titles`` given, recorded on 2e8ad0d before G11 changed anything:
-``GENERATOR_LESSONS`` off (or absent) must reproduce them."""
+``GENERATOR_LESSONS`` off (or absent) must reproduce them. The viewed
+configurations were re-recorded on d8e7a9f with the count_note fix (two false
+notes gone, every request byte-identical)."""
 
 
 def _g11_run(cfg: Settings, *, call_index: int = 0) -> tuple[_Run, GenerateResult]:
