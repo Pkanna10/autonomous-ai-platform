@@ -138,6 +138,29 @@ gated); paper intake conditional. Wave 1 was built on 2026-10-25 (U1 on
 completion date or gate yet. 3c (D33-D34) and 3b (D27-D32) are designed in the
 Step 3 spec and built after it, 3c first (O5).
 
+Maintenance merges into `master` (2026-11-03, one at a time, each after its own
+checks were green and master's CI on the previous merge had finished; the lab
+branch was not touched, so X1 runs on the environment it was built against):
+
+- [#43](https://github.com/Pkanna10/autonomous-ai-platform/pull/43)
+  pytest-asyncio 1.4.0 to 1.4.1: merge `2f5d041`, master CI green.
+- [#42](https://github.com/Pkanna10/autonomous-ai-platform/pull/42) node image
+  22.23.2 to 22.23.3 (bookworm-slim): merge `4a83cdb`, master CI green.
+- [#41](https://github.com/Pkanna10/autonomous-ai-platform/pull/41) qdrant
+  v1.19.2 to v1.20.0: merge `bd2f35f`, master CI green.
+- [#33](https://github.com/Pkanna10/autonomous-ai-platform/pull/33)
+  docker/login-action 4.6.0 to 4.7.0: merge `e5e9842`, master CI green.
+- [#31](https://github.com/Pkanna10/autonomous-ai-platform/pull/31) esbuild
+  0.25.12 to 0.28.2: merge `30fdcc4`, master CI green.
+- Closed, each a dedicated upgrade unit after the lab (Technical Debt):
+  [#44](https://github.com/Pkanna10/autonomous-ai-platform/pull/44) anthropic
+  1.17 to 2.3.0 and
+  [#32](https://github.com/Pkanna10/autonomous-ai-platform/pull/32)
+  @anthropic-ai/sdk 0.137 to 1.3.0.
+- Parked until after X1, open and untouched: #34 dotenv, #35
+  docker/build-push-action, #36 docker/setup-buildx-action, #37 lint-staged, #38
+  actions/setup-python, #39 vite, #40 astral-sh/setup-uv (majors).
+
 Recommended Claude Code model and effort per step: 0 Opus 5.5 High; 1 Fable 5.1
 Extra; 2-4 and 3b Opus 5.5 Ultracode; 3c, 5 and 6 Opus 5.5 High (Fable 5.1 Max
 only when stuck). In Step 3 every unit's Reviewer ran on Fable 5.1, a different
@@ -2352,6 +2375,9 @@ builds it.
 | 2026-10-31 | 1      | [41186544846](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/41186544846)                                                                                                                                                                                         | E1 (1 of 2) | 14.43      | `ideas-probe`, arms A-E plus the auditor on more_itertools, pyparsing, tomli, sortedcontainers; 4/4 passed in 56 min. Good ideas A/B/C/D/E: more_itertools 4/2/3/2/2, pyparsing 5/1/1/1/2, tomli 5/1/3/1/0, sortedcontainers (control) 4/2/1/1/3. Artifact live-results-41186544846-1.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | 2026-10-31 | 1      | [41190431186](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/41190431186)                                                                                                                                                                                         | E1 (2 of 2) | 15.28      | Same arms on mistune, sqlparse, markdown, idna; 4/4 passed in 53 min. Good ideas A/B/C/D/E: mistune 4/1/0/1/2, sqlparse 5/3/1/2/2, markdown 5/2/0/2/2, idna 5/2/2/2/3. Gate not met (best arm C: 3 or more on 2 of 7 counted libraries, needs 5). Artifact live-results-41190431186-1.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | 2026-10-31 | 1      | [41200381767](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/41200381767)                                                                                                                                                                                         | L5a         | 1.37       | `ab-v2`, arm A (blind) alone, corpus v2, 1 rep, 12/12 passed in 15.7 min. Blind delivered on 9 of the 10 slowdowns (only auditchain missed), 0 of 2 decoy controls. Saturated by the pre-registered line (9/10 or more): arm B is not paid for, v2 is revised and L5a re-runs once. Artifact live-results-41200381767-1.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 2026-11-03 | 1      | [41642031575](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/41642031575)                                                                                                                                                                                         | Va views    | 0.00       | `ideas-views` on e3743e5, no request, 1.4 min: 48 rows (8 E1 libraries x 6 views), committed as `tests/fixtures/ideas_probe/views.jsonl` (c9aa3fd).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 2026-11-03 | 1      | [41642619744](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/41642619744)                                                                                                                                                                                         | Vb marker   | 2.17       | `ideas-marker` on c9aa3fd, 7.7 min, 96 replies, no error. Rows with a real verdict: 332 of 332 (keep 114, inconclusive 175, reject 43); scored rank sets: 48 of 72 (24 had no positive or no rival), 222 ideas, 103 positives, 17 of 18 libraries (more_itertools had none). Opus 5.5 AUC 0.671 (95 % 0.528-0.801), Opus 5 0.618 (0.488-0.737), the generator's own order 0.608 (0.480-0.737). O37: Opus 5.5 passes (>= 0.65, low > 0.5, above the generator, Opus 5 more than 0.05 behind) and is the marker; 103 positives, so it decides.                                                                                                                                                                                                                                                                                              |
+| 2026-11-03 | 1      | [41642625225](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/41642625225)                                                                                                                                                                                         | Vc validate | 1.27       | `ideas-validate` on c9aa3fd, 6.9 min. Smokes: Sonnet 5 and Fable 5 each end_turn, served as asked. Dedupe labels by Opus 5 (outside E1's writers): 380 pairs of 1,229 candidates, 17 requests, none refused. G4's dedupe fails its bar: agreement 78.9 % (bar 90 %), different-mechanism pairs merged 2.3 % (bar 5 %, met); it merged 42 of 116 same-mechanism pairs, so it under-merges and X1 reports raw lists beside it. 20-pair owner sample recorded.                                                                                                                                                                                                                                                                                                                                                                               |
 
 ### 2026-10-24 (Window 0 final experiments: what they decide)
 
@@ -3061,6 +3087,17 @@ worktree", 4.4.0) or in the builder rules every brief carries.
   notes only positive counts. Requests were byte-identical; the six viewed
   golden hashes were re-recorded after a diff showed only those false notes left
   the result.
+- Major SDK upgrades, each a dedicated unit after the lab, through the SDK's
+  migration guide with tests first: the Python `anthropic` SDK is pinned
+  `>=1.17.0,<2.0.0` (locked 1.17.0) in `services/python_agents/pyproject.toml`
+  (Dependabot offered 2.3.0, #44, closed); the TypeScript `@anthropic-ai/sdk` is
+  `^0.137.0` (locked 0.137.0) in `packages/agent-core/package.json` (Dependabot
+  offered 1.3.0, #32, closed).
+- Merged branches `claude/step3-research` (#22), `claude/step3-ci-fixes` (#29)
+  and `claude/procrun-open-output` (#30) are still on the remote: this session's
+  git proxy refuses a push to any branch but the lab's (HTTP 403) and no GitHub
+  tool here deletes a branch, so the owner deletes them (each PR's "Delete
+  branch" button).
 - Dependabot alert #236 (moderate, on master, reported by the push of
   2026-11-02): this session has no Dependabot API, so the alert page was not
   opened; identified by audit instead. On master `pnpm audit` finds only
