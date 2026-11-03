@@ -146,7 +146,7 @@ from autonomous_ai_agents.execution.protocols import (
     UnderstandResult,
 )
 from autonomous_ai_agents.execution.runner import BaselineRunner, TrialRunner
-from autonomous_ai_agents.learning.lessons import lessons_from_verdicts
+from autonomous_ai_agents.learning.lessons import combine_marks, lessons_from_verdicts
 from autonomous_ai_agents.optimization.anticheat import (
     DEFAULT_PROTECTED_PATTERNS,
     check_diff_all,
@@ -3592,11 +3592,15 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
         known = _by_id(state["hypotheses"])
         decided = _deliverable(state)  # no lesson from a proposal (G3)
         context = tuple(sorted({tag for hs in state["hotspots"] for tag in hs.tags}))
+        # A keep weighs what the run set's combine did with it (W2, D13).
+        offered = _delivery_sets(decided)[0]
+        marks = combine_marks(offered, state["combination"], state["kept_verdict_ids"])
         lessons = lessons_from_verdicts(
             [_two_look_gain(v) for v in decided],
             known,
             project_id=state["project"].id,
             context=context,
+            marks=marks,
         )
         for lesson in lessons:
             ctx.repository.save_lesson(lesson)

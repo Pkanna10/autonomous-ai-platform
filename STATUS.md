@@ -754,6 +754,22 @@ blocks it.
   lab's learning mechanism, W3 deferred. Budget: X1 (~42 USD) is ~28 % of Window
   1's 148.73 USD; read every idea list in full; some confirmatory rungs may
   spill into Window 2.
+- **D25 amended (G11, W2, D13): a kept verdict's lesson weight follows its
+  combine.** Held or skipped 1.0, applied in a failed greedy re-test while
+  another fallback held 0.5 (`combine:unconfirmed`), not reproduced 0.25
+  (`combine:not_reproduced`), no combiner 1.0; the outcome is unchanged and a
+  `combine:*` tag joins the context. _Why:_ a single noisy win should not count
+  as a full keep in the next ranking. The weight only scales `LESSON_STEP`; it
+  never changes a verdict. `Combination` does not record which changes a failed
+  greedy re-test applied, so a change offered, not delivered, not skipped and
+  not its own failed fallback is taken as applied (the stricter weight).
+- **G11 (W1) choices (Lead, under the G11 section).** The lessons block also
+  reaches the rule-relaxing lanes, because they share the cached data block and
+  leaving them out would cost each a cache write; their ideas stay quarantined
+  proposals (G3). Only the project's own lessons are shown (never global or
+  another project's). In the pipeline the titles to avoid stay in S1's
+  on-the-table block only, so a title appears once per request; today's
+  generator gets them inside the lessons block (at most 40).
 - **O36. G5b and the input-shape view (owner, 2026-11-03).** Near-miss compounds
   are built by replay: the two measured trial commits are merged onto the base
   with the combiner's object-only git, with no editor and no tokens. A conflict

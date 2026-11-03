@@ -25,12 +25,19 @@ code check, deliberately: the editor is confined and ``anticheat`` judges
 the diff, so no further heuristics are added here), or when its title repeats
 an earlier one (compared with whitespace collapsed, case-folded). At most
 ``n`` are kept, in the model's order. Not wired into the graph yet (Step 3).
+
+Lessons (G11, W1, D21): given ``lessons`` or ``avoid_titles``, the user
+message gains ``lessons_block`` after the repository block: the project's
+last ``LESSONS_SHOWN`` lessons (outcome, weight, text) and this run's titles
+as one plain capped line each, under the request's token; a line holding a
+live token is withheld, noted. The idea pipeline puts the same block (its
+lessons only) at the end of its shared data block.
 """
 
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Final, Literal
 
 from pydantic import Field
@@ -44,6 +51,7 @@ from autonomous_ai_agents.clients.structured import (
     check_count,
     check_effort,
     clamp_unit,
+    count_note,
     data_line,
     hotspot_rows,
     read_reply,
@@ -62,6 +70,7 @@ from autonomous_ai_agents.common.models import (
     Hotspot,
     Hypothesis,
     HypothesisSource,
+    Lesson,
     Objective,
     Project,
     ProjectUnderstanding,
@@ -77,6 +86,28 @@ MAX_SUMMARY_CHARS: Final = 600
 MAX_EXPECTED_GAIN: Final = 1.0
 MAX_REPLY_ITEMS: Final = 50  # a longer list rejects the reply
 MAX_HOTSPOT_REFS: Final = 16
+
+LESSONS_SHOWN: Final = 20
+"""The project's most recent lessons a prompt shows (D21)."""
+LESSON_TEXT_CHARS: Final = 300
+LESSON_TITLE_CHARS: Final = 80  # idea_dedupe.SEED_TITLE_CHARS
+LESSON_TITLES_SHOWN: Final = 40
+LESSONS_TAG: Final = "untrusted_lessons"
+LESSONS_LEAD: Final = (
+    "Lessons from this project's earlier runs follow, fenced as untrusted "
+    "data: each lesson line is one judged idea with its outcome, its weight "
+    "(how much the engine's ranking counts it, from 0.25 to 1) and the "
+    "engine's summary with the measured gain."
+)
+_TITLES_ONLY_LEAD: Final = (
+    "The ideas this run already holds follow, fenced as untrusted data."
+)
+TITLES_LEAD: Final = (
+    " Each tried line is an idea this run already holds: do not propose it again."
+)
+_PLAIN_SWAPS: Final = str.maketrans({'"': "'", "\\": "/", "<": "(", ">": ")"})
+_TEXT_SWAPS: Final = str.maketrans({'"': "'", "\\": "/", "<": "("})
+"""A lesson's text keeps its ``->``: with no ``<`` no tag can open or close."""
 
 _CLASS_ORDER: Final = {
     ChangeClass.efficiency: 0,
@@ -195,6 +226,8 @@ def generate_hypotheses(
     hotspots: Sequence[Hotspot],
     objective: Objective,
     techniques: Sequence[Technique] = (),
+    lessons: Sequence[Lesson] = (),
+    avoid_titles: Sequence[str] = (),
     n: int = 5,
     effort: Effort | None = None,
     max_tokens: int = GENERATE_MAX_TOKENS,
@@ -239,6 +272,9 @@ def generate_hypotheses(
         *(spot_lines or ["(none)"]),
     ]
     parts = [fence.opening(), fence.block("untrusted_repo_content", repo)]
+    learned = lessons_block(project.id, lessons, avoid_titles, fence, notes)
+    if learned:
+        parts.append(learned)
     if not research.by_slug:
         parts.append(_NO_PLAYBOOK)
     text = "\n".join((*parts, _ORDER.format(n=n)))
@@ -253,6 +289,70 @@ def generate_hypotheses(
     result = send(transport, request, budget, sleep=sleep, config=config, notes=notes)
     reply = read_reply(result, _Reply, what="write hypotheses")
     return _hypotheses(reply, project, research.by_slug, _index(spots), n, notes)
+
+
+def plain_line(text: str, cap: int, *, arrows: bool = False) -> str:
+    """One capped line of printable ASCII with no quote, backslash or angle
+    bracket: ``idea_dedupe.plain_title``'s rule with a cap of its own (that
+    module imports this one through ``idea_lanes``, so it cannot be used
+    here; a test pins the two together). ``arrows`` keeps ``>`` (a lesson's
+    ``->``)."""
+    flat = " ".join(text.split()).translate(_TEXT_SWAPS if arrows else _PLAIN_SWAPS)
+    kept = "".join(c if c.isascii() and c.isprintable() else "?" for c in flat)
+    return kept[:cap].strip() or "(untitled)"
+
+
+def lessons_block(
+    project_id: str,
+    lessons: Sequence[Lesson],
+    avoid_titles: Iterable[str],
+    fence: Fence,
+    notes: list[str],
+) -> str:
+    """The lead-in and ``<untrusted_lessons>`` (W1, D21), or ``""`` when no
+    line is left: a ``lesson:`` line per one of the project's last
+    ``LESSONS_SHOWN`` lessons (oldest first; another project's or a global
+    one is never shown), then a ``tried:`` line per distinct title, at most
+    ``LESSON_TITLES_SHOWN``. Text and titles are plain capped lines; a line
+    whose text or title holds a live token is withheld, noted."""
+    mine = [lesson for lesson in lessons if lesson.project_id == project_id]
+    shown_lessons = mine[-LESSONS_SHOWN:]
+    count_note(notes, len(mine) - len(shown_lessons),
+               f"older lesson(s) not shown (limit {LESSONS_SHOWN})")  # fmt: skip
+    lines: list[str] = []
+    withheld = 0
+    for lesson in shown_lessons:
+        line = "lesson: " + data_line({
+            "outcome": lesson.outcome.value, "weight": round(lesson.weight, 2),
+            "text": plain_line(lesson.text, LESSON_TEXT_CHARS, arrows=True),
+        })  # fmt: skip
+        if fence.holds(lesson.text) or fence.holds(line):
+            withheld += 1
+        else:
+            lines.append(line)
+    count_note(notes, withheld, "lesson line(s) withheld: they hold a boundary token")
+    seen: set[str] = set()
+    titles: list[str] = []
+    withheld = hidden = 0
+    for title in avoid_titles:
+        plain = plain_line(title, LESSON_TITLE_CHARS)
+        if plain.casefold() in seen:
+            continue
+        seen.add(plain.casefold())
+        if fence.holds(title) or fence.holds(plain):
+            withheld += 1
+        elif len(titles) == LESSON_TITLES_SHOWN:
+            hidden += 1
+        else:
+            titles.append("tried: " + data_line(plain))
+    count_note(notes, withheld, "title line(s) withheld: they hold a boundary token")
+    count_note(notes, hidden, f"title(s) not shown (limit {LESSON_TITLES_SHOWN})")
+    if not lines and not titles:
+        return ""
+    lead = (LESSONS_LEAD if lines else _TITLES_ONLY_LEAD) + (
+        TITLES_LEAD if titles else ""
+    )
+    return f"{lead}\n{fence.block(LESSONS_TAG, (*lines, *titles))}"
 
 
 def _fenced_line(

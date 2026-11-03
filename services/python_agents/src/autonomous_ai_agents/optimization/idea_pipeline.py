@@ -53,6 +53,14 @@ raised inside it after a request was sent carries ``SEEDED_NOTE``
 (``seeded_failure``), so the node can charge the call's whole spend, S1's
 included, to its own counters either way.
 
+Lessons (G11, W1, D21): ``GENERATOR_LESSONS`` (off by default; off keeps
+every request byte for byte) appends ``generate.lessons_block`` (the
+project's last 20 lessons, fenced under the call's token) to the data block
+of S1, every lens and every rule-relaxing lane, shared view or own, so each
+gets the same bytes where the cache breakpoint sits and no instruction
+grows. ``avoid_titles`` stay where they are (``<already_on_the_table>``,
+S4a), so no title is shown twice. The leap and the reviewer never get it.
+
 What they may change (G3): ``IDEAS_RELAX_LANES`` (off by default) adds
 rule-relaxing lanes to S2, after every other lane (in sequence, no other lane
 sees their mechanisms). Their ideas carry ``proposal`` from birth
@@ -138,6 +146,7 @@ from autonomous_ai_agents.common.models import (
     Workload,
 )
 from autonomous_ai_agents.common.repo_read import RepoReader
+from autonomous_ai_agents.optimization.generate import lessons_block
 from autonomous_ai_agents.optimization.idea_context import (
     HistoryReader,
     IdeaReadLimits,
@@ -288,6 +297,8 @@ class _Call:
     seeds: tuple[Seed, ...] = ()
     seeded: bool = False
     """A second call with a seed to show: it runs its lanes again (D64)."""
+    lessons: str = ""
+    """The lessons block every lane's data block ends with (W1); ``""``: none."""
 
 
 class IdeaPipelineGenerator:
@@ -334,6 +345,7 @@ class IdeaPipelineGenerator:
         self._dedupe = _switch(config, "IDEAS_MECHANISM_DEDUPE")
         self._frameworks = config.IDEAS_LANE_FRAMEWORKS
         self._seeded = config.IDEAS_ROUND_SEEDS
+        self._lessons = config.GENERATOR_LESSONS
 
     def generate(
         self,
@@ -395,6 +407,8 @@ class IdeaPipelineGenerator:
         c = _Call(project, objective, hotspots, budget, research, fence, context,
                   prefix, index, notes, budget.spent_usd,
                   understanding=understanding)  # fmt: skip
+        if self._lessons:  # W1: the lessons only; the titles are on the table
+            c.lessons = lessons_block(project.id, lessons, (), fence, notes)
         if self._seeded:
             c.seeds = _round_seeds(verdicts, notes)
         c.seeded = call_index >= 1 and bool(c.seeds)
@@ -735,6 +749,9 @@ class IdeaPipelineGenerator:
         role: Role = "leap" if lane is Lane.leap else "lane"
         leap, transport = lane is Lane.leap, self._lanes[lane]
         view = c.views.get(lane)
+        prefix = c.prefix if view is None else view.prefix
+        if c.lessons and not leap:  # the same bytes in every lane (W1)
+            prefix = f"{prefix}\n{c.lessons}"
         instruction = lane_instruction(
             lane, table=table, examples=examples, n=n,
             floor=c.objective.min_relative_gain, model=transport.chain[0],
@@ -742,8 +759,7 @@ class IdeaPipelineGenerator:
         )  # fmt: skip
         request = lane_request(
             lane, system=c.research.system, instruction=instruction,
-            prefix=c.prefix if view is None else view.prefix,
-            shared=view is None or view.shared,
+            prefix=prefix, shared=view is None or view.shared,
             schema=IDEAS_SCHEMA, effort=self._efforts[role],
             max_tokens=self._cfg.IDEAS_LEAP_MAX_TOKENS if leap
             else self._cfg.IDEAS_LANE_MAX_TOKENS,

@@ -435,3 +435,27 @@ def test_the_compound_survives_a_serde_round_trip_mid_run(
     (trial,) = cast(list[Trial], delta["round_trials"])
     assert compound_parents(next(h for h in again["hypotheses"] if h.id == trial.hypothesis_id))  # fmt: skip
     assert len(runner.replays) == 1
+
+
+def test_a_refused_compound_teaches_no_lesson(
+    make_context: ContextFactory,
+    engine_graph: GraphFactory,
+    state: EngineState,
+    sample_project: Project,
+    in_memory_repo: InMemoryRepository,
+) -> None:
+    """G11: a compound whose replay was refused (marked rejected, no trial,
+    no verdict) is never a lesson; its parents' verdicts are, at weight 1.0
+    (nothing was kept, so nothing was combined)."""
+    n1, n2 = _ideas(sample_project, "N1 cache the parse", "N2 hoist the lookup")
+    runner = Replayer({k: NEAR[k] for k in (n1.title, n2.title)}, conflict=True)
+
+    final, _ = _graph_run(make_context, engine_graph, state, [n1, n2], runner,
+                          near_miss_compounds=True)  # fmt: skip
+
+    (compound,) = [h for h in final["hypotheses"] if compound_parents(h) is not None]
+    assert compound.status is HypothesisStatus.rejected
+    lessons = in_memory_repo.list_lessons(sample_project.id)
+    assert [lesson.hypothesis_id for lesson in lessons] == [n1.id, n2.id]
+    assert compound.id not in {lesson.hypothesis_id for lesson in final["lessons"]}
+    assert {lesson.weight for lesson in lessons} == {1.0}

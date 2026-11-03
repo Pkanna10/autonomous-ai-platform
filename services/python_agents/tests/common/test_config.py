@@ -1364,3 +1364,22 @@ def test_round_seeds_turn_on_from_the_environment(
     assert Settings(_env_file=None).IDEAS_ROUND_SEEDS is True
     with pytest.raises(ValidationError, match="IDEAS_ROUND_SEEDS"):
         _cfg(IDEAS_ROUND_SEEDS="sometimes")
+
+
+# --------------------------------------------------------------------------
+# G11: lessons in the prompts (GENERATOR_LESSONS)
+# --------------------------------------------------------------------------
+
+
+def test_lessons_in_the_prompts_are_off_by_default(clean_env: Path) -> None:
+    """Should show no model a lesson until a configuration turns W1 on."""
+    assert _cfg().GENERATOR_LESSONS is False
+
+
+def test_lessons_in_the_prompts_turn_on_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch, clean_env: Path
+) -> None:
+    monkeypatch.setenv("GENERATOR_LESSONS", "true")
+    assert Settings(_env_file=None).GENERATOR_LESSONS is True
+    with pytest.raises(ValidationError, match="GENERATOR_LESSONS"):
+        _cfg(GENERATOR_LESSONS="sometimes")

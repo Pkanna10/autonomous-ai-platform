@@ -5666,3 +5666,180 @@ class TestUnaffordableTrials:
         ]
         statuses = {h.id: h.status for h in _items(delta, "hypotheses", Hypothesis)}
         assert statuses[h3_noise.id] is HypothesisStatus.proposed
+
+
+# ---------------------------------------------------------------------------
+# G11 (W2, D13; amends decision 25): learn weights a keep by its combine
+# ---------------------------------------------------------------------------
+
+
+class TestLearnCombineDiscount:
+    """Two kept changes, ``one`` and ``two`` (equal gains: ``one`` is the
+    fallback by id), driven through the real combine node on a
+    ``FakeCombiner`` (it stands for ``GitCombiner``), then learn."""
+
+    @staticmethod
+    def _lessons(
+        make_context: ContextFactory,
+        base_state: EngineState,
+        project: Project,
+        results: Callable[[list[str]], list[CombineMeasured]] | None,
+        *,
+        slow_second: bool = False,
+    ) -> tuple[dict[str, Lesson], EngineState, NodeContext]:
+        """``results`` gets the trial ids (``one``'s first) and scripts the
+        combiner; ``None`` wires none."""
+        one = _efficiency(project, "one", "one-fast")
+        two = _efficiency(project, "two", "two-fast")
+        scripts = {"one-fast": _winning(FAST),
+                   "two-fast": _winning(SLOW if slow_second else FAST)}  # fmt: skip
+        state = _committed(
+            _advance(make_nodes(make_context([one, two], scripts)), base_state,
+                     _before("combine"))
+        )  # fmt: skip
+        ids = [_trial_of(state, one).id, _trial_of(state, two).id]
+        combiner = None if results is None else FakeCombiner(results(ids))
+        ctx = make_context([one, two], scripts, combiner=combiner)
+        nodes = make_nodes(ctx)
+        state = _apply(state, nodes["combine"](state))
+        lessons = _items(nodes["learn"](state), "lessons", Lesson)
+        return {lesson.hypothesis_id or "": lesson for lesson in lessons}, state, ctx
+
+    def test_held_and_skipped_keeps_count_in_full(
+        self, make_context: ContextFactory, base_state: EngineState,
+        sample_project: Project, sample_workload: Workload,
+    ) -> None:  # fmt: skip
+        """
+        GIVEN a greedy re-test that held over ``one``, ``two`` skipped for a
+              conflict
+        THEN ``one`` is held and ``two`` skipped, both at weight 1.0 with
+             their tag in the context and the Step 2 text
+        """
+
+        def results(ids: list[str]) -> list[CombineMeasured]:
+            skip = CombineSkip(trial_id=ids[1], reason="conflict", paths=("x.py",))
+            return [_measured(sample_workload.id, ids[:1], skipped=[skip])]
+
+        lessons, state, _ = self._lessons(
+            make_context, base_state, sample_project, results
+        )
+        assert state["kept_verdict_ids"] == [lessons["one"].verdict_id]
+        assert (lessons["one"].weight, lessons["two"].weight) == (1.0, 1.0)
+        assert "combine:held" in lessons["one"].context
+        assert "combine:skipped" in lessons["two"].context
+        assert lessons["one"].text.endswith(": keep (+41.7%)")
+        assert "combine" not in lessons["two"].text
+
+    def test_a_fallback_that_held_leaves_the_other_keep_unconfirmed(
+        self, make_context: ContextFactory, base_state: EngineState,
+        sample_project: Project, sample_workload: Workload,
+    ) -> None:  # fmt: skip
+        """
+        GIVEN a greedy re-test over both that failed, then ``one``'s
+              fallback held
+        THEN ``one`` is held (1.0) and ``two`` unconfirmed (0.5, noted);
+             both outcomes stay keep
+        """
+        failing = _rows(sample_workload.id, FAST, tests=0.0)
+
+        def results(ids: list[str]) -> list[CombineMeasured]:
+            return [_measured(sample_workload.id, ids, combined=failing),
+                    _measured(sample_workload.id, ids[:1], tip="d" * 40)]  # fmt: skip
+
+        lessons, state, _ = self._lessons(
+            make_context, base_state, sample_project, results
+        )
+        combination = state["combination"]
+        assert combination is not None and combination.holds
+        assert combination.fallback_trial_id is not None
+        assert combination.applied_trial_ids == (combination.fallback_trial_id,)
+        assert (lessons["one"].weight, lessons["two"].weight) == (1.0, 0.5)
+        assert "combine:held" in lessons["one"].context
+        assert "combine:unconfirmed" in lessons["two"].context
+        assert lessons["two"].text.endswith("keep (+41.7%; combine: unconfirmed)")
+        assert {lessons[k].outcome for k in ("one", "two")} == {VerdictOutcome.keep}
+
+    def test_when_nothing_held_both_keeps_are_not_reproduced(
+        self, make_context: ContextFactory, base_state: EngineState,
+        sample_project: Project, sample_workload: Workload,
+    ) -> None:  # fmt: skip
+        """
+        GIVEN the greedy re-test and ``one``'s fallback both failing
+        THEN both keeps weigh 0.25, tagged and noted not reproduced; learn
+             run again gives the same lesson ids and lessons
+        """
+        failing = _rows(sample_workload.id, FAST, tests=0.0)
+
+        def results(ids: list[str]) -> list[CombineMeasured]:
+            return [_measured(sample_workload.id, ids, combined=failing),
+                    _measured(sample_workload.id, ids[:1], combined=failing)]  # fmt: skip
+
+        lessons, state, ctx = self._lessons(
+            make_context, base_state, sample_project, results
+        )
+        assert state["kept_verdict_ids"] == []
+        for name in ("one", "two"):
+            assert lessons[name].weight == 0.25
+            assert lessons[name].outcome is VerdictOutcome.keep
+            assert "combine:not_reproduced" in lessons[name].context
+            assert lessons[name].text.endswith("; combine: not reproduced)")
+        again = _items(make_nodes(ctx)["learn"](state), "lessons", Lesson)
+        assert {lesson.hypothesis_id: lesson.model_dump(exclude={"created_at"})
+                for lesson in again} == {
+            k: lesson.model_dump(exclude={"created_at"}) for k, lesson in lessons.items()
+        }  # fmt: skip
+        assert len(ctx.repository.list_lessons(sample_project.id)) == 2
+
+    def test_no_combiner_and_a_non_keep_weigh_one_with_no_tag(
+        self, make_context: ContextFactory, base_state: EngineState,
+        sample_project: Project, sample_workload: Workload,
+    ) -> None:  # fmt: skip
+        """
+        GIVEN no combiner (both keeps delivered as Step 1 did); then a
+              combiner whose re-test of the one keep fails with no other
+              change to fall back on, beside a second change that measured
+              no gain (not kept)
+        THEN without a combiner every lesson weighs 1.0 with no combine tag;
+             with one, the failed keep is not reproduced and the other
+             verdict keeps weight 1.0 and no tag
+        """
+        plain, _, _ = self._lessons(make_context, base_state, sample_project, None)
+        assert {lesson.weight for lesson in plain.values()} == {1.0}
+        assert not any(t.startswith("combine:") for lesson in plain.values()
+                       for t in lesson.context)  # fmt: skip
+        failing = _rows(sample_workload.id, FAST, tests=0.0)
+
+        def results(ids: list[str]) -> list[CombineMeasured]:
+            return [_measured(sample_workload.id, ids[:1], combined=failing)]
+
+        lessons, state, _ = self._lessons(
+            make_context, base_state, sample_project, results, slow_second=True
+        )
+        combination = state["combination"]
+        assert combination is not None and combination.fallback_trial_id is None
+        assert lessons["one"].weight == 0.25
+        assert lessons["two"].outcome is not VerdictOutcome.keep
+        assert lessons["two"].weight == 1.0
+        assert not any(t.startswith("combine:") for t in lessons["two"].context)
+
+    def test_a_proposal_teaches_nothing_even_with_a_combination(
+        self, make_context: ContextFactory, base_state: EngineState,
+        sample_project: Project, sample_workload: Workload,
+    ) -> None:  # fmt: skip
+        """G3 holds under W2: a keep whose hypothesis is a quarantined
+        proposal is no lesson, whatever the combination recorded for it."""
+        failing = _rows(sample_workload.id, FAST, tests=0.0)
+
+        def results(ids: list[str]) -> list[CombineMeasured]:
+            return [_measured(sample_workload.id, ids, combined=failing),
+                    _measured(sample_workload.id, ids[:1], combined=failing)]  # fmt: skip
+
+        _, state, ctx = self._lessons(make_context, base_state, sample_project, results)
+        state["hypotheses"] = [
+            h.model_copy(update={"tags": ("proposal:output_order",)})
+            if h.id == "two" else h
+            for h in state["hypotheses"]
+        ]  # fmt: skip
+        lessons = _items(make_nodes(ctx)["learn"](state), "lessons", Lesson)
+        assert [lesson.hypothesis_id for lesson in lessons] == ["one"]
+        assert lessons[0].weight == 0.25

@@ -380,6 +380,15 @@ class Settings(BaseSettings):
     seed to show runs its lanes again. S1, the leap, the reviewer and the
     rule-relaxing lanes never see a seed, nor is a proposal one; off keeps
     every request as it is."""
+    GENERATOR_LESSONS: bool = False
+    """Lessons in the prompts (G11, W1, D21): the project's last 20 lessons
+    (each its outcome, weight and text; the text carries timing gains only)
+    reach today's generator, with this run's titles, and the idea pipeline's
+    S1, lens and rule-relaxing lanes, as one fenced untrusted block; a line
+    holding a boundary token is withheld. In the pipeline the block ends the
+    shared, cached data block (every lane the same bytes; the titles stay in
+    ``<already_on_the_table>``); the leap and the reviewer never see it.
+    Off keeps every request as it is."""
     ALLOW_RETENTION_MODELS: bool = False
     """Admit ``RETENTION_REQUIRED_MODELS`` in repository-text roles (D63).
     Set only by the live harness, for fixture and pinned-OSS repositories."""
