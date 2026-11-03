@@ -33,6 +33,7 @@ from autonomous_ai_agents.common.models import (
 from autonomous_ai_agents.optimization import idea_dedupe as dd
 from autonomous_ai_agents.optimization.idea_types import Lane
 
+from . import ideas_pool as ipool
 from . import ideas_probe as ip
 from . import ideas_report as ir
 from . import ideas_slice as sl
@@ -635,80 +636,177 @@ LEAP_TRIAL: Row = {**TRIALS[0], "label": "leap", "lane": "leap", "model": O55,
 VALIDATION = SERVICE.parents[1] / ".claude/handoff/step3/idea-lab/x1-validation"
 
 
-def _shown(*keys: tuple[str, int]) -> list[Row]:
-    return [{"label": label, "position": n} for label, n in keys]
+# O40/O41's pooled tournament, as ``ideas_pool.rank_library`` writes it (the
+# pool guards read the module's own rows through ``_parsed``): tomli's lens-lane
+# results (X1-0 to X1-3), X1-1's Opus 5.5 lens apart from the Opus 5.5 ranking
+MEMBERS = {"p1a": ("X1-0", "eliminate", 1), "p2b": ("X1-0", "far", 1),
+           "p3c": ("X1-2", "eliminate", 1), "p4d": ("X1-3", "far", 1),
+           "p5e": ("X1-1", "eliminate", 1), "p6f": ("X1-1", "eliminate", 2),
+           "p7g": ("X1-1", "assume_less", 1)}  # fmt: skip
+OWN = {"p8h": ("X1-1", "far", 1)}  # LENS_55, written by Opus 5.5
 
 
-def _marker(arm: str, marker: str, model: str, shown: list[Row],
-            grades: list[bool], scores: list[float] | None, validated: bool) -> Row:  # fmt: skip
-    return {"experiment": "ideas-slice-marker", "repo": "tomli", "arm": arm,
-            "marker": marker, "model": model, "shown": shown, "grades": grades,
-            "scores": scores, "error": None, "cost_usd": 0.01, "counted": 9,
-            "sent": True, "chunks": [], "validated": validated}  # fmt: skip
+def _set(marker: str, rnd: int, k: int, of: int, shown: list[str],
+         order: list[str] | None) -> Row:  # fmt: skip
+    name = f"{marker}-r{rnd}-s{k}"
+    return {"experiment": "ideas-pool-set", "repo": "tomli", "marker": marker,
+            "model": O55 if marker == "opus-5-5" else O5,
+            "validated": marker == "opus-5-5", "round": rnd, "set": k, "of": of,
+            "name": name, "ids": sorted(shown), "seed": f"20261103:tomli:1:{name}",
+            "shown": shown, "order": order,
+            "advanced": [] if order is None or of == 1 else order[:2],
+            "error": None, "cost_usd": 0.02, "counted": 900, "sent": True,
+            "chunks": []}  # fmt: skip
 
 
-X0_SET = _shown(("eliminate", 1), ("far", 1), ("obvious", 1), ("leap", 1))
-X1_SET = _shown(("far", 1), ("eliminate", 1))
-MARKERS: list[Row] = [  # as Ve writes them under O39: Opus 5 grades Opus 5.5's ideas
-    _marker("X1-0", "opus-5-5", O55, X0_SET, [True, True, True, False],
-            [4.0, 1.0, 3.0, 2.0], True),
-    _marker("X1-0", "opus-5", O5, X0_SET, [False, False, False, True],
-            [1.0, 2.0, 3.0, 4.0], False),
-    _marker("X1-1", "opus-5", O5, X1_SET, [True, False], [2.0, 1.0], False),
-    _marker("X1-1", "opus-5-5", O55, X1_SET, [False, True], [2.0, 1.0], True),
+def _keys(ids: Mapping[str, tuple[str, str, int]], with_id: bool = True) -> list[Row]:
+    return [{**({"id": i} if with_id else {}), "arm": a, "label": label, "position": n}
+            for i, (a, label, n) in ids.items()]  # fmt: skip
+
+
+def _result(marker: str, members: Mapping[str, tuple[str, str, int]],
+            apart: Mapping[str, tuple[str, str, int]], top: list[str] | None,
+            requests: int = 3, rounds: int = 2) -> Row:  # fmt: skip
+    return {"experiment": "ideas-pool-result", "repo": "tomli", "marker": marker,
+            "model": O55 if marker == "opus-5-5" else O5,
+            "validated": marker == "opus-5-5", "members": _keys(members),
+            "apart": _keys(apart, False), "top": top, "counts": None,
+            "requests": requests, "rounds": rounds, "max_shown": 4}  # fmt: skip
+
+
+SETS: list[Row] = [
+    _set("opus-5-5", 1, 1, 2, ["p3c", "p1a", "p4d", "p2b"], ["p4d", "p1a", "p3c", "p2b"]),
+    _set("opus-5-5", 1, 2, 2, ["p6f", "p7g", "p5e"], ["p7g", "p5e", "p6f"]),
+    _set("opus-5-5", 2, 1, 1, ["p5e", "p1a", "p7g", "p4d"], ["p5e", "p1a", "p7g", "p4d"]),
+    _set("opus-5", 1, 1, 2, ["p1a", "p2b", "p3c", "p4d"], ["p1a", "p2b", "p3c", "p4d"]),
+    _set("opus-5", 1, 2, 2, ["p5e", "p6f", "p7g", "p8h"], ["p8h", "p6f", "p5e", "p7g"]),
+    _set("opus-5", 2, 1, 1, ["p1a", "p2b", "p6f", "p8h"], ["p8h", "p2b", "p1a", "p6f"]),
 ]  # fmt: skip
+TOP_55, TOP_5 = ["p5e", "p1a", "p7g"], ["p8h", "p2b", "p1a"]
+RESULTS: list[Row] = [
+    _result("opus-5-5", MEMBERS, OWN, TOP_55),
+    _result("opus-5", {**MEMBERS, **OWN}, {}, TOP_5),
+]
+OLD_MARKER: Row = {  # O39's within-set row: no longer read
+    "experiment": "ideas-slice-marker", "repo": "tomli", "arm": "X1-0",
+    "marker": "opus-5-5", "shown": [], "grades": [], "scores": None,
+    "validated": True,
+}  # fmt: skip
 
 
-def _marked(**override: list[Row]) -> list[Row]:
-    return _x1(**{"other": [LEAP, LENS_55], "markers": MARKERS, **override})
+def _pooled(**override: list[Row]) -> list[Row]:
+    return _x1(**{"other": [LEAP, LENS_55, OLD_MARKER], "pool": [*SETS, *RESULTS],
+                  **override})  # fmt: skip
 
 
-def test_the_marker_feasible_headline_counts_lens_lane_ideas_only(
+def _section(report: ir.Report) -> str:
+    text = ir.render(report)["measures.md"]
+    return text[text.index("## Marker-feasible") :]
+
+
+def test_the_pooled_counts_validated_with_opus_5s_unvalidated_beside(
     tmp_path: Path,
 ) -> None:
-    report = _report(tmp_path, _marked())
-    # X1-0: lens eliminate (4 of 4, in the top 3) and far (1 of 4, not); S1's
-    # obvious (3) and the leap (Opus 5's 4) count only in the all-lanes figure
-    # validated grades (Opus 5.5's) apart from the unvalidated (Opus 5 grading
-    # Opus 5.5's leap and X1-1's Opus 5.5 lens), never merged into one figure
-    assert report.marked["X1-0"] == (ir.Marked(1, 2, 0, 0), ir.Marked(2, 3, 1, 1))
-    assert report.marked["X1-1"] == (ir.Marked(1, 1, 1, 1), ir.Marked(1, 1, 1, 1))
-    assert set(report.marked) == {"X1-0", "X1-1"}  # configurations with a grade
+    report = _report(tmp_path, _pooled())
+    (validated, other) = report.pools["tomli"]
+    assert (validated.marker, validated.validated) == ("opus-5-5", True)
+    assert validated.counts() == {"X1-0": 1, "X1-1": 2, "X1-2": 0, "X1-3": 0}
+    assert other.counts() == {"X1-0": 2, "X1-1": 1, "X1-2": 0, "X1-3": 0}
+    assert sum((validated.counts() or {}).values()) == 3 == ir.MARKER_TOP == ipool.TOP
     relaxing = {lane.value for lane in Lane if lane.value.startswith("relax_")}
     assert not set(ir.LENSES) & {"obvious", "leap", *relaxing} and len(relaxing) == 4
-    assert ir.MARKER_TOP == sl.TOP
-    text = ir.render(report)["measures.md"]
-    section = text[text.index("## Marker-feasible") :]
-    assert "S1, the leap and the rule-relaxing lanes are left out" in section
-    lines = section.splitlines()
-    assert "Opus 5.5's leap and X1-1's Opus 5.5 lens" in section
-    assert ("| configuration | lens lanes (headline, validated grades) | lens lanes "
-            "graded by a marker that failed O37 (unvalidated) | all lanes "
-            "(validated) | all lanes (unvalidated) |") in lines  # fmt: skip
-    assert "| X1-0 | 1/2 | - | 2/3 | 1/1 unvalidated |" in lines
-    assert "| X1-1 | 1/1 | 1/1 unvalidated | 1/1 | 1/1 unvalidated |" in lines
+    lines = _section(report).splitlines()
+    assert ("| library | ranked by | X1-0 | X1-1 | X1-2 | X1-3 | pooled | not ranked "
+            "(the marker's own model) | requests | rounds |") in lines  # fmt: skip
+    assert "| tomli | opus-5-5 (validated) | 1 | 2 | 0 | 0 | 7 | 1 | 3 | 2 |" in lines
+    assert ("| tomli | opus-5 (unvalidated) | 2 unvalidated | 1 unvalidated | "
+            "0 unvalidated | 0 unvalidated | 8 | 0 | 3 | 2 |") in lines  # fmt: skip
+    assert (
+        "| all libraries | opus-5-5 (validated) | 1 | 2 | 0 | 0 | 7 | 1 | 3 | 2 |"
+        in lines
+    )
     assert not any(x.startswith(("| A |", "| X1-4 |")) for x in lines)
-    unanswered = [{**MARKERS[1], "scores": None}, *MARKERS[2:]]  # Opus 5 failed
-    assert _report(tmp_path, _marked(markers=[MARKERS[0], *unanswered])).marked[
-        "X1-0"] == (ir.Marked(1, 2, 0, 0), ir.Marked(2, 3, 0, 0))  # fmt: skip
-    only_opus_5 = _report(tmp_path, _marked(markers=MARKERS[:3]))  # X1-1: no 5.5 grade
-    assert only_opus_5.marked["X1-1"] == (ir.Marked(0, 0, 1, 1),) * 2
-    text = ir.render(only_opus_5)["measures.md"]
-    assert "| X1-1 | - | 1/1 unvalidated | - | 1/1 unvalidated |" in text.splitlines()
 
 
-def test_without_a_marker_row_there_is_no_marker_feasible_count(
+def test_the_full_tournament_record_and_the_own_model_ideas_apart(
+    tmp_path: Path,
+) -> None:
+    section = _section(_report(tmp_path, _pooled()))
+    lines = section.splitlines()
+    assert "### tomli" in lines
+    assert ("#### Ranked by opus-5-5 (claude-opus-5-5), validated: 7 ideas, 3 "
+            "requests in 2 rounds") in lines  # fmt: skip
+    assert ("#### Ranked by opus-5 (claude-opus-5), unvalidated: 8 ideas, 3 "
+            "requests in 2 rounds") in lines  # fmt: skip
+    assert "| 1 | p5e | Skip work | X1-1 | eliminate | claude-sonnet-5 |" in lines
+    assert ("| 1 | 1 | p3c, p1a, p4d, p2b | 20261103\\:tomli\\:1\\:opus-5-5-r1-s1 | "
+            "p4d, p1a, p3c, p2b | p4d, p1a |") in lines  # fmt: skip
+    assert ("| 2 | 1 | p5e, p1a, p7g, p4d | 20261103\\:tomli\\:1\\:opus-5-5-r2-s1 | "
+            "p5e, p1a, p7g, p4d | final, the top 3 |") in lines  # fmt: skip
+    assert "| p8h | Opus lens idea | X1-1 | far | claude-opus-5-5 |" in lines
+    head = section.index("#### Ranked by opus-5-5")
+    apart = section.index("Not ranked (written by claude-opus-5-5, the marker's own")
+    assert head < apart < section.index("#### Ranked by opus-5 (")
+    assert section.count("none") >= 1  # Opus 5 ranked the whole pool: none apart
+
+
+def test_the_note_says_tournament_and_the_validated_set_size(tmp_path: Path) -> None:
+    section = _section(_report(tmp_path, _pooled()))
+    assert "a tournament, not one ranking of the whole pool" in section
+    assert ("Every request showed 3 to 4 ideas, at most 6: the set size the "
+            "marker was validated on (Vb's 48 scored sets: 3 to 8 ideas, 4.6 on "
+            "average)") in section  # fmt: skip
+    assert "S1, the leap or the rule-relaxing lanes" in section
+    assert (
+        "(opus-5 failed O37)" in section and "X1-1 has a comparable number" in section
+    )
+    assert (
+        (ir.SET_SIZE, ir.VB_SETS) == (ipool.SET_SIZE, ipool.VB_SETS) == (6, (3, 8, 4.6))
+    )
+
+
+def test_the_within_set_version_and_its_columns_are_gone(tmp_path: Path) -> None:
+    report = _report(tmp_path, _pooled())
+    assert not hasattr(ir, "MarkerLine") and not hasattr(report, "marked")
+    assert "ideas-slice-marker" not in ir._KINDS
+    text = ir.render(report)["measures.md"]
+    for old in ("lens lanes (headline, validated grades)", "all lanes (validated)",
+                "of its shown set", "graded by a marker that failed O37"):  # fmt: skip
+        assert old not in text, old
+
+
+def test_without_a_pool_row_there_is_no_marker_feasible_count(
     tmp_path: Path,
 ) -> None:
     report = _report(tmp_path)
-    assert report.marked == {}
+    assert report.pools == {}
     assert "no marker-feasible count" in ir.render(report)["measures.md"]
+    stopped = _report(tmp_path, _pooled(pool=[*SETS[:3], SETS[3], {
+        **SETS[4], "order": None, "advanced": [], "error": "BudgetExceeded: x"},
+        RESULTS[0], {**RESULTS[1], "top": None, "requests": 2, "rounds": 1}]))  # fmt: skip
+    lines = _section(stopped).splitlines()
+    assert "| tomli | opus-5 (unvalidated) | - | - | - | - | 8 | 0 | 2 | 1 |" in lines
+    assert any("no order (BudgetExceeded\\: x), the tournament stopped" in x
+               for x in lines)  # fmt: skip
+
+
+def test_a_pool_of_one_idea_needs_no_request_and_is_its_own_top(
+    tmp_path: Path,
+) -> None:
+    one = _result("opus-5-5", {"p1a": MEMBERS["p1a"]}, {}, ["p1a"], 0, 0)
+    report = _report(tmp_path, _pooled(pool=[one]))
+    (pool,) = report.pools["tomli"]
+    assert pool.sets == () and pool.counts() == {"X1-0": 1, "X1-1": 0, "X1-2": 0,
+                                                 "X1-3": 0}  # fmt: skip
+    section = _section(report)
+    assert "No set request was sent." in section
+    assert "| tomli | opus-5-5 (validated) | 1 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |" in section
 
 
 def test_an_opus_5_5_idea_graded_by_opus_5_is_unvalidated_in_its_file(
     tmp_path: Path,
 ) -> None:
-    files = ir.render(_report(tmp_path, _marked(trials=[*TRIALS, LEAP_TRIAL])))
+    files = ir.render(_report(tmp_path, _pooled(trials=[*TRIALS, LEAP_TRIAL])))
     lines = files["tomli-X1-0.md"].splitlines()
     leap = next(x for x in lines if "Leap idea" in x)
     assert "| keep (graded by opus-5, unvalidated) |" in leap
@@ -720,30 +818,49 @@ def test_an_opus_5_5_idea_graded_by_opus_5_is_unvalidated_in_its_file(
     assert ir.trial_cell(fallback) == "keep"
 
 
+_OBVIOUS = {"p0z": ("X1-0", "obvious", 1)}
+_X1_4 = {"p0z": ("X1-4", "relax_api", 1)}
+_GONE = {"p0z": ("X1-3", "far", 9)}
+
+
 @pytest.mark.parametrize(
     ("override", "match"),
     [
-        ({"markers": [{**MARKERS[0], "grades": [True]}]}, "malformed.*marker"),
-        ({"markers": [{**MARKERS[0], "scores": [1.0]}]}, "malformed.*marker"),
-        ({"markers": [{**MARKERS[0], "scores": []}]}, "malformed.*marker"),
-        ({"markers": [{k: v for k, v in MARKERS[0].items() if k != "validated"}]},
-         "malformed.*validated"),
         ({"trials": [{k: v for k, v in TRIALS[0].items()
                       if k != "grader_validated"}]}, "malformed.*grader_validated"),
         ({"trials": [{**TRIALS[0], "grader": None}]}, "malformed.*grader"),
-        ({"markers": [{**MARKERS[0], "arm": "B"}]}, "not an X1 arm"),
+        ({"pool": [*SETS, _result("opus-5-5", {**MEMBERS, **_GONE}, OWN, TOP_55),
+                   RESULTS[1]]}, "far #9: a pooled idea with no ideas-idea row"),
+        ({"pool": [*SETS, _result("opus-5-5", {**MEMBERS, **_OBVIOUS}, OWN,
+                                  TOP_55), RESULTS[1]]},
+         "not a lens-lane idea of X1-0 to X1-3"),
+        ({"pool": [*SETS, _result("opus-5-5", {**MEMBERS, **_X1_4}, OWN,
+                                  TOP_55), RESULTS[1]]}, "not one of X1-0"),
+        ({"pool": [*SETS, _result("opus-5-5", {**MEMBERS, **OWN}, {}, TOP_55),
+                   RESULTS[1]]}, "written by the marker's own model"),
+        ({"pool": [*SETS, RESULTS[0], _result("opus-5", MEMBERS, OWN, TOP_5)]},
+         "listed apart but not the marker's model"),
+        ({"pool": [*SETS, _result("opus-5-5", MEMBERS, OWN, ["p1a", "p5e", "p7g"]),
+                   RESULTS[1]]}, "not the final set's"),
+        ({"pool": [*SETS, *RESULTS, RESULTS[0]]}, "opus-5-5 twice"),
+        ({"pool": [*SETS[:2], {**SETS[2], "order": ["p5e"]}, *SETS[3:], *RESULTS]},
+         "malformed ideas-pool-set"),
+        ({"pool": [*SETS[:2], _set("opus-5-5", 2, 1, 1, [*MEMBERS][:7],
+                                   [*MEMBERS][:7]), *SETS[3:], *RESULTS]},
+         "past the validated set size"),
+        ({"pool": [{**SETS[0], "repo": "flask"}, *SETS[1:], *RESULTS]}, "not one of the 8"),
+        ({"pool": [{**SETS[0], "advanced": ["p1a", "p4d"]}, *SETS[1:], *RESULTS]},
+         "advanced is not the order's top two"),
+        ({"pool": [*SETS, RESULTS[0], {**RESULTS[1], "top": None}]}, "not the final"),
+        ({"pool": [_result("opus-5-5", {"p1a": MEMBERS["p1a"]}, {}, None, 0, 0)]},
+         "not the final"),  # one idea, no request: its top is that idea
     ],
 )  # fmt: skip
-def test_a_malformed_o39_row_is_refused(
+def test_a_malformed_or_inconsistent_row_is_refused(
     tmp_path: Path, override: dict[str, list[Row]], match: str
 ) -> None:
     with pytest.raises(ValueError, match=match):
-        _report(tmp_path, _marked(**override))
-
-
-def test_a_grade_of_an_idea_with_no_ideas_idea_row_is_refused(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="leap #1: a graded idea with no ideas-idea"):
-        _report(tmp_path, _x1(markers=MARKERS))
+        _report(tmp_path, _pooled(**override))
 
 
 def test_the_upper_bound_labels_sit_where_the_two_measures_appear(

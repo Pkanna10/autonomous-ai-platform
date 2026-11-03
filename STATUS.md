@@ -3204,6 +3204,47 @@ worktree", 4.4.0) or in the builder rules every brief carries.
   bound while it under-merges; the label drops once a dedupe passes), and
   measures.md names the 380 pairs as the development set before X2. Size about
   2.4x its row (the marker loader the report lacked), accepted as harness code.
+- V-cap (O42). X1-1 alone sets `IDEAS_LANE_MAX_TOKENS` to 32,000 (S1 and every
+  lens; the leap keeps 12,000, the reviewer 16,000) and, as an addition for the
+  owner to confirm, `LLM_TIMEOUT_S` to 951 s (`X1_1_TIMEOUT_S`): at Fable 5.1's
+  slowest measured rate (67.3 output tokens a second) the default 300 s would
+  cut an unstreamed request at about 20,200 tokens, and a lane's budget covers
+  one attempt, so the lane would be lost as a charged failure with no
+  `max_tokens` recorded. Every other arm keeps 12,000 and 300 s (guarded). The
+  SDK accepts 32,000 unstreamed because the client's timeout is explicit (a wire
+  test goes through the real client). Worst case: X1-1 7.22 a library (was
+  4.21), an X1 library 16.95, four 67.80 (under the fuse) but about 300 job
+  minutes, past the 240-minute job: run 2 is either three libraries plus one
+  (needs 51 and 17) or one 360-minute job (not built). The re-run option
+  `ideas_arms=X1-1` (arm A, X1-1, the auditor; arm A because share-new is read
+  from the auditor's links) needs 8.20 a library, 33 for run 1's four, about 190
+  minutes, about 14.3 USD expected (each truncated Fable request run on to
+  32,000 tokens adds about 1.00).
+- V-O40 (O40, O41). New `ideas-pool` suite (need 22, 60 minutes) ranks the four
+  libraries outside the slice; the slice ranks its own four (need 75 for two
+  libraries, from 64). Per library the lens-lane ideas of X1-0 to X1-3 form one
+  pool, chunked by sorted id into sets of about six, the top two of each set to
+  a final ranking whose top 3 is the result; X1-1's Opus 5.5 ideas are left out
+  of the validated ranking and Opus 5 ranks the whole pool beside it, marked
+  unvalidated. A library with no `ideas-idea` row or no returned lens-lane idea
+  is refused at load, before any clone or request (the review's should_fix: it
+  had printed as a measured row of zeros); a validated pool that is all the
+  marker's own model's ideas writes a 0-count row with its `apart` list, a real
+  result. Size about 1.6x its row (the suite's plan and recorder), accepted as
+  harness code.
+- V-reaudit (O44). New `ideas-reaudit` suite (need 3, 30 minutes, inputs
+  `LIVE_REAUDIT_RUN1` and `LIVE_REAUDIT_RERUN`; the re-run's file is to be
+  committed at `tests/fixtures/ideas_reaudit/x1-1-rerun.jsonl`): no idea
+  generation; each arm's recorded replies are replayed through
+  `ideas_probe.run_arm` (nothing sent), trusted only if the replay reproduces
+  its own file's audit rows exactly, then pooled as run 1's A, X1-0, X1-2 and
+  X1-3 with the re-run's X1-1 (never the re-run's own arm A, tested by a mutant)
+  and audited once per library. Rows keep the `ideas-audit` shape under the
+  experiment name `ideas-reaudit` with both files' digests, so a report reads
+  them only by opting in. Size about 2x its row (294 code lines): the pool
+  cannot be rebuilt from rows alone (the files keep no `shown_ideas`, verdicts
+  or pool beyond the 48-idea bound), so the replay is the seam; accepted as
+  harness code.
 - G2 fix found by Va: `count_note` noted negative cuts, so every callers view
   under its limits said e.g. "-199 file(s) not scanned for callers"; it now
   notes only positive counts. Requests were byte-identical; the six viewed

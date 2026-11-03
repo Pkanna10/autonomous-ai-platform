@@ -1081,6 +1081,8 @@ SUITES = (
     "ideas-marker",  # Vb: the marker validation (O36.1, O37)
     "ideas-validate",  # Vc: the smoke requests and the dedupe labels
     "ideas-slice",  # Ve: X1's execution slice
+    "ideas-pool",  # V-O40: the pooled ranking on the four outside the slice
+    "ideas-reaudit",  # V-reaudit: the pooled re-audit of the X1-1 re-run (O44)
 )
 DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_sweep_live.py",
@@ -1098,6 +1100,8 @@ DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_ideas_marker_live.py",  # Vb: the marker validation
     "tests/live/test_ideas_validate_live.py",  # Vc: smoke and dedupe labels
     "tests/live/test_ideas_slice_live.py",  # Ve: the execution slice
+    "tests/live/test_ideas_pool_live.py",  # V-O40: the pooled ranking
+    "tests/live/test_ideas_reaudit_live.py",  # V-reaudit: the pooled re-audit
 )
 EXPERIMENT_MINUTES = {
     # the sweeps on 37 repositories (v1 + hard + v2), from the Window 0 jobs on
@@ -1128,6 +1132,8 @@ EXPERIMENT_MINUTES = {
     "ideas-marker": 240,  # ideas_marker.JOB_MINUTES: 17 clones, 96 requests
     "ideas-validate": 60,  # ideas_validate.JOB_MINUTES: 19 requests
     "ideas-slice": 150,  # ideas_slice.JOB_MINUTES: two libraries, 8 loops
+    "ideas-pool": 60,  # ideas_pool.JOB_MINUTES: four clones, 88 set requests
+    "ideas-reaudit": 30,  # ideas_reaudit.JOB_MINUTES: four clones, 4 requests
 }  # batch wait; 5 papers; 18 web runs
 SWEEP_FABLE_ENV = {  # Fable 5.1 beside the one arm whose run phase 1 shares
     "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
@@ -1145,11 +1151,16 @@ MARKER_CAP = {"LIVE_SUITE_CAP_USD": "24"}  # the marker plan refuses a cap below
 # E1: four a dispatch (4 x 41 of ideas_probe.JOB_MINUTES' 240)
 IDEAS_E1_DISPATCH = {"LIVE_IDEAS_REPOS": "pyparsing,tomli,mistune,idna"}
 # Ve: two libraries a dispatch; the slice plan refuses a cap below its need
-SLICE_DISPATCH = {"LIVE_SLICE_REPOS": "sqlparse,pyparsing", "LIVE_SUITE_CAP_USD": "64"}
+SLICE_DISPATCH = {"LIVE_SLICE_REPOS": "sqlparse,pyparsing", "LIVE_SUITE_CAP_USD": "75"}
 SLICE_IDEAS = (
     "tests/fixtures/ideas_slice/x1-1.jsonl,tests/fixtures/ideas_slice/x1-2.jsonl"
 )
 SLICE_MARKER = "tests/fixtures/ideas_slice/marker.jsonl"
+POOL_CAP = {"LIVE_SUITE_CAP_USD": "22"}  # V-O40: the pool plan refuses a cap below
+REAUDIT_RUN1 = (  # V-reaudit: X1 run 1's archived results, from the service dir
+    "../../.claude/handoff/step3/idea-lab/x1/ideas-probe-x1-run1-41679255224.jsonl"
+)
+REAUDIT_RERUN = "tests/fixtures/ideas_reaudit/x1-1-rerun.jsonl"  # the Lead's
 SWEEP_RECORD_ENV = {  # one arm, recorded for hand labels and offline replay
     "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
     "LIVE_SWEEP_RECORD": "1",
@@ -1826,6 +1837,8 @@ def _suite_needs() -> dict[str, float]:
     marker = importlib.import_module(f"{__package__}.ideas_marker")
     validate = importlib.import_module(f"{__package__}.ideas_validate")
     slice_ = importlib.import_module(f"{__package__}.ideas_slice")
+    pool = importlib.import_module(f"{__package__}.ideas_pool")
+    reaudit = importlib.import_module(f"{__package__}.ideas_reaudit")
     one_library = {oss_ab.REPOS_ENV: OSS_AB_DISPATCH_REPO}
     return {
         "noise": noise.noise_need(noise.noise_plan({})),
@@ -1853,6 +1866,10 @@ def _suite_needs() -> dict[str, float]:
         "ideas-marker": marker.marker_need(marker.marker_plan(MARKER_CAP)),
         "ideas-validate": validate.validate_need(validate.validate_plan({})),
         "ideas-slice": slice_.slice_need(slice_.slice_plan(SLICE_DISPATCH)),
+        "ideas-pool": pool.pool_need(pool.pool_plan(POOL_CAP)),
+        "ideas-reaudit": reaudit.reaudit_need(  # its files are read in its fixture
+            reaudit.ReauditPlan(reaudit.REAUDIT_LIBRARIES, Path(), Path())
+        ),
         "sweep": sweep.sweep_need(sweep.sweep_plan({})),
         "sweep-fable": sweep.sweep_need(sweep.sweep_plan(SWEEP_FABLE_ENV)),
         "sweep-record": sweep.sweep_need(sweep.sweep_plan(SWEEP_RECORD_ENV)),
@@ -1962,7 +1979,11 @@ def _dispatch(
         f'"${{LIVE_AB_REPS-unset}}" > "{tmp_path / "ab.txt"}"\n'
         f'printf "%s " "${{LIVE_SLICE_REPOS-unset}}" "${{OP_COUNT_JUDGE-unset}}" '
         f'"${{LIVE_SLICE_IDEAS-unset}}" "${{LIVE_SLICE_MARKER-unset}}" '
-        f'> "{tmp_path / "slice.txt"}"\n',
+        f'> "{tmp_path / "slice.txt"}"\n'
+        f'printf "%s " "${{LIVE_POOL_IDEAS-unset}}" "${{LIVE_POOL_MARKER-unset}}" '
+        f'> "{tmp_path / "pool.txt"}"\n'
+        f'printf "%s " "${{LIVE_REAUDIT_RUN1-unset}}" "${{LIVE_REAUDIT_RERUN-unset}}" '
+        f'> "{tmp_path / "reaudit.txt"}"\n',
         encoding="utf-8",
     )
     fake.chmod(0o755)
@@ -2026,13 +2047,14 @@ def test_the_run_step_refuses_a_cap_below_the_suite_need(
 
 
 @pytest.mark.parametrize(
-    ("repos", "need"), [("sqlparse,pyparsing", "64"), ("tomli", "32")]
+    ("repos", "need"), [("sqlparse,pyparsing", "75"), ("tomli", "38")]
 )
 def test_the_slice_exports_its_libraries_inputs_and_the_op_count_judge(
     repos: str, need: str, tmp_path: Path
 ) -> None:
     """Ve: slice_repos, the committed X1 and marker results, OP_COUNT_JUDGE
-    on (spec 6.5), the Step 3 noise rule, the need the libraries' count x 32."""
+    on (spec 6.5), the Step 3 noise rule, the need the libraries' count x
+    37.45 (O41's pooled tournament included), rounded up to the dollar."""
     for name in ("ok", "below"):
         (tmp_path / name).mkdir()
     code, output, calls = _dispatch(
@@ -2050,6 +2072,62 @@ def test_the_slice_exports_its_libraries_inputs_and_the_op_count_judge(
         tmp_path / "below", "ideas-slice", "claude-opus-5-5", below, slice_repos=repos
     )
     assert (code, calls) == (1, "") and f"suite_cap_usd {below} is below" in output
+
+
+def test_the_pool_suite_exports_the_x1_and_marker_results_alone(
+    tmp_path: Path,
+) -> None:
+    """V-O40: the pooled ranking on the four libraries outside the slice reads
+    the slice's committed X1 and marker results, under the Step 2 noise rule
+    (no engine trial), no slice input and no op-count judge, need 22."""
+    for name in ("ok", "below"):
+        (tmp_path / name).mkdir()
+    code, output, calls = _dispatch(
+        tmp_path / "ok", "ideas-pool", "claude-opus-5-5", "22"
+    )
+    assert code == 0, output
+    argv = "run pytest tests/live/test_ideas_pool_live.py -m live --no-cov -n 0 -rA"
+    assert calls.splitlines()[0] == argv
+    pool_env = (tmp_path / "ok" / "pool.txt").read_text(encoding="utf-8").split()
+    assert pool_env == [SLICE_IDEAS, SLICE_MARKER]
+    slice_env = (tmp_path / "ok" / "slice.txt").read_text(encoding="utf-8").split()
+    assert slice_env == ["unset"] * 4
+    rule = (tmp_path / "ok" / "rule.txt").read_text(encoding="utf-8").split()
+    assert rule[:3] == ["false", "false", "0"]  # step2: no engine trial
+    code, output, calls = _dispatch(tmp_path / "below", "ideas-pool", "claude-opus-5-5",
+                                    "21.99")  # fmt: skip
+    assert (code, calls) == (1, "") and "suite_cap_usd 21.99 is below" in output
+    other = _run_script()
+    assert other.count("LIVE_POOL_IDEAS=") == 1  # exported for ideas-pool alone
+
+
+def test_the_reaudit_suite_exports_its_two_results_files_alone(
+    tmp_path: Path,
+) -> None:
+    """V-reaudit (O44): X1 run 1's archived results and the re-run's fixture,
+    fixed paths that resolve from the service directory, under the Step 2
+    noise rule (no engine trial), no slice input, need 3 (4 x 0.70)."""
+    for name in ("ok", "below"):
+        (tmp_path / name).mkdir()
+    code, output, calls = _dispatch(
+        tmp_path / "ok", "ideas-reaudit", "claude-opus-5-5", "3"
+    )
+    assert code == 0, output
+    argv = "run pytest tests/live/test_ideas_reaudit_live.py -m live --no-cov -n 0 -rA"
+    assert calls.splitlines()[0] == argv
+    found = (tmp_path / "ok" / "reaudit.txt").read_text(encoding="utf-8").split()
+    assert found == [REAUDIT_RUN1, REAUDIT_RERUN]
+    service = TESTS_DIR.parent
+    assert (service / REAUDIT_RUN1).resolve().is_file()  # committed (41679255224)
+    slice_env = (tmp_path / "ok" / "slice.txt").read_text(encoding="utf-8").split()
+    assert slice_env == ["unset"] * 4
+    rule = (tmp_path / "ok" / "rule.txt").read_text(encoding="utf-8").split()
+    assert rule[:3] == ["false", "false", "0"]  # step2: no engine trial
+    code, output, calls = _dispatch(
+        tmp_path / "below", "ideas-reaudit", "claude-opus-5-5", "2.99"
+    )
+    assert (code, calls) == (1, "") and "suite_cap_usd 2.99 is below" in output
+    assert _run_script().count("LIVE_REAUDIT_RUN1=") == 1  # for ideas-reaudit alone
 
 
 def test_slice_repos_is_required_strict_and_for_the_slice_only(

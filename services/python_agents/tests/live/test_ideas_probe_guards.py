@@ -37,6 +37,7 @@ import httpx2
 import pytest
 
 from autonomous_ai_agents.clients.structured import Fence
+from autonomous_ai_agents.clients.transport import AnthropicTransport
 from autonomous_ai_agents.common.config import (
     IDEA_VIEWS,
     Role,
@@ -80,10 +81,10 @@ from autonomous_ai_agents.optimization.idea_types import (
 from autonomous_ai_agents.optimization.sources import GenerateResult
 from autonomous_ai_agents.orchestrator.factory import repo_reader
 
+from . import conftest, oss
 from . import discovery_ab as ab
 from . import ideas_probe as ip
 from . import ideas_views as iv
-from . import oss
 from . import test_discovery_guards as dg
 from . import test_oss_guards as og
 from .conftest import TESTS_DIR, LiveRun, StartLive
@@ -304,6 +305,42 @@ def test_the_seconds_are_e1s_recorded_maxima_per_role_and_model() -> None:
         assert ip.request_seconds("lane", fable) == 2 * found[("leap", FABLE)]
     with pytest.raises(ValueError, match="no E1 seconds"):
         ip.request_seconds("leap", ip.FABLE_5)
+
+
+X1_RUN1 = TESTS_DIR.parents[2] / ".claude/handoff/step3/idea-lab/x1"
+
+
+def test_the_rates_are_x1_run_1s_slowest_reply_per_model() -> None:
+    """O42's re-pin: per model, the slowest output tokens a second over every
+    sent reply of run 1 (41679255224) of at least 1,000 output tokens, any
+    role on that model: a square lens on its row's model, any other request
+    on its arm's role model, the auditor on Opus 5.5. Opus 5.5's is X1-3's
+    leap (effort high), slower than any of its X1-1 lens lanes."""
+    path = X1_RUN1 / "ideas-probe-x1-run1-41679255224.jsonl"
+    records = [json.loads(line) for line in path.read_text("utf-8").splitlines()]
+    rows = {(r["repo"], r["arm"]): r for r in records
+            if r["experiment"] == ip.ROW_EXPERIMENT}  # fmt: skip
+    arms = {a.key: a for a in ip._KNOWN_ARMS}
+    rates: dict[str, float] = {}
+    slowest: dict[str, tuple[str, str]] = {}
+    for record in records:
+        if record["experiment"] != ip.REPLY_EXPERIMENT or not record["sent"]:
+            continue
+        role, out = record["role"], record["usage"][1]
+        if role == "auditor":
+            model = OPUS
+        else:
+            row = rows[(record["repo"], record["arm"])]
+            cfg = ip.arm_config(arms[record["arm"]], _project())
+            square = row["lane_models"] if role == "lane" else {}
+            model = square.get(record["label"], role_chain(cfg, role)[0])
+            assert model in row["models"], record
+        rate = round(out / record["seconds"], 3)
+        if out >= 1_000 and rate < rates.get(model, float("inf")):
+            rates[model] = rate
+            slowest[model] = (record["arm"], role)
+    assert rates == ip.X1_RUN1_TOKENS_PER_S == RUN_1_RATES
+    assert slowest[OPUS] == ("X1-3", "leap")  # 3,567 tokens in 49.875 s
 
 
 def test_sequential_lanes_count_one_stage_a_lane() -> None:
@@ -1240,16 +1277,19 @@ def _dispatch(
         ("count", "tomli,idna,mistune", "3", "count", "unset"),
         ("C-low,C-high", "", "20", "C-low,C-high", ip.FACTS_FIXTURE),
         ("C-low,C-high", "tomli,mistune", "10", "C-low,C-high", ip.FACTS_FIXTURE),
+        ("X1", "more_itertools,pyparsing,tomli", "51", "X1", ip.FACTS_FIXTURE),
+        ("X1", "mistune,sqlparse,markdown", "51", "X1", ip.FACTS_FIXTURE),
+        ("X1", "tomli", "17", "X1", ip.FACTS_FIXTURE),
+        ("X1", "", "51", "X1", ip.FACTS_FIXTURE),
+        ("X1-1", "", "33", "X1-1", ip.FACTS_FIXTURE),  # O42: run 1's four
         (
-            "X1",
+            "X1-1",
             "more_itertools,pyparsing,tomli,sortedcontainers",
-            "56",
-            "X1",
+            "33",
+            "X1-1",
             ip.FACTS_FIXTURE,
         ),
-        ("X1", "mistune,sqlparse,markdown,idna", "56", "X1", ip.FACTS_FIXTURE),
-        ("X1", "tomli", "14", "X1", ip.FACTS_FIXTURE),
-        ("X1", "", "56", "X1", ip.FACTS_FIXTURE),
+        ("X1-1", "tomli", "9", "X1-1", ip.FACTS_FIXTURE),
     ],
 )
 def test_the_ideas_inputs_set_the_arms_libraries_their_need_and_the_facts(
@@ -1269,15 +1309,16 @@ def test_the_ideas_inputs_set_the_arms_libraries_their_need_and_the_facts(
     )
     assert (got_arms, got_facts, cap, paired) == (exported, facts, need, "false")
     assert got_repos == (repos or "unset")
-    assert got_views == (ip.VIEWS_FIXTURE if exported == ip.X1_KEY else "unset")
+    x1 = exported in (ip.X1_KEY, ip.X1_RERUN_KEY)
+    assert got_views == (ip.VIEWS_FIXTURE if x1 else "unset")
     # the shell's need is the module's own, rounded up
     env = {ip.ARMS_ENV: exported, **({ip.REPOS_ENV: repos} if repos else {})}
     plan = ip.ProbePlan(
         ip.probe_arms(env), ip.probe_repos(env, ip.probe_arms(env)),
         Path(facts) if facts != "unset" else None,
     )  # fmt: skip
-    if exported == ip.X1_KEY and not repos:  # the shell's need is four's
-        plan = replace_repos(plan, ip.E1_REPOS[:4])
+    if exported == ip.X1_KEY and not repos:  # the shell's need is three's
+        plan = replace_repos(plan, ip.E1_REPOS[:3])
     assert ip.probe_need(plan) <= int(need) < ip.probe_need(plan) + 1
     below = f"{int(need) - 1}.99"
     code, output, calls = _dispatch(tmp_path / "below", arms, below, repos=repos)
@@ -1287,7 +1328,7 @@ def test_the_ideas_inputs_set_the_arms_libraries_their_need_and_the_facts(
 def test_the_ideas_inputs_are_strict_and_for_the_probe_only(tmp_path: Path) -> None:
     block = _ci_block("      ideas_arms:", "\n\n")
     assert "type: choice" in block and "default: 'A,B,C,D,E'" in block
-    assert "options: ['A,B,C,D,E', count, 'C-low,C-high', X1]" in block
+    assert "options: ['A,B,C,D,E', count, 'C-low,C-high', X1, X1-1]" in block
     repos = _ci_block("      ideas_repos:", "\n\n")
     assert "type: string" in repos and "default: ''" in repos
     for index, bad in enumerate(("", "A", "count;id", "C-low", "x1", "X1-0")):
@@ -1325,13 +1366,23 @@ def test_the_suite_row_timeout_noise_rule_and_stage_a_ignore() -> None:
     cap_help = _ci_block("      suite_cap_usd:", "\n\n")
     assert (
         "ideas-probe 46 (E1, four libraries of ideas_repos, one 12; "
-        "ideas_arms count 9, C-low,C-high 20; X1 56 for four libraries of "
-        "ideas_repos, under the 80 USD fuse, one 14)" in cap_help
+        "ideas_arms count 9, C-low,C-high 20; X1 51 for three libraries of "
+        "ideas_repos, under the 80 USD fuse, one 17; X1-1 33 for the four of "
+        "run 1, one 9)" in cap_help
     )
-    assert ip.X1_LIBRARY_CENTS == 1395 and "cents=1395" in _run_script()
+    assert ip.X1_LIBRARY_CENTS == 1695 and "cents=1695" in _run_script()
+    assert ip.X1_RERUN_LIBRARY_CENTS == 820 and "cents=820" in _run_script()
     arms_help = _ci_block("      ideas_arms:", "\n\n")
-    assert "need 13.95 a library, 56 for four" in arms_help
-    assert "or 13.95 (X1), rounded up" in _ci_block("      ideas_repos:", "\n\n")
+    assert "need 16.95 a library, 51 for three" in arms_help
+    assert (
+        "X1-1: the O42 re-run, arm A and X1-1 (its lanes at 32,000 output "
+        "tokens) with the auditor on the same facts and views, the four "
+        "libraries of run 1 unless ideas_repos names others, need 8.20 a "
+        "library, 33 for four" in arms_help
+    )
+    repos_help = _ci_block("      ideas_repos:", "\n\n")
+    assert "16.95 (X1) or 8.20 (X1-1), rounded up" in repos_help
+    assert "X1 at most three" in repos_help
     block = _ci_block("  live-smoke:", "    defaults:")
     assert f"inputs.suite == 'ideas-probe' && {ip.JOB_MINUTES} ||" in block
     assert EXPERIMENT_MINUTES["ideas-probe"] == ip.JOB_MINUTES
@@ -1558,7 +1609,16 @@ X1_DISPATCHES = (
     "more_itertools,pyparsing,tomli,sortedcontainers",
     "mistune,sqlparse,markdown,idna",
 )
-X1_LIBRARY_CAP = 13.95  # 0.27 + 2.475 + 4.206 + 2.539 + 2.675 + 1.075 + 0.69 up
+X1_LIBRARY_CAP = 16.95  # 0.27 + 2.475 + 7.216 + 2.539 + 2.675 + 1.075 + 0.69 up
+X1_1_CAP = 7.21575  # O42: X1-1's S1 and six lenses at 32,000 output tokens
+RERUN_LIBRARY_CAP = 8.20  # O42's re-run: 0.27 (A) + 7.216 (X1-1) + 0.69 up
+RUN_1 = ("more_itertools", "pyparsing", "tomli", "sortedcontainers")
+# Run 1 (41679255224): the slowest output rate per model (tokens/s, any
+# sent reply of at least 1,000 output tokens; Opus 5.5's is X1-3's leap)
+RUN_1_RATES = {
+    SONNET: 99.595, "claude-sonnet-5": 84.399, HAIKU: 181.057, OPUS: 71.519,
+    "claude-fable-5": 69.293, FABLE: 67.327,
+}  # fmt: skip
 SQUARE_MODELS = {
     "claude-sonnet-5", HAIKU, OPUS, "claude-fable-5", FABLE, SONNET,
 }  # fmt: skip
@@ -1589,6 +1649,7 @@ def test_each_x1_configuration_changes_exactly_its_own_lever() -> None:
     assert _changed(ip.ARM_X1_1) == {
         "IDEAS_LANE_MODELS": {lane: m for lane, m in ip.square_models(2).items()},
         "ALLOW_RETENTION_MODELS": True, "IDEAS_THINK_LINE_ALL": True,
+        "IDEAS_LANE_MAX_TOKENS": 32_000, "LLM_TIMEOUT_S": 951.0,  # O42
     }  # fmt: skip
     assert ip.arm_config(ip.ARM_X1_0, tomli).IDEAS_THINK_LINE_ALL is False
     assert ip.arm_config(ip.ARM_X1_1, tomli).IDEAS_LANE_MODELS == ip.square_models(2)
@@ -1611,6 +1672,7 @@ def test_each_x1_configuration_changes_exactly_its_own_lever() -> None:
     assert "two factors" in ip.ARM_X1_3.lever and "split in X2" in ip.ARM_X1_3.lever
     assert "never scored" in ip.ARM_X1_4.lever and "S1" in ip.ARM_X1_4.lever
     assert "think line" in ip.ARM_X1_1.lever
+    assert "lane output cap 32,000 (O42)" in ip.ARM_X1_1.lever  # rows tell runs
     for arm in ip.X1_ARMS:
         cfg = ip.arm_config(arm, tomli)
         assert cfg.IDEA_PIPELINE is arm.pipeline and arm.lever, arm.key
@@ -1650,12 +1712,16 @@ def test_x1_caps_are_each_configurations_worst_case_and_a_dispatch_fits() -> Non
     leap = ip.request_usd(ip.LANE_PROMPT_BOUND, 12_000, OPUS)
     review = ip.request_usd(ip.REVIEW_PROMPT_BOUND, 16_000, OPUS)
     assert ip.arm_usd(ip.ARM_X1_0) == ip.arm_usd(ip.ARM_C) == pytest.approx(2.475)
-    lenses = [ip.request_usd(ip.LANE_PROMPT_BOUND, 12_000, m) for m in SQUARE_MODELS]
+    # O42: X1-1's S1 and lenses at 32,000 output tokens, its leap and
+    # reviewer at their own caps (12,000, 16,000) as X1-0's
+    s1 = ip.request_usd(ip.LANE_PROMPT_BOUND, 32_000, SONNET)
+    lenses = [ip.request_usd(ip.LANE_PROMPT_BOUND, 32_000, m) for m in SQUARE_MODELS]
     for name in ip.E1_REPOS:
         assert ip.arm_usd(ip.ARM_X1_1, repo=name) == pytest.approx(
-            lane + sum(lenses) + leap + review
+            s1 + sum(lenses) + leap + review
         )
-    assert ip.arm_usd(ip.ARM_X1_1) == pytest.approx(4.20575)
+    assert ip.arm_usd(ip.ARM_X1_1) == pytest.approx(X1_1_CAP)
+    assert X1_1_CAP == pytest.approx(4.20575 + 2 * 1.0 + 3 * 0.2 + 0.4 + 0.01)
     taken = ip.LANE_PROMPT_BOUND + ip.TAKEN_PROMPT_EXTRA
     assert ip.arm_usd(ip.ARM_X1_2) == pytest.approx(
         lane + 6 * ip.request_usd(taken, 12_000, SONNET)
@@ -1668,12 +1734,19 @@ def test_x1_caps_are_each_configurations_worst_case_and_a_dispatch_fits() -> Non
     assert ip.arm_usd(ip.ARM_X1_4) == pytest.approx(5 * lane) == pytest.approx(1.075)
     assert ip.TAKEN_PROMPT_EXTRA >= 48 * 60  # MAX_TAKEN_LINES lines
     facts = Path(ip.SERVICE_DIR / ip.FACTS_FIXTURE)
-    for dispatch in X1_DISPATCHES:
+    for dispatch in X1_DISPATCHES:  # four would be 67.80, under the fuse
         plan = ip.ProbePlan(ip.X1_ARMS, _repos(dispatch.split(",")), facts, facts)
         assert [plan.library_cap(r.name) for r in plan.repos] == [X1_LIBRARY_CAP] * 4
         assert ip.probe_need(plan) == pytest.approx(4 * X1_LIBRARY_CAP)
         assert ip.probe_need(plan) <= ip.X1_FUSE_USD == X1_FUSE
-    assert ip.X1_LIBRARY_CENTS == round(X1_LIBRARY_CAP * 100) == 1395
+    assert ip.X1_LIBRARY_CENTS == round(X1_LIBRARY_CAP * 100) == 1695
+    rerun = ip.ProbePlan(ip.X1_RERUN_ARMS, _repos(RUN_1), facts, facts)
+    assert [rerun.library_cap(n) for n in RUN_1] == [RERUN_LIBRARY_CAP] * 4
+    assert ip.probe_need(rerun) == pytest.approx(32.80) and rerun.audit
+    assert ip.X1_RERUN_LIBRARY_CENTS == 820
+    for arm in (a for a in ip._KNOWN_ARMS if a is not ip.ARM_X1_1):  # unchanged
+        cfg = ip.arm_config(arm, _project())
+        assert (cfg.IDEAS_LANE_MAX_TOKENS, cfg.LLM_TIMEOUT_S) == (12_000, 300.0)
 
 
 def test_the_rule_relaxing_lanes_count_in_a_pipeline_calls_cap() -> None:
@@ -1684,46 +1757,86 @@ def test_the_rule_relaxing_lanes_count_in_a_pipeline_calls_cap() -> None:
     assert ip.pipeline_usd(cfg) == pytest.approx(2.475 + 4 * lane)
 
 
-def test_x1_minutes_fit_the_job_four_libraries_a_dispatch() -> None:
-    """E1's seconds (Vd): X1-1's Fable lenses dominate a round (twice E1's
-    Fable 5.1 leap), so a row with both Fables in one round of four is
-    shorter (46 minutes) than one with them in both rounds (51); X1-4 is S1
-    and one round of its four lanes (O38)."""
+def test_x1_minutes_fit_the_job_three_libraries_a_dispatch() -> None:
+    """E1's seconds (Vd) for every lane at 12,000 tokens (run 1 measured them
+    well inside: 54 minutes for four libraries); O42: a lane past that cap
+    may write all of it, twice its model's slowest run-1 rate over 32,000
+    tokens (Fable 5.1 951 s, Fable 5 924 s, Opus 5.5 895 s, Sonnet 5 758 s,
+    Sonnet 5.5 643 s, Haiku 5.5 353 s). X1-1's rounds of four are then
+    each a Fable's, so an X1 library takes 74-76 minutes: three a dispatch
+    fit the 240-minute job, four do not; X1-1's re-run (arm A, X1-1, the
+    auditor) fits four. X1-4 is S1 and one round of its four lanes (O38)."""
     facts = ip.SERVICE_DIR / ip.FACTS_FIXTURE
+    assert ip.X1_RUN1_TOKENS_PER_S == RUN_1_RATES and ip.E1_LANE_MAX_TOKENS == 12_000
+    for model, rate in RUN_1_RATES.items():
+        assert ip.cap_seconds(32_000, model) == pytest.approx(2 * 32_000 / rate)
+        assert ip.cap_seconds(12_000, model) == 0.0  # E1's seconds hold
+    with pytest.raises(ValueError, match="no run-1 rate for a lane on claude-x"):
+        ip.cap_seconds(32_000, "claude-x")
+    lane = {m: 2 * 32_000 / r for m, r in RUN_1_RATES.items()}
+    assert ip.X1_1_TIMEOUT_S == 951 >= max(lane.values())  # no lane times out
+    assert ip.arm_seconds(ip.ARM_X1_1, repo="more_itertools") == pytest.approx(
+        lane[SONNET] + lane["claude-fable-5"] + lane[FABLE] + 130.7
+    )  # S1; Fable 5 in round 1, Fable 5.1 in round 2; the reviewer
+    assert ip.arm_seconds(ip.ARM_X1_0) == pytest.approx(  # unchanged
+        47.732 + 47.732 + 195.296 + 130.7
+    )
+    assert ip.arm_seconds(ip.ARM_X1_4) == pytest.approx(47.732 + 47.732)
     plan = ip.ProbePlan(ip.X1_ARMS, _repos(ip.E1_REPOS), facts, facts)
     minutes = {name: plan.library_minutes(name) for name in ip.E1_REPOS}
     assert minutes == {
-        "more_itertools": 51, "pyparsing": 46, "tomli": 46, "sortedcontainers": 46,
-        "mistune": 51, "sqlparse": 46, "markdown": 51, "idna": 46,
+        "more_itertools": 76, "pyparsing": 74, "tomli": 74, "sortedcontainers": 76,
+        "mistune": 76, "sqlparse": 76, "markdown": 76, "idna": 74,
     }  # fmt: skip
-    assert ip.arm_seconds(ip.ARM_X1_1, repo="more_itertools") == pytest.approx(
-        47.732 + 2 * 468.566 + 130.7
-    )
-    assert ip.arm_seconds(ip.ARM_X1_4) == pytest.approx(47.732 + 47.732)
-    # S1, then its four relaxing lanes in one round of 4 workers, no reviewer
-    for dispatch, total in zip(X1_DISPATCHES, (189, 194), strict=True):
-        env = {ip.ARMS_ENV: "X1", ip.REPOS_ENV: dispatch,
-               ip.FACTS_ENV: str(facts), ip.VIEWS_ENV: str(facts)}  # fmt: skip
-        found = ip.probe_plan(env)
-        assert found.arms == ip.X1_ARMS and found.minutes() == total <= ip.JOB_MINUTES
-    # five libraries take exactly the job's 240 minutes since O38's X1-4 trim,
-    # no margin, and 69.75 USD is under the fuse: hence the explicit cap of
-    # four (ci.yml), refused before any spend; six and the eight are past the
-    # job's minutes, refused
-    five = ip.ProbePlan(ip.X1_ARMS, _repos(ip.E1_REPOS[:5]), facts, facts)
-    assert five.minutes() == ip.JOB_MINUTES and ip.probe_need(five) < X1_FUSE
-    for arms in ("X1", "X1-4", "A,X1-1"):  # any X1 configuration, alone too
-        with pytest.raises(
-            ValueError, match="X1 runs at most 4 libraries a dispatch .ci.yml., not 5"
-        ):
-            ip.probe_plan({ip.ARMS_ENV: arms, ip.FACTS_ENV: str(facts),
-                           ip.VIEWS_ENV: str(facts),
-                           ip.REPOS_ENV: ",".join(ip.E1_REPOS[:5])})  # fmt: skip
+    for dispatch in X1_DISPATCHES:
+        names = dispatch.split(",")
+        env = {ip.ARMS_ENV: "X1", ip.FACTS_ENV: str(facts), ip.VIEWS_ENV: str(facts)}
+        with pytest.raises(ValueError, match="past the 240-minute job"):
+            ip.probe_plan({**env, ip.REPOS_ENV: dispatch})
+        found = ip.probe_plan({**env, ip.REPOS_ENV: ",".join(names[:3])})
+        assert found.arms == ip.X1_ARMS
+        assert found.minutes() == sum(minutes[n] for n in names[:3]) <= 240
+        assert ip.probe_need(found) == pytest.approx(3 * X1_LIBRARY_CAP)  # 50.85
+    rerun = ip.probe_plan({ip.ARMS_ENV: "X1-1", ip.FACTS_ENV: str(facts),
+                           ip.VIEWS_ENV: str(facts)})  # fmt: skip
+    assert rerun.minutes() == 50 + 47 + 47 + 49 <= ip.JOB_MINUTES == 240
+    five = {ip.FACTS_ENV: str(facts), ip.VIEWS_ENV: str(facts),
+            ip.REPOS_ENV: ",".join(ip.E1_REPOS[:5])}  # fmt: skip
+    with pytest.raises(  # X1-4 fits five in minutes: the explicit cap
+        ValueError, match="X1 runs at most 4 libraries a dispatch .ci.yml., not 5"
+    ):
+        ip.probe_plan({ip.ARMS_ENV: "X1-4", **five})
+    for arms in ("X1-1", "A,X1-1"):  # the re-run's fifth passes the job first
+        with pytest.raises(ValueError, match="about 243 minutes, past the 240"):
+            ip.probe_plan({ip.ARMS_ENV: arms, **five})
     assert ip.X1_LIBRARIES_A_DISPATCH == 4
     for repos in ({}, {ip.REPOS_ENV: ",".join(ip.E1_REPOS[:6])}):  # 8, 6: refused
         with pytest.raises(ValueError, match="past the 240-minute job"):
             ip.probe_plan({ip.ARMS_ENV: "X1", ip.FACTS_ENV: str(facts),
                            ip.VIEWS_ENV: str(facts), **repos})  # fmt: skip
+
+
+def test_the_x1_1_rerun_plans_arm_a_and_x1_1_on_run_1s_libraries() -> None:
+    """O42: ``X1-1`` re-runs X1-1 alone beside arm A (today's generator, about
+    0.026 a library) and the auditor, so share-new against today's generator
+    is measured in the re-run's own audit pool; on run 1's four libraries
+    unless named, on E1's facts and Va's views, refused without them."""
+    facts = str(ip.SERVICE_DIR / ip.FACTS_FIXTURE)
+    env = {ip.ARMS_ENV: ip.X1_RERUN_KEY, ip.FACTS_ENV: facts, ip.VIEWS_ENV: facts}
+    assert ip.X1_RERUN_KEY == "X1-1" and ip.X1_RERUN_REPOS == RUN_1
+    assert ip.probe_arms(env) == ip.X1_RERUN_ARMS == (ip.ARM_A, ip.ARM_X1_1)
+    plan = ip.probe_plan(env)
+    assert plan.arms == ip.X1_RERUN_ARMS and plan.audit
+    assert {r.name for r in plan.repos} == set(RUN_1) and len(plan.repos) == 4
+    assert plan.facts is not None and plan.views is not None
+    one = ip.probe_plan({**env, ip.REPOS_ENV: "tomli"})
+    assert [r.name for r in one.repos] == ["tomli"]
+    assert ip.probe_need(one) == pytest.approx(RERUN_LIBRARY_CAP)
+    with pytest.raises(ValueError, match=f"X1 reads E1's facts: set {ip.FACTS_ENV}"):
+        ip.probe_plan({ip.ARMS_ENV: "X1-1"})
+    with pytest.raises(ValueError, match=f"X1 reads Va's views: set {ip.VIEWS_ENV}"):
+        ip.probe_plan({ip.ARMS_ENV: "X1-1", ip.FACTS_ENV: facts})
+    assert ip.probe_repos({ip.ARMS_ENV: "X1"}, ip.X1_ARMS) == _repos(ip.E1_REPOS)
 
 
 def test_x1_needs_e1s_facts_and_vas_views_before_any_spend(tmp_path: Path) -> None:
@@ -1883,6 +1996,92 @@ def test_x1_1_sends_each_lens_on_its_square_model(dry: Path) -> None:
     }  # fmt: skip
 
 
+class _CutFable(dg.Wire):
+    """``dg.Wire``, but a Fable lane stops at its cap: ``max_tokens``, the
+    whole cap written, the reply cut mid-JSON (run 1's three truncations)."""
+
+    def __call__(self, request: httpx2.Request) -> httpx2.Response:
+        response = super().__call__(request)
+        message = response.json()
+        if message.get("model") not in (FABLE, "claude-fable-5"):
+            return response
+        cap = json.loads(request.read())["max_tokens"]
+        text = message["content"][0]["text"]
+        message.update(stop_reason="max_tokens",
+                       usage={**message["usage"], "output_tokens": cap},
+                       content=[{"type": "text", "text": text[: len(text) // 2]}])  # fmt: skip
+        return httpx2.Response(200, json=message, request=request)
+
+
+def test_x1_1s_lane_cap_reaches_s1_and_every_lens_request_on_the_wire(
+    dry: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """O42: ``IDEAS_LANE_MAX_TOKENS`` is the max tokens of S1 and every lens
+    request (``idea_pipeline._lane_job``), through the real SDK client (no
+    streaming refusal: its timeout is explicit); the leap and the reviewer
+    keep their own caps; every transport of the arm has the 951 s timeout."""
+    timeouts: list[float] = []
+
+    class _Seen(AnthropicTransport):
+        def __init__(self, cfg: Settings, **kw: Any) -> None:
+            timeouts.append(cfg.LLM_TIMEOUT_S)
+            super().__init__(cfg, **kw)
+
+    monkeypatch.setattr(conftest, "AnthropicTransport", _Seen)
+    wire = dg.Wire(_Answers(), usages=[CACHED] * 12)
+    found = ip.run_arm(ip.ARM_X1_1, wire.run(), _facts(), base=_base(), reader=_reader)
+    assert found.error is None and found.result is not None
+    caps = {_lens(b): b["max_tokens"] for b in wire.bodies}
+    lanes = ("obvious", *(lane.value for lane in LENS_LANES))
+    assert caps == {**dict.fromkeys(lanes, 32_000), "leap": 12_000, "reviewer": 16_000}
+    assert len(timeouts) == 3 + 6 and set(timeouts) == {951.0}  # roles, lenses
+    assert all(e.request.max_tokens == 32_000 for e in found.exchanges
+               if e.role == "lane")  # fmt: skip
+    timeouts.clear()
+    c_wire = dg.Wire(_Answers(), usages=[CACHED] * 12)
+    ip.run_arm(ip.ARM_X1_0, c_wire.run(), _facts(), base=_base(), reader=_reader)
+    assert {b["max_tokens"] for b in c_wire.bodies} == {12_000, 16_000}
+    assert set(timeouts) == {300.0}  # X1-0: the defaults
+
+
+def test_a_lane_stopped_at_max_tokens_is_recorded_so_and_never_retried(
+    dry: Path, tmp_path: Path
+) -> None:
+    """O42 condition 2: a request stopping at 32,000 is a finding about its
+    model. The Fable lanes' replies stop at ``max_tokens``: each was sent
+    once (no retry, no second request), its exchange, row and reply record
+    keep ``max_tokens`` and the whole cap's output tokens, the lane yields
+    no idea (a note says why) and the arm still returns the others."""
+    wire = _CutFable(_Answers(), usages=[CACHED] * 12)
+    found = ip.run_arm(ip.ARM_X1_1, wire.run(), _facts(), base=_base(), reader=_reader)
+    assert found.error is None and found.result is not None
+    row = ip.square_models(ip.square_row(LIB.name))
+    cut = {lane.value for lane, m in row.items() if m in (FABLE, "claude-fable-5")}
+    assert len(cut) == 2 and len(wire.bodies) == 1 + 6 + 2  # each sent once
+    assert sorted(b["model"] for b in wire.bodies if _lens(b) in cut) == sorted(
+        (FABLE, "claude-fable-5")
+    )
+    for e in found.exchanges:
+        stopped = e.label in cut
+        assert e.sent and (e.stop_reason == "max_tokens") is stopped, e.label
+        assert (e.usage[1] == 32_000) is stopped, e.label
+    notes = " ".join(found.result.notes)
+    for label in cut:
+        assert f"lane {label} failed (UnusableReplyError)" in notes
+        assert "'max_tokens' before a complete answer" in notes
+    results = tmp_path / "r.jsonl"
+    recorder = ip.ProbeRecorder(ip.ProbePlan((ip.ARM_X1_1,), _repos(("tomli",))),
+                                ResultsSink({"LIVE_RESULTS_PATH": str(results)}))  # fmt: skip
+    recorder.record(LIB.name, [found], [], None, wire.run(), read=_read)
+    (probe,) = recorder.rows
+    assert {k for k, v in probe.stops.items() if v == "max_tokens"} == cut
+    assert "lane output cap 32,000 (O42)" in probe.lever  # the re-run's rows say so
+    lines = [json.loads(x) for x in results.read_text("utf-8").splitlines()]
+    replies = {x["label"]: x for x in lines if x["experiment"] == ip.REPLY_EXPERIMENT}
+    assert {k for k, x in replies.items() if x["stop_reason"] == "max_tokens"} == cut
+    assert all(replies[k]["usage"][1] == 32_000 for k in cut)
+
+
 _FENCED = re.compile(r"<([a-z_]+) boundary=(\w+)>\n.*?\n</\1 boundary=\2>", re.S)
 _SAMPLING = ("thinking", "temperature", "top_p", "top_k")
 
@@ -1922,7 +2121,9 @@ def test_x1_1s_think_line_is_well_formed_on_every_models_request(
          the Opus leap and the reviewer are X1-0's, byte for byte
     """
     on = {_lens(b): b for b in _x1_1_bodies(ip.ARM_X1_1, monkeypatch)}
-    plain = dataclasses.replace(ip.ARM_X1_1, update=())
+    plain = dataclasses.replace(ip.ARM_X1_1, update=tuple(
+        kv for kv in ip.ARM_X1_1.update if kv[0] != "IDEAS_THINK_LINE_ALL"
+    ))  # fmt: skip
     off = {_lens(b): b for b in _x1_1_bodies(plain, monkeypatch)}
     assert ip.arm_config(plain, _project()).IDEAS_THINK_LINE_ALL is False
     lanes = ("obvious", *(lane.value for lane in LENS_LANES))

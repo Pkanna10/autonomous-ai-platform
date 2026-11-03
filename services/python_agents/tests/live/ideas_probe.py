@@ -31,7 +31,10 @@ factors, labelled so), the views given through the pipeline's
 ``view_builder`` seam and never built live; X1-4 S1 and the four
 rule-relaxing lanes alone (G3, O38: no lens, leap or reviewer; proposals
 only: never pooled or scored). An X1 dispatch's worst case
-stays under ``X1_FUSE_USD``.
+stays under ``X1_FUSE_USD``. O42: X1-1's S1 and lenses write at most
+``X1_1_LANE_MAX_TOKENS`` (32,000; every other arm 12,000) under a client
+timeout of ``X1_1_TIMEOUT_S``; ``X1-1`` alone (``X1_RERUN_KEY``) re-runs it
+beside arm A and the auditor, on X1 run 1's four libraries unless named.
 
 Minutes, re-pinned from E1's recorded seconds (``E1_SECONDS``, the slowest
 sent request per role and model; an unmeasured lane model reads as the
@@ -39,20 +42,21 @@ nearest measured request): a request takes ``TIME_MARGIN`` times that, a
 parallel stage the slowest of each round of ``IDEAS_LANE_WORKERS`` (one lane
 a round with ``IDEAS_SEQUENTIAL_LANES``, G4), phase 1 ``PHASE_ONE_MINUTES``
 (E0b: a count-mode library about 47 s); a plan past ci.yml's ``JOB_MINUTES``
-is refused: E1 41 minutes a library, X1 46 or 51 (the row of its square),
-four a dispatch (``X1_LIBRARIES_A_DISPATCH``: five X1 fit the job exactly,
-so the cap is explicit). Count mode also counts the reviewer request with its ideas
+is refused: E1 41 minutes a library, X1 74 to 76 (O42: a lane past E1's
+12,000-token cap takes ``cap_seconds``, the cap at its model's slowest X1
+run-1 rate), so three a dispatch, O42's re-run 47 to 50; any X1 plan at most
+four (``X1_LIBRARIES_A_DISPATCH``). Count mode also counts the reviewer request with its ideas
 repeated under fresh ids up to ``IDEAS_REVIEW_MAX_IDEAS`` (D55's reviewer
 bound is for 16 ideas; S1 and one lens give fewer).
 
 Caps: an arm's cap is the sum of its requests' worst cases on D55's bounds,
 re-derived from E0b's counted maxima (D61; the E1 row: B 1.99, C 2.475, D
 4.53, E 1.045, the auditor 0.69; A on the oss-ab suite's measured blind
-bound, 0.27; X1-1 4.206, X1-2 2.539 and X1-3 2.675 on wider bounds for the
+bound, 0.27; X1-1 7.216 (O42), X1-2 2.539 and X1-3 2.675 on wider bounds for the
 mechanisms block and the views, X1-4 1.075), count mode's real spend is
 ``COUNT_SENT`` lane requests (0.43, the tap refuses past it); a library's
 run is phase 1, its arms and the auditor, rounded up (E1 11.40, count 0.85,
-C-low/C-high 4.95, X1 13.95 on recorded facts); a plan past
+C-low/C-high 4.95, X1 16.95 and O42's re-run 8.20 on recorded facts); a plan past
 the 150 USD ceiling is refused in the module fixture. Fable (30-day
 retention) gets ``ALLOW_RETENTION_MODELS`` only in arm D's copy and only for
 a library of the pinned OSS manifests (O15); the flag is cleared in every
@@ -241,7 +245,7 @@ AUDIT_EFFORT: Final[Effort] = "high"
 RETENTION_MAX_TOKENS: Final = 20_000  # arm D's Fable leap and reviewer (D58)
 COUNT_SENT: Final = 2  # count mode sends S1 and the first lens lane
 JOB_MINUTES: Final = 240  # ci.yml's ideas-probe timeout: four libraries
-X1_LIBRARIES_A_DISPATCH: Final = 4  # ci.yml; five fit 240 minutes exactly, no margin
+X1_LIBRARIES_A_DISPATCH: Final = 4  # ci.yml; X1-4 alone fits five in minutes
 TIME_MARGIN: Final = 2  # over E1's slowest request (the timing-guard rule)
 E1_SECONDS: Final[Mapping[tuple[str, str], float]] = {
     ("generator", SONNET): 11.772, ("lane", SONNET): 23.866,
@@ -256,6 +260,19 @@ _AS_MEASURED: Final[Mapping[tuple[str, str], tuple[str, str]]] = {
     ("lane", FABLE): ("leap", FABLE), ("lane", FABLE_5): ("leap", FABLE),
 }  # fmt: skip
 """X1-1's unmeasured lane models, read as the nearest measured (slower) one."""
+E1_LANE_MAX_TOKENS: Final = 12_000  # the lane cap E1's and X1 run 1's seconds hold at
+X1_1_LANE_MAX_TOKENS: Final = 32_000  # O42: X1-1's lane output cap, X1-1 alone
+X1_RUN1_TOKENS_PER_S: Final[Mapping[str, float]] = {
+    SONNET: 99.595, SONNET_5: 84.399, HAIKU: 181.057, OPUS: 71.519,
+    FABLE_5: 69.293, FABLE: 67.327,
+}  # fmt: skip
+"""X1 run 1 (41679255224), O42's re-pin: each model's slowest output rate,
+tokens a second, over every sent reply of at least 1,000 output tokens on
+that model, any role (Opus 5.5's is X1-3's leap at effort high, 3,567 in
+49.875 s; its slowest X1-1 lens lane wrote 88.3 a second)."""
+X1_1_TIMEOUT_S: Final = math.ceil(
+    TIME_MARGIN * X1_1_LANE_MAX_TOKENS / min(X1_RUN1_TOKENS_PER_S.values())
+)  # 951: a lens may write its whole cap; the default 300 s ends Fable near 20k
 PHASE_ONE_MINUTES: Final = 2  # E0b: a whole count-mode library about 47 s
 CLONE_MINUTES: Final = 1  # recorded facts: a fresh clone only
 NOTE_CHARS: Final = _CELL_MAX
@@ -264,6 +281,7 @@ E1_REPOS: Final = (
     "mistune", "sqlparse", "markdown", "idna",
 )  # fmt: skip
 E1B_REPOS: Final = ("pyparsing", "tomli", "mistune", "markdown")
+X1_RERUN_REPOS: Final = E1_REPOS[:4]  # X1 run 1's (41679255224), for O42's re-run
 OSS_NAMES: Final = frozenset(repo.name for repo in OSS_SELECTABLE)
 _ROLES: Final[tuple[Role, ...]] = ("generator", *PIPELINE_ROLES)
 _REVIEW_TOKEN: Final = re.compile(r"The review boundary token is (\w+)\.")
@@ -337,9 +355,14 @@ def square_models(row: int) -> dict[Lane, str]:
 
 ARM_X1_0: Final = IdeaArm("X1-0", True, lever="baseline: arm C's settings again")
 ARM_X1_1: Final = IdeaArm(
-    "X1-1", True, (("IDEAS_THINK_LINE_ALL", True),), square=True,
+    "X1-1", True,
+    (("IDEAS_THINK_LINE_ALL", True),
+     ("IDEAS_LANE_MAX_TOKENS", X1_1_LANE_MAX_TOKENS),
+     ("LLM_TIMEOUT_S", float(X1_1_TIMEOUT_S))),
+    square=True,
     lever="who thinks (G1): S1 on Sonnet 5.5, each lens on its square's model, "
-    "the think line on every lane as X1-0's all-Sonnet 5.5 lanes have it (O38)",
+    "the think line on every lane as X1-0's all-Sonnet 5.5 lanes have it (O38); "
+    "lane output cap 32,000 (O42)",
 )  # fmt: skip
 ARM_X1_2: Final = IdeaArm(
     "X1-2", True,
@@ -363,6 +386,8 @@ ARM_X1_4: Final = IdeaArm(
 X1_CONFIGS: Final = (ARM_X1_0, ARM_X1_1, ARM_X1_2, ARM_X1_3, ARM_X1_4)
 X1_ARMS: Final = (ARM_A, *X1_CONFIGS)  # arm A: today's generator, same day
 X1_KEY: Final = "X1"  # ``$LIVE_IDEAS_ARMS`` for all of ``X1_ARMS``
+X1_RERUN_KEY: Final = "X1-1"  # O42's re-run: X1-1 beside arm A and the auditor
+X1_RERUN_ARMS: Final = (ARM_A, ARM_X1_1)  # A: share-new in the re-run's own pool
 _X1_KEYS: Final = frozenset(arm.key for arm in X1_CONFIGS)
 _KNOWN_ARMS: Final = (*IDEA_ARMS, *X1_CONFIGS)
 
@@ -482,8 +507,11 @@ def arm_seconds(
         return COUNT_SENT * request_seconds("lane", cfg.IDEAS_LANE_MODEL)
 
     def one(lane: Lane) -> float:
-        return request_seconds("leap" if lane is Lane.leap else "lane",
-                               lane_chain(cfg, lane)[0])  # fmt: skip
+        model = lane_chain(cfg, lane)[0]
+        if lane is Lane.leap:
+            return request_seconds("leap", model)
+        cap = cap_seconds(cfg.IDEAS_LANE_MAX_TOKENS, model)
+        return max(request_seconds("lane", model), cap)
 
     s2 = [one(lane) for lane in s2_lanes(cfg)]
     k = 1 if cfg.IDEAS_SEQUENTIAL_LANES else cfg.IDEAS_LANE_WORKERS
@@ -497,6 +525,17 @@ def arm_seconds(
 
 
 AUDIT_SECONDS: Final = request_seconds("auditor", OPUS)
+
+
+def cap_seconds(max_tokens: int, model: str) -> float:
+    """O42: a lane past E1's cap may write all of it, ``TIME_MARGIN`` times
+    at the model's slowest run-1 rate; at or under it, none (E1's hold)."""
+    if max_tokens <= E1_LANE_MAX_TOKENS:
+        return 0.0
+    rate = X1_RUN1_TOKENS_PER_S.get(model)
+    if rate is None:
+        raise ValueError(f"no run-1 rate for a lane on {model}")
+    return TIME_MARGIN * max_tokens / rate
 
 
 @dataclass(frozen=True)
@@ -534,6 +573,10 @@ X1_LIBRARY_CENTS: Final = round(
     100 * ProbePlan(X1_ARMS, (), Path(FACTS_FIXTURE)).library_cap()
 )
 """ci.yml's need of one X1 library (every row of the square alike)."""
+X1_RERUN_LIBRARY_CENTS: Final = round(
+    100 * ProbePlan(X1_RERUN_ARMS, (), Path(FACTS_FIXTURE)).library_cap()
+)
+"""ci.yml's need of one library of O42's re-run."""
 
 
 def check_fuse(plan: ProbePlan) -> None:
@@ -548,6 +591,8 @@ def check_fuse(plan: ProbePlan) -> None:
 def probe_arms(environ: Mapping[str, str]) -> tuple[IdeaArm, ...]:
     if environ.get(ARMS_ENV) == X1_KEY:
         return X1_ARMS
+    if environ.get(ARMS_ENV) == X1_RERUN_KEY:
+        return X1_RERUN_ARMS
     keys = _keys(environ, ARMS_ENV, [arm.key for arm in _KNOWN_ARMS])
     if keys is None:
         return E1_ARMS
@@ -566,6 +611,8 @@ def probe_repos(
         if tuple(arms) == (ARM_COUNT,):
             return OSS_CORPUS
         names = E1_REPOS if any(arm.e1 for arm in arms) else E1B_REPOS
+        if tuple(arms) == X1_RERUN_ARMS:  # run 1's four (O42)
+            names = X1_RERUN_REPOS
     return tuple(repo for repo in OSS_SELECTABLE if repo.name in names)
 
 

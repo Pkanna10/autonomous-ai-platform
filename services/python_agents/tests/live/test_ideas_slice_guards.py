@@ -64,6 +64,7 @@ from autonomous_ai_agents.orchestrator.main import EngineRunResult
 
 from . import discovery_oss as dx
 from . import ideas_marker as im
+from . import ideas_pool as ipool
 from . import ideas_probe as ip
 from . import ideas_report as report
 from . import ideas_slice as sl
@@ -89,7 +90,7 @@ SECRET = "sk-ant-api03-" + "notarealkey0123456789"  # planted, never a real key
 CHOSEN_55 = im.Decision("opus-5-5", im.HIGHER, ("opus-5-5", "opus-5"), ())
 CHOSEN_5 = im.Decision("opus-5", im.ONE, ("opus-5",), ())
 NO_MARKER = im.Decision(None, im.NO_MARKER, (), ())
-TWO = {sl.REPOS_ENV: "sqlparse,pyparsing", SUITE_CAP_ENV: "64"}
+TWO = {sl.REPOS_ENV: "sqlparse,pyparsing", SUITE_CAP_ENV: "75"}
 
 
 # ---------------------------------------------------------------------------
@@ -345,21 +346,24 @@ def test_the_need_is_the_worst_case_of_two_libraries_under_the_fuse() -> None:
     assert sl.TRIAL_USD == OSS_TRIAL_CAP_USD == 2.5  # E2's per-trial worst case
     assert sl.loop_cap(3) == 7.5 and sl.loop_cap(1) == 2.5
     assert sl.MARKER_LIBRARY_USD == ceil_usd(4 * im.set_usd()) == 2.0
-    assert plan.library_cap() == 4 * 7.5 + 2.0 == 32.0
-    assert sl.slice_need(plan) == 64.0 <= X1_FUSE_USD < CAP_CEILING_USD
-    one = sl.slice_plan({sl.REPOS_ENV: "sortedcontainers", SUITE_CAP_ENV: "32"})
-    assert sl.slice_need(one) == 32.0
+    # O41's pooled tournament at its bound (40 ideas: 11 requests a marker)
+    assert sl.POOL_LIBRARY_USD == ipool.library_usd() == 5.45
+    assert plan.library_cap() == ceil_usd(4 * 7.5 + 2.0 + 5.45) == 37.45
+    assert sl.slice_need(plan) == 74.9 <= X1_FUSE_USD < CAP_CEILING_USD
+    one = sl.slice_plan({sl.REPOS_ENV: "sortedcontainers", SUITE_CAP_ENV: "38"})
+    assert sl.slice_need(one) == 37.45
     assert sl.SLICE_REPOS == ("sqlparse", "pyparsing", "tomli", "sortedcontainers")
     assert sl.CONTROL == "sortedcontainers"
-    # L2b's 4.2 minutes a loop of up to 3 trials, twice over: 9; a clone and
-    # two marker requests a configuration at Vb's 2 minutes
-    assert plan.minutes() == 2 * (1 + 4 * (2 * 2 + 9)) == 106 <= sl.JOB_MINUTES
+    # L2b's 4.2 minutes a loop of up to 3 trials, twice over: 9; a clone,
+    # two marker requests a configuration at Vb's 2 minutes, and the pooled
+    # tournament's 22 requests at 30 s at its bound
+    assert plan.minutes() == 2 * (1 + 11 + 4 * (2 * 2 + 9)) == 128 <= sl.JOB_MINUTES
 
 
 def test_three_libraries_are_past_the_fuse_and_the_job() -> None:
     three = sl.SlicePlan(sl.SLICE_LIBRARIES[:3])
-    assert sl.slice_need(three) == 96.0 > X1_FUSE_USD
-    assert three.minutes() == 159 > sl.JOB_MINUTES
+    assert sl.slice_need(three) == pytest.approx(112.35) and 112.35 > X1_FUSE_USD
+    assert three.minutes() == 192 > sl.JOB_MINUTES
     with pytest.raises(ValueError, match="80 USD fuse or the 150-minute job"):
         sl.check_fuse(three)
     sl.check_fuse(sl.SlicePlan(sl.SLICE_LIBRARIES[2:]))
@@ -369,10 +373,10 @@ def test_three_libraries_are_past_the_fuse_and_the_job() -> None:
     ("environ", "match"),
     [
         ({SUITE_CAP_ENV: "64"}, "name the dispatch's libraries"),
-        ({sl.REPOS_ENV: "sqlparse,pyparsing,tomli", SUITE_CAP_ENV: "96"}, "at most 2"),
+        ({sl.REPOS_ENV: "sqlparse,pyparsing,tomli", SUITE_CAP_ENV: "113"}, "at most 2"),
         ({sl.REPOS_ENV: "idna", SUITE_CAP_ENV: "64"}, "must name distinct"),
         ({sl.REPOS_ENV: "tomli,tomli", SUITE_CAP_ENV: "64"}, "must name distinct"),
-        ({sl.REPOS_ENV: "sqlparse,pyparsing", SUITE_CAP_ENV: "63.99"}, "below"),
+        ({sl.REPOS_ENV: "sqlparse,pyparsing", SUITE_CAP_ENV: "74.89"}, "below"),
         ({**TWO, sl.IDEAS_ENV: "tests/fixtures/ideas_slice/none.jsonl"}, "no X1"),
         ({**TWO, sl.MARKER_ENV: "/nowhere/marker.jsonl"}, "no marker"),
         ({**TWO, sl.MARKER_ENV: "pyproject.toml,uv.lock"}, "one results file"),
@@ -417,7 +421,7 @@ def test_the_engine_is_checked_before_any_spend(
         return LiveRun("x", cap)
 
     recorder = sl.SliceRecorder(plan, ResultsSink({}), base=_base(),
-                                ideas={}, decision=NO_MARKER)  # fmt: skip
+                                ideas={}, decision=NO_MARKER, pools={})  # fmt: skip
     with pytest.raises(ValueError, match=match):
         sl.run_library(dx.OSS_SELECTABLE[0], live=live, root=Path("/nowhere"),
                        isolation=REQUIRED, recorder=recorder, base=base)  # fmt: skip
@@ -451,6 +455,19 @@ def test_the_recorder_needs_both_inputs_and_reads_vbs_verdict(
     marked = sl.SliceRecorder(sl.SlicePlan(tomli, (x1,), empty), ResultsSink({}),
                               base=_base(), decision=CHOSEN_55)  # fmt: skip
     assert marked.selection == f"marker opus-5-5 ({im.HIGHER})"
+    assert marked.pools is not None and len(marked.pools[REPO]) == 9  # O41's pool
+    given = sl.SliceRecorder(sl.SlicePlan(tomli, (x1,), empty), ResultsSink({}),
+                             base=_base(), decision=CHOSEN_55, pools={})  # fmt: skip
+    assert given.pools == {}  # an override is kept, never reloaded
+    # audits but no ideas-idea row: the pool refuses before any clone or request
+    lines = x1.read_text(encoding="utf-8").splitlines()
+    bare = tmp_path / "bare.jsonl"
+    bare.write_text("\n".join(x for x in lines
+                              if f'"experiment": "{ip.IDEA_EXPERIMENT}"' not in x))  # fmt: skip
+    assert sl.load_ideas((bare,), (REPO,))[(REPO, "X1-0")] == ()  # the slice's own
+    with pytest.raises(ValueError, match=f"{REPO}: no ideas-idea rows in the X1"):
+        sl.SliceRecorder(sl.SlicePlan(tomli, (bare,), empty), ResultsSink({}),
+                         base=_base(), decision=CHOSEN_55)  # fmt: skip
 
 
 # ---------------------------------------------------------------------------
@@ -468,6 +485,7 @@ def _order(body: Json) -> str:
     lines = re.findall(r'^\{"id": "I\d+".*$', text, re.MULTILINE)
     ids = {d["title"]: d["id"] for d in map(json.loads, lines)}
     wanted = [t for t in ANSWERS[body["model"]] if t in ids]
+    wanted += sorted(t for t in ids if t not in wanted)  # a pooled set's others
     return json.dumps({"order": [ids[t] for t in wanted]})
 
 
@@ -554,8 +572,9 @@ def slice_run(
         monkeypatch.setattr(sl, "start_arm_loop", engine.start)
         monkeypatch.setattr(sl, "run_engine", engine.run)
         cloned: list[Path] = []
-        monkeypatch.setattr(sl, "clone_pinned", lambda *a, **k: cloned.append(a[3]))
-        monkeypatch.setattr(sl, "hot_code", lambda repo, dest: _hot(repo.name))
+        # the markers' and the pooled tournament's one clone (``ipool.hot_of``)
+        monkeypatch.setattr(ipool, "clone_pinned", lambda *a, **k: cloned.append(a[3]))
+        monkeypatch.setattr(ipool, "hot_code", lambda repo, dest: _hot(repo.name))
 
         def live(cap: float) -> LiveRun:
             engine.calls.append(f"live {cap:g}")
@@ -588,11 +607,17 @@ def test_one_loop_per_configuration_one_trial_per_pick(slice_run: Any) -> None:
     # request counted and capped before it went, then one loop per pick set
     marker_cap = ceil_usd(2 * im.request_worst(im.OPUS_55_MARKER)
                           + im.request_worst(im.OPUS_5_MARKER))  # fmt: skip
-    assert [r.cap_usd for r in runs] == [marker_cap, 7.5, 2.5]
-    assert [b["model"] for b in wire.bodies] == [OPUS, OPUS_5, OPUS]
-    assert len(wire.counted) == 3 and len(runs[0].records) == 3
-    assert engine.calls == [f"live {marker_cap:g}", "live 7.5", "start X1-0",
-                            "run X1-0", "live 2.5", "start X1-1", "run X1-1"]  # fmt: skip
+    # then the pooled tournament (O41): 9 lens-lane ideas, sets of 5 and 4,
+    # then a final set of 4, on each marker: 3 requests each
+    pool_cap = ceil_usd(3 * im.set_usd())
+    assert [r.cap_usd for r in runs] == [marker_cap, pool_cap, 7.5, 2.5]
+    assert [b["model"] for b in wire.bodies] == [OPUS, OPUS_5, OPUS, *[OPUS] * 3,
+                                                 *[OPUS_5] * 3]  # fmt: skip
+    assert len(wire.counted) == 9 and len(runs[0].records) == 3
+    assert len(runs[1].records) == 6
+    assert engine.calls == [f"live {marker_cap:g}", f"live {pool_cap:g}", "live 7.5",
+                            "start X1-0", "run X1-0", "live 2.5", "start X1-1",
+                            "run X1-1"]  # fmt: skip
     (root0, cands0, _), (root1, cands1, _) = engine.loops
     assert [h.title for h in cands0] == ["leap-new", "e-late", "f-new"]
     assert [h.title for h in cands1] == ["x1-copies-x0"]
@@ -668,6 +693,7 @@ def test_without_a_marker_the_slice_runs_the_fallback_and_says_so(
 ) -> None:
     runs, wire, engine, out = slice_run(NO_MARKER)
     assert wire.bodies == [] and [r.cap_usd for r in runs] == [7.5, 2.5]
+    assert _records(out, ipool.RESULT_EXPERIMENT) == []  # no marker: no pooled rank
     assert [h.title for h in engine.loops[0][1]] == ["f-new", "leap-new", "e-new"]
     trials = _records(out, sl.TRIAL_EXPERIMENT)
     assert {t["selection"] for t in trials} == {f"fallback ({im.NO_MARKER}): "
@@ -798,13 +824,13 @@ def test_an_opus_5_5_idea_is_graded_by_opus_5_and_marked_unvalidated(
         ("X1-1", "opus-5-5", True, [True]),
     ]  # fmt: skip
     # the report reads both fields as Ve writes them, through to its table cell
-    parsed = report._parsed([out], [sl.TRIAL_EXPERIMENT, sl.MARKER_EXPERIMENT])
+    # the report reads the trial's fields as Ve writes them, through to its
+    # cell (O40 replaced the within-set count: the marker rows are not read)
+    parsed = report._parsed([out], [sl.TRIAL_EXPERIMENT])
     (line,) = [t for t in parsed[sl.TRIAL_EXPERIMENT]
                if isinstance(t, report.TrialLine) and t.title == "leap-new"]  # fmt: skip
     assert report.trial_cell(line) == "keep (graded by opus-5, unvalidated)"
-    assert {(m.marker, m.validated) for m in parsed[sl.MARKER_EXPERIMENT]
-            if isinstance(m, report.MarkerLine)} == {("opus-5-5", True),
-                                                     ("opus-5", False)}  # fmt: skip
+    assert sl.MARKER_EXPERIMENT not in report._KINDS
 
 
 @pytest.mark.parametrize(
@@ -852,8 +878,50 @@ def test_vbs_verdict_row_is_read_and_a_disagreeing_one_refused(
 
 def test_every_other_slice_field_is_heads(slice_run: Any) -> None:
     _, _, _, out = slice_run(O39)
-    rows = [{k: v for k, v in json.loads(x).items()
-             if k not in (*O39_FIELDS, "hypothesis_id")}
-            for x in out.read_text(encoding="utf-8").splitlines()]  # fmt: skip
+    rows = [
+        {
+            k: v
+            for k, v in json.loads(x).items()
+            if k not in (*O39_FIELDS, "hypothesis_id")
+        }
+        for x in out.read_text(encoding="utf-8").splitlines()
+        if '"experiment": "ideas-pool-' not in x
+    ]  # O41's rows: their own test
     digest = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
     assert digest == SLICE_GOLDEN
+
+
+# ---------------------------------------------------------------------------
+# O40/O41: the slice ranks its library's pool by the shared tournament
+# ---------------------------------------------------------------------------
+
+
+def test_the_slice_ranks_its_librarys_pool_by_the_shared_tournament(
+    slice_run: Any, x1: Path
+) -> None:
+    _, wire, _, out = slice_run(O39)
+    pool = ipool.load_pools((x1,), (REPO,))[REPO]
+    assert {i.row.title for i in pool} == {
+        "f-new",
+        "f-dup-a",
+        "f-behaviour",
+        "e-family",
+        "e-new",
+        "e-late",
+        "e-unaudited",
+        "x1-copies-x0",
+        "x1-via-a",
+    }  # every returned lens-lane idea: audited or not, new or not, any class
+    sets = _records(out, ipool.SET_EXPERIMENT)
+    assert [(s["marker"], s["round"], len(s["ids"])) for s in sets] == [
+        (m, r, n) for m in ("opus-5-5", "opus-5") for r, n in ((1, 5), (1, 4), (2, 4))
+    ]  # fmt: skip
+    results = _records(out, ipool.RESULT_EXPERIMENT)
+    assert [(r["repo"], r["marker"], r["validated"]) for r in results] == [
+        (REPO, "opus-5-5", True), (REPO, "opus-5", False)]  # fmt: skip
+    assert all(len(r["members"]) == 9 and len(r["top"]) == 3 for r in results)
+    assert all(sum(r["counts"].values()) == 3 for r in results)
+    for body in wire.bodies[3:]:  # after the slice's three marker requests
+        text = "\n".join(block["text"] for block in body["messages"][0]["content"])
+        assert 1 < len(re.findall(r'^\{"id": "I\d+"', text, re.M)) <= ipool.SET_SIZE
+    # the pool's hot code is the markers' one clone (``slice_run`` asserts it)

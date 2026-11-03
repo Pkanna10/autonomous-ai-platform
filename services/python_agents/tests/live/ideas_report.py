@@ -25,16 +25,22 @@ ran; title, verdict, gain_pct, floor_pct, op_count; ``keep`` is a win) and
 one ``ideas-slice-combine`` per (configuration, library) engine run (repo,
 arm, summary chunks, cost_usd of the whole run and D64's seeded_calls and
 seeded_cost_usd from its state, both required: 0 when no seeded call ran);
-O39's fields: the trial's grader and ``grader_validated``, and each
-``ideas-slice-marker`` row (repo, arm, marker, shown, grades, scores,
-``validated``: whether that grader passed O37, as Vb's verdict said).
+O39's fields: the trial's grader and ``grader_validated``. The pooled
+ranking's rows as ``ideas_pool.rank_library`` writes them (the slice for its
+four libraries, the ``ideas-pool`` suite for the other four): one
+``ideas-pool-set`` a set request (repo, marker, model, validated, round, set,
+of, ids, seed, shown, order, advanced, error) and one ``ideas-pool-result``
+a library and marker (members with their ids, apart, top, requests, rounds).
 
-O39 (owner, 2026-11-03): marker-feasible is an idea its grader (the marker
-that did not write it) placed in the top ``MARKER_TOP`` of its shown set,
-the slice's pick depth; the headline across configurations counts lens-lane
-ideas only, the all-lanes figure beside it; grades by a marker that failed
-O37 sit in their own columns, each cell "unvalidated", never merged into the
-validated figures. Until Vc's dedupe passes its
+O40/O41 (owner, 2026-11-03): marker-feasible is pooled. Per library, every
+returned lens-lane idea of X1-0 to X1-3 forms one pool, ranked by a
+tournament of sets of at most ``SET_SIZE`` (the set size the marker was
+validated on); the measure is how many of the final set's top ``MARKER_TOP``
+each configuration supplied, beside the full record (every round's sets,
+each set's order, which advanced). The validated marker never ranks its own
+model's ideas (listed apart); the other candidate ranks the whole pool, its
+counts marked unvalidated. A row that breaks those rules, or a set past the
+set size, is refused. Until Vc's dedupe passes its
 bar, unique mechanisms and the share new to today's generator carry
 ``bound``'s label (read from the score row: under-merging makes them upper
 bounds), the raw lists and counts beside them.
@@ -65,7 +71,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Self, TypeVar
 
-from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from autonomous_ai_agents.optimization.idea_context import _totals
 from autonomous_ai_agents.optimization.idea_dedupe import (
@@ -85,6 +91,7 @@ from autonomous_ai_agents.optimization.idea_types import (
     RelaxedRule,
 )
 
+from . import ideas_pool as ipool
 from .conftest import redact_keys
 from .discovery_io import cells
 from .ideas_probe import (
@@ -103,10 +110,14 @@ from .ideas_validate import E1_DIR as E1_DIR
 from .ideas_validate import SCORE_EXPERIMENT as DEDUPE_EXPERIMENT
 
 REPORT_DIR: Final = SERVICE_DIR.parents[1] / ".claude/handoff/step3/idea-lab/x1"
+SET_EXPERIMENT: Final = ipool.SET_EXPERIMENT
+RESULT_EXPERIMENT: Final = ipool.RESULT_EXPERIMENT
+POOL_CONFIGS: Final = ipool.POOL_CONFIGS
+SET_SIZE: Final = ipool.SET_SIZE  # O41: the set size the marker was validated on
+VB_SETS: Final = ipool.VB_SETS
+MARKER_TOP: Final = ipool.TOP  # O40: the pool's top 3
 TRIAL_EXPERIMENT: Final = "ideas-slice-trial"
 COMBINE_EXPERIMENT: Final = "ideas-slice-combine"
-MARKER_EXPERIMENT: Final = "ideas-slice-marker"
-MARKER_TOP: Final = 3  # ideas_slice.TOP: the picks a set
 NOTE_PREFIXES: Final = ("Vc's ", "These rows are the raw list")
 CONFIGS: Final = tuple(a.key for a in X1_ARMS)  # A, then X1-0 to X1-4
 TODAY, BASELINE = "A", "X1-0"
@@ -228,29 +239,61 @@ class TrialLine(_Row):
         return self
 
 
-class Shown(_Row):
+_NAME: Final = r"^[a-z0-9][a-z0-9.-]{0,63}$"  # shown in a heading: a plain name
+
+
+class PoolKey(_Row):
+    arm: str
     label: str
     position: int
 
+    @model_validator(mode="after")
+    def _config(self) -> Self:
+        if self.arm not in POOL_CONFIGS:
+            raise ValueError(f"{self.arm}: not one of X1-0 to X1-3")
+        return self
 
-class MarkerLine(_Row):
+
+class PoolMember(PoolKey):
+    id: str
+
+
+class PoolSetLine(_Row):
     repo: str
-    arm: str
     marker: str
-    shown: tuple[Shown, ...]
-    grades: tuple[bool, ...]  # which shown ideas take this marker's score
-    scores: tuple[float, ...] | None
-    validated: bool
+    round: int
+    set: int
+    of: int
+    ids: tuple[str, ...]
+    seed: str
+    shown: tuple[str, ...]
+    order: tuple[str, ...] | None  # the marker's, most likely first
+    advanced: tuple[str, ...]
+    error: str | None
 
     @model_validator(mode="after")
-    def _aligned(self) -> Self:
-        n = len(self.shown)
-        if (
-            len(self.grades) != n
-            or len(self.shown if self.scores is None else self.scores) != n
-        ):
-            raise ValueError("a marker row's grades or scores do not match its shown")
+    def _set(self) -> Self:
+        ids, order = sorted(self.ids), self.order
+        if not 0 < len(ids) <= SET_SIZE:
+            raise ValueError(f"a set of {len(ids)} ideas, past the validated set size")
+        if sorted(self.shown) != ids or (order is not None and sorted(order) != ids):
+            raise ValueError("the shown order or the order is not a permutation")
+        top = () if order is None or self.of == 1 else order[: ipool.ADVANCE]
+        if self.advanced != top:
+            raise ValueError("advanced is not the order's top two")
         return self
+
+
+class PoolResultLine(_Row):
+    repo: str
+    marker: str = Field(pattern=_NAME)
+    model: str = Field(pattern=_NAME)
+    validated: bool
+    members: tuple[PoolMember, ...]
+    apart: tuple[PoolKey, ...]
+    top: tuple[str, ...] | None
+    requests: int
+    rounds: int
 
 
 class CombineLine(_Row):
@@ -270,7 +313,7 @@ _KINDS: Final[Mapping[str, type[_Row]]] = {
     IDEA_EXPERIMENT: IdeaLine, ROW_EXPERIMENT: ProbeLine, AUDIT_EXPERIMENT: AuditLine,
     PROPOSAL_EXPERIMENT: ProposalLine, TRIAL_EXPERIMENT: TrialLine,
     COMBINE_EXPERIMENT: CombineLine, DEDUPE_EXPERIMENT: DedupeLine,
-    MARKER_EXPERIMENT: MarkerLine,
+    SET_EXPERIMENT: PoolSetLine, RESULT_EXPERIMENT: PoolResultLine,
 }  # fmt: skip
 
 
@@ -310,7 +353,8 @@ class Rows:
     trials: tuple[TrialLine, ...]
     combines: tuple[CombineLine, ...]
     dedupe: DedupeScore | None
-    markers: tuple[MarkerLine, ...] = ()
+    pool_sets: tuple[PoolSetLine, ...] = ()
+    pool_results: tuple[PoolResultLine, ...] = ()
 
 
 def load_rows(paths: Sequence[Path]) -> Rows:
@@ -320,7 +364,8 @@ def load_rows(paths: Sequence[Path]) -> Rows:
         _of(f, IDEA_EXPERIMENT, IdeaLine), _of(f, ROW_EXPERIMENT, ProbeLine),
         _of(f, AUDIT_EXPERIMENT, AuditLine), _of(f, PROPOSAL_EXPERIMENT, ProposalLine),
         _of(f, TRIAL_EXPERIMENT, TrialLine), _of(f, COMBINE_EXPERIMENT, CombineLine),
-        None, _of(f, MARKER_EXPERIMENT, MarkerLine),
+        None, _of(f, SET_EXPERIMENT, PoolSetLine),
+        _of(f, RESULT_EXPERIMENT, PoolResultLine),
     )  # fmt: skip
     for kind, found in ((IDEA_EXPERIMENT, rows.ideas), (ROW_EXPERIMENT, rows.probes)):
         if not found:
@@ -329,10 +374,8 @@ def load_rows(paths: Sequence[Path]) -> Rows:
     if len(scores) != 1:
         raise ValueError(f"no {DEDUPE_EXPERIMENT} row (Vc's dedupe validation)"
                          if not scores else f"{DEDUPE_EXPERIMENT} row twice")  # fmt: skip
-    keyed: Sequence[ProbeLine | IdeaLine | AuditLine | TrialLine | CombineLine
-                    | MarkerLine]  # fmt: skip
-    for keyed in (rows.ideas, rows.probes, rows.audits, rows.trials, rows.combines,
-                  rows.markers):  # fmt: skip
+    keyed: Sequence[ProbeLine | IdeaLine | AuditLine | TrialLine | CombineLine]
+    for keyed in (rows.ideas, rows.probes, rows.audits, rows.trials, rows.combines):
         for r in keyed:
             if r.arm not in CONFIGS or r.repo not in E1_REPOS:
                 raise ValueError(f"{r.repo} {r.arm!r}: not an X1 arm on one of the "
@@ -342,6 +385,12 @@ def load_rows(paths: Sequence[Path]) -> Rows:
     ]
     if twice:
         raise ValueError(f"{ROW_EXPERIMENT}: {' '.join(twice[0])} twice")
+    repos = [p.repo for p in rows.pool_sets] + [p.repo for p in rows.pool_results]
+    if bad := [r for r in repos if r not in E1_REPOS]:
+        raise ValueError(f"{bad[0]}: a pooled row's library is not one of the 8")
+    pools = Counter((p.repo, p.marker) for p in rows.pool_results)
+    if again := [k for k, n in pools.items() if n > 1]:
+        raise ValueError(f"{RESULT_EXPERIMENT}: {' '.join(again[0])} twice")
     return dataclasses.replace(rows, dedupe=scores[0].score)
 
 
@@ -460,18 +509,67 @@ class Cost:
 
 
 @dataclass(frozen=True)
-class Marked:
-    feasible: int  # in its grader's top ``MARKER_TOP``, grader passed O37
-    graded: int
-    feasible_unvalidated: int  # the same for a grader that failed O37
-    graded_unvalidated: int
+class Pool:
+    marker: str
+    model: str
+    validated: bool
+    members: dict[str, IdeaLine]  # by id
+    apart: tuple[IdeaLine, ...]  # the marker's own model's: not ranked
+    top: tuple[str, ...] | None  # None: the tournament stopped
+    sets: tuple[PoolSetLine, ...]  # by round and set
+    requests: int
+    rounds: int
+
+    def counts(self) -> dict[str, int] | None:
+        if self.top is None:
+            return None
+        found = Counter(self.members[x].arm for x in self.top)
+        return {c: found[c] for c in POOL_CONFIGS}
 
 
-def _marked(graded: Sequence[tuple[IdeaLine, bool, bool]]) -> Marked:
-    def part(ok: bool) -> list[bool]:
-        return [f for _, f, v in graded if v is ok]
+def pool_of(
+    p: PoolResultLine,
+    sets: Iterable[PoolSetLine],
+    at: Mapping[tuple[str, str, str, int], IdeaLine],
+) -> Pool:
+    """One ranking, refused when its rows break O39, O40 or O41's rules."""
 
-    return Marked(sum(part(True)), len(part(True)), sum(part(False)), len(part(False)))
+    def idea(k: PoolKey) -> IdeaLine:
+        if (i := at.get((p.repo, k.arm, k.label, k.position))) is None:
+            raise ValueError(f"{p.repo} {k.arm} {k.label} #{k.position}: a pooled "
+                             "idea with no ideas-idea row")  # fmt: skip
+        if i.lane not in LENSES or i.proposal or not i.returned:
+            raise ValueError(f"{p.repo}: {i.title!r} ({i.arm}, {i.lane}) is not a "
+                             "lens-lane idea of X1-0 to X1-3's results")  # fmt: skip
+        return i
+
+    def say(i: IdeaLine, why: str) -> ValueError:
+        return ValueError(
+            f"{p.repo} {p.marker}: {i.title!r} ({i.arm}, {i.model}) {why}"
+        )
+
+    members = {m.id: idea(m) for m in p.members}
+    apart = tuple(idea(k) for k in p.apart)
+    if p.validated and (own := [i for i in members.values() if i.model == p.model]):
+        raise say(own[0], "is ranked, but written by the marker's own model (O39)")
+    if other := [i for i in apart if i.model != p.model]:
+        raise say(other[0], "is listed apart but not the marker's model")
+    mine = tuple(sorted((s for s in sets if (s.repo, s.marker) == (p.repo, p.marker)),
+                        key=lambda s: (s.round, s.set)))  # fmt: skip
+    first = sorted(x for s in mine if s.round == 1 for x in s.ids)
+    if not mine:  # no request: a pool of one idea or none (a set of one is not sent)
+        complete, expected = len(members) <= 1, tuple(sorted(members))[:MARKER_TOP]
+    else:
+        last = mine[-1]
+        complete = last.of == 1 and last.order is not None
+        expected = (last.order or ())[:MARKER_TOP]
+    if (not set(first) <= set(members) or (p.top is not None) != complete
+            or (complete and (p.top != expected
+                              or (mine and first != sorted(members))))):  # fmt: skip
+        raise ValueError(f"{p.repo} {p.marker}: the top {MARKER_TOP} is not the "
+                         "final set's, or round 1's sets are not the pool")  # fmt: skip
+    return Pool(p.marker, p.model, p.validated, dict(sorted(members.items())), apart,
+                p.top, mine, p.requests, p.rounds)  # fmt: skip
 
 
 @dataclass(frozen=True)
@@ -486,7 +584,7 @@ class Report:
     deltas: dict[tuple[str, str], tuple[float | None, float | None]]
     costs: dict[str, Cost]
     sample: tuple[IdeaLine, ...]
-    marked: dict[str, tuple[Marked, Marked]]  # (lens lanes, all lanes)
+    pools: dict[str, tuple[Pool, ...]]  # by library: each ranking
 
 
 def _order(i: IdeaLine) -> tuple[object, ...]:
@@ -600,19 +698,9 @@ def report_of(results: Sequence[Path], e1_dir: Path = E1_DIR) -> Report:
             math.fsum(c.seeded_cost_usd for c in runs), wins, usd / wins if wins else None,
         )  # fmt: skip
     at = {(i.repo, i.arm, i.label, i.position): i for i in rows.ideas}
-    graded: list[tuple[IdeaLine, bool, bool]] = []  # idea, feasible, validated
-    for row in (x for x in rows.markers if x.scores is not None):  # None: no order
-        for one, takes, score in zip(
-            row.shown, row.grades, row.scores or (), strict=True
-        ):
-            if not takes:
-                continue
-            if (idea := at.get((row.repo, row.arm, one.label, one.position))) is None:
-                raise ValueError(f"{row.repo} {row.arm} {one.label} #{one.position}: "
-                                 "a graded idea with no ideas-idea row")  # fmt: skip
-            graded.append((idea, score > len(row.shown) - MARKER_TOP, row.validated))
-    marked = {a: (_marked([g for g in mine if g[0].lane in LENSES]), _marked(mine))
-              for a in CONFIGS if (mine := [g for g in graded if g[0].arm == a])}  # fmt: skip
+    pools: dict[str, list[Pool]] = defaultdict(list)
+    for p in sorted(rows.pool_results, key=lambda p: p.repo):  # each: as recorded
+        pools[p.repo].append(pool_of(p, rows.pool_sets, at))
     return Report(
         rows=rows, facts=facts, measures={a: measures(a) for a in CONFIGS},
         proposals=dict(sorted(Counter(i.relaxes.value for i in rows.ideas
@@ -620,7 +708,8 @@ def report_of(results: Sequence[Path], e1_dir: Path = E1_DIR) -> Report:
         overlap=tuple(clusters), square=square,
         margins={a: tuple(sorted(v for i, v in over.items() if i.arm == a))
                  for a in CONFIGS},
-        deltas=deltas, costs=costs, sample=owner_sample(scored), marked=marked,
+        deltas=deltas, costs=costs, sample=owner_sample(scored),
+        pools={repo: tuple(found) for repo, found in pools.items()},
     )  # fmt: skip
 
 
@@ -712,31 +801,88 @@ def _library_file(r: Report, repo: str, arm: str) -> str:
     ])  # fmt: skip
 
 
-def _marker_section(r: Report) -> list[str]:
-    def cell(feasible: int, graded: int, tag: str = "") -> str:
-        return f"{feasible}/{graded}{tag}" if graded else "-"  # "-": no such grade
+def _ideas(found: Iterable[tuple[str | None, IdeaLine]]) -> list[list[object]]:
+    return [[*(() if k is None else (k,)), i.title, i.arm, i.lane, i.model or "-"]
+            for k, i in found]  # fmt: skip
 
-    def cells(m: Marked) -> list[str]:
-        return [cell(m.feasible, m.graded),
-                cell(m.feasible_unvalidated, m.graded_unvalidated, " unvalidated")]  # fmt: skip
 
-    if not r.marked:
-        return ["No marker grade recorded (no ideas-slice-marker row): no "
-                "marker-feasible count."]  # fmt: skip
+def _ranking(p: Pool) -> list[str]:
+    tag = "validated" if p.validated else "unvalidated"
+
+    def advanced(s: PoolSetLine) -> str:
+        if s.order is None:
+            return f"no order ({s.error or 'no reply'}), the tournament stopped"
+        return ", ".join(s.advanced) if s.of > 1 else f"final, the top {MARKER_TOP}"
+
+    record = [[s.round, s.set, ", ".join(s.shown), s.seed,
+               "-" if s.order is None else ", ".join(s.order), advanced(s)]
+              for s in p.sets]  # fmt: skip
+    top = [[n, *row] for n, row in enumerate(
+        _ideas((x, p.members[x]) for x in p.top or ()), 1)]  # fmt: skip
     return [
-        f"An idea its grader (the marker that did not write it) placed in the top "
-        f"{MARKER_TOP} of its shown set, of the ideas graded (the slice's sets). "
-        "The headline counts lens-lane ideas only: S1, the leap and the "
-        "rule-relaxing lanes are left out (O39). The headline holds validated "
-        "grades only; Opus 5's grades of Opus 5.5's ideas (Opus 5.5's leap and "
-        "X1-1's Opus 5.5 lens) sit in their own columns, marked unvalidated "
-        "(Opus 5 failed O37).", "",
-        *_table(("configuration", "lens lanes (headline, validated grades)",
-                 "lens lanes graded by a marker that failed O37 (unvalidated)",
-                 "all lanes (validated)", "all lanes (unvalidated)"),
-                [[a, *cells(lens), *cells(every)]
-                 for a, (lens, every) in r.marked.items()]),
+        f"#### Ranked by {p.marker} ({p.model}), {tag}: {len(p.members)} ideas, "
+        f"{p.requests} requests in {p.rounds} rounds", "",
+        *(_table(("rank", "id", "title", "configuration", "lane", "model"), top)
+          if p.top is not None else ["The tournament stopped: no top 3."]), "",
+        "Every set (ids in the order shown; the marker's order, most likely first):",
+        "", *_table(("round", "set", "shown", "seed", "the marker's order",
+                     "advanced"), record), "",
+        "The pool:", "",
+        *_table(("id", "title", "configuration", "lane", "model"),
+                _ideas(p.members.items())), "",
+        f"Not ranked (written by {p.model}, the marker's own model):", "",
+        *(_table(("title", "configuration", "lane", "model"),
+                 _ideas((None, i) for i in p.apart)) if p.apart else ["none"]), "",
     ]  # fmt: skip
+
+
+def _marker_section(r: Report) -> list[str]:
+    if not r.pools:
+        return ["No pooled ranking recorded (no ideas-pool-result row): no "
+                "marker-feasible count."]  # fmt: skip
+    every = [p for found in r.pools.values() for p in found]
+    shown = [len(s.ids) for p in every for s in p.sets]
+    failed = sorted({p.marker for p in every if not p.validated})
+    size = (f"Every request showed {min(shown)} to {max(shown)} ideas, at most "
+            f"{SET_SIZE}: the set size the marker was validated on (Vb's 48 scored "
+            f"sets: {VB_SETS[0]} to {VB_SETS[1]} ideas, {VB_SETS[2]} on average)."
+            if shown else "No set request was sent.")  # fmt: skip
+
+    def row(repo: str, ps: Sequence[Pool]) -> list[object]:
+        p, done = ps[0], [x.counts() for x in ps]
+        tag = "" if p.validated else " unvalidated"
+        cells = (["-"] * len(POOL_CONFIGS) if None in done else
+                 [f"{sum(c[a] for c in done if c)}{tag}" for a in POOL_CONFIGS])  # fmt: skip
+        return [repo, f"{p.marker} ({'validated' if p.validated else 'unvalidated'})",
+                *cells, sum(len(x.members) for x in ps), sum(len(x.apart) for x in ps),
+                sum(x.requests for x in ps), max(x.rounds for x in ps)]  # fmt: skip
+
+    by_marker = _grouped(every, lambda p: p.marker)
+    out = [
+        "Per library, every configuration's lens-lane ideas (X1-0 to X1-3, their "
+        "results; never S1, the leap or the rule-relaxing lanes) form one pool, "
+        "ranked by a tournament, not one ranking of the whole pool (O41): in "
+        "sorted idea-id order (an id hashed from the idea's row, carrying no "
+        f"configuration, lane or model) the pool is split into ceil(n/{SET_SIZE}) "
+        "sets as equal as possible; each set is ranked in one blind request "
+        "(titles, class and the library's hot code, shown in an order shuffled by "
+        f"a recorded seed); the top {ipool.ADVANCE} of each set advance, round after "
+        "round, until "
+        "the advancing ideas fit one set, whose ranking gives the top "
+        f"{MARKER_TOP}. {size} The count is how many of that top {MARKER_TOP} each "
+        "configuration supplied (O40). The validated marker (Vb's verdict) never "
+        "ranks its own model's ideas (O39): those are listed apart, not ranked. "
+        "The other candidate ranks the whole pool, its counts marked unvalidated"
+        + (f" ({', '.join(failed)} failed O37)" if failed else "")
+        + ", so X1-1 has a comparable number.", "",
+        *_table(("library", "ranked by", *POOL_CONFIGS, "pooled",
+                 "not ranked (the marker's own model)", "requests", "rounds"),
+                [*(row(repo, (p,)) for repo, ps in r.pools.items() for p in ps),
+                 *(row("all libraries", ps) for ps in by_marker.values())]),
+    ]  # fmt: skip
+    for repo, ps in r.pools.items():
+        out += ["", f"### {repo}", "", *(x for p in ps for x in _ranking(p))]
+    return out
 
 
 def _measures_file(r: Report, show_raw: bool, verdict: str) -> str:
@@ -773,7 +919,7 @@ def _measures_file(r: Report, show_raw: bool, verdict: str) -> str:
         "slice's USD is its engine runs', D64's seeded calls included.", "",
         *_table(("configuration", "ideas USD", "slice USD", "seeded calls",
                  "seeded USD", "wins", "slice USD per win"), costs), "",
-        "## Marker-feasible ideas (6.2, O39)", "", *_marker_section(r), "",
+        "## Marker-feasible ideas (6.2, O40, O41)", "", *_marker_section(r), "",
     ])  # fmt: skip
 
 

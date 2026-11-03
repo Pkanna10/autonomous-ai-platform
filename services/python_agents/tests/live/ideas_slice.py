@@ -44,8 +44,15 @@ records), ``discovery.run_engine`` (every corpus guard). Caps: a trial
 ``TRIAL_USD`` (E2's worst case), the markers' run each needed request's
 worst case; a dispatch's worst case stays under ``X1_FUSE_USD``.
 
+O40/O41: before its loops, each library's lens-lane pool (X1-0 to X1-3) is
+ranked by ``ideas_pool.rank_library``'s tournament (the one implementation
+the ``ideas-pool`` suite runs on the other four libraries), on the markers'
+one clone of the hot code; its worst case (``POOL_LIBRARY_USD``, priced on
+``ideas_pool.POOL_BOUND``) is in the need.
+
 Recorded, never asserted (``$LIVE_RESULTS_PATH``): every marker request
-(``ideas-slice-marker``), per trial its idea in full, its source keys
+(``ideas-slice-marker``), every pooled set and ranking (``ideas-pool-set``,
+``ideas-pool-result``), per trial its idea in full, its source keys
 (repo, arm, label, position: the ``ideas-idea`` row's), selection, verdict,
 gain, floor and op counts (``ideas-slice-trial``), and per (configuration,
 library) the combine summary (``ideas-slice-combine``). Model-derived text
@@ -56,7 +63,7 @@ from __future__ import annotations
 
 import functools
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, Literal
@@ -74,15 +81,16 @@ from autonomous_ai_agents.orchestrator.nodes import op_count_cell
 
 from . import discovery_oss as dx
 from . import ideas_marker as im
+from . import ideas_pool as ipool
 from . import ideas_probe as ip
 from .conftest import LiveRun, StartLive, redact_keys, suite_cap
 from .corpus import CorpusOutcome, Loop
 from .discovery import OPUS, ceil_usd, run_engine
 from .discovery_io import ResultsSink
 from .discovery_oss import OSS_TRIAL_CAP_USD, start_arm_loop
-from .ideas_marker import hot_code
+from .ideas_pool import MARKER_TITLE_MAX, IdeaRow, check_verdict
 from .ideas_probe import X1_FUSE_USD, _chunks, _fit, _Strict
-from .oss import PRODUCTION, GitPolicy, OssRepo, clone_pinned
+from .oss import PRODUCTION, GitPolicy, OssRepo
 
 SLICE_CONFIGS: Final = ("X1-0", "X1-1", "X1-2", "X1-3")
 SLICE_REPOS: Final = ("sqlparse", "pyparsing", "tomli", "sortedcontainers")
@@ -95,6 +103,7 @@ SHOWN_MAX: Final = 10  # Vb validated orders of at most 10 ideas (oss-ab's n)
 DISPATCH_REPOS: Final = 2  # two dispatches of two libraries (spec 6.3)
 TRIAL_USD: Final = OSS_TRIAL_CAP_USD  # E2's per-trial worst case, 2.50
 MARKER_LIBRARY_USD: Final = ceil_usd(len(SLICE_CONFIGS) * im.set_usd())
+POOL_LIBRARY_USD: Final = ipool.library_usd()  # O41's tournament at its bound
 LOOP_MINUTES: Final = 9  # L2b: 42 min / 10 OSS loops of up to 3 trials, x2
 CLONE_MINUTES: Final = 1
 JOB_MINUTES: Final = 150  # ci.yml's ideas-slice timeout
@@ -124,28 +133,17 @@ class SlicePlan:
     marker: Path | None = None  # Vb's results file
 
     def library_cap(self) -> float:
-        return ceil_usd(MARKER_LIBRARY_USD + len(SLICE_CONFIGS) * loop_cap(TOP))
+        return ceil_usd(MARKER_LIBRARY_USD + POOL_LIBRARY_USD
+                        + len(SLICE_CONFIGS) * loop_cap(TOP))  # fmt: skip
 
     def minutes(self) -> int:
         asks = len(im.MARKERS) * im.REQUEST_MINUTES
-        return len(self.repos) * (
-            CLONE_MINUTES + len(SLICE_CONFIGS) * (asks + LOOP_MINUTES)
-        )
+        pooled = CLONE_MINUTES + ipool.library_minutes()
+        return len(self.repos) * (pooled + len(SLICE_CONFIGS) * (asks + LOOP_MINUTES))
 
 
 def slice_need(plan: SlicePlan) -> float:
     return len(plan.repos) * plan.library_cap()
-
-
-def _paths(environ: Mapping[str, str], name: str, what: str) -> tuple[Path, ...]:
-    raw = [x for x in environ.get(name, "").split(",") if x]
-    found = tuple(Path(x) if Path(x).is_absolute() else ip.SERVICE_DIR / x for x in raw)
-    missing = [str(p) for p in found if not p.is_file()]
-    if missing:
-        raise ValueError(f"{name}: no {what} at {missing[0]!r}")
-    if len(set(found)) != len(found):
-        raise ValueError(f"{name}: a results file named twice")
-    return found
 
 
 def check_fuse(plan: SlicePlan) -> None:
@@ -163,11 +161,11 @@ def slice_plan(environ: Mapping[str, str]) -> SlicePlan:
         raise ValueError(f"{REPOS_ENV}: name the dispatch's libraries ({SLICE_REPOS})")
     if len(names) > DISPATCH_REPOS:
         raise ValueError(f"{REPOS_ENV}: at most {DISPATCH_REPOS} libraries a dispatch")
-    marker = _paths(environ, MARKER_ENV, "marker results")
+    marker = ipool.paths(environ, MARKER_ENV, "marker results")
     if len(marker) > 1:
         raise ValueError(f"{MARKER_ENV}: Vb's one results file")
     plan = SlicePlan(tuple(r for r in SLICE_LIBRARIES if r.name in names),
-                     _paths(environ, IDEAS_ENV, "X1 results"), (*marker, None)[0])  # fmt: skip
+                     ipool.paths(environ, IDEAS_ENV, "X1 results"), (*marker, None)[0])  # fmt: skip
     check_fuse(plan)
     need, cap = slice_need(plan), suite_cap(environ)
     if cap < need:
@@ -195,25 +193,6 @@ def check_judges(loop: Loop) -> None:
 # ---------------------------------------------------------------------------
 
 
-class IdeaRow(_Strict):
-    experiment: Literal["ideas-idea"]
-    repo: str
-    arm: str
-    lane: str
-    label: str
-    model: str
-    position: int
-    title: str
-    change: str
-    returned: bool
-    proposal: bool
-    relaxes: str | None
-    mechanism: str | None
-    cells: tuple[str, ...]
-    path: str | None
-    target: dict[str, int] | None
-
-
 class _AuditRow(_Strict):
     experiment: Literal["ideas-audit"]
     repo: str
@@ -229,27 +208,10 @@ class _AuditRow(_Strict):
     duplicate_of: str | None
 
 
-class _ReplyRow(_Strict):
-    experiment: Literal["ideas-reply"]
-    repo: str
-    arm: str
-    role: str
-    label: str
-    counted: int
-    sent: bool
-    stop_reason: str | None
-    usage: tuple[int, ...]
-    chars: int
-    shown: int
-    seconds: float
-    chunks: tuple[str, ...]
-
-
-_KINDS: Final[Mapping[str, type[IdeaRow | _AuditRow | _ReplyRow]]] = {
+_KINDS: Final[Mapping[str, type[_Strict]]] = {
     ip.IDEA_EXPERIMENT: IdeaRow, ip.AUDIT_EXPERIMENT: _AuditRow,
-    ip.REPLY_EXPERIMENT: _ReplyRow,
+    ip.REPLY_EXPERIMENT: ipool.ReplyRow,
 }  # fmt: skip
-Row = IdeaRow | _AuditRow | _ReplyRow
 
 
 @dataclass(frozen=True)
@@ -283,16 +245,13 @@ def families(audits: Mapping[str, _AuditRow]) -> dict[str, int]:
     return {i: _number(find(i)) for i in audits}
 
 
-def _library(repo: str, rows: Sequence[Row]) -> dict[tuple[str, str], tuple[Idea, ...]]:
+def _library(
+    repo: str, rows: Sequence[_Strict]
+) -> dict[tuple[str, str], tuple[Idea, ...]]:
     audits = {a.id: a for a in rows if isinstance(a, _AuditRow)}
     if not audits:
         raise ValueError(f"{repo}: no ideas-audit rows: newness is unknown")
-    texts: dict[tuple[str, str], str] = {}
-    for r in rows:
-        if isinstance(r, _ReplyRow) and r.sent and r.role in ("lane", "leap"):
-            if (r.arm, r.label) in texts:
-                raise ValueError(f"{repo} {r.arm} {r.label}: two sent replies")
-            texts[(r.arm, r.label)] = "".join(r.chunks)
+    texts = ipool.reply_texts(repo, rows)
     family = families(audits)
     taken = {family[i] for i, a in audits.items() if a.arm == ip.ARM_A.key}
     by_key: dict[tuple[str, str, str], str | None] = {}
@@ -304,13 +263,7 @@ def _library(repo: str, rows: Sequence[Row]) -> dict[tuple[str, str], tuple[Idea
         aid = by_key.get((row.arm, row.lane, row.title))
         if row.arm not in found or not row.returned or row.proposal or aid is None:
             continue
-        items = ip.reply_ideas(texts.get((row.arm, row.label), ""), ip._no_text)
-        if not 0 < row.position <= len(items) or (
-            redact_keys(items[row.position - 1][0].title) != row.title
-        ):
-            raise ValueError(f"{repo} {row.arm} {row.label} #{row.position}: "
-                             "not the idea its reply holds")  # fmt: skip
-        item = items[row.position - 1][0]
+        item = ipool.reply_item(row, texts)
         if audits[aid].auditor is not None and item.change_class == "efficiency":
             found[row.arm].append(Idea(row, item, _number(aid), family[aid]))
     out: dict[tuple[str, str], tuple[Idea, ...]] = {}
@@ -328,19 +281,7 @@ def load_ideas(
     paths: Sequence[Path], repos: Sequence[str]
 ) -> dict[tuple[str, str], tuple[Idea, ...]]:
     """The eligible ideas per (library, configuration), in pool order."""
-    rows: dict[str, list[Row]] = {}
-    owner: dict[str, Path] = {}
-    for path in paths:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            kind = next((k for k in _KINDS if f'"experiment": "{k}"' in line), None)
-            if kind is None:
-                continue
-            row = _KINDS[kind].model_validate_json(line)
-            if owner.setdefault(row.repo, path) != path:
-                raise ValueError(
-                    f"{row.repo}: recorded in {owner[row.repo]} and {path}"
-                )
-            rows.setdefault(row.repo, []).append(row)
+    rows = ipool.read_rows(paths, _KINDS)
     out: dict[tuple[str, str], tuple[Idea, ...]] = {}
     for repo in repos:
         out.update(_library(repo, rows.get(repo, [])))
@@ -364,37 +305,8 @@ def grader(idea: Idea, order: Sequence[im.Marker]) -> im.Marker | None:
     return next((m for m in order if m.model != idea.row.model), None)
 
 
-class _Verdict(_Strict):  # Vb's ``ideas-marker-verdict`` row, as ``finish`` writes it
-    experiment: Literal["ideas-marker-verdict"]
-    chosen: str | None
-    reason: str
-    passed: tuple[str, ...]
-    baseline_ties: tuple[str, ...]
-    positives: int
-    comparable: int
-    generator: dict[str, float | int | None]
-    bar: dict[str, float | int]
-
-
-def check_verdict(path: Path, decision: im.Decision) -> im.Decision:
-    """The scorer's decision, refused when Vb's verdict row says otherwise."""
-    rows = [_Verdict.model_validate_json(x)
-            for x in path.read_text(encoding="utf-8").splitlines()
-            if f'"experiment": "{im.VERDICT_EXPERIMENT}"' in x]  # fmt: skip
-    if len(rows) > 1:
-        raise ValueError(f"{path}: {im.VERDICT_EXPERIMENT} row twice")
-    if rows and (rows[0].chosen, rows[0].passed) != (decision.chosen, decision.passed):
-        raise ValueError(f"{path}: its {im.VERDICT_EXPERIMENT} row disagrees with "
-                         "the score of its reply rows")  # fmt: skip
-    return decision
-
-
 def shown(ideas: Sequence[Idea]) -> tuple[Idea, ...]:
     return tuple(ideas[:SHOWN_MAX])
-
-
-MARKER_TITLE_MAX: Final = 300
-"""Vb's ``RankRow.title`` bound; a longer lane title is shown clipped."""
 
 
 def rank_set(repo: str, config: str, ideas: Sequence[Idea]) -> im.RankSet:
@@ -494,6 +406,7 @@ class SliceRecorder:
     base: Settings = field(default_factory=lambda: settings)
     ideas: dict[tuple[str, str], tuple[Idea, ...]] | None = None
     decision: im.Decision | None = None
+    pools: dict[str, tuple[ipool.PoolIdea, ...]] | None = None  # O41's, by library
 
     def __post_init__(self) -> None:
         check_engine(self.base)
@@ -501,11 +414,15 @@ class SliceRecorder:
             raise ValueError(f"{IDEAS_ENV}: name X1's results files")
         if self.decision is None and self.plan.marker is None:
             raise ValueError(f"{MARKER_ENV}: name Vb's results file")
+        names = [r.name for r in self.plan.repos]
         if self.ideas is None:
-            self.ideas = load_ideas(self.plan.ideas, [r.name for r in self.plan.repos])
+            self.ideas = load_ideas(self.plan.ideas, names)
+        if self.pools is None:
+            self.pools = ipool.load_pools(self.plan.ideas, names)
         if self.decision is None and self.plan.marker is not None:
             marker = self.plan.marker
             self.decision = check_verdict(marker, im.score_results(marker)[1])
+        ipool.check_priced(self.pools or {}, self.decision or NO_DECISION)
 
     @property
     def order(self) -> tuple[im.Marker, ...]:
@@ -596,8 +513,8 @@ class SliceRecorder:
 # ---------------------------------------------------------------------------
 
 
-def _ask(recorder: SliceRecorder, repo: OssRepo, live: StartLive, root: Path,
-         policy: GitPolicy, base: Settings) -> dict[str, dict[str, im.MarkerReply]]:  # fmt: skip
+def _ask(recorder: SliceRecorder, repo: OssRepo, live: StartLive,
+         hot: Callable[[], im.HotCode], base: Settings) -> dict[str, dict[str, im.MarkerReply]]:  # fmt: skip
     """Each configuration's shown set once to each grader it needs."""
     order = recorder.order
     needs = {c: tuple(dict.fromkeys(g for i in shown(recorder.eligible(repo.name, c))
@@ -608,13 +525,10 @@ def _ask(recorder: SliceRecorder, repo: OssRepo, live: StartLive, root: Path,
     if cap == 0:
         return replies
     run = live(cap)
-    dest = root / f"hot-{repo.name}"
-    clone_pinned(repo.url, repo.tag, repo.commit, dest, policy=policy)
-    hot = hot_code(repo, dest)
     for c in SLICE_CONFIGS:
         ideas = shown(recorder.eligible(repo.name, c))
         for m in needs[c]:
-            r = im.ask(m, run, rank_set(repo.name, c, ideas), hot, base=base)
+            r = im.ask(m, run, rank_set(repo.name, c, ideas), hot(), base=base)
             recorder.marker(repo.name, c, r, ideas)
             replies[c][m.key] = r
     assert len(run.capture.messages()) == len(run.records)
@@ -638,9 +552,14 @@ def run_library(
     policy: GitPolicy = PRODUCTION,
     base: Settings = settings,
 ) -> None:
-    """The markers' run, then one engine loop per configuration's picks."""
+    """The markers' run, the pooled tournament (O41) on the same clone's hot
+    code, then one engine loop per configuration's picks."""
     check_engine(base)
-    replies = _ask(recorder, repo, live, root, policy, base)
+    hot = ipool.hot_of(repo, root, policy)
+    replies = _ask(recorder, repo, live, hot, base)
+    ipool.rank_library(repo.name, (recorder.pools or {}).get(repo.name, ()),
+                       recorder.decision or NO_DECISION, live=live, hot=hot,
+                       sink=recorder.sink, base=base)  # fmt: skip
     for c in SLICE_CONFIGS:
         chosen = picks(recorder.eligible(repo.name, c), recorder.order, replies[c])
         if not chosen:

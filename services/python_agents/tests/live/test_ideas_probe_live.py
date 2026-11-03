@@ -9,7 +9,8 @@ fresh clone at the same head), each arm of ``$LIVE_IDEAS_ARMS`` (``count``
 alone, ``X1``, or distinct of A-E, ``C-low``, ``C-high`` and X1's
 configurations; default A-E) generating once from those facts, and with an
 E1 or X1 arm one auditor pass. X1 (Vd) reads E1's facts and Va's recorded
-views (``$LIVE_IDEAS_VIEWS``), never building a view live.
+views (``$LIVE_IDEAS_VIEWS``), never building a view live; ``X1-1`` (O42)
+re-runs X1-1 beside arm A and the auditor on X1 run 1's four libraries.
 
 The plan is read in the module fixture, before any test spends: one past
 the 150 USD ceiling, the job's minutes or (X1) the 80 USD fuse, recorded
