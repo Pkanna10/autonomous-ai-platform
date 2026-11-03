@@ -34,8 +34,13 @@ No model is called here; ``render_data_block`` builds the cached prefix (D59).
 from __future__ import annotations
 
 import ast
+import csv
+import io
+import json
+import math
 import posixpath
 import re
+import tomllib
 import unicodedata
 import warnings
 from ast import parse as _ast_parse
@@ -739,6 +744,18 @@ USES_MAX: Final = 30
 INPUT_FILES_MAX: Final = 4
 INPUT_SAMPLE_BYTES: Final = 64 * 1024
 INPUT_HEAD_LINES: Final = 5
+INPUT_SCHEMA_DEPTH: Final = 6
+INPUT_SCHEMA_POSITIONS: Final = 8
+INPUT_SCHEMA_VARIANTS: Final = 3
+INPUT_SCHEMA_COLUMNS: Final = 8
+_FORMATS: Final[Mapping[str, str]] = {
+    ".json": "json", ".jsonl": "jsonl", ".ndjson": "jsonl", ".csv": "csv",
+    ".tsv": "tsv", ".toml": "toml",
+}  # fmt: skip
+_INT: Final = re.compile(r"[+-]?[0-9]+")
+_CHAR_CLASSES: Final[Mapping[str, str]] = {
+    "L": "letter", "N": "number", "P": "punctuation", "S": "symbol"
+}  # fmt: skip
 FACT_TEXT_CHARS: Final = 200
 HISTORY_WALK_MAX: Final = 400
 HISTORY_COMMITS_MAX: Final = 20
@@ -1068,8 +1085,10 @@ def _inputs(
     source: ViewSource, tracked: frozenset[str], notes: list[str]
 ) -> LaneView | None:
     """The workloads' real inputs: each command and inputs, and a summary
-    and head of every tracked file they name (data, never a script). A
-    secret-like or frozen quality file is never read."""
+    and schema of every tracked file they name (data, never a script), with
+    its screened head only outside S0's protected set (G2b: a lane that saw
+    a benchmark's literal input could specialise for it). A secret-like or
+    frozen quality file is never read."""
     found = _anchor(source, notes)
     if found is None:
         return None
@@ -1096,8 +1115,10 @@ def _inputs(
                 paths.append(path)
     count_note(notes, len(paths) - INPUT_FILES_MAX,
                f"input file(s) not read (limit {INPUT_FILES_MAX})")  # fmt: skip
+    patterns = (*DEFAULT_PROTECTED_PATTERNS, *source.protected, *source.read_deny)
     for path in paths[:INPUT_FILES_MAX]:
-        facts.append(f"input file: {data_line(_input_summary(source, path, notes))}")
+        guarded = any(matches_pattern(path, p) for p in patterns)
+        facts += _input_summary(source, path, notes, guarded=guarded)
     return LaneView("input_shape", found[1], tuple(facts))
 
 
@@ -1109,27 +1130,206 @@ def _under(working_dir: str, value: str) -> str | None:
 
 
 def _input_summary(
-    source: ViewSource, path: str, notes: list[str]
-) -> dict[str, object]:
+    source: ViewSource, path: str, notes: list[str], *, guarded: bool
+) -> list[str]:
+    """The ``input file`` fact (its head only when not ``guarded``) and,
+    for text, the ``input schema`` fact: no line, value or name in it."""
     try:
         found = read_text(source.reader, source.commit, path, cap=INPUT_SAMPLE_BYTES)
     except GitError:
         notes.append(f"{path}: unreadable in git")
-        return {"path": path, "kind": "unreadable"}
+        return [f"input file: {data_line({'path': path, 'kind': 'unreadable'})}"]
     if not isinstance(found, ReadText):
-        return {"path": path, "kind": found}
-    lines = found.text.replace("\r\n", "\n").split("\n")
+        return [f"input file: {data_line({'path': path, 'kind': found})}"]
+    text = found.text.replace("\r\n", "\n")
+    lines = text.split("\n")
     if lines[-1] == "":
         lines.pop()
     sizes = [len(line) for line in lines]
-    return {
+    summary: dict[str, object] = {
         "path": path, "bytes": len(found.text.encode()), "cut": found.cut,
         "lines": len(lines), "blank_lines": sum(not line.strip() for line in lines),
         "distinct_lines": len(set(lines)), "longest_line": max(sizes, default=0),
         "mean_line": round(sum(sizes) / len(sizes), 1) if sizes else 0.0,
         "ascii": found.text.isascii(),
-        "head": [_clip(line) for line in _screen(lines[:INPUT_HEAD_LINES])[0]],
     }  # fmt: skip
+    if guarded:
+        summary["protected"] = True
+    else:
+        summary["head"] = [_clip(line) for line in _screen(lines[:INPUT_HEAD_LINES])[0]]
+    schema = _schema(path, text, lines, found.cut, notes)
+    return [f"input file: {data_line(summary)}", f"input schema: {data_line(schema)}"]
+
+
+def _schema(
+    path: str, text: str, lines: list[str], cut: bool, notes: list[str]
+) -> dict[str, object]:
+    """The format by extension (else JSON when the whole text parses as it),
+    then its shape; a parse failure fails closed to the text shape."""
+    named = _FORMATS.get(posixpath.splitext(path)[1].casefold())
+    fmt = named or ("json" if text.lstrip()[:1] in ("{", "[") else "text")
+    try:
+        body = _parsed(fmt, text, lines[:-1] if cut else lines, cut)
+    except (ValueError, RecursionError, MemoryError, csv.Error):
+        body = None
+    if body is None:
+        if named:
+            notes.append(f"{path}: not read as {fmt} (malformed or cut at the "
+                         "sample cap); its text shape is shown")  # fmt: skip
+        tokens = [line.split() for line in lines]
+        fmt, body = "text", {
+            "tokens_per_line": _spread([len(t) for t in tokens]),
+            "distinct_tokens": len({word for t in tokens for word in t}),
+        }  # fmt: skip
+    chars = Counter(
+        "space"
+        if c.isspace()
+        else _CHAR_CLASSES.get(unicodedata.category(c)[0], "other")
+        for c in text
+    )
+    names = ("letter", "number", "space", "punctuation", "symbol", "other")
+    return {"path": path, "format": fmt, **body,
+            "characters": {k: chars[k] for k in names}}  # fmt: skip
+
+
+def _parsed(
+    fmt: str, text: str, rows: list[str], cut: bool
+) -> dict[str, object] | None:
+    """``rows``: the lines with a cut last line dropped; ``None`` when the
+    format needs the whole text and it is cut, or it is plain text."""
+    if fmt == "jsonl":
+        records = [json.loads(row) for row in rows if row.strip()]
+        return {"records": len(records), **_tree(records),
+                "structure": _clip(_variants([_sig(r, 1) for r in records]))}  # fmt: skip
+    if fmt in ("csv", "tsv"):
+        return _table("\n".join(rows), "\t" if fmt == "tsv" else ",")
+    if cut or fmt == "text":
+        return None
+    root = json.loads(text) if fmt == "json" else tomllib.loads(text)
+    return {**_tree([root]), "structure": _clip(_sig(root, 1))}
+
+
+def _type_of(value: object) -> str:
+    if value is None:
+        return "null"
+    names = ((bool, "bool"), (int, "int"), (float, "float"), (str, "str"),
+             (dict, "object"), (list, "array"))  # fmt: skip
+    found = next((name for kind, name in names if isinstance(value, kind)), None)
+    return found or type(value).__name__  # TOML's datetime, date and time
+
+
+def _sig(value: object, depth: int) -> str:
+    """Types by position, never a key: ``object{n}[...]``, ``array<a|b>``."""
+    if isinstance(value, dict):
+        if depth > INPUT_SCHEMA_DEPTH:
+            return "object{...}"
+        parts = [
+            _sig(v, depth + 1) for v in list(value.values())[:INPUT_SCHEMA_POSITIONS]
+        ]
+        if len(value) > INPUT_SCHEMA_POSITIONS:
+            parts.append(f"+{len(value) - INPUT_SCHEMA_POSITIONS}")
+        return f"object{{{len(value)}}}[{','.join(parts)}]"
+    if isinstance(value, list):
+        if depth > INPUT_SCHEMA_DEPTH:
+            return "array<...>"
+        return f"array<{_variants([_sig(v, depth + 1) for v in value])}>"
+    return _type_of(value)
+
+
+def _variants(sigs: list[str]) -> str:
+    distinct = list(dict.fromkeys(sigs))
+    more = ["..."] if len(distinct) > INPUT_SCHEMA_VARIANTS else []
+    return "|".join([*distinct[:INPUT_SCHEMA_VARIANTS], *more])
+
+
+def _tree(roots: Sequence[object]) -> dict[str, object]:
+    """Depth, type counts and spreads of parsed JSON or TOML values."""
+    kinds: Counter[str] = Counter()
+    fields: list[int] = []
+    lengths: list[int] = []
+    strings: list[str] = []
+    numbers: list[int | float] = []
+    depth = 0
+    stack = [(root, 1) for root in roots]
+    while stack:
+        value, level = stack.pop()
+        kinds[_type_of(value)] += 1
+        if isinstance(value, dict | list):
+            depth = max(depth, level)
+            items = list(value.values()) if isinstance(value, dict) else value
+            (fields if isinstance(value, dict) else lengths).append(len(items))
+            stack += [(item, level + 1) for item in items]
+        elif isinstance(value, str):
+            strings.append(value)
+        elif isinstance(value, int | float) and not isinstance(value, bool):
+            numbers.append(value)
+    return {
+        "depth": depth, "types": dict(sorted(kinds.items())),
+        "fields": _spread(fields), "array_lengths": _spread(lengths),
+        "string_lengths": _spread([len(s) for s in strings]),
+        "distinct_strings": len(set(strings)), "numbers": _numbers(numbers),
+    }  # fmt: skip
+
+
+def _numbers(values: list[int | float]) -> dict[str, object] | None:
+    """Counts and the decimal-exponent range: a spread, never a value."""
+    if not values:
+        return None
+    finite = [v for v in values if isinstance(v, int) or math.isfinite(v)]
+    mags = [len(str(abs(v))) - 1 if isinstance(v, int)
+            else math.floor(math.log10(abs(v))) for v in finite if v]  # fmt: skip
+    return {
+        "count": len(values), "distinct": len(set(values)),
+        "negative": sum(v < 0 for v in finite), "zero": sum(not v for v in finite),
+        "nonfinite": len(values) - len(finite),
+        "magnitude": [min(mags), max(mags)] if mags else None,
+    }  # fmt: skip
+
+
+def _table(text: str, delimiter: str) -> dict[str, object]:
+    """Rows, widths and each column by position (types, distinct values,
+    lengths, magnitude): never a cell or a column name."""
+    rows = list(csv.reader(io.StringIO(text), delimiter=delimiter, strict=True))
+    columns = max((len(row) for row in rows), default=0)
+    listed: list[dict[str, object]] = []
+    for i in range(min(columns, INPUT_SCHEMA_COLUMNS)):
+        cells = [row[i] for row in rows if i < len(row)]
+        kinds = [_cell(cell) for cell in cells]
+        mags = [m for _, m in kinds if m is not None]
+        listed.append({
+            "position": i + 1, "types": dict(sorted(Counter(k for k, _ in kinds).items())),
+            "distinct": len(set(cells)), "lengths": _spread([len(c) for c in cells]),
+            "magnitude": [min(mags), max(mags)] if mags else None,
+        })  # fmt: skip
+    return {"rows": len(rows), "columns": columns,
+            "row_width": _spread([len(row) for row in rows]),
+            "columns_not_listed": max(columns - INPUT_SCHEMA_COLUMNS, 0),
+            "per_column": listed}  # fmt: skip
+
+
+def _cell(cell: str) -> tuple[str, int | None]:
+    """A cell's type and decimal exponent (an integer's from its digits, so
+    no conversion is ever unbounded)."""
+    value = cell.strip()
+    if not value:
+        return "empty", None
+    if _INT.fullmatch(value):
+        digits = value.lstrip("+-").lstrip("0")
+        return "int", len(digits) - 1 if digits else None
+    try:
+        number = float(value)
+    except ValueError:
+        return "str", None
+    if not number or not math.isfinite(number):
+        return "float", None
+    return "float", math.floor(math.log10(abs(number)))
+
+
+def _spread(values: Sequence[int]) -> dict[str, object] | None:
+    if not values:
+        return None
+    return {"min": min(values), "max": max(values),
+            "mean": round(sum(values) / len(values), 1)}  # fmt: skip
 
 
 def _module(

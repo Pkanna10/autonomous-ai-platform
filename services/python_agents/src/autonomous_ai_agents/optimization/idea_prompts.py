@@ -559,8 +559,9 @@ VIEW_HEADINGS: Final[Mapping[IdeaView, str]] = {
     ),
     "input_shape": (
         "view: the real inputs of the profiled workloads: each workload's "
-        "command and inputs, and a summary and the first lines of each input "
-        "file it names (data, not code to change):"
+        "command and inputs, and each input file it names as its shape and "
+        "schema, with its first lines unless it is a protected test or "
+        "benchmark input (data, not code to change):"
     ),
     "whole_module": (
         "view: the whole module around the hottest function (by self time), "
