@@ -777,6 +777,16 @@ blocks it.
   lab's learning mechanism, W3 deferred. Budget: X1 (~42 USD) is ~28 % of Window
   1's 148.73 USD; read every idea list in full; some confirmatory rungs may
   spill into Window 2.
+- **O41. The pooled ranking's rules (owner, 2026-11-03).** (1) X1-1's Opus 5.5
+  lens ideas are left out of the validated pool (the marker never ranks its own
+  model's ideas), and a second ranking of the whole pool by Opus 5, marked
+  unvalidated, gives X1-1 a comparable number beside the validated one. (2) An
+  oversize pool is chunked, never refused: deterministic sets of about six (by
+  sorted idea id), each ranked; the top two of each set go to a final ranking;
+  the final's top 3 is the pooled result. Every request stays at the size the
+  marker was validated on, and the report says so. (3) The pooled ranking runs
+  for all eight libraries: the slice ranks its four, and a small marker pass
+  ranks the four outside it.
 - **O40. Marker-feasible pooled; run 2 pre-approved (owner, 2026-11-03).**
   Marker-feasible is redefined: per library, every configuration's lens-lane
   ideas form one pool, the validated marker ranks the pool, and the measure is
