@@ -153,7 +153,11 @@ from autonomous_ai_agents.optimization.idea_types import Lane
 from autonomous_ai_agents.optimization.judges import Judge, default_judges
 from autonomous_ai_agents.optimization.sources import HypothesisGenerator
 from autonomous_ai_agents.orchestrator.events import emit, make_event
-from autonomous_ai_agents.orchestrator.nodes import NodeContext, NoiseCalibrator
+from autonomous_ai_agents.orchestrator.nodes import (
+    NodeContext,
+    NoiseCalibrator,
+    ReplayRunner,
+)
 from autonomous_ai_agents.orchestrator.understand import ClaudeUnderstander
 from autonomous_ai_agents.persistence.repository import (
     InMemoryRepository,
@@ -496,6 +500,36 @@ class ConnectedTrialRunner:
                 brief=brief,
             )
 
+    def replay(
+        self,
+        hypothesis: Hypothesis,
+        parents: Sequence[Trial],
+        workloads: Sequence[Workload],
+        baseline: Baseline,
+        *,
+        round: int,
+        branch: str,
+        budget_usd: float,
+        brief: TrialBrief,
+    ) -> Trial:
+        """A near-miss compound's trial (G5b), replayed by the bound runner
+        (``GitTrialRunner.replay``), its notes scoped like ``run``'s."""
+        current = self.current
+        if not isinstance(current, ReplayRunner):
+            raise EngineError("the bound trial runner cannot replay trials")
+        run_id = self.runners.run_of(branch, hypothesis.id)
+        with self.runners.notes.scope(run_id, RunPhase.trials):
+            return current.replay(
+                hypothesis,
+                parents,
+                workloads,
+                baseline,
+                round=round,
+                branch=branch,
+                budget_usd=budget_usd,
+                brief=brief,
+            )
+
 
 def build_context(
     project: Project,
@@ -693,4 +727,5 @@ def build_context(
         calibration_blocks=settings.NOISE_CALIBRATION_BLOCKS,
         confirm_winners=settings.CONFIRM_WINNERS,
         portfolio_rounds=settings.PORTFOLIO_ROUNDS,
+        near_miss_compounds=settings.NEAR_MISS_COMPOUNDS,
     )

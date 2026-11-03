@@ -366,6 +366,20 @@ class Settings(BaseSettings):
     """Drop, in the portfolio, an idea whose mechanism key (``idea_dedupe``:
     overlapping target lines, same mechanism and primary cell) matches an
     earlier one's (G4). Unvalidated until the dedupe passes its bar."""
+    NEAR_MISS_COMPOUNDS: bool = False
+    """Replay two near misses as one compound trial (G5b, ``evolve``): both
+    inconclusive at least half their noise floor in the right direction, on
+    disjoint files, efficiency, neither a proposal; at most one a round,
+    cherry-picked onto the base (no editor, no tokens) and judged from
+    scratch. Off: no compound, no extra routing."""
+    IDEAS_ROUND_SEEDS: bool = False
+    """Round seeds (G5b): from the second hypotheses round on, each lens lane
+    is shown the verdicts of the ideas this run already trialled (mechanism
+    key, plain title, outcome, primary gain over the noise floor; keeps
+    first) in G4's one mechanisms block, and a second generator call with a
+    seed to show runs its lanes again. S1, the leap, the reviewer and the
+    rule-relaxing lanes never see a seed, nor is a proposal one; off keeps
+    every request as it is."""
     ALLOW_RETENTION_MODELS: bool = False
     """Admit ``RETENTION_REQUIRED_MODELS`` in repository-text roles (D63).
     Set only by the live harness, for fixture and pinned-OSS repositories."""

@@ -34,6 +34,7 @@ from autonomous_ai_agents.optimization.sources import (
     GenerateResult,
     HypothesisGenerator,
     MatchResult,
+    RunVerdicts,
     TechniqueMatcher,
 )
 from autonomous_ai_agents.orchestrator.nodes import NodeContext
@@ -76,6 +77,7 @@ class _Generator:
         protected: Sequence[str] = (),
         read_deny: Sequence[str] = (),
         workloads: Sequence[Workload] = (),
+        verdicts: RunVerdicts | None = None,
     ) -> GenerateResult:
         return GenerateResult(hypotheses=self.hypotheses[:n], notes=("one",))
 

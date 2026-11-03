@@ -45,7 +45,11 @@ from autonomous_ai_agents.common.models import (
     Workload,
 )
 from autonomous_ai_agents.optimization.generate import generate_hypotheses
-from autonomous_ai_agents.optimization.sources import GenerateResult, MatchResult
+from autonomous_ai_agents.optimization.sources import (
+    GenerateResult,
+    MatchResult,
+    RunVerdicts,
+)
 from autonomous_ai_agents.research.playbook import MATCH_MAX_TOKENS, match_techniques
 
 
@@ -96,6 +100,7 @@ class ClaudeHypothesisGenerator:
         protected: Sequence[str] = (),  # noqa: ARG002
         read_deny: Sequence[str] = (),  # noqa: ARG002
         workloads: Sequence[Workload] = (),  # noqa: ARG002 - the pipeline's (G2)
+        verdicts: RunVerdicts | None = None,  # noqa: ARG002 - the pipeline's (G5b)
     ) -> GenerateResult:
         notes: list[str] = []
         hypotheses = generate_hypotheses(

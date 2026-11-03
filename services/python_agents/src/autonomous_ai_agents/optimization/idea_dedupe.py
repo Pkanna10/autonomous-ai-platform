@@ -37,20 +37,30 @@ from __future__ import annotations
 import json
 import re
 from bisect import bisect_right
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from fractions import Fraction
 from pathlib import Path
 from typing import Annotated, Final, Self
 
-from pydantic import Field, JsonValue, model_validator
+from pydantic import Field, JsonValue, field_validator, model_validator
 
-from autonomous_ai_agents.clients.structured import Fence, count_note, data_line
-from autonomous_ai_agents.common.models import EngineModel
+from autonomous_ai_agents.clients.structured import (
+    Fence,
+    count_note,
+    data_line,
+    shown,
+)
+from autonomous_ai_agents.common.models import (
+    EngineModel,
+    JsonScalar,
+    VerdictOutcome,
+)
 from autonomous_ai_agents.common.paths import normalize_path
 from autonomous_ai_agents.optimization.idea_lanes import tag_shape
 from autonomous_ai_agents.optimization.idea_types import (
     CodeContext,
     CodeDocument,
+    GenerateEvent,
     IdeaCandidate,
     Lane,
     Mechanism,
@@ -76,6 +86,21 @@ TAKEN_LEAD: Final = (
     "an idea that changes the same lines by the same transformation is a "
     "repeat whatever its title. Change other code, or change it another way."
 )
+SEEDED_LEAD: Final = (
+    f"Mechanisms already on the table, inside <{TAKEN_TAG}>, one per line: the "
+    "file, the function, the target lines, the mechanism and the primary morph "
+    "cell. A mechanism this run already trialled also carries its title, its "
+    "verdict (keeps first) and its measured primary gain as a multiple of the "
+    "noise floor (null: not measured). Do not repeat these mechanisms: an idea "
+    "that changes the same lines by the same transformation is a repeat "
+    "whatever its title. Change other code, or change it another way."
+)
+"""The lead-in once a round seed is shown (G5b); ``TAKEN_LEAD`` otherwise."""
+KEY_EVENT: Final = "idea_mechanism"
+"""The event code that records a hypothesis's mechanism key (G5b)."""
+SEED_TITLE_CHARS: Final = 80
+_UNTITLED: Final = "(untitled)"
+_TITLE_SWAPS: Final = str.maketrans({'"': "'", "\\": "/", "<": "(", ">": ")"})
 _LINE_PREFIX: Final = re.compile(r"^\s*L\d+:\s?")
 _PLAIN_NAME: Final = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
 _Text = Annotated[str, Field(min_length=1)]
@@ -100,6 +125,77 @@ class MechanismKey(EngineModel):
     target: Target
     mechanism: Mechanism
     cell: MorphCell
+
+
+class IdeaKey(EngineModel):
+    """A mechanism key and the function the idea's anchor names (G5b)."""
+
+    key: MechanismKey
+    function: str | None = None
+
+
+class Seed(EngineModel):
+    """One trialled idea a lens lane is shown (G5b); the title is model
+    text, so it is made plain (``plain_title``) whatever it was given."""
+
+    key: IdeaKey
+    title: str
+    outcome: VerdictOutcome
+    gain_over_floor: float | None = Field(allow_inf_nan=False)
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _plain(cls, value: object) -> object:
+        return plain_title(value) if isinstance(value, str) else value
+
+
+def plain_title(title: str) -> str:
+    """One capped line of printable ASCII with no character JSON would
+    escape and no angle bracket (the evolution harness's rule, G4's fence)."""
+    flat = " ".join(title.split()).translate(_TITLE_SWAPS)
+    kept = "".join(c if c.isascii() and c.isprintable() else "?" for c in flat)
+    return kept[:SEED_TITLE_CHARS].strip() or _UNTITLED
+
+
+def key_event(hypothesis_id: str, title: str, key: IdeaKey) -> GenerateEvent:
+    """The record of a hypothesis's key the next round seeds from."""
+    target = key.key.target
+    return GenerateEvent(
+        code=KEY_EVENT,
+        message=f"{shown(title)} targets {target.path}:{target.first}-{target.last}",
+        data={"hypothesis_id": hypothesis_id, "path": target.path,
+              "function": key.function, "first": target.first, "last": target.last,
+              "mechanism": key.key.mechanism.value, "cell": key.key.cell.value},
+    )  # fmt: skip
+
+
+class _KeyRecord(EngineModel):
+    code: str
+    hypothesis_id: _Text
+    path: _Text
+    function: str | None
+    first: _Line
+    last: _Line
+    mechanism: Mechanism
+    cell: MorphCell
+
+
+def recorded_keys(events: Iterable[Mapping[str, JsonScalar]]) -> dict[str, IdeaKey]:
+    """Each hypothesis's key from the node's event data (``KEY_EVENT``, the
+    first record of an id wins); a malformed record is skipped."""
+    found: dict[str, IdeaKey] = {}
+    for data in events:
+        if data.get("code") != KEY_EVENT:
+            continue
+        fields = {name: data.get(name) for name in _KeyRecord.model_fields}
+        try:
+            row = _KeyRecord.model_validate(fields)
+            target = Target(path=row.path, first=row.first, last=row.last)
+        except ValueError:
+            continue
+        key = MechanismKey(target=target, mechanism=row.mechanism, cell=row.cell)
+        found.setdefault(row.hypothesis_id, IdeaKey(key=key, function=row.function))
+    return found
 
 
 # --------------------------------------------------------------------------
@@ -217,35 +313,57 @@ def taken_block(
     keys: Mapping[str, MechanismKey],
     fence: Fence,
     notes: list[str],
+    seeds: Sequence[Seed] = (),
 ) -> str:
     """The lead-in and ``<already_on_the_table_mechanisms>``, one line per
-    distinct key in ``ideas``' order; ``""`` when no idea has a key."""
+    distinct key: ``seeds`` first (G5b; in their order, each with its title,
+    outcome and gain over the floor), then ``ideas``' keys no line holds
+    yet; ``""`` when no line is left. With no seed shown it is G4's block."""
     lines: list[str] = []
     seen: set[MechanismKey] = set()
-    withheld = hidden = 0
-    for idea in ideas:
-        key = keys.get(idea.id)
-        if key is None or key in seen:
-            continue
+    counts = {"withheld": 0, "hidden": 0}
+    shown_seed = False
+
+    def add(
+        key: MechanismKey, function: str | None, extra: dict[str, JsonScalar]
+    ) -> bool:
         seen.add(key)
-        function = None if idea.anchor is None else idea.anchor.qualname
         line = data_line({
             "path": key.target.path, "function": function,
             "lines": f"{key.target.first}-{key.target.last}",
-            "mechanism": key.mechanism.value, "cell": key.cell.value,
+            "mechanism": key.mechanism.value, "cell": key.cell.value, **extra,
         })  # fmt: skip
         if fence.holds(line) or tag_shape(line):
-            withheld += 1
+            counts["withheld"] += 1
         elif len(lines) == MAX_TAKEN_LINES:
-            hidden += 1
+            counts["hidden"] += 1
         else:
             lines.append(line)
-    count_note(notes, withheld, "mechanism line(s) withheld: they hold a boundary "
-               "token or a tag shape")  # fmt: skip
-    count_note(notes, hidden, f"mechanism line(s) not shown (limit {MAX_TAKEN_LINES})")
+            return True
+        return False
+
+    for seed in seeds:
+        if seed.key.key not in seen:
+            extra: dict[str, JsonScalar] = {
+                "title": seed.title, "outcome": seed.outcome.value,
+                "gain_over_floor": seed.gain_over_floor,
+            }  # fmt: skip
+            shown_seed = add(seed.key.key, seed.key.function, extra) or shown_seed
+    for idea in ideas:
+        key = keys.get(idea.id)
+        if key is not None and key not in seen:
+            add(key, None if idea.anchor is None else idea.anchor.qualname, {})
+    count_note(notes, counts["withheld"], "mechanism line(s) withheld: they hold a "
+               "boundary token or a tag shape")  # fmt: skip
+    count_note(
+        notes,
+        counts["hidden"],
+        f"mechanism line(s) not shown (limit {MAX_TAKEN_LINES})",
+    )
     if not lines:
         return ""
-    return f"{TAKEN_LEAD}\n{fence.block(TAKEN_TAG, lines)}"
+    lead = SEEDED_LEAD if shown_seed else TAKEN_LEAD
+    return f"{lead}\n{fence.block(TAKEN_TAG, lines)}"
 
 
 # --------------------------------------------------------------------------

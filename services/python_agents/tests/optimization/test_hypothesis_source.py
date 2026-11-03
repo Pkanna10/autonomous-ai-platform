@@ -25,6 +25,7 @@ from autonomous_ai_agents.common.models import (
     ChangeClass,
     Direction,
     Hotspot,
+    Hypothesis,
     HypothesisSource,
     Lesson,
     Objective,
@@ -34,6 +35,7 @@ from autonomous_ai_agents.common.models import (
     ProjectUnderstanding,
     Technique,
     TechniqueMatchRecord,
+    Verdict,
     VerdictOutcome,
 )
 from autonomous_ai_agents.optimization.hypothesis_source import (
@@ -44,7 +46,9 @@ from autonomous_ai_agents.optimization.sources import (
     GenerateResult,
     HypothesisGenerator,
     MatchResult,
+    RunVerdicts,
     TechniqueMatcher,
+    Trialled,
 )
 from autonomous_ai_agents.research import playbook as playbook_module
 from autonomous_ai_agents.research.playbook import MATCH_MAX_TOKENS, StableTokens
@@ -171,6 +175,7 @@ def _generate(
     techniques: Sequence[Technique] = (),
     n: int = 5,
     cfg: Settings = GEN_CFG,
+    verdicts: RunVerdicts | None = None,
 ) -> tuple[GenerateResult, ScriptedTransport, Budget]:
     transport = ScriptedTransport(replies, cfg=cfg)
     spend = Budget(5.0) if budget is None else budget
@@ -185,6 +190,7 @@ def _generate(
         avoid_titles=avoid_titles,
         n=n,
         budget=spend,
+        verdicts=verdicts,
     )
     return result, transport, spend
 
@@ -255,6 +261,24 @@ def test_generate_passes_n_through() -> None:
 def test_lessons_and_avoid_titles_do_not_reach_the_prompt_until_w1() -> None:
     _, plain, _ = _generate([_ideas()])
     _, given, _ = _generate([_ideas()], lessons=[LESSON], avoid_titles=["Use a set"])
+    assert given.requests == plain.requests
+
+
+def test_this_runs_verdicts_never_reach_todays_prompt() -> None:
+    """The round seeds are the idea pipeline's (G5b): today's generator
+    accepts the run's verdicts and sends exactly what it sends without."""
+    _, plain, _ = _generate([_ideas()])
+    hypothesis = Hypothesis(
+        project_id="p1", source=HypothesisSource.novel, title="Use a dict",
+        rationale="r", change_class=ChangeClass.efficiency, expected_gain=0.2,
+        provability=0.8, risk=0.1,
+    )  # fmt: skip
+    verdict = Verdict(
+        trial_id="t1", hypothesis_id=hypothesis.id, outcome=VerdictOutcome.keep,
+        change_class=ChangeClass.efficiency, gain=0.3, summary="kept",
+    )  # fmt: skip
+    seen = RunVerdicts(trialled=(Trialled(hypothesis, verdict, None),), noise_floor=0.1)
+    _, given, _ = _generate([_ideas()], verdicts=seen)
     assert given.requests == plain.requests
 
 

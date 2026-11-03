@@ -1345,3 +1345,22 @@ def test_lane_frameworks_turn_on_from_the_environment(
     assert Settings(_env_file=None).IDEAS_LANE_FRAMEWORKS is True
     with pytest.raises(ValidationError, match="IDEAS_LANE_FRAMEWORKS"):
         _cfg(IDEAS_LANE_FRAMEWORKS="sometimes")
+
+
+# --------------------------------------------------------------------------
+# G5b: round seeds (IDEAS_ROUND_SEEDS)
+# --------------------------------------------------------------------------
+
+
+def test_round_seeds_are_off_by_default(clean_env: Path) -> None:
+    """Should show no lane a verdict until a configuration turns seeds on."""
+    assert _cfg().IDEAS_ROUND_SEEDS is False
+
+
+def test_round_seeds_turn_on_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch, clean_env: Path
+) -> None:
+    monkeypatch.setenv("IDEAS_ROUND_SEEDS", "true")
+    assert Settings(_env_file=None).IDEAS_ROUND_SEEDS is True
+    with pytest.raises(ValidationError, match="IDEAS_ROUND_SEEDS"):
+        _cfg(IDEAS_ROUND_SEEDS="sometimes")

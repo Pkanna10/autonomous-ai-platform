@@ -754,6 +754,29 @@ blocks it.
   lab's learning mechanism, W3 deferred. Budget: X1 (~42 USD) is ~28 % of Window
   1's 148.73 USD; read every idea list in full; some confirmatory rungs may
   spill into Window 2.
+- **O36. G5b and the input-shape view (owner, 2026-11-03).** Near-miss compounds
+  are built by replay: the two measured trial commits are merged onto the base
+  with the combiner's object-only git, with no editor and no tokens. A conflict
+  means no compound, recorded as a note. The pair rule is D22's (both
+  inconclusive, right direction, each at least 0.5 of its floor, disjoint files,
+  efficiency, no proposal), with at most one compound a round, judged as a
+  normal trial at full N with anti-cheat on its own diff. `trial_runner.py` is
+  recorded as a touch outside G5's first file list. Round seeds are approved,
+  off by default, merged with G4's mechanisms block into one fenced block. The
+  input-shape view shows a protected input as its schema only (no line, value,
+  key or column name), because a lane that sees the benchmark's literal input
+  can specialise for it and pass every frozen judge; other inputs keep their
+  five-line head.
+- **D64. A seeded second generator call re-runs the lanes (Lead, under O36).**
+  D48 makes every second call S1 only, and the node calls the generator again
+  only once the pool is empty, so lens lanes never run after round 1 and seeds
+  could never reach one. With `IDEAS_ROUND_SEEDS` on and at least one seed, a
+  second call runs S1, the lenses, the leap and the reviewer again, reserved
+  whole under D55's share (skipped with `discovery_unaffordable` if it does not
+  fit); seeds off or nothing to seed keeps D48 exactly. _Why:_ it is the only
+  way the approved seeds work; the cost appears only when the setting is on. The
+  owner may veto it; the veto patch (every second call S1 only again) is kept
+  ready.
 
 ### 2026-11-01 (owner: E1's answers and the idea lab, O23-O30)
 
@@ -2954,6 +2977,25 @@ worktree", 4.4.0) or in the builder rules every brief carries.
   prove the order); in sequential mode a re-priced lane's exchange carries a
   generic `lane-N` label in `ideas-reply` (scoring reads tags, not labels, and
   X1-4 is not sequential).
+- G5b and G2b review nits, left as they are: with sequential lanes and seeds
+  both on, the mechanisms block's withheld and limit notes are written twice
+  (the unseeded block for the leap and relaxing lanes, the seeded one for the
+  lenses); the zero-cost compound replay still waits behind
+  `min_trial_budget_usd`, so a run with less than that left can open a compound
+  round that then runs nothing; a cut JSON-lines or CSV protected input whose 64
+  KB sample ends exactly on a newline under-counts its records by one; G2b's
+  source is about 1.5x its row and G5b-compound's about 1.4x W4's estimate. Seed
+  keys travel as `idea_mechanism` events (no new state key); the compound's
+  parents are tags (`compound:replay`, `compound_parent:<trial>`), source
+  `lesson`, its id derived from the parents.
+- G5b integration review (Lead's merge of the two halves): the factory's
+  `ConnectedTrialRunner` had no `replay`, so `NEAR_MISS_COMPOUNDS` on failed at
+  startup (fixed, with a factory test); seed ratios used `Verdict.gain` over the
+  baseline-only floor while compounds used the judge's floor, which counts the
+  trial's spread, so seeds flattered noisy trials (fixed: both read
+  `evolve.primary_gain_floor`, the run floor only as a fallback); the node test
+  now drives the recorded key through round 1's real events and covers a
+  compound verdict reaching the generator unkeyed.
 - Dependabot alert #236 (moderate, on master, reported by the push of
   2026-11-02): this session has no Dependabot API, so the alert page was not
   opened; identified by audit instead. On master `pnpm audit` finds only

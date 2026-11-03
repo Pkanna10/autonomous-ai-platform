@@ -152,6 +152,17 @@ from autonomous_ai_agents.optimization.anticheat import (
     check_diff_all,
     check_run_count,
 )
+from autonomous_ai_agents.optimization.evolve import (
+    CompoundPair,
+    CompoundParents,
+    ReplayRefusedError,
+    compound_hypothesis,
+    compound_parents,
+    find_pair,
+    primary_gain_floor,
+    used_pairs,
+)
+from autonomous_ai_agents.optimization.idea_dedupe import recorded_keys
 from autonomous_ai_agents.optimization.idea_types import is_proposal, relaxed_rules
 from autonomous_ai_agents.optimization.judges import (
     OP_COUNT_JUDGE,
@@ -165,7 +176,9 @@ from autonomous_ai_agents.optimization.judges import (
 from autonomous_ai_agents.optimization.ranking import rank_generated, rank_hypotheses
 from autonomous_ai_agents.optimization.sources import (
     HypothesisGenerator,
+    RunVerdicts,
     TechniqueMatcher,
+    Trialled,
 )
 from autonomous_ai_agents.orchestrator.combine_node import (
     CombineOutcome,
@@ -219,6 +232,25 @@ class NoiseCalibrator(Protocol):
         commit: str,
         blocks: int,
     ) -> NoiseCalibration: ...
+
+
+@runtime_checkable
+class ReplayRunner(Protocol):
+    """A runner that also builds a trial by replaying measured trials (G5b,
+    ``GitTrialRunner.replay``): ``evolve.ReplayRefusedError`` when it cannot."""
+
+    def replay(
+        self,
+        hypothesis: Hypothesis,
+        parents: Sequence[Trial],
+        workloads: Sequence[Workload],
+        baseline: Baseline,
+        *,
+        round: int,
+        branch: str,
+        budget_usd: float,
+        brief: TrialBrief,
+    ) -> Trial: ...
 
 
 @runtime_checkable
@@ -292,6 +324,10 @@ class NodeContext:
     Step 3 Wave 2 (D54): ``portfolio_rounds`` (0-3, ``PORTFOLIO_ROUNDS``) is
     how many rounds a keep waits before it ends exploration; 0 is Step 2's.
 
+    G5b: ``near_miss_compounds`` (``NEAR_MISS_COMPOUNDS``, off) replays a
+    pair of near misses as a compound trial (``evolve``); it needs a
+    ``ReplayRunner``.
+
     Construction refuses duplicate or refname-unsafe candidate ids (each id
     names a trial branch), knobs below 1, a negative or non-finite
     ``min_trial_budget_usd`` and discovery or retry knobs outside their
@@ -335,6 +371,7 @@ class NodeContext:
     calibration_blocks: int = 0
     confirm_winners: bool = False
     portfolio_rounds: int = 0
+    near_miss_compounds: bool = False
 
     def __post_init__(self) -> None:
         counts = Counter(candidate.id for candidate in self.candidates)
@@ -364,6 +401,11 @@ class NodeContext:
             )
         self._check_discovery_knobs()
         self._check_noise_knobs()
+        if self.near_miss_compounds and not isinstance(self.runner, ReplayRunner):
+            raise ValueError(
+                "near_miss_compounds needs a runner that can replay trials"
+                f" (GitTrialRunner), got {type(self.runner).__name__}"
+            )
 
     def _check_discovery_knobs(self) -> None:
         """The ranges of the matching settings (``common/config.py``)."""
@@ -909,6 +951,60 @@ def _quarantine(ctx: NodeContext, state: EngineState) -> list[Hypothesis]:
     return found
 
 
+def _next_compound(ctx: NodeContext, state: EngineState) -> CompoundPair | None:
+    """The near-miss pair this run has not compounded yet (G5b), or ``None``
+    with compounds off."""
+    if not ctx.near_miss_compounds:
+        return None
+    primary = primary_metric(_require_baseline(state).objectives)
+    known = (*state["hypotheses"], *state["parked"])
+    return find_pair(
+        state["verdicts"], state["trials"], state["hypotheses"], primary=primary,
+        parked=frozenset(h.id for h in state["parked"]), used=used_pairs(known),
+    )  # fmt: skip
+
+
+def _compound_note(
+    state: EngineState, round_number: int, pair: CompoundPair
+) -> EngineEvent:
+    a, b = pair.first, pair.second
+    return _note(
+        state, RunPhase.hypotheses, "compound",
+        f"round {round_number}: a compound of {shown(a.hypothesis.title)} and"
+        f" {shown(b.hypothesis.title)} (gain/floor {a.ratio:.2f} + {b.ratio:.2f})"
+        " replays their measured commits",
+        data={"round": round_number, "parents": f"{a.trial.id},{b.trial.id}",
+              "ratio": pair.ratio},
+    )  # fmt: skip
+
+
+def _replay(
+    ctx: NodeContext,
+    state: EngineState,
+    hypothesis: Hypothesis,
+    parents: CompoundParents,
+    measured: Baseline,
+    *,
+    branch: str,
+    budget_usd: float,
+    brief: TrialBrief,
+) -> Trial:
+    """The compound's trial, replayed from its parents' measured trials;
+    ``ReplayRefusedError`` when compounds are off or a parent is unknown."""
+    runner = ctx.runner
+    if not ctx.near_miss_compounds or not isinstance(runner, ReplayRunner):
+        raise ReplayRefusedError("near-miss compounds are off")
+    by_id = {trial.id: trial for trial in state["trials"]}
+    for trial_id in (parents.first, parents.second):
+        if trial_id not in by_id:
+            raise ReplayRefusedError(f"parent trial {trial_id!r} is not in this run")
+    return runner.replay(
+        hypothesis, (by_id[parents.first], by_id[parents.second]),
+        state["workloads"], measured, round=state["round"], branch=branch,
+        budget_usd=budget_usd, brief=brief,
+    )  # fmt: skip
+
+
 def _discovery_cap(ctx: NodeContext, state: EngineState) -> float:
     """D7's ``d``: discovery keeps one trial's reserve and stays in its share."""
     cap, cost = state["max_cost_usd"], state["cost_usd"]
@@ -1003,6 +1099,35 @@ def _sift(
     return kept, parked, notes
 
 
+def _run_verdicts(state: EngineState) -> RunVerdicts | None:
+    """This run's verdicts so far, each with its hypothesis and the mechanism
+    key the idea pipeline recorded for it (its ``KEY_EVENT`` events), and the
+    run's noise floor (the worst workload's smallest provable gain), for the
+    round seeds (G5b); ``None`` before the first verdict (round 1)."""
+    if not state["verdicts"]:
+        return None
+    hypotheses = {h.id: h for h in state["hypotheses"]}
+    keys = recorded_keys(event.data for event in state["events"])
+    measured = state["baseline"]
+    floor = (
+        None
+        if measured is None
+        else _worst_floor(_noise(measured.measurements, measured.objectives))
+    )
+    primary = None if measured is None else primary_metric(measured.objectives)
+    trialled = tuple(
+        Trialled(
+            hypotheses[v.hypothesis_id],
+            v,
+            keys.get(v.hypothesis_id),
+            *primary_gain_floor(v.judge_results, primary),
+        )  # fmt: skip
+        for v in state["verdicts"]
+        if v.hypothesis_id in hypotheses
+    )
+    return RunVerdicts(trialled, floor)
+
+
 def _generate(
     ctx: NodeContext,
     state: EngineState,
@@ -1040,6 +1165,7 @@ def _generate(
             protected=(*ctx.protected_patterns, *state["extra_protected"]),
             read_deny=() if ctx.quality is None else ctx.quality.frozen_paths,
             workloads=state["workloads"],
+            verdicts=_run_verdicts(state),
         )
     except BudgetExceeded as exc:  # the reserve or the share refused it (D7)
         spend = _discovery_spend(state, budget, called=budget.spent_usd > cost)
@@ -2829,6 +2955,9 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
         ]
         sliced = {h.id for h in ranked}
         rest = [h for h in pool if h.id not in sliced]  # callers stay in ctx
+        pair = _next_compound(ctx, state)  # G5b: ahead of the round's ideas
+        compound = [] if pair is None else [compound_hypothesis(pair)]
+        noted = [] if pair is None else [_compound_note(state, round_number, pair)]
         event = _announce(
             state,
             RunPhase.hypotheses,
@@ -2843,8 +2972,8 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             **turn.delta,
             "phase": RunPhase.hypotheses,
             "round": round_number,
-            "hypotheses": [*state["hypotheses"], *ranked],
-            "events": [*turn.events, event],
+            "hypotheses": [*state["hypotheses"], *compound, *ranked],
+            "events": [*turn.events, *noted, event],
         }
         if state["candidate_pool"] or rest:
             delta["candidate_pool"] = rest
@@ -2864,23 +2993,27 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
         attempts than allowed included (charged at most ``remaining``)."""
         branch = f"{ctx.branch_prefix}trial-{state['run_id']}-{hypothesis.id}"
         assert_safe_branch(branch, state["project"], ctx.branch_prefix)
-        trial = ctx.runner.run(
-            hypothesis,
-            state["workloads"],
-            measured,
-            round=state["round"],
-            branch=branch,
-            budget_usd=remaining,
-            brief=TrialBrief(
-                understanding=state["understanding"],
-                hotspots=_brief_hotspots(hypothesis, state["hotspots"]),
-                protected=(*ctx.protected_patterns, *state["extra_protected"]),
-                read_deny=() if ctx.quality is None else ctx.quality.frozen_paths,
-                fix_retries_left=fix_retries_left,
-            ),
+        parents = compound_parents(hypothesis)  # G5b: replayed, never edited
+        retries = fix_retries_left if parents is None else 0
+        brief = TrialBrief(
+            understanding=state["understanding"],
+            hotspots=_brief_hotspots(hypothesis, state["hotspots"]),
+            protected=(*ctx.protected_patterns, *state["extra_protected"]),
+            read_deny=() if ctx.quality is None else ctx.quality.frozen_paths,
+            fix_retries_left=retries,
         )
+        if parents is None:
+            trial = ctx.runner.run(
+                hypothesis, state["workloads"], measured, round=state["round"],
+                branch=branch, budget_usd=remaining, brief=brief,
+            )  # fmt: skip
+        else:
+            trial = _replay(
+                ctx, state, hypothesis, parents, measured, branch=branch,
+                budget_usd=remaining, brief=brief,
+            )  # fmt: skip
         problems = _runner_trial_problems(
-            trial, hypothesis, state["round"], remaining, fix_retries_left
+            trial, hypothesis, state["round"], remaining, retries
         )
         if problems:
             error = EngineError(
@@ -2916,6 +3049,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
         stopped: list[EngineEvent] = []
         records, retry_warnings = _recorded_fix_retries(ctx, state)
         warned += retry_warnings
+        refused: dict[str, HypothesisStatus] = {}
         for index, hypothesis in enumerate(proposed):
             remaining = state["max_cost_usd"] - cost_usd
             if remaining <= 0 or remaining < ctx.min_trial_budget_usd:
@@ -2940,6 +3074,14 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                 left = max(0, ctx.fix_retries_per_run - spent)
             try:
                 trial = run_one(state, hypothesis, measured, remaining, left)
+            except ReplayRefusedError as exc:  # no compound: a note (G5b)
+                refused[hypothesis.id] = HypothesisStatus.rejected
+                warned.append(_note(
+                    state, RunPhase.trials, "compound_refused",
+                    f"no compound for {shown(hypothesis.title)}: {exc}",
+                    level=EventLevel.warning, data={"reason": exc.reason[:200]},
+                ))  # fmt: skip
+                continue
             except TrialUnaffordable as exc:  # its first request alone passes the cap
                 stopped.append(
                     _budget_exhausted(
@@ -2977,6 +3119,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                 raise
             new_trials.append(trial)
         ran = {trial.hypothesis_id: HypothesisStatus.trialled for trial in new_trials}
+        ran |= refused
         failed = sum(1 for t in new_trials if t.status is TrialStatus.failed)
         event = _announce(
             state,
@@ -3473,6 +3616,8 @@ def make_router(ctx: NodeContext) -> RouterFn:
             return "combine"
         candidates, pool = _untried(ctx, state)  # a review verdict never routes
         if candidates or pool or _live_generator(ctx, state, priced=True) is not None:
+            return "hypotheses"
+        if _next_compound(ctx, state) is not None:  # G5b: a near-miss pair waits
             return "hypotheses"
         return "combine"
 

@@ -95,6 +95,7 @@ from autonomous_ai_agents.orchestrator.factory import (
     engine_transport,
     min_trial_budget,
 )
+from autonomous_ai_agents.orchestrator.nodes import ReplayRunner
 from autonomous_ai_agents.orchestrator.understand import ClaudeUnderstander
 from autonomous_ai_agents.persistence.repository import InMemoryRepository
 
@@ -1061,3 +1062,74 @@ def test_with_the_pipeline_off_no_lane_transport_is_built(
     build_context(project, transport_factory=make)
 
     assert LANE_MODEL not in built
+
+
+# ---------------------------------------------------------------------------
+# G5b: near-miss compounds need the connected runner to replay
+# ---------------------------------------------------------------------------
+
+
+def test_compounds_on_build_a_context_whose_runner_replays(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The factory's own runner passes the node's replay check, so the
+    setting can be turned on in production, not only with a test stub."""
+    monkeypatch.setattr(settings, "NEAR_MISS_COMPOUNDS", True)
+    ctx = build_context(project, transport=_scripted())
+    assert ctx.near_miss_compounds is True
+    assert isinstance(ctx.runner, ReplayRunner)
+
+
+class _Replaying(StubTrialRunner):
+    """A bound trial runner that records every replay and returns a trial."""
+
+    def __init__(self) -> None:
+        super().__init__({}, default=ScriptedOutcome())
+        self.replays: list[tuple[str, tuple[str, ...], int, str, float]] = []
+
+    def replay(
+        self,
+        hypothesis: Hypothesis,
+        parents: Sequence[Trial],
+        workloads: Sequence[Workload],
+        baseline: Baseline,
+        *,
+        round: int,
+        branch: str,
+        budget_usd: float,
+        brief: TrialBrief,
+    ) -> Trial:
+        self.replays.append((hypothesis.id, tuple(p.id for p in parents), round,
+                             branch, budget_usd))  # fmt: skip
+        return Trial(hypothesis_id=hypothesis.id, round=round, branch=branch)
+
+
+def _replay(runners: ConnectedRunners, project: Project) -> Trial:
+    parents = tuple(Trial(id=f"p{i}", hypothesis_id=f"h{i}", round=1,
+                          branch=f"engine/trial-r1-h{i}") for i in (1, 2))  # fmt: skip
+    return ConnectedTrialRunner(runners).replay(
+        _hypothesis(project),
+        parents,
+        [],
+        Baseline(commit=SHA),
+        round=2,
+        branch="engine/trial-r1-h1",
+        budget_usd=0.0,
+        brief=TrialBrief(understanding=None, hotspots=(), protected=()),
+    )
+
+
+def test_the_replay_delegate_forwards_to_the_bound_runner(project: Project) -> None:
+    bound = _Replaying()
+    runners = ConnectedRunners(
+        project, lambda _p: (StubBaselineRunner(ScriptedOutcome()), bound)
+    )
+    trial = _replay(runners, project)
+    assert (trial.hypothesis_id, trial.round) == ("h1", 2)
+    assert bound.replays == [("h1", ("p1", "p2"), 2, "engine/trial-r1-h1", 0.0)]
+
+
+def test_a_bound_runner_that_cannot_replay_is_refused(project: Project) -> None:
+    runners = ConnectedRunners(project, _Built())
+    with pytest.raises(EngineError, match="cannot replay"):
+        _replay(runners, project)

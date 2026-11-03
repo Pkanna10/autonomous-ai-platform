@@ -182,6 +182,11 @@ near-miss compounds). Owner decisions of 2026-11-03 fix G5b below.
   run has already trialled: each idea's mechanism key (file, function, target
   lines, mechanism, primary cell), its sanitised title, its outcome and its gain
   as a ratio of the noise floor; keeps first. Behind a setting, off by default.
+  Because the node calls the generator again only once the pool is empty, a
+  second generator call with at least one seed re-runs S1, the lenses, the leap
+  and the reviewer, reserved whole under D55's share (skipped with
+  `discovery_unaffordable` if it does not fit); with seeds off or nothing to
+  seed it stays S1 only (D48).
   **One fenced block, not two:** the seeds and G4's mechanisms block
   (`taken_block`) are merged into one fenced block with one lead-in, one line
   per distinct mechanism key, a trialled key carrying its outcome and gain, so

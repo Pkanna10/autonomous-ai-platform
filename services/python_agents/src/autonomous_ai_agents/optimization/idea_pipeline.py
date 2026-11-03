@@ -37,6 +37,17 @@ not its request was then sent (a budget stop, count mode): a report joins the
 labels with the lanes it sent, to tell a view alone from a view with its
 framework.
 
+Round seeds (G5b): ``IDEAS_ROUND_SEEDS`` (off by default; off keeps every
+request and result byte for byte) builds a seed per verdict in ``verdicts``
+(this run's, passed by the node) whose hypothesis is no proposal and has a
+recorded mechanism key: its key, plain title, outcome and primary gain over
+the run's noise floor, keeps first. Each lens lane, and no other request, is
+shown them as the first lines of G4's one mechanisms block (alone when
+sequential lanes are off), so the prompt grows once. No verdict (round 1) is
+no seed; a second call with a seed runs its lanes again instead of S1 only.
+Seeds on, the result records each hypothesis's key as a ``KEY_EVENT`` event,
+which the node reads back (``idea_dedupe.recorded_keys``) next round.
+
 What they may change (G3): ``IDEAS_RELAX_LANES`` (off by default) adds
 rule-relaxing lanes to S2, after every other lane (in sequence, no other lane
 sees their mechanisms). Their ideas carry ``proposal`` from birth
@@ -67,6 +78,7 @@ today's prompt plus code; the bank is for the lenses and the leap).
 
 from __future__ import annotations
 
+import math
 import re
 import threading
 import time
@@ -117,6 +129,7 @@ from autonomous_ai_agents.common.models import (
     Project,
     ProjectUnderstanding,
     Technique,
+    VerdictOutcome,
     Workload,
 )
 from autonomous_ai_agents.common.repo_read import RepoReader
@@ -131,8 +144,11 @@ from autonomous_ai_agents.optimization.idea_context import (
     review_context,
 )
 from autonomous_ai_agents.optimization.idea_dedupe import (
+    IdeaKey,
     MechanismKey,
+    Seed,
     idea_key,
+    key_event,
     taken_block,
 )
 from autonomous_ai_agents.optimization.idea_lanes import (
@@ -166,6 +182,7 @@ from autonomous_ai_agents.optimization.idea_review import (
     unreviewed,
 )
 from autonomous_ai_agents.optimization.idea_types import (
+    LENS_LANES,
     RELAXING_LANES,
     CodeContext,
     GenerateEvent,
@@ -174,11 +191,13 @@ from autonomous_ai_agents.optimization.idea_types import (
     Lane,
     ReviewReason,
     ReviewVerdict,
+    is_proposal,
     proposal_tag,
 )
 from autonomous_ai_agents.optimization.sources import (
     GenerateResult,
     HypothesisGenerator,
+    RunVerdicts,
 )
 from autonomous_ai_agents.research.playbook import (
     ResearchSystem,
@@ -257,6 +276,7 @@ class _Call:
     understanding: ProjectUnderstanding | None = None
     keys: dict[str, MechanismKey] = field(default_factory=dict)
     frameworks: dict[Lane, str] = field(default_factory=dict)
+    seeds: tuple[Seed, ...] = ()
 
 
 class IdeaPipelineGenerator:
@@ -302,6 +322,7 @@ class IdeaPipelineGenerator:
         self._sequential = _switch(config, "IDEAS_SEQUENTIAL_LANES")
         self._dedupe = _switch(config, "IDEAS_MECHANISM_DEDUPE")
         self._frameworks = config.IDEAS_LANE_FRAMEWORKS
+        self._seeded = config.IDEAS_ROUND_SEEDS
 
     def generate(
         self,
@@ -321,9 +342,11 @@ class IdeaPipelineGenerator:
         protected: Sequence[str] = (),
         read_deny: Sequence[str] = (),
         workloads: Sequence[Workload] = (),
+        verdicts: RunVerdicts | None = None,
     ) -> GenerateResult:
         """``workloads`` are the run's (G2): the input-shape view shows their
-        real inputs; none, and that view shows no input."""
+        real inputs; none, and that view shows no input. ``verdicts`` are
+        this run's so far, the round seeds' source (G5b)."""
         notes: list[str] = []
         research = research_system(IDEAS_SYSTEM_PROMPT, techniques, notes)
         fence = repo_fence(research)
@@ -361,11 +384,16 @@ class IdeaPipelineGenerator:
         c = _Call(project, objective, hotspots, budget, research, fence, context,
                   prefix, index, notes, budget.spent_usd,
                   understanding=understanding)  # fmt: skip
+        if self._seeded:
+            c.seeds = _round_seeds(verdicts, notes)
         named = [*avoid_titles, *(t.name for t in research.by_slug.values())]
         s1 = self._s1(c, n, named)
-        if call_index >= 1:
+        if call_index >= 1 and not c.seeds:
             notes.append("second generator call: S1 only, earlier titles avoided (D48)")
             return self._result(c, s1, n)
+        if call_index >= 1:
+            notes.append(f"second generator call with {len(c.seeds)} round seed(s): "
+                         "the lanes run again, the lens lanes seeded (G5b)")  # fmt: skip
         seed = run_id if run_id is not None else f"{commit}:{project.id}"
         lanes = (
             *self._cfg.IDEAS_LENSES,
@@ -479,7 +507,10 @@ class IdeaPipelineGenerator:
         sizes[Lane.leap] = cfg.IDEAS_LEAP_N
         sizes.update({lane: cfg.IDEAS_LANE_N for lane in cfg.IDEAS_RELAX_LANES})
         first = self._taken(c, table) if self._sequential else table
-        jobs = {lane: self._lane_job(c, lane, sizes[lane], first, examples[lane])
+        seeded = self._taken(c, table, c.seeds) if c.seeds else first
+        jobs = {lane: self._lane_job(c, lane, sizes[lane],
+                                     seeded if lane in LENS_LANES else first,
+                                     examples[lane])
                 for lane in lanes}  # fmt: skip
         total = sum(job.estimate for job in jobs.values())
         try:
@@ -517,7 +548,9 @@ class IdeaPipelineGenerator:
         for at, lane in enumerate(order):
             job = jobs[lane]
             if len(c.read) != priced:
-                job = self._lane_job(c, lane, sizes[lane], self._taken(c, table),
+                seeds = c.seeds if lane in LENS_LANES else ()
+                job = self._lane_job(c, lane, sizes[lane],
+                                     self._taken(c, table, seeds),
                                      examples[lane])  # fmt: skip
                 try:
                     c.budget.check(job.estimate)
@@ -537,10 +570,13 @@ class IdeaPipelineGenerator:
             found += self._read(c, lane, job, sizes[lane])
         return found
 
-    def _taken(self, c: _Call, table: str) -> str:
-        """The table, then the mechanisms taken so far (G4), if any."""
+    def _taken(self, c: _Call, table: str, seeds: Sequence[Seed] = ()) -> str:
+        """The table, then the one mechanisms block, if any: ``seeds`` first
+        (G5b, a lens lane's), then the mechanisms taken so far (G4) when the
+        lanes run in sequence."""
         notes: list[str] = []
-        block = taken_block(c.read, c.keys, c.fence, notes)
+        ideas = c.read if self._sequential else ()
+        block = taken_block(ideas, c.keys, c.fence, notes, seeds)
         c.notes.extend(f"mechanisms block: {note}" for note in notes)
         return f"{table}\n{block}" if block else table
 
@@ -820,9 +856,15 @@ class IdeaPipelineGenerator:
         room = max(0, bound - len(head))
         count_note(c.notes, len(tail[room:]),
                    f"novel idea(s) past the result's bound of {bound} dropped")  # fmt: skip
-        hypotheses = tuple(
-            self._hypothesis(c, i) for i in (*head, *tail[:room], *proposals)
-        )
+        ideas = (*head, *tail[:room], *proposals)
+        hypotheses = tuple(self._hypothesis(c, i) for i in ideas)
+        if self._seeded:  # the keys the next round seeds from (G5b)
+            for idea, hypothesis in zip(ideas, hypotheses, strict=True):
+                key = c.keys.get(idea.id)
+                if key is not None and idea.proposal is None:
+                    function = None if idea.anchor is None else idea.anchor.qualname
+                    c.events.append(key_event(hypothesis.id, idea.title,
+                                              IdeaKey(key=key, function=function)))  # fmt: skip
         read = [i for i in c.read if i.proposal is None]
         stats = IdeaStats(
             ideas_per_lane=c.per_lane,
@@ -886,6 +928,36 @@ def framework_labels(notes: Sequence[str]) -> dict[Lane, str | None]:
             label = found.group(2)
             labels[Lane(found.group(1))] = None if label == "none" else label
     return labels
+
+
+def _round_seeds(verdicts: RunVerdicts | None, notes: list[str]) -> tuple[Seed, ...]:
+    """A seed per verdict whose hypothesis is no proposal and has a key, its
+    gain over the floor rounded (``None``: either unknown), keeps first."""
+    if verdicts is None:
+        return ()
+    floor = verdicts.noise_floor
+    found: list[Seed] = []
+    proposals = unkeyed = 0
+    for item in verdicts.trialled:
+        if is_proposal(item.hypothesis):  # never a seed (G3)
+            proposals += 1
+            continue
+        if item.key is None:
+            unkeyed += 1
+            continue
+        gain, below = item.gain, item.floor  # the trial's own primary result
+        if gain is None or below is None:  # none measured: the run's floor
+            gain, below = item.verdict.gain, floor
+        ratio = None if gain is None or below is None or not below > 0 else gain / below
+        found.append(Seed(
+            key=item.key, title=item.hypothesis.title, outcome=item.verdict.outcome,
+            gain_over_floor=None if ratio is None or not math.isfinite(ratio)
+            else round(ratio, 2),
+        ))  # fmt: skip
+    count_note(notes, proposals, "proposal(s) never seeded (G3)")
+    count_note(notes, unkeyed, "verdict(s) not seeded: no mechanism key recorded")
+    found.sort(key=lambda seed: seed.outcome is not VerdictOutcome.keep)
+    return tuple(found)
 
 
 def _switch(config: Settings, name: str) -> bool:
