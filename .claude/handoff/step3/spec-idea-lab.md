@@ -100,6 +100,16 @@ Each view is capped and fenced like today's data block; a lane gets one view,
 not all of them, so the ~100-token lens is no longer drowned by one giant
 identical block.
 
+**Protected inputs are shown as a schema only (owner, 2026-11-03).** An input
+file under a protected path (`tests/`, `benchmarks/`, the run's protected and
+read-deny patterns) is shown as its shape alone: sizes (bytes, lines, line
+lengths), the detected format and its types and nesting (depth, element and
+field counts, value types per position), and distributions (length and value
+spread, character classes). No line, no value and no key name is shown. *Why:*
+a lane that sees the benchmark's literal input can specialise for exactly that
+input and pass every frozen judge. An input outside protected paths keeps its
+five-line screened head beside the same summary.
+
 **Contamination guard (history view).** The performance-commit history is read
 only up to the pinned commit, never past it. On the held-out rungs this matters:
 a held-out library is pinned before any fix it is scored on, and V9's keys sit
@@ -154,16 +164,46 @@ quarantine.
 
 ### G5 — Each lane gets a framework; compounding into evolution
 
-- **Per-lane idea framework** (`optimization/idea_prompts.py`): each lane's view
-  or relaxed rule comes with a short framework that steers it (e.g. the callers
-  view with "push work to the caller or memoise across calls"; the input-shape
-  view with "specialise for the shape the workload actually passes").
-- **Compounding** (`orchestrator/nodes.py`, `optimization/evolve.py`): the spec
-  states how the pipeline feeds evolution rounds (the kept ideas of round N seed
-  round N+1 with their measured gains, FunSearch/AlphaEvolve style), and how
-  **near-miss ideas** — each individually below the noise floor — are combined
-  into one trial so their gains can add. A combined-near-miss trial is a normal
-  trial under the frozen judges; nothing about it relaxes a rule.
+Built in two parts: **G5a** (frameworks, committed) and **G5b** (round seeds and
+near-miss compounds). Owner decisions of 2026-11-03 fix G5b below.
+
+- **Per-lane idea framework (G5a)** (`optimization/idea_prompts.py`): each
+  lane's view or relaxed rule comes with a short framework that steers it (e.g.
+  the callers view with "push work to the caller or memoise across calls"; the
+  input-shape view with "specialise for the shape the workload actually
+  passes"). `IDEAS_LANE_FRAMEWORKS`, off by default; off keeps every request
+  byte-identical. The framework sits in the lane's own instruction, outside
+  every fence and every cached block; a note per lane records which framework
+  it was assigned, so X1-3 can tell a view alone from a view with its
+  framework.
+- **Round seeds (G5b)** (`optimization/idea_dedupe.py`, `idea_pipeline.py`,
+  `orchestrator/nodes.py`): from the engine's second hypotheses round on (up to
+  `PORTFOLIO_ROUNDS`), each lens lane is shown the verdicts of the ideas this
+  run has already trialled: each idea's mechanism key (file, function, target
+  lines, mechanism, primary cell), its sanitised title, its outcome and its gain
+  as a ratio of the noise floor; keeps first. Behind a setting, off by default.
+  **One fenced block, not two:** the seeds and G4's mechanisms block
+  (`taken_block`) are merged into one fenced block with one lead-in, one line
+  per distinct mechanism key, a trialled key carrying its outcome and gain, so
+  the prompt grows once. With seeds off, G4's block is unchanged byte for byte.
+  A proposal (G3) is never a seed. Re-basing across runs (what E4 measured)
+  stays in the evolution harness.
+- **Near-miss compounds (G5b, W4 folded in)** (`optimization/evolve.py` new,
+  `orchestrator/nodes.py`, `execution/trial_runner.py`): D22's rule. Two
+  verdicts form a pair when both are **inconclusive**, both in the right
+  direction with a primary gain of at least **0.5 of the noise floor**, their
+  trials change **disjoint files**, both are **efficiency** class, and neither
+  is a proposal. **At most one compound a round**, the best pair by combined
+  gain/floor ratio. The compound is built by **replay**: the two measured trial
+  commits are cherry-picked onto the run's base with the combiner's hardened
+  git, with no editor request, so it costs no tokens and is exactly what was
+  measured. A conflict means no compound, recorded as a note. The compound is a
+  **normal trial** under the frozen judges at full N, with anti-cheat on its own
+  diff; nothing about it relaxes a rule, and it is judged from scratch (its
+  parents' measurements are never reused). Behind a setting, off by default.
+  *Outside G5's file list:* the replay needs `execution/trial_runner.py` (a
+  trial whose commit comes from cherry-picks, not the editor); the owner
+  approved that touch on 2026-11-03.
 - **Folded-in Wave 3 units (O35).** W4 (evolution: near-miss compounds) becomes
   part of G5. W1 and W2 (lessons in the generator prompt; the combine-failed
   lesson discount) become G11, the lab's learning mechanism: each round's
@@ -441,7 +481,7 @@ fuse. The final figure is re-derived and reported before the first dispatch.
 | G2 | Per-lane views, the history view's contamination guard | `optimization/idea_context.py`; tests | G1 |
 | G3 | Rule-relaxing proposals path + structural quarantine, security-reviewed before X1 (O32) | `optimization/idea_types.py`, `idea_lanes.py`, `anticheat.py`, the judges; tests | G1 |
 | G4 | Sequential lanes, mechanism dedupe, its validation set | `optimization/idea_pipeline.py`, `idea_dedupe.py` (new); tests | G1 |
-| G5 | Per-lane frameworks; compounding into evolution, with W4's near-miss compounds folded in | `optimization/idea_prompts.py`, `orchestrator/nodes.py`, `optimization/evolve.py`; tests | G2-G4 |
+| G5 | Per-lane frameworks (G5a); round seeds and near-miss compounds by replay, W4 folded in (G5b) | `optimization/idea_prompts.py`, `idea_pipeline.py`, `idea_dedupe.py`, `orchestrator/nodes.py`, `optimization/evolve.py`, `execution/trial_runner.py` (outside the first list, owner 2026-11-03); tests | G2-G4 |
 | G6 | Scaling + operation-count judges, shadow mode | `optimization/judges.py`, `execution/measure.py`; tests | — |
 | G7 | The idea-lab process doc | `.claude/handoff/step3/idea-lab.md` | — |
 | G8 | The 18 unseen problems (setter Fable 5.1, O19; no Fable attempter, O34; each reference measured by the frozen judges before sealing) | `tests/fixtures/idea_lab/…`, a setter harness | G1-G6 |
