@@ -783,16 +783,18 @@ blocks it.
   report, one pooled re-audit (no idea generation) per library pools the
   re-run's X1-1 ideas with run 1's A, X1-0, X1-2 and X1-3, and the report for
   those four libraries comes from that pooled audit. The self/cross measure
-  (O43, definition confirmed by the owner): the headline counts one
-  `duplicate_of` link per audit row, only for ideas in the arm's result, self or
-  cross by the link target's arm; one secondary row labelled "before the arm's
-  own filter" counts every audited row, including those the arm's own reviewer
-  or dedupe had already removed, since it shows the lever's effect at
-  generation. The whole-class version is dropped. On run 1 (summed over the four
-  libraries): headline self 0 for every arm (each arm's own filter removes its
-  self-repeats), cross X1-0 5, X1-1 13, X1-2 18, X1-3 16; before the own filter,
-  self 9, 3, 0, 0 and cross 18, 21, 37, 26. The owner's 15/2/2/2 is not
-  reproduced by these rows; the report prints the counts as defined.
+  (O43, definition confirmed by the owner): one `duplicate_of` link per audit
+  row, self or cross by the link target's arm. Headline: only ideas in the arm's
+  result, labelled "what the arm handed on (in-result rows)"; secondary: every
+  audit row, labelled "every idea the lanes generated (all audit rows)"; the
+  filter is stated next to each number. The whole-class version is dropped.
+  Audit ids restart in every library (i01, i02, ...), so a link's target is
+  looked up within its own library. The owner's 15/2/2/2 (all rows) and 1/0/0/2
+  (in-result) are what an id-only lookup gives, each target resolved against
+  another library's idea; within each library run 1 gives self 9, 3, 0, 0 on all
+  rows and 0 for every arm in-result, cross 18, 21, 37, 26 on all rows and 5,
+  13, 18, 16 in-result. The reading holds: the baseline repeats itself most at
+  generation and the levers cut that, while cross-arm repeats stay high.
 - **O43. X1's audit reading (owner, 2026-11-03, on run 1).** "Infeasible" is
   almost entirely `duplicate_of` (114 of 116 verdicts, verified), and the
   as-coded good count rewards whichever arm the auditor read first (arm A 19 of
