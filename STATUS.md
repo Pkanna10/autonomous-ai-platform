@@ -777,6 +777,18 @@ blocks it.
   lab's learning mechanism, W3 deferred. Budget: X1 (~42 USD) is ~28 % of Window
   1's 148.73 USD; read every idea list in full; some confirmatory rungs may
   spill into Window 2.
+- **O44. The X1-1 re-run is re-audited in the full pool (owner, 2026-11-03).**
+  The re-run audits only arm A and X1-1, so its duplicate rate would be lower
+  than run 1's by construction. Before its X1-1 rows replace run 1's in the
+  report, one pooled re-audit (no idea generation) per library pools the
+  re-run's X1-1 ideas with run 1's A, X1-0, X1-2 and X1-3, and the report for
+  those four libraries comes from that pooled audit. The self/cross measure
+  (O43), as the Lead builds it: self = auditor links between two ideas of the
+  same arm; cross = links between the arm and any other arm, counted for both
+  ends, because a link's direction only records which idea the auditor read
+  first (run 1: 11 links from X1-0 to X1-1 and 9 from X1-1 to X1-0). Run 1's
+  link matrix by source and target arm is recorded with the run; the owner's 15
+  against 2 and 22-35 are not reproduced by this or by the per-class count.
 - **O43. X1's audit reading (owner, 2026-11-03, on run 1).** "Infeasible" is
   almost entirely `duplicate_of` (114 of 116 verdicts, verified), and the
   as-coded good count rewards whichever arm the auditor read first (arm A 19 of
