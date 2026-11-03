@@ -524,6 +524,23 @@ fuse. The final figure is re-derived and reported before the first dispatch.
 | V (CI) | An `idea-lab` live suite: the views pass, the Sonnet 5 / Fable 5 smoke requests, the marker and dedupe validations, the idea configurations (X1-1's Latin square), the execution slice with per-trial records and combine summaries, `OP_COUNT_JUDGE` on (asserted), the §6.5 comparison tables, caps per dispatch, full idea lists | `tests/live/…`, `ci.yml` | G1-G6 |
 | X1 | The first exploratory round (live): validations, idea configurations, execution slice | — | G1-G7, the V suite, the views pass |
 
+**The V suite, split (Lead, 2026-11-03).** Six units on separate files; each
+writes its `ci.yml` suite as a patch the Lead integrates, and none sends a
+request outside its own CI suite.
+
+| Unit | What | Files (owned) | After |
+| --- | --- | --- | --- |
+| Va | Views pass (§6.1): per library, clone at E1's recorded commit, build every view from E1's facts with no request, write `ideas-views` rows and a loader | `tests/live/ideas_views.py` (new); guards | G2, G2b |
+| Vb | Marker validation (§6.1, O37): rank sets from `oss_ab_rank_rows.jsonl`, Opus 5.5 and Opus 5 rank, within-library AUC with a cluster bootstrap, the bar | `tests/live/ideas_marker.py` (new); guards | — |
+| Vc | Smoke requests (Sonnet 5, Fable 5) and the dedupe validation: a labeller that wrote none of E1's ideas labels candidate pairs, scored against G4's bar, plus an owner spot-check sample | `tests/live/ideas_validate.py` (new); guards | G4 |
+| Vd | The X1 configurations (§6.2): X1-0 to X1-4 and arm A on E1's facts and Va's views, X1-1's Latin square, full idea lists, cost per configuration | `tests/live/ideas_probe.py`; guards | Va |
+| Ve | The execution slice (§6.3): the top ideas new to today's generator by the validated marker, as normal engine trials, `OP_COUNT_JUDGE` on and asserted, per-trial records and combine summaries | `tests/live/ideas_slice.py` (new); guards | Vb, Vd |
+| Vf | The report (§6.5): per library and configuration markdown, the four comparison tables, cost per configuration with D64's seeded-call column, the owner's hidden-source sample | `tests/live/ideas_report.py` (new); guards | Vd, Ve |
+
+Wave A builds Va, Vb and Vc in parallel; wave B builds Vd, then Ve and Vf. The
+validations (Vb, Vc, the views pass) can be dispatched as soon as wave A is in;
+X1 waits for all six.
+
 **The idea-quality marker** is resolved before X1 (§6.1): Opus 5.5 and Opus
 5 rank ideas with measured trial outcomes (the oss-ab rank rows), the closer
 ranking wins, the owner-labelled sample scores novelty, and no idea is graded
