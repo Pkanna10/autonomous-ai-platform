@@ -3245,6 +3245,38 @@ worktree", 4.4.0) or in the builder rules every brief carries.
   cannot be rebuilt from rows alone (the files keep no `shown_ideas`, verdicts
   or pool beyond the 48-idea bound), so the replay is the seam; accepted as
   harness code.
+- V-rep (O42, O43, O44 in the report). Arm comparisons use `good_corrected` and
+  `good_strict` only (run 1: X1-0 13/13, X1-1 13/12, X1-2 11/10, X1-3 14/11, arm
+  A 19 corrected and no strict count); the as-coded count appears only in the
+  per-library raw appendix, labelled "as coded (reading-order artifact)".
+  Self/cross looks each link's target up within its own library, in two tables,
+  "What the arm handed on (in-result rows)" first and "Every idea the lanes
+  generated (all audit rows)" second, the filter on every column. Run 1's values
+  are pinned (all rows self 9/3/0/0, cross 18/21/37/26; in-result self 0/0/0/0,
+  cross 5/13/18/16), and an id-only lookup is shown to give other numbers. Table
+  2b gives X1-1's cost per model, priced from `ideas-reply` usage at
+  `MODEL_PRICING` (no row records a request's cost), over the model's lens-lane
+  requests only, divided by its unique new mechanisms, both labelled upper
+  bounds; a model with none shows "no unique new mechanism". `--rerun` and
+  `--reaudit` go together. On the re-run's libraries, X1-1's probe, idea and
+  reply rows come from the re-run and every audit figure from the pooled
+  re-audit, with the good counts recomputed from its rows (checked to reproduce
+  run 1's 20 probe rows). The re-run is recognised by its shape, arms A and X1-1
+  alone on each library. The report is refused in each of these cases:
+  - a mixed input;
+  - a re-run without its re-audit;
+  - digests that do not match;
+  - a run 1 X1-1 slice or pool row on a re-run library (the review's should_fix:
+    such a row would join the re-run's ideas by position).
+
+  A slice trial whose title differs from its idea's is also refused. So the
+  slice and the pool for those libraries must run on the re-run. The headers
+  name each library's source files. Review nit left as it is: a re-run library
+  that no results file holds passes the swap with X1-1 rows alone; the re-run is
+  planned on run 1's four libraries only. Size about 2.6x its row (308 source
+  lines: the swap and its refusals, recomputed audit scores, three sections),
+  accepted as harness code like the other V units.
+
 - G2 fix found by Va: `count_note` noted negative cuts, so every callers view
   under its limits said e.g. "-199 file(s) not scanned for callers"; it now
   notes only positive counts. Requests were byte-identical; the six viewed

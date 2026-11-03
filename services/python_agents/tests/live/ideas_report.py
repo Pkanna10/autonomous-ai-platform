@@ -56,12 +56,26 @@ a library (a keyless idea is its own); an idea is new to today's generator
 when its class under the auditor's duplicate links, joined either way
 (``ideas_slice.families``' rule), holds no arm-A audit; auditor-feasible is a
 review that is not ``infeasible``.
+
+V-rep (O42-O44): good counts are the corrected and strict ones (the as-coded
+count rewards the arm the auditor read first: only in the per-library
+appendix, labelled so); self/cross repeats count each audit row's
+``duplicate_of`` link once, its target looked up in its own library (ids
+restart in each), over in-result rows (the headline) and all audit rows;
+X1-1's lens-lane USD per model (priced from ``ideas-reply`` usage) beside
+its unique new mechanisms. ``--rerun`` (O42's X1-1 re-run: arms A and X1-1
+alone) and ``--reaudit`` (its pooled re-audit, ``ideas-reaudit`` rows whose
+digests name the re-run and one results file) go together: the re-run's
+X1-1 probe, idea and reply rows replace those libraries', and the re-audit's
+rows every audit-based figure there (the probe counts recomputed by
+``audit_scores``); the headers name each library's files.
 """
 
 from __future__ import annotations
 
 import argparse
 import dataclasses
+import hashlib
 import json
 import math
 import random
@@ -73,6 +87,8 @@ from typing import Final, Self, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from autonomous_ai_agents.clients.cost import response_cost
+from autonomous_ai_agents.common.config import settings
 from autonomous_ai_agents.optimization.idea_context import _totals
 from autonomous_ai_agents.optimization.idea_dedupe import (
     MAX_DIFFERENT_MERGED,
@@ -99,6 +115,7 @@ from .ideas_probe import (
     E1_REPOS,
     IDEA_EXPERIMENT,
     PROPOSAL_EXPERIMENT,
+    REPLY_EXPERIMENT,
     ROW_EXPERIMENT,
     SERVICE_DIR,
     SQUARE_MODELS,
@@ -106,6 +123,8 @@ from .ideas_probe import (
     FactsBody,
     load_facts,
 )
+from .ideas_reaudit import REAUDIT_EXPERIMENT
+from .ideas_reaudit import REAUDIT_REPOS as REAUDIT_REPOS
 from .ideas_validate import E1_DIR as E1_DIR
 from .ideas_validate import SCORE_EXPERIMENT as DEDUPE_EXPERIMENT
 
@@ -123,7 +142,11 @@ CONFIGS: Final = tuple(a.key for a in X1_ARMS)  # A, then X1-0 to X1-4
 TODAY, BASELINE = "A", "X1-0"
 LEVERS: Final = CONFIGS[2:]
 NOISE_ARMS: Final = ("B", "C", "D")  # E1: one Sonnet lane generator, three times
-DELTA_MEASURES: Final = ("ideas", "non_obvious", "good", "feasible", "cost_usd")
+DELTA_MEASURES: Final = ("ideas", "non_obvious", "good_corrected", "good_strict",
+                         "feasible", "cost_usd")  # O43: never the as-coded good  # fmt: skip
+HANDED_ON: Final = "what the arm handed on (in-result rows)"  # O44's headline
+GENERATED: Final = "every idea the lanes generated (all audit rows)"
+_BAD: Final = "infeasible"
 NO_BAND: Final = ("unique", "new", "above", "families")  # E1 has no idea rows
 SAMPLE_SEED: Final = 20261103
 SAMPLE_SIZE: Final = 24
@@ -182,11 +205,15 @@ class ProbeLine(_Row):
     arm: str
     ideas: int
     non_obvious: int
-    good: int | None
+    good: int | None  # as coded: a reading-order artifact (O43), appendix only
     audited: int
     auditor_infeasible: int
     proposals: int = 0  # ``ProbeRow``'s default; E1's rows predate it
     cost_usd: float
+    good_corrected: int | None = None  # E1's rows predate both
+    good_strict: int | None = None
+    lever: str = ""
+    lane_models: dict[str, str] = Field(default_factory=dict)  # X1-1: lens -> model
 
     @property
     def feasible(self) -> int:
@@ -198,10 +225,25 @@ class AuditLine(_Row):
     arm: str
     id: str
     title: str
+    tier: int
     in_result: bool
     auditor: str | None
     reason: str | None
     duplicate_of: str | None
+
+
+class ReauditLine(AuditLine):  # ``ideas_reaudit.ReauditSink``'s rows
+    run1_sha256: str
+    rerun_sha256: str
+
+
+class ReplyLine(_Row):
+    repo: str
+    arm: str
+    role: str
+    label: str
+    sent: bool
+    usage: tuple[int, int, int, int]  # input, output, cache read, cache write
 
 
 class ProposalLine(_Row):
@@ -314,7 +356,12 @@ _KINDS: Final[Mapping[str, type[_Row]]] = {
     PROPOSAL_EXPERIMENT: ProposalLine, TRIAL_EXPERIMENT: TrialLine,
     COMBINE_EXPERIMENT: CombineLine, DEDUPE_EXPERIMENT: DedupeLine,
     SET_EXPERIMENT: PoolSetLine, RESULT_EXPERIMENT: PoolResultLine,
+    REPLY_EXPERIMENT: ReplyLine,
 }  # fmt: skip
+_READ: Final[Mapping[str, type[_Row]]] = {
+    **_KINDS,
+    REAUDIT_EXPERIMENT: ReauditLine,
+}  # the re-audit: opted in
 
 
 def _parsed(paths: Iterable[Path], kinds: Iterable[str]) -> dict[str, list[_Row]]:
@@ -329,7 +376,7 @@ def _parsed(paths: Iterable[Path], kinds: Iterable[str]) -> dict[str, list[_Row]
             kind = row.get("experiment") if isinstance(row, dict) else None
             if kind not in found:
                 continue
-            model = _KINDS[kind]
+            model = _READ[kind]
             try:
                 fields = {k: v for k, v in row.items() if k in model.model_fields}
                 found[kind].append(model.model_validate(fields))
@@ -355,17 +402,104 @@ class Rows:
     dedupe: DedupeScore | None
     pool_sets: tuple[PoolSetLine, ...] = ()
     pool_results: tuple[PoolResultLine, ...] = ()
+    replies: tuple[ReplyLine, ...] = ()
+    sources: tuple[tuple[str, str], ...] = ()  # (library, the files its figures use)
 
 
-def load_rows(paths: Sequence[Path]) -> Rows:
-    """X1's rows from its results files, refused when a kind is missing."""
-    f = _parsed(paths, _KINDS)
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _rerun_of(found: Mapping[str, list[_Row]]) -> set[str]:
+    """The libraries holding the X1-1 re-run's shape: arms A and X1-1 alone."""
+    arms = _grouped(_of(found, ROW_EXPERIMENT, ProbeLine), lambda p: p.repo)
+    return {r for r, ps in arms.items() if {p.arm for p in ps} == {TODAY, "X1-1"}}
+
+
+def _swap(
+    f: dict[str, list[_Row]], files: Mapping[Path, Mapping[str, list[_Row]]],
+    rerun: Path, reaudit: Path,
+) -> tuple[set[str], str]:  # fmt: skip
+    """O44: the re-run's X1-1 rows and the pooled re-audit's audit rows in
+    place of run 1's on the re-run's libraries; refused unless the re-audit's
+    digests name the re-run and one of ``files``."""
+    g = _parsed([rerun], _KINDS)
+    redo = _rerun_of(g)
+    if not redo or redo != {p.repo for p in _of(g, ROW_EXPERIMENT, ProbeLine)}:
+        raise ValueError(f"{rerun.name}: not the X1-1 re-run (arms A and X1-1 "
+                         "alone on each library, O42)")  # fmt: skip
+    audits = _of(_parsed([reaudit], (REAUDIT_EXPERIMENT,)), REAUDIT_EXPERIMENT,
+                 ReauditLine)  # fmt: skip
+    shas = {_sha(p): p for p in files}
+    pair = {(a.run1_sha256, a.rerun_sha256) for a in audits}
+    if len(pair) != 1 or (d := pair.pop())[1] != _sha(rerun) or d[0] not in shas:
+        raise ValueError(f"{reaudit.name}: its digests do not name {rerun.name} "
+                         "and one results file as X1 run 1 (O44)")  # fmt: skip
+    if (done := {a.repo for a in audits}) != redo:
+        raise ValueError(f"{reaudit.name}: re-audits {sorted(done)}, the re-run "
+                         f"ran {sorted(redo)}")  # fmt: skip
+    for p, h in files.items():  # joined by (label, position): run 1's ideas
+        sliced: tuple[TrialLine | CombineLine, ...] = (
+            *_of(h, TRIAL_EXPERIMENT, TrialLine),
+            *_of(h, COMBINE_EXPERIMENT, CombineLine),
+        )
+        stale = [r.repo for r in sliced if r.arm == "X1-1"] + [
+            r.repo for r in _of(h, RESULT_EXPERIMENT, PoolResultLine)
+            if any(k.arm == "X1-1" for k in (*r.members, *r.apart))]  # fmt: skip
+        if old := sorted(set(stale) & redo):
+            raise ValueError(f"{p.name}: {old[0]} X1-1 slice/pool rows are run 1's "
+                             "X1-1 ideas; re-slice or re-rank on the re-run before "
+                             "reporting (O44)")  # fmt: skip
+    swapped = (IDEA_EXPERIMENT, ROW_EXPERIMENT, REPLY_EXPERIMENT, PROPOSAL_EXPERIMENT)
+    for kind, rows in f.items():
+        rows[:] = [r for r in rows if getattr(r, "repo", None) not in redo
+                   or (kind != AUDIT_EXPERIMENT and (kind not in swapped
+                                                     or getattr(r, "arm", "") != "X1-1"))]  # fmt: skip
+        if kind in swapped:
+            rows += [r for r in g[kind] if getattr(r, "arm", "") == "X1-1"]
+    fields = set(AuditLine.model_fields)
+    f[AUDIT_EXPERIMENT] += [AuditLine.model_validate(a.model_dump(include=fields))
+                            for a in audits]  # fmt: skip
+    return redo, (f"X1-1's probe, idea and reply rows from {rerun.name}; every "
+                  "audit-based figure (share-new, self/cross, good counts, "
+                  f"auditor-feasible) from {reaudit.name}; the rest from "
+                  f"{shas[d[0]].name}")  # fmt: skip
+
+
+def load_rows(
+    paths: Sequence[Path], rerun: Path | None = None, reaudit: Path | None = None
+) -> Rows:
+    """X1's rows from its results files, refused when a kind is missing; with
+    O44's re-run and its pooled re-audit swapped in (``_swap``)."""
+    if (rerun is None) != (reaudit is None):
+        raise ValueError("the X1-1 re-run and its pooled re-audit go together "
+                         "(--rerun and --reaudit, O44), never one alone")  # fmt: skip
+    files = {p: _parsed([p], _KINDS) for p in paths}
+    for p, g in files.items():
+        if held := _rerun_of(g):
+            raise ValueError(f"{p.name}: holds the X1-1 re-run (arms A and X1-1 "
+                             f"alone on {', '.join(sorted(held))}): name it with "
+                             "--rerun beside its pooled re-audit (O44)")  # fmt: skip
+    f = {kind: [r for g in files.values() for r in g[kind]] for kind in _KINDS}
+    redo, swapped = (set(), "") if rerun is None or reaudit is None else (
+        _swap(f, files, rerun, reaudit))  # fmt: skip
+    named = {repo: ", ".join(dict.fromkeys(p.name for p, g in files.items()
+                                           for r in _of(g, ROW_EXPERIMENT, ProbeLine)
+                                           if r.repo == repo))
+             for repo in E1_REPOS}  # fmt: skip
+    scored = audit_scores([a for a in _of(f, AUDIT_EXPERIMENT, AuditLine)
+                           if a.repo in redo])  # fmt: skip
+    probes: list[_Row] = [p.model_copy(update=scored.get((p.repo, p.arm), {}))
+                          for p in _of(f, ROW_EXPERIMENT, ProbeLine)]  # fmt: skip
+    f[ROW_EXPERIMENT] = probes
     rows = Rows(
         _of(f, IDEA_EXPERIMENT, IdeaLine), _of(f, ROW_EXPERIMENT, ProbeLine),
         _of(f, AUDIT_EXPERIMENT, AuditLine), _of(f, PROPOSAL_EXPERIMENT, ProposalLine),
         _of(f, TRIAL_EXPERIMENT, TrialLine), _of(f, COMBINE_EXPERIMENT, CombineLine),
         None, _of(f, SET_EXPERIMENT, PoolSetLine),
-        _of(f, RESULT_EXPERIMENT, PoolResultLine),
+        _of(f, RESULT_EXPERIMENT, PoolResultLine), _of(f, REPLY_EXPERIMENT, ReplyLine),
+        tuple((r, swapped if r in redo else v) for r, v in named.items()
+              if v or r in redo),
     )  # fmt: skip
     for kind, found in ((IDEA_EXPERIMENT, rows.ideas), (ROW_EXPERIMENT, rows.probes)):
         if not found:
@@ -449,6 +583,65 @@ def fresh(audits: Iterable[AuditLine]) -> frozenset[tuple[str, str]]:
     return frozenset(k for k in by if find(k) not in taken)
 
 
+def audit_scores(
+    audits: Sequence[AuditLine],
+) -> dict[tuple[str, str], dict[str, int | None]]:
+    """``ideas_probe.scores``' counts from audit rows alone (the pooled
+    re-audit writes no probe row): a duplicate whose root, followed through
+    the links within its library, is another arm's takes the root's verdict;
+    strict leaves out roots of arm A; a library with no verdict is unknown."""
+    out: dict[tuple[str, str], dict[str, int | None]] = {}
+    for repo, rows in _grouped(audits, lambda a: a.repo).items():
+        by, known = {a.id: a for a in rows}, any(a.auditor is not None for a in rows)
+
+        def root(a: AuditLine, by: Mapping[str, AuditLine] = by) -> AuditLine | None:
+            seen = {a.id}
+            while (a.auditor, a.reason) == (_BAD, "duplicate_of"):
+                if (t := by.get(a.duplicate_of or "")) is None or t.id in seen:
+                    return None
+                seen.add(t.id)
+                a = t
+            return a
+
+        for arm, mine in _grouped(rows, lambda a: a.arm).items():
+            kept = [(a.title, a if (r := root(a)) is None or r.arm == arm else r)
+                    for a in mine if a.tier == 0]  # fmt: skip
+            kept = [(t, w) for t, w in kept if w.auditor not in (None, _BAD)]
+            audited = [a for a in mine if a.auditor is not None]
+            out[(repo, arm)] = {
+                "audited": len(audited),
+                "auditor_infeasible": sum(a.auditor == _BAD for a in audited),
+                "good": len({a.title for a in audited if a.tier == 0
+                             and a.auditor != _BAD}) if known else None,
+                "good_corrected": len({t for t, _ in kept}) if known else None,
+                "good_strict": None if arm == TODAY or not known
+                else len({t for t, w in kept if w.arm != TODAY}),
+            }  # fmt: skip
+    return out
+
+
+def _index(audits: Sequence[AuditLine]) -> Callable[[AuditLine], AuditLine | None]:
+    """A link's target, looked up within its own library (O44: ids restart)."""
+    by = {(a.repo, a.id): a for a in audits}
+    return lambda a: by.get((a.repo, a.duplicate_of or ""))
+
+
+def repeats(
+    audits: Sequence[AuditLine], in_result: bool
+) -> dict[tuple[str, str], Counter[str]]:
+    """Per (library, arm): each audit row's ``duplicate_of`` link once, self
+    when its target is the same arm's, cross otherwise (O43, O44)."""
+    target = _index(audits)
+    out: dict[tuple[str, str], Counter[str]] = {}
+    for a in audits:
+        found = out.setdefault((a.repo, a.arm), Counter())
+        if a.duplicate_of is not None and (a.in_result or not in_result):
+            t = target(a)
+            found["unresolved" if t is None else "self" if t.arm == a.arm
+                  else "cross"] += 1  # fmt: skip
+    return out
+
+
 def _grouped(items: Iterable[_V], key: Callable[[_V], _K]) -> dict[_K, list[_V]]:
     out: dict[_K, list[_V]] = defaultdict(list)
     for item in items:
@@ -488,6 +681,15 @@ class Measures:
     known: int  # ideas with a predicted ceiling
     families: int
     cost_usd: float
+
+
+@dataclass(frozen=True)
+class LensCost:  # one model of X1-1's square (O42)
+    requests: int
+    usd: float
+    ideas: int
+    new: int
+    unique: int
 
 
 @dataclass(frozen=True)
@@ -585,6 +787,9 @@ class Report:
     costs: dict[str, Cost]
     sample: tuple[IdeaLine, ...]
     pools: dict[str, tuple[Pool, ...]]  # by library: each ranking
+    good: dict[str, tuple[int | None, int | None]]  # corrected, strict (O43)
+    repeats: dict[str, dict[tuple[str, str], Counter[str]]]  # by filter label
+    lens_costs: dict[str, LensCost]  # by model
 
 
 def _order(i: IdeaLine) -> tuple[object, ...]:
@@ -610,8 +815,11 @@ def owner_sample(
     return tuple(drawn[:size])
 
 
-def report_of(results: Sequence[Path], e1_dir: Path = E1_DIR) -> Report:
-    rows = load_rows(results)
+def report_of(
+    results: Sequence[Path], e1_dir: Path = E1_DIR, *,
+    rerun: Path | None = None, reaudit: Path | None = None,
+) -> Report:  # fmt: skip
+    rows = load_rows(results, rerun, reaudit)
     facts, noise = load_e1(e1_dir)
     for repo in sorted({i.repo for i in rows.ideas} | {p.repo for p in rows.probes}):
         if repo not in facts:
@@ -653,6 +861,28 @@ def report_of(results: Sequence[Path], e1_dir: Path = E1_DIR) -> Report:
                                     tuple(dict.fromkeys(i.title for i in ideas))))  # fmt: skip
 
     lens = [i for i in scored if i.arm == "X1-1" and i.lane in LENSES]
+    on = {(p.repo, k): m for p in rows.probes if p.arm == "X1-1"
+          for k, m in p.lane_models.items()}  # fmt: skip
+    spent = _grouped(((m, r) for r in rows.replies if (r.arm, r.role) == ("X1-1", "lane")
+                      and r.sent and (m := on.get((r.repo, r.label)))), lambda x: x[0])  # fmt: skip
+    audit_of = {(a.repo, a.arm, a.title): a for a in rows.audits}
+    novel = [i for i in lens if (a := audit_of.get((i.repo, i.arm, i.title)))
+             and (a.repo, a.id) in new_ids]  # fmt: skip
+
+    def priced(m: str, u: tuple[int, int, int, int]) -> float:
+        usage = {"input_tokens": u[0], "output_tokens": u[1],
+                 "cache_read_input_tokens": u[2], "cache_creation_input_tokens": u[3]}  # fmt: skip
+        return response_cost(usage, settings.MODEL_PRICING, model=m)[0]
+
+    lens_costs = {m: LensCost(
+        len(spent.get(m, [])), math.fsum(priced(m, r.usage) for _, r in spent.get(m, [])),
+        sum(i.model == m for i in lens), sum(i.model == m for i in novel),
+        _unique(i for i in novel if i.model == m)) for m in SQUARE_MODELS}  # fmt: skip
+
+    def summed(arm: str, m: str) -> int | None:
+        found = [getattr(p, m) for p in rows.probes if p.arm == arm]
+        return None if not found or None in found else sum(found)
+
     square = {
         k: (len(g), _unique(g), sum(over.get(i, -1.0) >= 0 for i in g))
         for by in (lambda i: (i.model, i.lane), lambda i: (i.model, "*"),
@@ -698,6 +928,13 @@ def report_of(results: Sequence[Path], e1_dir: Path = E1_DIR) -> Report:
             math.fsum(c.seeded_cost_usd for c in runs), wins, usd / wins if wins else None,
         )  # fmt: skip
     at = {(i.repo, i.arm, i.label, i.position): i for i in rows.ideas}
+    for t in rows.trials:  # the library file joins them by (label, position)
+        where = f"{t.repo} {t.arm} {t.label} #{t.position}"
+        if (i := at.get((t.repo, t.arm, t.label, t.position))) is None:
+            raise ValueError(f"{where}: a trial with no ideas-idea row")
+        if i.title != t.title:
+            raise ValueError(f"{where}: the trial's {t.title!r} is not the idea "
+                             f"there ({i.title!r})")  # fmt: skip
     pools: dict[str, list[Pool]] = defaultdict(list)
     for p in sorted(rows.pool_results, key=lambda p: p.repo):  # each: as recorded
         pools[p.repo].append(pool_of(p, rows.pool_sets, at))
@@ -710,6 +947,10 @@ def report_of(results: Sequence[Path], e1_dir: Path = E1_DIR) -> Report:
                  for a in CONFIGS},
         deltas=deltas, costs=costs, sample=owner_sample(scored),
         pools={repo: tuple(found) for repo, found in pools.items()},
+        good={a: (summed(a, "good_corrected"), summed(a, "good_strict"))
+              for a in CONFIGS},
+        repeats={label: repeats(rows.audits, label == HANDED_ON)
+                 for label in (HANDED_ON, GENERATED)}, lens_costs=lens_costs,
     )  # fmt: skip
 
 
@@ -885,6 +1126,68 @@ def _marker_section(r: Report) -> list[str]:
     return out
 
 
+def _sources(r: Report) -> list[str]:
+    found = "; ".join(f"{repo}: {files}" for repo, files in r.rows.sources)
+    return [f"Sources (O44): {found}", ""]
+
+
+def _known(value: int | None) -> object:
+    return "-" if value is None else value
+
+
+def _vrep_sections(r: Report) -> list[str]:
+    """O43's good counts, O44's self/cross tables, the as-coded appendix."""
+    out = [
+        "## Good ideas, corrected and strict (O43)", "",
+        "Summed over the libraries (- when one is unknown). Corrected: returned "
+        "non-obvious ideas the auditor did not mark infeasible, a duplicate taking "
+        "the verdict of the other arm's idea it repeats; strict: of those, none "
+        "decided on an arm-A idea. The as-coded count rewards the arm the auditor "
+        "read first, so it is shown only in the appendix.", "",
+        *_table(("configuration", "good corrected", "good strict"),
+                [[a, _known(c), _known(st)] for a, (c, st) in r.good.items()]), "",
+        "## Self and cross repeats (O43, O44)", "",
+        "Each audit row's duplicate_of link counted once: self when its target is "
+        "the same configuration's idea, cross otherwise, the target looked up "
+        "within the same library (audit ids restart in each).", "",
+    ]  # fmt: skip
+    for label in (HANDED_ON, GENERATED):
+        tag, by = label[label.index("(") :], r.repeats[label]
+        keyed = sorted(by.items(), key=lambda kv: (kv[0][0], CONFIGS.index(kv[0][1])))
+        total = [(("all libraries", a), sum((c for (_, x), c in by.items() if x == a),
+                                            Counter[str]())) for a in CONFIGS
+                 if any(x == a for _, x in by)]  # fmt: skip
+        out += [f"### {label.capitalize()}", "", *_table(
+            ("library", "configuration",
+             *(f"{h} {tag}" for h in ("self", "cross", "target not found"))),
+            [[repo, arm, *(f"{c[k]} {tag}" for k in ("self", "cross", "unresolved"))]
+             for (repo, arm), c in (*keyed, *total)]), ""]  # fmt: skip
+    probes = sorted(r.rows.probes, key=lambda p: (p.repo, CONFIGS.index(p.arm)))
+    return [*out, "## Appendix: per-library raw good counts", "", *_table(
+        ("library", "configuration", "good corrected", "good strict",
+         "as coded (reading-order artifact)"),
+        [[p.repo, p.arm, _known(p.good_corrected), _known(p.good_strict),
+          _known(p.good)] for p in probes]), ""]  # fmt: skip
+
+
+def _lens_costs(r: Report, tag: str) -> list[str]:
+    body = [[m, c.requests, f"{c.usd:.4f}", c.ideas, c.new, c.unique,
+             f"{c.usd / c.unique:.4f}" if c.unique else "no unique new mechanism"]
+            for m, c in r.lens_costs.items()]  # fmt: skip
+    return [
+        "## 2b X1-1 cost per unique new mechanism, per model (O42)", "",
+        "Per model of the Latin square: the USD of its X1-1 lens-lane requests "
+        "(S1, the leap and the reviewer left out), priced from each sent "
+        "request's recorded usage (ideas-reply rows) at common/config.py's "
+        "MODEL_PRICING: no row records a request's cost. Ideas: its returned "
+        "lens-lane ideas; new to today's generator by the auditor's duplicate "
+        "links; unique new by the G4 mechanism key.", "",
+        *_table(("model", "lens-lane requests", "USD", "ideas",
+                 f"new to today's generator{tag}", f"unique new mechanisms{tag}",
+                 "USD per unique new mechanism"), body), "",
+    ]  # fmt: skip
+
+
 def _measures_file(r: Report, show_raw: bool, verdict: str) -> str:
     raw = ("raw titles",) if show_raw else ()
     tag, score = _tag(bound(r.rows.dedupe)), r.rows.dedupe
@@ -899,7 +1202,7 @@ def _measures_file(r: Report, show_raw: bool, verdict: str) -> str:
               f"{c.seeded_usd:.4f}", c.wins, _num(c.per_win, 4)]
              for a, c in r.costs.items()]  # fmt: skip
     return "\n".join([
-        "# X1 idea measures (spec-idea-lab 6.2)", "",
+        "# X1 idea measures (spec-idea-lab 6.2)", "", *_sources(r),
         *_table(("dedupe (G4)", "verdict"), [["Vc's validation", verdict]]), "",
         *note,
         "Ideas: each configuration's result (returned, not a proposal: "
@@ -920,6 +1223,7 @@ def _measures_file(r: Report, show_raw: bool, verdict: str) -> str:
         *_table(("configuration", "ideas USD", "slice USD", "seeded calls",
                  "seeded USD", "wins", "slice USD per win"), costs), "",
         "## Marker-feasible ideas (6.2, O40, O41)", "", *_marker_section(r), "",
+        *_vrep_sections(r),
     ])  # fmt: skip
 
 
@@ -943,7 +1247,7 @@ def _tables_file(r: Report, show_raw: bool) -> str:
                else "inside the noise" if abs(d) <= s else "beyond the noise"]
               for (a, m), (d, s) in r.deltas.items()]  # fmt: skip
     return "\n".join([
-        "# X1 comparison tables (spec-idea-lab 6.5)", "",
+        "# X1 comparison tables (spec-idea-lab 6.5)", "", *_sources(r),
         f"## 1 Mechanism x configuration overlap{tag}", "",
         "Each deduplicated mechanism (keyed ideas only) and how many ideas of "
         "each configuration it holds.", "",
@@ -952,7 +1256,7 @@ def _tables_file(r: Report, show_raw: bool) -> str:
         "", f"## 2 X1-1 model x lens (ideas/unique mechanisms{tag}/ceilings over "
         "floor)", "",
         *_table(("model", *LENSES, "all lenses"), square),
-        "", "## 3 Predicted ceilings against the floor (ceiling - floor)", "",
+        "", *_lens_costs(r, tag), "## 3 Predicted ceilings against the floor (ceiling - floor)", "",
         *_table(("configuration", "with a ceiling", "unknown", "over the floor",
                  "min", "q25", "median", "q75", "max"), ceil),
         "", "![ceiling less floor per configuration](ceilings.svg)", "",
@@ -1045,9 +1349,13 @@ def main(argv: Sequence[str] | None = None, echo: Callable[[str], None] = print)
     parser.add_argument("results", nargs="+", type=Path)
     parser.add_argument("--e1", type=Path, default=E1_DIR)
     parser.add_argument("--out", type=Path, default=REPORT_DIR)
+    parser.add_argument("--rerun", type=Path, help="O42's X1-1 re-run results")
+    parser.add_argument("--reaudit", type=Path, help="its pooled re-audit (O44)")
     args = parser.parse_args(argv)
     try:
-        files = render(report_of(args.results, args.e1))
+        report = report_of(args.results, args.e1, rerun=args.rerun,
+                           reaudit=args.reaudit)  # fmt: skip
+        files = render(report)
     except (OSError, ValueError) as error:
         echo(f"error: {error}")
         return 2

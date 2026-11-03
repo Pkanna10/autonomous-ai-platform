@@ -15,14 +15,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
+import re
 import subprocess
 import sys
-from collections.abc import Mapping
+from collections import Counter
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import pytest
 
+from autonomous_ai_agents.common.config import settings
 from autonomous_ai_agents.common.models import (
     Direction,
     Hotspot,
@@ -38,6 +42,7 @@ from . import ideas_probe as ip
 from . import ideas_report as ir
 from . import ideas_slice as sl
 from .conftest import TESTS_DIR
+from .discovery import FABLE, OPUS, SONNET
 
 Row = dict[str, object]
 SERVICE = TESTS_DIR.parent
@@ -88,12 +93,13 @@ def _idea(
 
 def _probe(
     repo: str, arm: str, ideas: int, good: int | None, usd: float,
-    audited: int = 0, bad: int = 0,
+    audited: int = 0, bad: int = 0, **later: object,
 ) -> Row:  # fmt: skip
+    """``later``: fields E1's rows predate (good_corrected, good_strict)."""
     return {"experiment": "ideas-probe", "repo": repo, "arm": arm, "ideas": ideas,
             "non_obvious": max(ideas - 2, 0), "good": good, "cost_usd": usd,
             "audited": audited, "auditor_infeasible": bad,
-            "models": ["m"], "stats": None}  # fmt: skip
+            "models": ["m"], "stats": None, **later}  # fmt: skip
 
 
 def _audit(
@@ -238,6 +244,8 @@ def _x1(**override: list[Row]) -> list[Row]:
             0.5,
             4,
             3 if arm == "X1-2" else 1,
+            good_corrected=None if arm == "X1-4" else 2,
+            good_strict=None if arm in ("A", "X1-4") else 1,
         )
         for repo, by_arm in X1_IDEAS.items()
         for arm, n in by_arm.items()
@@ -245,7 +253,9 @@ def _x1(**override: list[Row]) -> list[Row]:
     kinds: dict[str, list[Row]] = {
         "ideas": IDEAS, "probes": probes, "audits": AUDITS, "trials": TRIALS,
         "combine": [COMBINE], "proposals": [PROPOSAL], "score": [_score(False)],
-        "other": [{"experiment": "ideas-reply", "repo": "tomli", "chunks": []}],
+        "other": [{"experiment": "ideas-reply", "repo": "tomli", "arm": "A",
+                   "role": "generator", "label": "generator", "sent": True,
+                   "usage": [900, 300, 0, 0], "chunks": []}],
     }  # fmt: skip
     kinds.update(override)
     return [row for rows in kinds.values() for row in rows]
@@ -429,8 +439,12 @@ def test_table_4_every_levers_delta_beside_the_noise(tmp_path: Path) -> None:
     # spread: tomli {7, 9, 7, X1-0's 5} = 4, idna {6, 6, 4, 4} = 2, mean 3
     assert deltas[("X1-1", "ideas")] == pytest.approx((3.0, 3.0))
     assert deltas[("X1-2", "ideas")] == pytest.approx((0.5, 3.0))
-    no_good, good_spread = deltas[("X1-4", "good")]
-    assert no_good is None and good_spread == pytest.approx(1.0)
+    # O43: the corrected and strict counts, never the as-coded one; E1's rows
+    # predate both, so neither has an A/A band
+    assert ("X1-1", "good") not in deltas
+    assert deltas[("X1-4", "good_corrected")] == (None, None)
+    assert deltas[("X1-1", "good_corrected")] == (0.0, None)
+    assert deltas[("X1-1", "good_strict")] == (0.0, None)
     # feasible = audited - auditor_infeasible; spread: tomli {4, 5, 3, X1-0's 3}
     # = 2, idna {3, 3, 3, 3} = 0, mean 1; X1-2's 1 less X1-0's 3 = -2
     assert deltas[("X1-2", "feasible")] == pytest.approx((-2.0, 1.0))
@@ -455,10 +469,13 @@ def test_e1_without_arms_b_c_d_is_refused(tmp_path: Path) -> None:
 
 
 def test_a_measure_e1_never_recorded_has_no_band(tmp_path: Path) -> None:
-    report = ir.report_of([_write(tmp_path, _x1())], _e1(tmp_path, good=None))
-    assert report.deltas[("X1-1", "good")] == (0.0, None)  # X1-0's value alone
+    rows = [{**r, "good_corrected": 3} if r["experiment"] == "ideas-probe" else r
+            for r in _x1()]  # fmt: skip
+    e1 = _e1(tmp_path, good=None)
+    report = ir.report_of([_write(tmp_path, rows)], e1)
+    assert report.deltas[("X1-1", "good_corrected")] == (0.0, None)  # X1-0's alone
     row = next(r for r in ir.render(report)["tables.md"].splitlines()
-               if r.startswith("| X1-1 | good"))  # fmt: skip
+               if r.startswith("| X1-1 | good_corrected"))  # fmt: skip
     assert "no A/A band" in row
 
 
@@ -700,8 +717,10 @@ def _pooled(**override: list[Row]) -> list[Row]:
 
 
 def _section(report: ir.Report) -> str:
+    """The marker section alone: up to the next section (V-rep's)."""
     text = ir.render(report)["measures.md"]
-    return text[text.index("## Marker-feasible") :]
+    text = text[text.index("## Marker-feasible") :]
+    return text[: text.index("\n## ")]
 
 
 def test_the_pooled_counts_validated_with_opus_5s_unvalidated_beside(
@@ -874,7 +893,7 @@ def test_the_upper_bound_labels_sit_where_the_two_measures_appear(
     assert f"unique mechanisms ({UPPER}) | raw titles |" in head  # the raw count
     assert f"new to today's generator ({UPPER})" in head
     tables = files["tables.md"]
-    assert tables.count(UPPER) == 2 + 2 * len(ir.LEVERS)
+    assert tables.count(UPPER) == 2 + 2 + 2 * len(ir.LEVERS)  # 2b's two (O42)
     assert f"## 1 Mechanism x configuration overlap ({UPPER})" in tables
     assert f"unique mechanisms ({UPPER})/ceilings" in tables
     for lever in ir.LEVERS:
@@ -909,24 +928,30 @@ def test_the_bound_is_read_from_vcs_score_row(tmp_path: Path) -> None:
     assert ir.bound(_scored(passed=True, show_raw=False)) is None
 
 
-GOLDEN = {  # sha256 of HEAD 8633ee3's render on these fixtures
-    "failed": "fd2abae22b3b00e645f0f4b02cdba7a354a363b3f7f3728a7218de67fd118aca",
-    "passed": "3b70392f04ef75d18ec2d1fb80ab2ea40020552e264a6168ff57d2d287bcaad1",
-}
+GOLDEN = {  # sha256 of HEAD 2c3f76b's render on these fixtures, in this view
+    "failed": "8a2764d5cc49a6d90ae52a780695facaef77ce2024843b967283007b29680a66",
+    "passed": "dc53fb3ec5153003723eb8a34885441b13eddfbfe1b857344f2d938ad0e052e3",
+}  # (8633ee3's, before V-rep's view: fd2abae2... and 3b70392f...)
+_GOOD_ROW = re.compile(r"\| X1-\d \| good")  # Table 4's good rows (O43 swapped them)
 
 
 def _head_view(files: Mapping[str, str]) -> str:
-    """O39's additions taken out: the bound tags, the two note lines (each
-    with its blank line), the marker section at the end of measures.md."""
+    """O39's and V-rep's additions taken out: the bound tags, the note and
+    source lines (each with its blank line), everything from the marker
+    section on in measures.md, Table 2b, and Table 4's good rows (as coded at
+    HEAD; corrected and strict now)."""
     out = {}
+    notes = (*ir.NOTE_PREFIXES, "Sources (O44): ")
     for name, text in files.items():
         text = text.replace(f" ({UPPER})", "")
         if "\n## Marker-feasible" in text:
             text = text[: text.index("\n## Marker-feasible")]
+        if "\n## 2b " in text:
+            text = text[: text.index("\n## 2b ")] + text[text.index("\n## 3 ") :]
         lines = text.split("\n")
         keep = [x for k, x in enumerate(lines)
-                if not x.startswith(ir.NOTE_PREFIXES)
-                and not (k and lines[k - 1].startswith(ir.NOTE_PREFIXES))]  # fmt: skip
+                if not x.startswith(notes) and not _GOOD_ROW.match(x)
+                and not (k and lines[k - 1].startswith(notes))]  # fmt: skip
         out[name] = "\n".join(keep)
     return hashlib.sha256(json.dumps(out, sort_keys=True).encode()).hexdigest()
 
@@ -935,3 +960,377 @@ def _head_view(files: Mapping[str, str]) -> str:
 def test_every_other_number_is_heads(tmp_path: Path, score: str) -> None:
     rows = _x1(score=[_score(score == "passed")])
     assert _head_view(ir.render(_report(tmp_path, rows))) == GOLDEN[score]
+
+
+# ---------------------------------------------------------------------------
+# V-rep (O42, O43, O44): good counts, self/cross, X1-1's cost, the sources
+# ---------------------------------------------------------------------------
+
+RUN1 = (SERVICE.parents[1] / ".claude/handoff/step3/idea-lab/x1"
+        / "ideas-probe-x1-run1-41679255224.jsonl")  # fmt: skip
+SCORE = next(VALIDATION.glob("ideas-validate-*.jsonl"))  # Vc's one score row
+POOLED = ("X1-0", "X1-1", "X1-2", "X1-3")
+HANDED_ON = "what the arm handed on (in-result rows)"
+GENERATED = "every idea the lanes generated (all audit rows)"
+FABLE_5, FABLE_51 = ip.FABLE_5, FABLE
+
+
+def _lines(path: Path) -> list[Row]:
+    return [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines()]
+
+
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _run1(*more: Path, **swap: Path) -> ir.Report:
+    return ir.report_of([RUN1, SCORE, *more], ir.E1_DIR, **swap)
+
+
+def _sums(by: Mapping[tuple[str, str], Counter[str]], kind: str) -> tuple[int, ...]:
+    return tuple(sum(c[kind] for (_, a), c in by.items() if a == arm) for arm in POOLED)
+
+
+def test_run_1s_self_and_cross_repeats_within_each_library() -> None:
+    """O44's figures: one link per audit row, its target looked up in its own
+    library, self when the target is the same arm's."""
+    report = _run1()
+    every, handed = report.repeats[GENERATED], report.repeats[HANDED_ON]
+    assert _sums(every, "self") == (9, 3, 0, 0)
+    assert _sums(every, "cross") == (18, 21, 37, 26)
+    assert _sums(handed, "self") == (0, 0, 0, 0)
+    assert _sums(handed, "cross") == (5, 13, 18, 16)
+    assert not any(
+        c["unresolved"] for by in report.repeats.values() for c in by.values()
+    )
+    a = [c for (_, arm), c in every.items() if arm == "A"]
+    assert len(a) == 4 and not any(sum(c.values()) for c in a)  # read first: none
+
+
+def test_an_id_only_lookup_gives_other_numbers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The bug O44 records: ids restart in every library (i01, i02, ...), so a
+    target found by id alone is another library's idea."""
+
+    def by_id(audits: tuple[ir.AuditLine, ...]) -> Callable[[ir.AuditLine], object]:
+        first: dict[str, ir.AuditLine] = {}
+        for a in audits:
+            first.setdefault(a.id, a)
+        return lambda a: first.get(a.duplicate_of or "")
+
+    monkeypatch.setattr(ir, "_index", by_id)
+    report = _run1()
+    every, handed = report.repeats[GENERATED], report.repeats[HANDED_ON]
+    assert _sums(every, "self") != (9, 3, 0, 0)
+    assert _sums(every, "cross") != (18, 21, 37, 26)
+    assert _sums(handed, "self") != (0, 0, 0, 0)
+
+
+def test_the_self_cross_tables_state_their_filter_beside_every_number() -> None:
+    text = ir.render(_run1())["measures.md"]
+    head, second = (
+        text.index(f"### {HANDED_ON.capitalize()}"),
+        text.index(f"### {GENERATED.capitalize()}"),
+    )
+    assert head < second
+    lines = text.splitlines()
+    for tag in ("in-result rows", "all audit rows"):
+        assert (f"| library | configuration | self ({tag}) | cross ({tag}) | "
+                f"target not found ({tag}) |") in lines  # fmt: skip
+    assert "| all libraries | X1-2 | 0 (in-result rows) | 18 (in-result rows) | 0 (in-result rows) |" in lines  # fmt: skip
+    assert "| all libraries | X1-0 | 9 (all audit rows) | 18 (all audit rows) | 0 (all audit rows) |" in lines  # fmt: skip
+    assert "| tomli | A | 0 (all audit rows) |" in text
+
+
+def test_audit_rows_alone_reproduce_run_1s_good_and_audited_counts(
+    tmp_path: Path,
+) -> None:
+    """The pooled re-audit writes no probe row (O44): its counts come from its
+    audit rows by ``ideas_probe.scores``' rules, checked on run 1's file."""
+    rows = ir.load_rows([RUN1, SCORE])
+    scored = ir.audit_scores(rows.audits)
+    fields = ("audited", "auditor_infeasible", "good", "good_corrected", "good_strict")
+    probes = {(p.repo, p.arm): p for p in rows.probes}
+    assert len(scored) == 20  # four libraries, five pooled arms
+    for key, got in scored.items():
+        assert got == {f: getattr(probes[key], f) for f in fields}, key
+    failed = [a.model_copy(update={"auditor": None}) for a in rows.audits
+              if a.repo == "tomli"]  # fmt: skip
+    assert {v["good_corrected"] for v in ir.audit_scores(failed).values()} == {None}
+    links = ir.load_rows([_write(tmp_path, _x1(audits=[
+        _audit("i01", "A", "a", "feasible"),
+        _audit("i02", "X1-0", "b", "infeasible", "i01"),  # root A: its verdict
+        _audit("i03", "X1-0", "c", "infeasible", "i99"),  # no such id: its own
+        _audit("i04", "X1-2", "d", "infeasible", "i05"),  # a loop: its own
+        _audit("i05", "X1-2", "e", "infeasible", "i04"),
+    ]))]).audits  # fmt: skip
+    small = ir.audit_scores(links)
+    assert small[("tomli", "X1-0")] == {"audited": 2, "auditor_infeasible": 2,
+                                        "good": 0, "good_corrected": 1,
+                                        "good_strict": 0}  # fmt: skip
+    assert small[("tomli", "X1-2")]["good_corrected"] == 0
+
+
+def test_the_headline_good_counts_are_corrected_and_strict_only() -> None:
+    report = _run1()
+    assert report.good == {"A": (19, None), "X1-0": (13, 13), "X1-1": (13, 12),
+                           "X1-2": (11, 10), "X1-3": (14, 11), "X1-4": (None, None)}  # fmt: skip
+    files = ir.render(report)
+    text = files["measures.md"]
+    lines = text.splitlines()
+    assert "| A | 19 | - |" in lines and "| X1-0 | 13 | 13 |" in lines
+    appendix = text.index("## Appendix")
+    assert text.count("as coded") == text[appendix:].count("as coded") >= 1
+    assert "as coded (reading-order artifact)" in text[appendix:]
+    assert "| tomli | X1-2 | 3 | 3 | 0 |" in lines  # as coded last, appendix only
+    tables = files["tables.md"]
+    assert "as coded" not in tables
+    assert not any(re.match(r"\| X1-\d \| good \|", x) for x in tables.splitlines())
+    assert re.search(r"\| X1-3 \| good_strict \|", tables)
+    assert {m for _, m in report.deltas} >= {"good_corrected", "good_strict"}
+
+
+def test_x1_1s_cost_per_unique_new_mechanism_per_model() -> None:
+    report = _run1()
+    usd = {FABLE_5: 2.997555, FABLE_51: 3.254315, ip.HAIKU: 0.019405,
+           OPUS: 0.846018, ip.SONNET_5: 0.558745, SONNET: 0.070942}  # fmt: skip
+    unique = {FABLE_5: 1, FABLE_51: 1, ip.HAIKU: 1, OPUS: 1, ip.SONNET_5: 3,
+              SONNET: 2}  # fmt: skip
+    assert set(report.lens_costs) == set(ip.SQUARE_MODELS) == set(usd)
+    for model, c in report.lens_costs.items():
+        assert c.requests == 4, model  # one lens a library, every library
+        assert c.usd == pytest.approx(usd[model], abs=1e-6), model
+        assert c.unique == unique[model], model
+    spent = math.fsum(c.usd for c in report.lens_costs.values())
+    x1_1 = math.fsum(p.cost_usd for p in report.rows.probes if p.arm == "X1-1")
+    assert spent < x1_1  # S1, the leap and the reviewer left out
+    tables = ir.render(report)["tables.md"]
+    section = tables[tables.index("## 2b ") : tables.index("## 3 ")]
+    assert tables.index("## 2 ") < tables.index("## 2b ")  # beside the counts
+    assert "ideas-reply" in section and "MODEL_PRICING" in section
+    assert f"new to today's generator ({UPPER})" in section
+    assert f"unique new mechanisms ({UPPER})" in section
+    assert f"| {ip.SONNET_5} | 4 | 0.5587 | 3 | 3 | 3 | 0.1862 |" in section
+
+
+def test_a_model_with_no_unique_new_mechanism_shows_its_cost_alone(
+    tmp_path: Path,
+) -> None:
+    probes = [{**r, "lane_models": {"eliminate": S5, "far": O55}}
+              if r["experiment"] == "ideas-probe" and r["arm"] == "X1-1" else r
+              for r in _x1()]  # fmt: skip
+    reply: Row = {"experiment": "ideas-reply", "repo": "tomli", "arm": "X1-1",
+                  "role": "lane", "label": "far", "sent": True,
+                  "usage": [1_000_000, 0, 0, 0], "chunks": []}  # fmt: skip
+    report = _report(tmp_path, [*probes, reply])
+    opus, rate = report.lens_costs[O55], settings.MODEL_PRICING[O55].input
+    assert (opus.requests, opus.unique) == (1, 0) and opus.usd == pytest.approx(rate)
+    tables = ir.render(report)["tables.md"]
+    assert (f"| {O55} | 1 | {rate:.4f} | 0 | 0 | 0 | no unique new mechanism |"
+            in tables)  # fmt: skip
+    assert report.lens_costs[ip.HAIKU].requests == 0  # no lane_models row for it
+
+
+def _rerun(
+    tmp: Path,
+    edit: Callable[[list[Row]], list[Row]] = lambda rows: rows,
+    rerun_rows: Callable[[list[Row]], list[Row]] = lambda rows: rows,
+) -> dict[str, Path]:
+    """A re-run made from run 1 (its A and X1-1 on the four libraries, X1-1's
+    ideas retitled and its lane output doubled) and its pooled re-audit (run
+    1's audit rows, X1-1's retitled, under ``ideas-reaudit`` with both
+    digests), as ``ideas_reaudit.ReauditSink`` writes them."""
+
+    def again(r: Row) -> Row:
+        if r["arm"] != "X1-1":
+            return r
+        if r["experiment"] in ("ideas-idea", "ideas-audit"):
+            return {**r, "title": f"R {r['title']}"}
+        if r["experiment"] == "ideas-reply":
+            usage = r["usage"]
+            assert isinstance(usage, list)
+            return {**r, "usage": [usage[0], 2 * usage[1], *usage[2:]]}
+        return {**r, "lever": f"{r['lever']}, lane output cap 32,000 (O42)"}
+
+    run1 = _lines(RUN1)
+    kinds = ("ideas-probe", "ideas-idea", "ideas-reply", "ideas-audit")
+    rerun = _write(tmp, rerun_rows([again(r) for r in run1 if r["experiment"] in kinds
+                                    and r["arm"] in ("A", "X1-1")]), "rerun.jsonl")  # fmt: skip
+    digests = {"run1_sha256": _sha(RUN1), "rerun_sha256": _sha(rerun)}
+    audits = [{**again(r), "experiment": "ideas-reaudit", **digests}
+              for r in run1 if r["experiment"] == "ideas-audit"]  # fmt: skip
+    reply: Row = {
+        "experiment": "ideas-reply",
+        "repo": "tomli",
+        "arm": "auditor",
+        **digests,
+    }
+    reaudit = _write(tmp, [*edit(audits), reply], "reaudit.jsonl")
+    return {"rerun": rerun, "reaudit": reaudit}
+
+
+def _infeasible(rows: list[Row]) -> list[Row]:  # tomli's X1-0: no link, all out
+    return [{**r, "auditor": "infeasible", "reason": "precondition_false",
+             "duplicate_of": None}
+            if (r["repo"], r["arm"]) == ("tomli", "X1-0") else r for r in rows]  # fmt: skip
+
+
+def test_the_re_run_and_its_pooled_re_audit_replace_run_1s_rows(
+    tmp_path: Path,
+) -> None:
+    report = _run1(**_rerun(tmp_path, _infeasible))
+    x1_1 = [i for i in report.rows.ideas if i.arm == "X1-1"]
+    assert x1_1 and all(i.title.startswith("R ") for i in x1_1)  # the re-run's
+    assert [p.lever.endswith("(O42)") for p in report.rows.probes
+            if p.arm == "X1-1"] == [True] * 4  # fmt: skip
+    every = report.repeats[GENERATED]
+    assert every[("tomli", "X1-0")]["self"] + every[("tomli", "X1-0")]["cross"] == 0
+    assert _sums(every, "self")[1:] == (3, 0, 0)  # the rest as run 1's
+    probe = {(p.repo, p.arm): p for p in report.rows.probes}
+    tomli = probe[("tomli", "X1-0")]
+    assert (tomli.audited, tomli.auditor_infeasible) == (10, 10)  # the re-audit's
+    assert (tomli.good_corrected, tomli.good_strict) == (0, 0)  # run 1: 4 and 4
+    assert probe[("tomli", "X1-4")].good_corrected is None  # never pooled
+    first = _run1()
+    for model, c in report.lens_costs.items():  # the re-run's replies priced
+        assert c.usd > first.lens_costs[model].usd, model
+        assert c.unique == first.lens_costs[model].unique, model
+    for name in ("measures.md", "tables.md"):
+        text = ir.render(report)[name]
+        header = text[: text.index("\n## ")]
+        assert header.count("Sources (O44): ") == 1, name
+        for repo in ir.REAUDIT_REPOS:
+            assert (f"{repo}: X1-1's probe, idea and reply rows from rerun.jsonl; "
+                    "every audit-based figure (share-new, self/cross, good counts, "
+                    "auditor-feasible) from reaudit.jsonl; the rest from "
+                    f"{RUN1.name}") in header, (name, repo)  # fmt: skip
+
+
+def test_without_a_re_run_the_header_names_run_1s_file() -> None:
+    text = ir.render(_run1())["measures.md"]
+    header = text[: text.index("\n## ")]
+    assert f"Sources (O44): more_itertools: {RUN1.name}; pyparsing: " in header
+    assert "rerun" not in header
+
+
+def _without_tomli(rows: list[Row]) -> list[Row]:
+    return [r for r in rows if r["repo"] != "tomli"]
+
+
+def _stranger(rows: list[Row]) -> list[Row]:
+    return [*rows, {**rows[0], "arm": "X1-0"}]  # an X1-0 row: not the re-run
+
+
+@pytest.mark.parametrize(
+    ("swap", "match"),
+    [
+        (lambda f: {"rerun": f["rerun"]}, "go together"),
+        (lambda f: {"reaudit": f["reaudit"]}, "go together"),
+        (lambda f: {"more": f["rerun"]}, "rerun.jsonl: holds the X1-1 re-run"),
+        (lambda f: {**f, "more": f["rerun"]}, "rerun.jsonl: holds the X1-1 re-run"),
+    ],
+)
+def test_the_re_run_alone_or_mixed_with_run_1s_rows_is_refused(
+    tmp_path: Path, swap: Callable[[dict[str, Path]], dict[str, Path]], match: str
+) -> None:
+    named = swap(_rerun(tmp_path))
+    more = named.pop("more", None)
+    with pytest.raises(ValueError, match=match):
+        _run1(*(() if more is None else (more,)), **named)
+
+
+@pytest.mark.parametrize(
+    ("edit", "rerun_rows", "match"),
+    [
+        (lambda rows: [{**r, "run1_sha256": "0" * 64} for r in rows],
+         lambda rows: rows, "digests do not name"),
+        (lambda rows: [{**r, "rerun_sha256": "0" * 64} for r in rows],
+         lambda rows: rows, "digests do not name"),
+        (_without_tomli, lambda rows: rows, "re-audits .* the re-run ran"),
+        (lambda rows: rows, _stranger, "not the X1-1 re-run"),
+        (lambda rows: rows, lambda rows: [], "not the X1-1 re-run"),
+    ],
+)  # fmt: skip
+def test_a_re_audit_that_is_not_the_re_runs_is_refused(
+    tmp_path: Path,
+    edit: Callable[[list[Row]], list[Row]],
+    rerun_rows: Callable[[list[Row]], list[Row]],
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        _run1(**_rerun(tmp_path, edit, rerun_rows))
+
+
+def test_the_cli_takes_the_re_run_and_its_re_audit(tmp_path: Path) -> None:
+    named = _rerun(tmp_path)
+    lines: list[str] = []
+    out = tmp_path / "out"
+    code = ir.main([str(RUN1), str(SCORE), "--rerun", str(named["rerun"]),
+                    "--reaudit", str(named["reaudit"]), "--out", str(out)],
+                   echo=lines.append)  # fmt: skip
+    assert code == 0, lines
+    assert "rerun.jsonl" in (out / "measures.md").read_text(encoding="utf-8")
+    code = ir.main([str(RUN1), str(SCORE), "--rerun", str(named["rerun"]),
+                    "--out", str(tmp_path / "o")], echo=lines.append)  # fmt: skip
+    assert code == 2 and "go together" in lines[-1]
+
+
+def _trial(arm: str, label: str, position: int, title: str) -> Row:
+    return {**TRIALS[0], "arm": arm, "label": label, "lane": label,
+            "position": position, "title": title}  # fmt: skip
+
+
+TOMLI_X1_1: tuple[str, str, int] = ("X1-1", "obvious", 1)  # run 1 tomli
+TOMLI_X1_1_TITLE = next(str(r["title"]) for r in _lines(RUN1)
+                        if r["experiment"] == "ideas-idea" and r["repo"] == "tomli"
+                        and (r["arm"], r["label"], r["position"]) == TOMLI_X1_1)  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    "stale",
+    [
+        _trial(*TOMLI_X1_1, TOMLI_X1_1_TITLE),  # Ve's trial of run 1's idea
+        {**COMBINE, "arm": "X1-1"},
+        _result("opus-5-5", {"p1": ("X1-1", "name_the_problem", 1)}, {}, ["p1"],
+                0, 0),  # a member (Fable 5.1's)
+        {**_result("sonnet-5", {"p1": ("X1-0", "far", 1)},
+                   {"q": ("X1-1", "resolve_tradeoff", 3)}, ["p1"], 0, 0),
+         "model": "claude-sonnet-5"},  # listed apart: the marker's own model's
+    ],
+)  # fmt: skip
+def test_run_1s_x1_1_slice_and_pool_rows_beside_the_re_run_are_refused(
+    tmp_path: Path, stale: Row
+) -> None:
+    """O44: run 1's X1-1 slice and pool rows on a re-run library would join the
+    re-run's ideas by (label, position): refused, never silently attached."""
+    more = _write(tmp_path, [stale], "slice.jsonl")
+    _run1(more)  # without the re-run: run 1's own rows, accepted
+    with pytest.raises(ValueError, match=(
+            "slice.jsonl: tomli X1-1 slice/pool rows are run 1's X1-1 ideas; "
+            "re-slice or re-rank on the re-run before reporting")):  # fmt: skip
+        _run1(more, **_rerun(tmp_path))
+
+
+def test_other_arms_slice_rows_beside_the_re_run_are_kept(tmp_path: Path) -> None:
+    title = next(str(r["title"]) for r in _lines(RUN1) if r["experiment"] == "ideas-idea"
+                 and (r["repo"], r["arm"], r["label"], r["position"])
+                 == ("tomli", "X1-0", "obvious", 1))  # fmt: skip
+    more = _write(tmp_path, [_trial("X1-0", "obvious", 1, title)], "slice.jsonl")
+    report = _run1(more, **_rerun(tmp_path))
+    assert report.costs["X1-0"].wins == 1 and report.costs["X1-1"].wins == 0
+    assert f"| 1 | {title} |" in ir.render(report)["tomli-X1-0.md"]
+
+
+def test_a_trial_is_joined_to_its_idea_only_when_the_titles_match(
+    tmp_path: Path,
+) -> None:
+    ok = _write(tmp_path, [_trial(*TOMLI_X1_1, TOMLI_X1_1_TITLE)], "ok.jsonl")
+    row = next(x for x in ir.render(_run1(ok))["tomli-X1-1.md"].splitlines()
+               if x.startswith(f"| 1 | {TOMLI_X1_1_TITLE} |"))  # fmt: skip
+    assert "| keep | 12.0% / 3.0% |" in row
+    bad = _write(tmp_path, [_trial(*TOMLI_X1_1, "Another idea")], "bad.jsonl")
+    with pytest.raises(ValueError, match="tomli X1-1 obvious #1: the trial's "
+                       "'Another idea' is not the idea there"):  # fmt: skip
+        _run1(bad)
+    lost = _write(tmp_path, [_trial("X1-1", "obvious", 99, "Lost")], "lost.jsonl")
+    with pytest.raises(ValueError, match="obvious #99: a trial with no ideas-idea"):
+        _run1(lost)
