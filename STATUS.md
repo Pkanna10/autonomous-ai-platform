@@ -777,6 +777,19 @@ blocks it.
   lab's learning mechanism, W3 deferred. Budget: X1 (~42 USD) is ~28 % of Window
   1's 148.73 USD; read every idea list in full; some confirmatory rungs may
   spill into Window 2.
+- **O43. X1's audit reading (owner, 2026-11-03, on run 1).** "Infeasible" is
+  almost entirely `duplicate_of` (114 of 116 verdicts, verified), and the
+  as-coded good count rewards whichever arm the auditor read first (arm A 19 of
+  20 as coded, 0 strict). Vf's headline counts are the corrected and strict
+  counts, never the as-coded one. New measure, per arm and per library:
+  duplicates of its own lanes against duplicates of other arms. Owner's reading:
+  the baseline repeats itself and every lever cuts that, while cross-arm repeats
+  stay high, so the levers fix self-repetition, not the pool of ideas. Lead's
+  check on run 1, one auditor link per duplicate (the target's arm the same or
+  another): self X1-0 9, X1-1 3, X1-2 0, X1-3 0; cross 18, 21, 37, 26 (arm A
+  none, read first). Through whole duplicate classes the self counts are 16, 8,
+  13, 8. Neither reproduces the owner's 15 against 2 and 22-35: the definition
+  is to be confirmed before the report unit builds it.
 - **O42. X1-1's lane output cap (owner, 2026-11-03).** After run 1's three Fable
   lens requests stopped at 12,000 output tokens with no idea, X1-1 alone sets
   the lane output cap to 32,000 (`IDEAS_LANE_MAX_TOKENS`, a configuration
