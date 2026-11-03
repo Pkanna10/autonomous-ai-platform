@@ -53,6 +53,10 @@ counted tokens per request), every request's reply (``ideas-reply``,
 redacted, chunked, with its shown ideas and seconds) and every pooled idea's
 review (``ideas-audit``: its id, the auditor's verdict, reason and
 ``duplicate_of``); a cost-table note per library and a summary table.
+Quarantined proposals (G3, rule-relaxing lanes) are never pooled, scored or
+counted as ideas (X1-4): each is recorded apart for the owner to read
+(``ideas-proposal``: its title, lane, rules and rationale) and counted in
+the row's ``proposals``.
 """
 
 from __future__ import annotations
@@ -109,6 +113,7 @@ from autonomous_ai_agents.optimization.idea_context import (
 from autonomous_ai_agents.optimization.idea_pipeline import IdeaPipelineGenerator
 from autonomous_ai_agents.optimization.idea_review import read_review, review_request
 from autonomous_ai_agents.optimization.idea_types import (
+    RELAXING_LANES,
     Anchor,
     IdeaCandidate,
     Lane,
@@ -117,6 +122,8 @@ from autonomous_ai_agents.optimization.idea_types import (
     ReviewVerdict,
     Tier,
     Typicality,
+    is_proposal,
+    relaxed_rules,
 )
 from autonomous_ai_agents.optimization.sources import (
     GenerateResult,
@@ -165,6 +172,7 @@ ROW_EXPERIMENT: Final = "ideas-probe"
 FACTS_EXPERIMENT: Final = "ideas-facts"
 REPLY_EXPERIMENT: Final = "ideas-reply"
 AUDIT_EXPERIMENT: Final = "ideas-audit"
+PROPOSAL_EXPERIMENT: Final = "ideas-proposal"
 HAIKU: Final = "claude-haiku-5-5"
 # D55's lane and reviewer bounds are discovery_ab's (one source, re-derived
 # from E0b, D61); the auditor's over 48 ideas: about 33.1k base + 48 x ~420
@@ -606,7 +614,11 @@ def _taps(arm: IdeaArm, cfg: Settings, run: LiveRun) -> dict[Role, Tap]:
         inner = run.transport(role_settings(cfg, "generator"))
         return {"generator": Tap(inner, "generator", ("generator",))}
     labels = {
-        "lane": ("obvious", *(lane.value for lane in cfg.IDEAS_LENSES)),
+        "lane": (
+            "obvious",
+            *(lane.value for lane in cfg.IDEAS_LENSES),
+            *(lane.value for lane in cfg.IDEAS_RELAX_LANES),  # G3: sent last
+        ),
         "leap": ("leap",),
         "reviewer": ("reviewer", f"reviewer-{cfg.IDEAS_REVIEW_MAX_IDEAS}"),
     }
@@ -788,6 +800,19 @@ def own_verdicts(reply: str) -> dict[str, str]:
     return {i: r.verdict for i, r in audit_reviews(reply).items()}
 
 
+def scored_hypotheses(result: GenerateResult | None) -> tuple[Hypothesis, ...]:
+    """The returned ideas the probe scores: every one but the quarantined
+    proposals (G3: reported, never scored or trialled, X1-4)."""
+    hypotheses = () if result is None else result.hypotheses
+    return tuple(h for h in hypotheses if not is_proposal(h))
+
+
+def proposals_of(result: GenerateResult | None) -> tuple[Hypothesis, ...]:
+    """The returned quarantined proposals, recorded apart for the owner."""
+    hypotheses = () if result is None else result.hypotheses
+    return tuple(h for h in hypotheses if is_proposal(h))
+
+
 def _lane(h: Hypothesis) -> str:
     return next((t[5:] for t in h.tags if t.startswith("lane:")), "today")
 
@@ -830,9 +855,13 @@ def pool(arms: Sequence[ArmRun], facts: IdeaFacts) -> list[Pooled]:
     for run in arms:
         if not run.arm.e1 or run.result is None:
             continue
-        returned = run.result.hypotheses
+        returned = scored_hypotheses(run.result)
         review = next((e for e in run.exchanges if e.label == "reviewer"), None)
-        shown = [] if review is None else shown_ideas(review.request)
+        shown = [
+            i
+            for i in ([] if review is None else shown_ideas(review.request))
+            if i.lane not in _RELAXING_LANE_VALUES  # a proposal: never pooled
+        ]
         own = {} if review is None else own_verdicts(review.reply)
         titles = {h.title for h in returned}
         items += [
@@ -847,13 +876,18 @@ def pool(arms: Sequence[ArmRun], facts: IdeaFacts) -> list[Pooled]:
     return ranked(items)
 
 
+_RELAXING_LANE_VALUES: Final = frozenset(lane.value for lane in RELAXING_LANES)
+
+
 def candidate(idea: ShownIdea, idea_id: str) -> IdeaCandidate:
     """A pooled idea as the reviewer request takes it: the shown fields, the
-    rest neutral (``review_request`` renders only the shown ones)."""
+    rest neutral (``review_request`` renders only the shown ones); a
+    relaxing lane's idea keeps its lane's proposal tag (G3), as its
+    validator requires (``pool`` never pools one)."""
     path, _, name = (idea.anchor or "").rpartition(":")
-    lane = idea.lane if idea.lane in Lane.__members__ else Lane.obvious.value
+    lane = Lane(idea.lane if idea.lane in Lane.__members__ else Lane.obvious.value)
     return IdeaCandidate(
-        id=idea_id, lane=Lane(lane), title=idea.title,
+        id=idea_id, lane=lane, proposal=RELAXING_LANES.get(lane), title=idea.title,
         change_summary=idea.change_summary, justification_summary="",
         change_class=ChangeClass(idea.change_class), expected_gain=0.0,
         provability=0.0, risk=0.0, depends_on_path=idea.depends_on_path,
@@ -1027,7 +1061,7 @@ def scores(
             if tier(p) == 0 and w is not None and w != _BAD
         ]
         removed = [(p, v) for p, v in audited if p.own == _BAD]
-        hypotheses = () if run.result is None else run.result.hypotheses
+        hypotheses = scored_hypotheses(run.result)
         known = audited_ok and run.arm.e1
         strict = known and run.arm.key != ARM_A.key
         out[run.arm.key] = Score(
@@ -1056,7 +1090,7 @@ class ProbeRow:
     arm: str
     models: tuple[str, ...]
     error: str | None
-    ideas: int
+    ideas: int  # returned, less the quarantined proposals
     non_obvious: int
     good: int | None
     good_corrected: int | None
@@ -1072,6 +1106,7 @@ class ProbeRow:
     counted: dict[str, int]
     sent: tuple[str, ...]
     audit_error: str | None
+    proposals: int = 0  # returned quarantined proposals (G3): never scored
 
     def record(self) -> dict[str, object]:
         return {"experiment": ROW_EXPERIMENT, **asdict(self)}
@@ -1085,6 +1120,15 @@ def _reply(repo: str, arm: str, e: Exchange) -> dict[str, object]:
         "stop_reason": e.stop_reason, "usage": list(e.usage), "chars": len(text),
         "shown": len(shown_ideas(e.request)), "seconds": round(e.seconds, 3),
         "chunks": _chunks(text),
+    }  # fmt: skip
+
+
+def _proposal(repo: str, arm: str, h: Hypothesis) -> dict[str, object]:
+    """One quarantined proposal for the owner to read (G3): never scored."""
+    return {
+        "experiment": PROPOSAL_EXPERIMENT, "repo": repo, "arm": arm,
+        "title": h.title, "lane": _lane(h), "relaxes": list(relaxed_rules(h)),
+        "rationale": _chunks(redact_keys(h.rationale)),
     }  # fmt: skip
 
 
@@ -1135,7 +1179,8 @@ class ProbeRecorder:
             )
             row = ProbeRow(
                 repo=repo, arm=a.arm.key, models=a.models, error=a.error,
-                ideas=0 if a.result is None else len(a.result.hypotheses),
+                ideas=len(scored_hypotheses(a.result)),
+                proposals=len(kept := proposals_of(a.result)),
                 non_obvious=s.non_obvious, good=s.good,
                 good_corrected=s.good_corrected, good_strict=s.good_strict,
                 audited=s.audited,
@@ -1151,9 +1196,12 @@ class ProbeRecorder:
             self.sink.write(row.record())
             for e in ex:
                 self.sink.write(_reply(repo, a.arm.key, e))
+            for h in kept:
+                self.sink.write(_proposal(repo, a.arm.key, h))
             good = "-" if s.good is None else s.good
+            held = f", {row.proposals} proposal(s)" if row.proposals else ""
             parts.append(
-                f"{a.arm.key} {row.ideas} idea(s), good {good}, {a.cost_usd:.3f}"
+                f"{a.arm.key} {row.ideas} idea(s){held}, good {good}, {a.cost_usd:.3f}"
             )
         if audit is not None:
             for i, p, v, r in reviewed:
@@ -1176,16 +1224,17 @@ class ProbeRecorder:
         lines = [
             "## Ideas probe (E0b, E1, E1b: idea-only)", "",
             "| repo | arm | ideas | non-obvious | good | good corrected | good strict "
-            "| audited | auditor infeasible | own removed (agreed) | USD | error |",
+            "| audited | auditor infeasible | own removed (agreed) | proposals "
+            "| USD | error |",
             "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: "
-            "| ---: | --- |",
+            "| ---: | ---: | --- |",
         ]  # fmt: skip
         for r in self.rows:
             lines.append(cells([
                 r.repo, r.arm, r.ideas, r.non_obvious, _known(r.good),
                 _known(r.good_corrected), _known(r.good_strict), r.audited,
                 r.auditor_infeasible, f"{r.own_removed} ({r.agreed})",
-                f"{r.cost_usd:.4f}", _errors(r),
+                r.proposals, f"{r.cost_usd:.4f}", _errors(r),
             ]))  # fmt: skip
         write_markdown("Ideas probe", "\n".join(lines), self.sink.environ, echo)
 

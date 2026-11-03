@@ -2116,11 +2116,16 @@ def _delivery_sets(
     return run, review
 
 
+def _proposal_ids(state: EngineState) -> set[str]:
+    """The ids of every quarantined proposal (G3) in the state."""
+    return {h.id for h in (*state["hypotheses"], *state["parked"]) if is_proposal(h)}
+
+
 def _deliverable(state: EngineState) -> list[Verdict]:
     """The decided verdicts, less any of a quarantined proposal (G3): the
     verdict rules already reject those; this keeps them out of the
     combines, the branches and the lessons whatever a verdict says."""
-    held = {h.id for h in (*state["hypotheses"], *state["parked"]) if is_proposal(h)}
+    held = _proposal_ids(state)
     decided = decided_verdicts(state["verdicts"], state["approval"])
     return [v for v in decided if v.hypothesis_id not in held]
 
@@ -3457,7 +3462,11 @@ def make_router(ctx: NodeContext) -> RouterFn:
             return "approval_gate"
         if state["budget_exhausted"]:
             return "combine"
-        kept = any(v.outcome is VerdictOutcome.keep for v in state["verdicts"])
+        held = _proposal_ids(state)  # a proposal's keep is never one (G3)
+        kept = any(
+            v.outcome is VerdictOutcome.keep and v.hypothesis_id not in held
+            for v in state["verdicts"]
+        )
         if kept and state["round"] >= ctx.portfolio_rounds:  # D54: after the rounds
             return "combine"
         if state["round"] >= state["max_rounds"]:

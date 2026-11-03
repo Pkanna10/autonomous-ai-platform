@@ -2949,6 +2949,11 @@ worktree", 4.4.0) or in the builder rules every brief carries.
   a live labeller that wrote none of E1's ideas (the V suite);
   `idea_dedupe.load_recorded` and `candidate_pairs` builds candidates from V6's
   recorded ideas.
+- G3 routing review nits, left as they are: the probe guard's "sent last"
+  assertion reads exchanges in tap order, not send order (the pipeline tests
+  prove the order); in sequential mode a re-priced lane's exchange carries a
+  generic `lane-N` label in `ideas-reply` (scoring reads tags, not labels, and
+  X1-4 is not sequential).
 - G6b review nits, left as they are: `ScaleSetting.env_var` refuses only PATH,
   HOME, TMPDIR and the PYTHON, LD_ and DYLD_ prefixes, so a name the sandbox
   denies (a token-shaped one) or one only passed through (LANG, TZ) is caught at

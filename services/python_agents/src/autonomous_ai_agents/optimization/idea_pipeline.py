@@ -26,6 +26,15 @@ S2 there (a ``discovery_unaffordable`` event naming it).
 matches an earlier admitted idea's (an ``idea_dropped`` event, reason
 ``mechanism_duplicate``, with ``duplicate_of``).
 
+What they may change (G3): ``IDEAS_RELAX_LANES`` (off by default) adds
+rule-relaxing lanes to S2, after every other lane (in sequence, no other lane
+sees their mechanisms). Their ideas carry ``proposal`` from birth
+(``idea_lanes``); S4a filters them on their own (no other idea is a duplicate
+of one, or one of another's), and they skip the reviewer and the portfolio
+(whose rules they break by design). They follow every other idea in the
+result, outside its bound, each with a ``proposal:<rule>`` tag, which the
+node parks for a human; none counts in the idea stats but ``ideas_per_lane``.
+
 Money (D48, section 5): before each stage every request is counted once
 (free) and priced at its worst case; the parent ``Budget`` checks the
 stage's sum once (S2 not fitting is skipped whole, a ``discovery_unaffordable``
@@ -151,6 +160,7 @@ from autonomous_ai_agents.optimization.idea_types import (
     Lane,
     ReviewReason,
     ReviewVerdict,
+    proposal_tag,
 )
 from autonomous_ai_agents.optimization.sources import (
     GenerateResult,
@@ -167,6 +177,10 @@ _ROLES: Final[tuple[Role, ...]] = ("lane", "leap", "reviewer")
 _SOFT: Final = (LLMUnavailable, LLMRequestError, UnusableReplyError, BudgetExceeded)
 """What ends one request without ending the pipeline (D48): noted, charged."""
 _GATE_CODES: Final = frozenset({"no_anchor", "ceiling_unknown", "below_gate"})
+_EQUIVALENCE_LABEL: Final = {
+    False: "Why the output stays the same",
+    True: "What the relaxed rule changes",  # a proposal (G3)
+}
 _CLASS_ORDER: Final = {
     ChangeClass.efficiency: 0,
     ChangeClass.behaviour: 1,
@@ -344,12 +358,16 @@ class IdeaPipelineGenerator:
                 reader if isinstance(reader, HistoryReader) else None,
             )  # fmt: skip
             c.views = self._views(c, source)
-        order = rotation(seed, lanes)
+        relax = self._cfg.IDEAS_RELAX_LANES  # G3: after every other lane
+        order = (*rotation(seed, lanes), *relax)
+        lanes = (*lanes, *relax)
         examples = example_rotation(seed, lanes, exclude=(project.name,))
         table = on_the_table([*(i.title for i in s1), *named], fence, notes)
-        others = self._s2(c, lanes, order, table, examples)
-        if others is None:
+        found = self._s2(c, lanes, order, table, examples)
+        if found is None:
             return self._result(c, s1, n)
+        others = [i for i in found if i.proposal is None]
+        proposals = self._proposals(c, found, avoid_titles, lessons)
         survivors = self._s4a(c, s1, others, avoid_titles, lessons)
         reviewed = self._s3(c, survivors)
         olds = [i for i in reviewed if i.lane is Lane.obvious]
@@ -369,7 +387,7 @@ class IdeaPipelineGenerator:
                       "title": shorten(idea.title),
                       "duplicate_of": shorten(twin.title)},
             ))  # fmt: skip
-        return self._result(c, picked, n)
+        return self._result(c, picked, n, proposals)
 
     def _views(self, c: _Call, source: ViewSource) -> dict[Lane, _Seen]:
         """Each viewed lens's view (G2), built and rendered once per view; a
@@ -422,6 +440,7 @@ class IdeaPipelineGenerator:
         cfg = self._cfg
         sizes = {lane: cfg.IDEAS_LANE_N for lane in cfg.IDEAS_LENSES}
         sizes[Lane.leap] = cfg.IDEAS_LEAP_N
+        sizes.update({lane: cfg.IDEAS_LANE_N for lane in cfg.IDEAS_RELAX_LANES})
         first = self._taken(c, table) if self._sequential else table
         jobs = {lane: self._lane_job(c, lane, sizes[lane], first, examples[lane])
                 for lane in lanes}  # fmt: skip
@@ -487,6 +506,26 @@ class IdeaPipelineGenerator:
         block = taken_block(c.read, c.keys, c.fence, notes)
         c.notes.extend(f"mechanisms block: {note}" for note in notes)
         return f"{table}\n{block}" if block else table
+
+    def _proposals(
+        self,
+        c: _Call,
+        found: Sequence[IdeaCandidate],
+        avoid_titles: Sequence[str],
+        lessons: Sequence[Lesson],
+    ) -> tuple[IdeaCandidate, ...]:
+        """S4a for the rule-relaxing lanes' ideas alone (G3): grounded,
+        gated and deduplicated among themselves, never against another
+        lane's idea; no reviewer, no portfolio."""
+        relaxed = [i for i in found if i.proposal is not None]
+        if not relaxed:
+            return ()
+        return deterministic_filter(
+            (), relaxed, floor=c.objective.min_relative_gain, objective=c.objective,
+            avoid=avoid_titles, lesson_titles=lesson_titles(lessons),
+            multiplier=self._cfg.IDEAS_AMDAHL_MULTIPLIER, notes=c.notes,
+            shown_slugs=frozenset(c.research.by_slug), events=c.events,
+        )  # fmt: skip
 
     def _s4a(
         self,
@@ -729,23 +768,32 @@ class IdeaPipelineGenerator:
     # ----------------------------------------------------------------------
 
     def _result(
-        self, c: _Call, ideas: Sequence[IdeaCandidate], n: int
+        self,
+        c: _Call,
+        ideas: Sequence[IdeaCandidate],
+        n: int,
+        proposals: Sequence[IdeaCandidate] = (),
     ) -> GenerateResult:
+        """The hypotheses within the bound, then the proposals (G3), which
+        the node parks; the stats leave proposals out but per lane."""
         bound = n + self._cfg.IDEAS_PORTFOLIO_MAX
         head = [i for i in ideas if i.change_class is not ChangeClass.novel]
         tail = [i for i in ideas if i.change_class is ChangeClass.novel]
         room = max(0, bound - len(head))
         count_note(c.notes, len(tail[room:]),
                    f"novel idea(s) past the result's bound of {bound} dropped")  # fmt: skip
-        hypotheses = tuple(self._hypothesis(c, i) for i in (*head, *tail[:room]))
+        hypotheses = tuple(
+            self._hypothesis(c, i) for i in (*head, *tail[:room], *proposals)
+        )
+        read = [i for i in c.read if i.proposal is None]
         stats = IdeaStats(
             ideas_per_lane=c.per_lane,
-            grounded=sum(i.anchor is not None for i in c.read),
-            anchored=sum(i.ceiling is not None for i in c.read),
+            grounded=sum(i.anchor is not None for i in read),
+            anchored=sum(i.ceiling is not None for i in read),
             gate_passed=c.gate_passed,
             non_obvious=c.non_obvious,
             review_verdicts=dict(c.verdicts),
-            unique_signatures=len({signature(i) for i in c.read}),
+            unique_signatures=len({signature(i) for i in read}),
             cost_usd=max(0.0, c.budget.spent_usd - c.start),
             cache_read_tokens=c.cache_reads,
             stop_reasons=c.stops,
@@ -758,11 +806,14 @@ class IdeaPipelineGenerator:
         rationale = (
             f"{idea.change_summary}\nWhy it should win: {idea.justification_summary}"
             f"\nPrecondition: {idea.precondition}"
-            f"\nWhy the output stays the same: {idea.equivalence_summary}"
+            f"\n{_EQUIVALENCE_LABEL[idea.proposal is not None]}: "
+            f"{idea.equivalence_summary}"
         )
         if idea.plan is not None:
             rationale += f"\nPlan: {idea.plan}"
         tags = [f"lane:{idea.lane.value}"]
+        if idea.proposal is not None:  # the quarantine's tag (G3)
+            tags.append(proposal_tag(idea.proposal))
         if idea.review is not None:
             tags.append(f"review:{idea.review.value}")
         tags += [f"claimed_tier:{idea.tier.value}",

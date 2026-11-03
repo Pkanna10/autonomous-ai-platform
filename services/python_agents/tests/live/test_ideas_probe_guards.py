@@ -39,8 +39,11 @@ from autonomous_ai_agents.clients.structured import Fence
 from autonomous_ai_agents.common.config import Role, Settings, role_chain, settings
 from autonomous_ai_agents.common.errors import LLMRequestError
 from autonomous_ai_agents.common.models import (
+    ChangeClass,
     Direction,
     Hotspot,
+    Hypothesis,
+    HypothesisSource,
     Objective,
     ObjectiveKind,
     Project,
@@ -52,9 +55,12 @@ from autonomous_ai_agents.optimization.idea_review import (
 )
 from autonomous_ai_agents.optimization.idea_types import (
     LENS_LANES,
+    Lane,
     Mechanism,
     MorphCell,
+    RelaxedRule,
 )
+from autonomous_ai_agents.optimization.sources import GenerateResult
 from autonomous_ai_agents.orchestrator.factory import repo_reader
 
 from . import discovery_ab as ab
@@ -1259,3 +1265,168 @@ def test_the_suite_row_timeout_noise_rule_and_stage_a_ignore() -> None:
     step2 = [line for line in noise.splitlines() if "noise_rule=step2" in line]
     assert any(re.search(r"\bideas-probe\b", line) for line in step2)
     assert "--ignore=tests/live/test_ideas_probe_live.py" in script
+
+
+# ---------------------------------------------------------------------------
+# G3: quarantined proposals are reported, never scored (spec X1-4, O32)
+# ---------------------------------------------------------------------------
+
+
+def _returned(title: str, *tags: str, rationale: str = "r") -> Hypothesis:
+    return Hypothesis(
+        project_id="p1", hotspot_ids=("h-slow_sum",), source=HypothesisSource.novel,
+        title=title, rationale=rationale, change_class=ChangeClass.efficiency,
+        expected_gain=0.1, provability=0.5, risk=0.1, tags=tags,
+    )  # fmt: skip
+
+
+_IDEA = _returned("a far idea", "lane:far")
+_LONG = "What the relaxed rule changes: " + "a new wheel. " * 90  # > 1 chunk
+_PROPOSAL = _returned(
+    "add a dependency", "lane:relax_dependency", "proposal:new_dependency",
+    rationale=_LONG,
+)  # fmt: skip
+_BARE_LANE = _returned("relax the api", "lane:relax_api")  # no proposal tag
+_ALL = (_IDEA, _PROPOSAL, _BARE_LANE)
+
+
+def _shown(title: str, lane: str) -> ip.ShownIdea:
+    return ip.ShownIdea(
+        id=f"{lane}-01", lane=lane, title=title, change_class="efficiency",
+        anchor=f"{PATH}:slow_sum", change_summary="s", precondition="p",
+        equivalence_summary="e", depends_on_path=PATH, depends_on_quote="q",
+    )  # fmt: skip
+
+
+def _proposal_run(arm: ip.IdeaArm = ip.ARM_C, *, shown: bool = False) -> ip.ArmRun:
+    exchanges: tuple[ip.Exchange, ...] = ()
+    if shown:
+        ideas = [ip.candidate(_shown(_IDEA.title, "far"), "far-01"),
+                 ip.candidate(_shown(_PROPOSAL.title, "relax_dependency"), "rx-01")]  # fmt: skip
+        request = review_request(
+            ideas, prefix="data", fence=Fence("aa" * 8), reviewer_fence=Fence("bb" * 8),
+            max_ideas=16, max_tokens=12_000, effort=None, notes=[],
+        )[0]  # fmt: skip
+        exchanges = (ip.Exchange("reviewer", "reviewer", 0, request),)
+    return ip.ArmRun(arm, GenerateResult(hypotheses=_ALL), None, 0.0, (), (), exchanges)
+
+
+def test_a_pooled_relaxing_lane_idea_becomes_a_valid_candidate() -> None:
+    for lane, rule in (("relax_dependency", RelaxedRule.new_dependency),
+                       ("relax_api", RelaxedRule.api_change)):  # fmt: skip
+        built = ip.candidate(_shown("t", lane), "i01")
+        assert (built.lane, built.proposal) == (Lane(lane), rule)
+    assert ip.candidate(_shown("t", "far"), "i01").proposal is None
+
+
+def test_proposals_are_never_pooled_for_the_auditor(dry: Path) -> None:
+    for shown in (False, True):
+        pooled = ip.pool([_proposal_run(shown=shown)], _facts())
+        assert [p.idea.title for p in pooled] == [_IDEA.title], shown
+        assert [ip.tier(p) for p in pooled] == [0]
+        wire = dg.Wire(_Answers(remove=False))
+        audit = ip.run_audit(pooled, wire.run(), _facts(), base=_base(), reader=_reader)
+        assert (audit.error, audit.verdicts) == (None, ("feasible",))
+        (body,) = wire.bodies
+        assert _IDEA.title in _text(body)
+        assert _PROPOSAL.title not in _text(body) and "relax_" not in _text(body)
+    assert ip.scored_hypotheses(_proposal_run().result) == (_IDEA,)
+    assert ip.proposals_of(_proposal_run().result) == (_PROPOSAL, _BARE_LANE)
+    assert ip.scored_hypotheses(None) == () == ip.proposals_of(None)
+
+
+def test_proposals_count_toward_no_score_and_are_recorded_apart(
+    tmp_path: Path,
+) -> None:
+    runs = [_proposal_run(ip.ARM_B), _proposal_run(ip.ARM_C, shown=True)]
+    pooled = ip.pool(runs, _facts())
+    assert len(pooled) == 2  # one idea an arm, no proposal
+    audit = ip.audit_of(_audit_reply([FEASIBLE, FEASIBLE]), len(pooled))
+    scored = ip.scores(runs, pooled, audit)
+    for arm in ("B", "C"):
+        assert scored[arm].non_obvious == 1
+        assert _counts(scored, arm) == (1, 1, 1)
+    results = tmp_path / "r.jsonl"
+    sink = ResultsSink({"LIVE_RESULTS_PATH": str(results)})
+    recorder = ip.ProbeRecorder(
+        ip.ProbePlan((ip.ARM_B, ip.ARM_C), _repos(("tomli",))), sink
+    )
+    run = dg.Wire(_Answers()).run()
+    recorder.record("tomli", runs, pooled, audit, run)
+    assert [(r.ideas, r.proposals, r.non_obvious) for r in recorder.rows] == [
+        (1, 2, 1), (1, 2, 1),
+    ]  # fmt: skip
+    lines = [json.loads(x) for x in results.read_text("utf-8").splitlines()]
+    rows = [x for x in lines if x["experiment"] == ip.ROW_EXPERIMENT]
+    assert [(r["ideas"], r["proposals"]) for r in rows] == [(1, 2), (1, 2)]
+    kept = [x for x in lines if x["experiment"] == ip.PROPOSAL_EXPERIMENT]
+    assert [(k["arm"], k["title"], k["relaxes"]) for k in kept] == [
+        (arm, title, rules)
+        for arm in ("B", "C")
+        for title, rules in ((_PROPOSAL.title, ["new_dependency"]),
+                             (_BARE_LANE.title, ["api_change"]))
+    ]  # fmt: skip
+    assert all(k["lane"].startswith("relax_") for k in kept)
+    assert ["".join(k["rationale"]) for k in kept[:2]] == [_LONG, "r"]  # whole
+    audits = [x for x in lines if x["experiment"] == ip.AUDIT_EXPERIMENT]
+    assert {a["title"] for a in audits} == {_IDEA.title}
+    assert "B 1 idea(s), 2 proposal(s), good 1" in run.notes[-1]
+    echoed: list[str] = []
+    recorder.finish(echoed.append)
+    header = next(line for line in echoed if line.startswith("| repo"))
+    assert "| own removed (agreed) | proposals | USD |" in header
+    assert any(line.startswith("| tomli | B | 1 | 1 | 1 |") and "| 2 |" in line
+               for line in echoed)  # fmt: skip
+
+
+def test_an_arm_with_no_proposal_keeps_its_note_and_counts_none() -> None:
+    plain = dataclasses.replace(
+        _proposal_run(), result=GenerateResult(hypotheses=(_IDEA,))
+    )
+    recorder = ip.ProbeRecorder(ip.ProbePlan((ip.ARM_C,), _repos(("tomli",))),
+                                ResultsSink({}))  # fmt: skip
+    run = dg.Wire(_Answers()).run()
+    recorder.record("tomli", [plain], [], None, run)
+    assert (recorder.rows[0].ideas, recorder.rows[0].proposals) == (1, 0)
+    assert "proposal" not in run.notes[-1]
+
+
+def test_a_relaxing_arms_proposal_is_reported_never_pooled_or_scored(
+    dry: Path, tmp_path: Path
+) -> None:
+    """End to end on the pipeline (G3's patch): an arm with a relaxing lane
+    on returns its proposal last; the probe labels its request, records it
+    apart and scores, pools and audits only the rest."""
+    base = _base().model_copy(update={"IDEAS_RELAX_LANES": (Lane.relax_dependency,)})
+    wire = dg.Wire(_Answers(), usages=[CACHED] * 14)
+    found = ip.run_arm(ip.ARM_C, wire.run(), _facts(), base=base, reader=_reader)
+    assert found.error is None and found.result is not None
+    assert [e.label for e in found.exchanges][-3:] == [
+        "relax_dependency", "leap", "reviewer",
+    ]  # fmt: skip
+    (proposal,) = ip.proposals_of(found.result)
+    assert found.result.hypotheses[-1] == proposal
+    assert "proposal:new_dependency" in proposal.tags
+    scored = ip.scored_hypotheses(found.result)
+    assert len(scored) == len(found.result.hypotheses) - 1
+    pooled = ip.pool([found], _facts())
+    assert proposal.title not in {p.idea.title for p in pooled}
+    assert all(p.idea.lane not in {"relax_dependency"} for p in pooled)
+    audit = ip.run_audit(
+        pooled, dg.Wire(_Answers(remove=False)).run(), _facts(), base=base,
+        reader=_reader,
+    )  # fmt: skip
+    assert audit.error is None
+    score = ip.scores([found], pooled, audit)["C"]
+    assert score.non_obvious == sum(
+        not h.tags[0].startswith("lane:obvious") for h in scored
+    )
+    results = tmp_path / "r.jsonl"
+    sink = ResultsSink({"LIVE_RESULTS_PATH": str(results)})
+    recorder = ip.ProbeRecorder(ip.ProbePlan((ip.ARM_C,), _repos(("tomli",))), sink)
+    recorder.record("tomli", [found], pooled, audit, dg.Wire(_Answers()).run())
+    (row,) = recorder.rows
+    assert (row.ideas, row.proposals) == (len(scored), 1)
+    lines = [json.loads(x) for x in results.read_text("utf-8").splitlines()]
+    (kept,) = [x for x in lines if x["experiment"] == ip.PROPOSAL_EXPERIMENT]
+    assert (kept["title"], kept["relaxes"]) == (proposal.title, ["new_dependency"])

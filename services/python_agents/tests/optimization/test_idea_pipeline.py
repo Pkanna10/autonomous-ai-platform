@@ -63,12 +63,17 @@ from autonomous_ai_agents.optimization.hypothesis_source import (
 from autonomous_ai_agents.optimization.idea_dedupe import TAKEN_TAG
 from autonomous_ai_agents.optimization.idea_pipeline import IdeaPipelineGenerator
 from autonomous_ai_agents.optimization.idea_portfolio import rotation
-from autonomous_ai_agents.optimization.idea_prompts import THINK_LINE, VIEW_HEADINGS
+from autonomous_ai_agents.optimization.idea_prompts import (
+    RELAX_TEXT,
+    THINK_LINE,
+    VIEW_HEADINGS,
+)
 from autonomous_ai_agents.optimization.idea_review import REVIEW_SYSTEM_PROMPT
 from autonomous_ai_agents.optimization.idea_types import (
     LENS_LANES,
     Lane,
     ReviewVerdict,
+    is_proposal,
 )
 from autonomous_ai_agents.optimization.sources import (
     GenerateResult,
@@ -1564,3 +1569,117 @@ def test_with_the_dedupe_off_the_twin_is_kept() -> None:
     assert not [
         e for e in result.events if e.data.get("reason") == "mechanism_duplicate"
     ]
+
+
+# --------------------------------------------------------------------------
+# G3: the rule-relaxing lanes (quarantined proposals)
+# --------------------------------------------------------------------------
+
+RELAX_TITLE = "Swap the keyword scan for a compiled package"
+RELAXED = BASE.model_copy(update={"IDEAS_RELAX_LANES": (Lane.relax_dependency,)})
+
+
+def _relaxed_run(*relax: Json) -> _Run:
+    reply = _ideas(*relax) if relax else _ideas(_idea(RELAX_TITLE, "find_all"))
+    return _Run(lane=[S1_REPLY, *_lens_replies(), reply], leap=[LEAP],
+                reviewer=[REVIEW], cfg=RELAXED)  # fmt: skip
+
+
+def test_a_relaxing_lanes_idea_follows_the_result_as_a_tagged_proposal() -> None:
+    """
+    GIVEN the relax_dependency lane on, its one idea sharing an earlier
+          lane's anchor
+    WHEN the pipeline runs
+    THEN the lane is sent last; its idea is deduplicated only among
+         proposals, never sent to the reviewer or the portfolio, and comes
+         after the unchanged result with its lane and proposal tags; the
+         stats count it per lane only
+    """
+    plain = _full()
+    before = plain()
+    run = _relaxed_run()
+
+    result = run()
+
+    *head, last = result.hypotheses
+    assert [h.title for h in head] == [h.title for h in before.hypotheses]
+    assert last.title == RELAX_TITLE
+    assert "lane:relax_dependency" in last.tags
+    assert "proposal:new_dependency" in last.tags and is_proposal(last)
+    assert "What the relaxed rule changes: the same values" in last.rationale
+    assert not any(is_proposal(h) for h in head)
+    (relax_request,) = run.requests("lane")[-1:]
+    assert RELAX_TEXT[Lane.relax_dependency] in _texts(relax_request)[-1]
+    (review,) = run.requests("reviewer")
+    assert RELAX_TITLE not in json.dumps(review.messages)
+    assert result.stats is not None and before.stats is not None
+    assert result.stats.ideas_per_lane[Lane.relax_dependency] == 1
+    assert result.stats.unique_signatures == before.stats.unique_signatures
+    assert result.stats.grounded == before.stats.grounded
+    assert result.stats.anchored == before.stats.anchored
+
+
+def test_proposals_are_filtered_among_themselves() -> None:
+    twin = _idea("Swap the scan for a compiled scanner", "find_all")
+    ungrounded = {**_idea("Vendor a C tokenizer", "find_all"),
+                  "depends_on_quote": "this line is not in the shown code at all"}  # fmt: skip
+    run = _relaxed_run(_idea(RELAX_TITLE, "find_all"), twin, ungrounded)
+
+    result = run()
+
+    proposals = [h.title for h in result.hypotheses if is_proposal(h)]
+    assert proposals == [RELAX_TITLE]
+    assert _noted(result.notes, "Swap the scan for a compiled scanner", "duplicate")
+
+
+def test_off_by_default_no_relaxing_lane_is_sent() -> None:
+    run = _full()
+    result = run()
+    assert len(run.requests("lane")) == 7
+    assert not any(is_proposal(h) for h in result.hypotheses)
+
+
+def test_with_both_g4_settings_on_a_proposal_still_comes_last_with_its_tag() -> None:
+    """
+    GIVEN sequential lanes, the mechanism dedupe and the relax_dependency
+          lane on, its one idea a mechanism twin of an S1 idea
+    WHEN the pipeline runs
+    THEN the relaxing lane is sent after every lens (so no lens is shown its
+         mechanism) and is shown the earlier ones; the dedupe never drops
+         the proposal, which comes last with its tags
+    """
+    cfg = SEQUENTIAL.model_copy(
+        update={
+            "IDEAS_MECHANISM_DEDUPE": True,
+            "IDEAS_RELAX_LANES": (Lane.relax_dependency,),
+        }
+    )
+    relax = _idea(RELAX_TITLE, "merge_runs", mechanism="algorithm",
+                  cells=("algorithm:better_constant",))  # fmt: skip
+    replies = [_ideas(*LENS[lane]) for lane in LENS_ORDER]
+    run = _Run(lane=[S1_REPLY, *replies, _ideas(relax)], leap=[LEAP],
+               reviewer=[REVIEW], cfg=cfg)  # fmt: skip
+
+    result = run()
+
+    *head, last = result.hypotheses
+    assert last.title == RELAX_TITLE and is_proposal(last)
+    assert {"lane:relax_dependency", "proposal:new_dependency"} <= set(last.tags)
+    assert not any(is_proposal(h) for h in head)
+    dropped = [e for e in result.events if e.code == "idea_dropped"]
+    assert all(e.data.get("title") != RELAX_TITLE for e in dropped)
+    *_lenses, relax_request = run.requests("lane")[1:]
+    assert RELAX_TEXT[Lane.relax_dependency] in _texts(relax_request)[-1]
+    assert _entry(O3) in (_taken(relax_request) or [])
+
+
+def test_a_proposal_naming_a_shown_technique_is_dropped_like_any_lanes() -> None:
+    named = _idea("Swap in the set membership trick", "count_words",
+                  slug="set-membership", cells=("representation:compact",))  # fmt: skip
+    run = _relaxed_run(_idea(RELAX_TITLE, "find_all"), named)
+
+    result = run(techniques=TECHNIQUES)
+
+    proposals = [h.title for h in result.hypotheses if is_proposal(h)]
+    assert proposals == [RELAX_TITLE]
+    assert _noted(result.notes, "Swap in the set membership trick", "shown technique")

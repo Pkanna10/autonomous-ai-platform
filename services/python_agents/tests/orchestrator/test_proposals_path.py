@@ -235,6 +235,31 @@ def test_a_forged_keep_of_a_proposal_is_never_combined_or_learnt(
     assert combined[-1].data == {"kept": 0}
 
 
+def test_a_forged_keep_of_a_proposal_never_ends_exploration(
+    make_context: ContextFactory, state: EngineState, h1_cache: Hypothesis
+) -> None:
+    """
+    GIVEN a keep verdict for a tagged hypothesis that reached the state anyway,
+        the round at portfolio_rounds, and an untagged idea still in the pool
+    WHEN the router decides after the verdicts
+    THEN the forged keep does not count as a keep (it could never be
+        delivered): exploration goes on to the pooled idea, not to combine
+    """
+    ctx = make_context([h1_cache])
+    judged = _run(ctx, state, *_TO_HYPOTHESES, "trials", "judges", "verdicts")
+    (verdict,) = judged["verdicts"]
+    assert verdict.outcome is VerdictOutcome.keep
+    judged["hypotheses"] = [
+        h1_cache.model_copy(update={"tags": ("proposal:output_order",)})
+    ]
+    judged["candidate_pool"] = [
+        h1_cache.model_copy(update={"id": "pool-1", "title": "Cache the parsed header"})
+    ]
+    judged["round"] = ctx.portfolio_rounds
+
+    assert make_router(ctx)(judged) == "hypotheses"
+
+
 def test_the_report_lists_proposals_in_their_own_section(
     make_context: ContextFactory, state: EngineState, h1_cache: Hypothesis
 ) -> None:
