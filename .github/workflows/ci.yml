@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: 'Live suite: stage-a, corpus, attack, hard, oss, or an experiment (probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, ab-v2-p, ab-v2, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, evolve-p, heal-hard, build, grader, upstream-verify, upstream, agent-probes, heal-agent, research-agent, watch, watch-cleanup, ideas-probe) (one at a time: together they need more than the 150 USD ceiling)'
+        description: 'Live suite: stage-a, corpus, attack, hard, oss, or an experiment (probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, ab-v2-p, ab-v2, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, evolve-p, heal-hard, build, grader, upstream-verify, upstream, agent-probes, heal-agent, research-agent, watch, watch-cleanup, ideas-probe, ideas-views, ideas-marker, ideas-validate) (one at a time: together they need more than the 150 USD ceiling)'
         type: choice
         options:
           [
@@ -53,6 +53,9 @@ on:
             watch,
             watch-cleanup,
             ideas-probe,
+            ideas-views,
+            ideas-marker,
+            ideas-validate,
           ]
         default: stage-a
       mode:
@@ -71,7 +74,7 @@ on:
         options: [default, claude-sonnet-5-5]
         default: default
       suite_cap_usd:
-        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75 (corpus_select controls 15), hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 112, sweep-fable 41, sweep-record 24, ab 140, ab-v2-p 59, ab-v2 68 (L5b; ab_arms A, L5a, 17), escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, evolve-p 56, heal-hard 8, build 27, grader 2, upstream-verify 0 (no request, but the cap must be above 0), upstream 50, agent-probes 1, heal-agent 8, research-agent 8, watch 2, watch-cleanup 2, ideas-probe 46 (E1, four libraries of ideas_repos, one 12; ideas_arms count 9, C-low,C-high 20)'
+        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75 (corpus_select controls 15), hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 112, sweep-fable 41, sweep-record 24, ab 140, ab-v2-p 59, ab-v2 68 (L5b; ab_arms A, L5a, 17), escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, evolve-p 56, heal-hard 8, build 27, grader 2, upstream-verify 0 (no request, but the cap must be above 0), upstream 50, agent-probes 1, heal-agent 8, research-agent 8, watch 2, watch-cleanup 2, ideas-probe 46 (E1, four libraries of ideas_repos, one 12; ideas_arms count 9, C-low,C-high 20), ideas-views 0 (no request, but the cap must be above 0), ideas-marker 24 (Vb: 48 rank sets x Opus 5.5 and Opus 5), ideas-validate 8 (Vc: the Sonnet 5 and Fable 5 smoke requests, 17 Opus 5 label requests)'
         type: string
         default: '12'
       oss_repo:
@@ -626,8 +629,17 @@ jobs:
     # re-pin it) and 2 for phase 1 (E0b: a count-mode library about 47 s),
     # E1 56 a library (phase 1, arm A, four pipeline calls of four stages,
     # the auditor), so four libraries a dispatch (ideas_repos, 224 minutes);
-    # E0b's ten 8 each, E1b's four 25 each.
-    timeout-minutes: ${{ inputs.suite == 'sweep' && 240 || inputs.suite == 'sweep-fable' && 180 || inputs.suite == 'sweep-record' && 150 || inputs.suite == 'ab' && 360 || inputs.suite == 'noise' && 90 || inputs.suite == 'oss-ab' && 120 || inputs.suite == 'evolve' && 300 || inputs.suite == 'evolve-more' && 300 || inputs.suite == 'evolve-p' && 300 || inputs.suite == 'ab-v2-p' && 300 || inputs.suite == 'ab-v2' && 300 || inputs.suite == 'build' && 120 || inputs.suite == 'upstream-verify' && 150 || inputs.suite == 'upstream' && 300 || inputs.suite == 'heal-agent' && 120 || inputs.suite == 'research-agent' && 45 || inputs.suite == 'ideas-probe' && 240 || inputs.suite == 'watch' && 90 || inputs.suite == 'escalation' && 90 || inputs.suite == 'triage' && 90 || inputs.suite == 'papers' && 60 || inputs.suite == 'web' && 90 || inputs.suite == 'corpus' && 120 || inputs.suite == 'oss' && 300 || inputs.suite == 'hard' && 90 || inputs.suite == 'attack' && 45 || 30 }}
+    # E0b's ten 8 each, E1b's four 25 each. ideas-views 30
+    # (ideas_views.VIEWS_JOB_MINUTES): no request, 8 libraries at 2 minutes
+    # each (a fresh clone with its tag's history, then six views of seconds),
+    # 16 minutes, about twice what they need. ideas-marker 240
+    # (ideas_marker.JOB_MINUTES): 17 pinned clones at 1 minute and 96
+    # ordering requests (48 rank sets x 2 markers, high effort) at 2 minutes
+    # each, about twice one short structured reply: 209 minutes. ideas-validate 60
+    # (ideas_validate.JOB_MINUTES): 2 smoke requests and 17 label requests
+    # at 2 minutes each (one reply of about 3k output tokens at medium
+    # effort, 2x margin), 38 minutes, no clone.
+    timeout-minutes: ${{ inputs.suite == 'sweep' && 240 || inputs.suite == 'sweep-fable' && 180 || inputs.suite == 'sweep-record' && 150 || inputs.suite == 'ab' && 360 || inputs.suite == 'noise' && 90 || inputs.suite == 'oss-ab' && 120 || inputs.suite == 'evolve' && 300 || inputs.suite == 'evolve-more' && 300 || inputs.suite == 'evolve-p' && 300 || inputs.suite == 'ab-v2-p' && 300 || inputs.suite == 'ab-v2' && 300 || inputs.suite == 'build' && 120 || inputs.suite == 'upstream-verify' && 150 || inputs.suite == 'upstream' && 300 || inputs.suite == 'heal-agent' && 120 || inputs.suite == 'research-agent' && 45 || inputs.suite == 'ideas-probe' && 240 || inputs.suite == 'ideas-views' && 30 || inputs.suite == 'ideas-marker' && 240 || inputs.suite == 'ideas-validate' && 60 || inputs.suite == 'watch' && 90 || inputs.suite == 'escalation' && 90 || inputs.suite == 'triage' && 90 || inputs.suite == 'papers' && 60 || inputs.suite == 'web' && 90 || inputs.suite == 'corpus' && 120 || inputs.suite == 'oss' && 300 || inputs.suite == 'hard' && 90 || inputs.suite == 'attack' && 45 || 30 }}
     defaults:
       run:
         working-directory: ./services/python_agents
@@ -743,7 +755,7 @@ jobs:
             echo "::error::the ANTHROPIC_API_KEY secret of environment 'live' is not set"
             exit 1
           fi
-          corpus=(--ignore=tests/live/test_corpus_live.py --ignore=tests/live/test_attack_corpus_live.py --ignore=tests/live/test_hard_corpus_live.py --ignore=tests/live/test_oss_live.py --ignore=tests/live/experiments --ignore=tests/live/test_sweep_live.py --ignore=tests/live/test_ab_live.py --ignore=tests/live/test_escalation_live.py --ignore=tests/live/test_noise_live.py --ignore=tests/live/test_oss_ab_live.py --ignore=tests/live/test_evolution_live.py --ignore=tests/live/test_build_live.py --ignore=tests/live/test_grader_agreement_live.py --ignore=tests/live/test_upstream_verify_live.py --ignore=tests/live/test_upstream_live.py --ignore=tests/live/test_ideas_probe_live.py)
+          corpus=(--ignore=tests/live/test_corpus_live.py --ignore=tests/live/test_attack_corpus_live.py --ignore=tests/live/test_hard_corpus_live.py --ignore=tests/live/test_oss_live.py --ignore=tests/live/experiments --ignore=tests/live/test_sweep_live.py --ignore=tests/live/test_ab_live.py --ignore=tests/live/test_escalation_live.py --ignore=tests/live/test_noise_live.py --ignore=tests/live/test_oss_ab_live.py --ignore=tests/live/test_evolution_live.py --ignore=tests/live/test_build_live.py --ignore=tests/live/test_grader_agreement_live.py --ignore=tests/live/test_upstream_verify_live.py --ignore=tests/live/test_upstream_live.py --ignore=tests/live/test_ideas_probe_live.py --ignore=tests/live/test_ideas_views_live.py --ignore=tests/live/test_ideas_marker_live.py --ignore=tests/live/test_ideas_validate_live.py)
           # need: the sum of the caps the suite's live tests ask the ledger for
           # (Stage A 8.55, corpus 15 x 5, attack 3 x 4, hard 10 x 5, oss at most
           # 10 x 5; the Window 0 experiments under tests/live/experiments: probes
@@ -778,7 +790,13 @@ jobs:
           # on D55's bounds re-derived from E0b's counts: phase 1 0.38, arms A
           # 0.27, B 1.99, C 2.475, D 4.53, E 1.045, the auditor 0.69), E0b
           # count 8.5 (10 x 0.85, 0.38 + 2 x 0.215), E1b 19.8 (4 x 2 x 2.475
-          # on recorded facts),
+          # on recorded facts), ideas-views 0 (Va: no request, the views pass),
+          # ideas-marker 24.0 (Vb: 17 libraries, each its
+          # rank sets with a kept idea and a rival x (Opus 5.5 0.22 + Opus 5
+          # 0.275, 12,000 counted tokens at 8,000) rounded up to 0.05; 48 sets),
+          # ideas-validate 8.0 (Vc: the smokes 0.05 Sonnet
+          # 5 + 0.15 Fable 5, each 3,000 counted tokens at 2,048, and 17 Opus 5
+          # label requests x 0.45625, 25,000 counted tokens at 12,000, 7.80),
           # rounded up; a smaller cap would refuse, and fail, the later
           # tests of the suite.
           case "${INPUT_SUITE}" in
@@ -817,8 +835,11 @@ jobs:
             watch) paths=(tests/live/experiments/test_watch_managed_live.py); need=2 ;;
             watch-cleanup) paths=(tests/live/experiments/test_watch_managed_live.py); need=2 ;;
             ideas-probe) paths=(tests/live/test_ideas_probe_live.py); need=46 ;;
+            ideas-views) paths=(tests/live/test_ideas_views_live.py); need=0 ;;
+            ideas-marker) paths=(tests/live/test_ideas_marker_live.py); need=24 ;;
+            ideas-validate) paths=(tests/live/test_ideas_validate_live.py); need=8 ;;
             *)
-              echo "::error::unknown suite input (stage-a, corpus, attack, hard, oss, probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, ab-v2-p, ab-v2, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, evolve-p, heal-hard, build, grader, upstream-verify, upstream, agent-probes, heal-agent, research-agent, watch, watch-cleanup or ideas-probe)"
+              echo "::error::unknown suite input (stage-a, corpus, attack, hard, oss, probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, ab-v2-p, ab-v2, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, evolve-p, heal-hard, build, grader, upstream-verify, upstream, agent-probes, heal-agent, research-agent, watch, watch-cleanup, ideas-probe, ideas-views, ideas-marker or ideas-validate)"
               exit 1
               ;;
           esac
@@ -1026,7 +1047,7 @@ jobs:
             stage-a | attack | probes | triage | papers | web | prescreen) noise_rule=step2 ;;
             sweep | sweep-fable | sweep-record | ab | ab-v2-p | ab-v2 | escalation | acquire) noise_rule=step2 ;;
             heal | oss-ab | evolve | evolve-more | evolve-p | heal-hard | build | grader | agent-probes | heal-agent | research-agent) noise_rule=step2 ;;
-            watch | watch-cleanup | ideas-probe) noise_rule=step2 ;;
+            watch | watch-cleanup | ideas-probe | ideas-views | ideas-marker | ideas-validate) noise_rule=step2 ;;
             *)
               echo "::error::no noise rule for suite ${INPUT_SUITE}"
               exit 1

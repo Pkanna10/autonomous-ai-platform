@@ -3015,6 +3015,26 @@ worktree", 4.4.0) or in the builder rules every brief carries.
   `evolve.primary_gain_floor`, the run floor only as a fallback); the node test
   now drives the recorded key through round 1's real events and covers a
   compound verdict reaching the generator unkeyed.
+- V suite wave A (Va views pass, Vb marker validation, Vc smoke and dedupe
+  validation): three new offline-guarded CI suites, `ideas-views` (need 0),
+  `ideas-marker` (need 24, 240 minutes) and `ideas-validate` (need 8, 60
+  minutes). Accepted over their size rows (test-only harness code, every extra
+  line a safety check the reviewers asked for): Vb about 2.8x (the blinding
+  filter on profile notes, an offline scorer so a job cut at its timeout can be
+  scored from its reply rows), Vc about 2.6x (a breached smoke fails closed
+  before any label request). Va needs a seam in `src` for Vd:
+  `IdeaPipelineGenerator(view_builder=...)` so a recorded view replaces
+  `build_view`, and Vd must call `generate` with E1's protected patterns, no
+  read-deny and the default limits, or the recorded views refuse. OSS workloads
+  name only their benchmark script, so the input-shape view shows the argv and
+  no input file. Vb's 2 minutes a marker request is unmeasured; a re-run after a
+  cut job costs the full 24 USD. Vc's labeller is Opus 5, outside E1's writers
+  derived from its rows.
+- G2 fix found by Va: `count_note` noted negative cuts, so every callers view
+  under its limits said e.g. "-199 file(s) not scanned for callers"; it now
+  notes only positive counts. Requests were byte-identical; the six viewed
+  golden hashes were re-recorded after a diff showed only those false notes left
+  the result.
 - Dependabot alert #236 (moderate, on master, reported by the push of
   2026-11-02): this session has no Dependabot API, so the alert page was not
   opened; identified by audit instead. On master `pnpm audit` finds only

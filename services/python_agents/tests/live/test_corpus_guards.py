@@ -1077,6 +1077,9 @@ SUITES = (
     "watch",
     "watch-cleanup",
     "ideas-probe",  # V7: E0b, E1, E1b, idea-only
+    "ideas-views",  # Va: the views pass, no request
+    "ideas-marker",  # Vb: the marker validation (O36.1, O37)
+    "ideas-validate",  # Vc: the smoke requests and the dedupe labels
 )
 DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_sweep_live.py",
@@ -1090,6 +1093,9 @@ DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_upstream_verify_live.py",  # V9c: the upstream corpus
     "tests/live/test_upstream_live.py",
     "tests/live/test_ideas_probe_live.py",  # V7: the ideas probe
+    "tests/live/test_ideas_views_live.py",  # Va: the views pass
+    "tests/live/test_ideas_marker_live.py",  # Vb: the marker validation
+    "tests/live/test_ideas_validate_live.py",  # Vc: smoke and dedupe labels
 )
 EXPERIMENT_MINUTES = {
     # the sweeps on 37 repositories (v1 + hard + v2), from the Window 0 jobs on
@@ -1116,6 +1122,9 @@ EXPERIMENT_MINUTES = {
     "research-agent": 45,  # research_agent.JOB_MINUTES: 11 runs
     "watch": 90,  # watch_managed.JOB_MINUTES: one watched hosted run
     "ideas-probe": 240,  # ideas_probe.JOB_MINUTES: E1 four libraries a dispatch
+    "ideas-views": 30,  # ideas_views.VIEWS_JOB_MINUTES: 8 libraries, no request
+    "ideas-marker": 240,  # ideas_marker.JOB_MINUTES: 17 clones, 96 requests
+    "ideas-validate": 60,  # ideas_validate.JOB_MINUTES: 19 requests
 }  # batch wait; 5 papers; 18 web runs
 SWEEP_FABLE_ENV = {  # Fable 5.1 beside the one arm whose run phase 1 shares
     "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
@@ -1129,6 +1138,7 @@ AB_V2_P_ENV = {"LIVE_AB_SET": "v2-p"}
 AB_V2_ENV = {"LIVE_AB_SET": "v2", "LIVE_AB_ARMS": "A,B"}  # L5b, ab_arms A,B
 AB_V2_BLIND_ENV = {"LIVE_AB_SET": "v2", "LIVE_AB_ARMS": "A", "LIVE_AB_REPS": "1"}
 OSS_AB_DISPATCH_REPO = "tabulate"  # oss-ab runs one library a dispatch
+MARKER_CAP = {"LIVE_SUITE_CAP_USD": "24"}  # the marker plan refuses a cap below
 # E1: four a dispatch (4 x 56 of ideas_probe.JOB_MINUTES' 240)
 IDEAS_E1_DISPATCH = {"LIVE_IDEAS_REPOS": "pyparsing,tomli,mistune,idna"}
 SWEEP_RECORD_ENV = {  # one arm, recorded for hand labels and offline replay
@@ -1803,6 +1813,9 @@ def _suite_needs() -> dict[str, float]:
     upstream = importlib.import_module(f"{__package__}.upstream")
     upstream_verify = importlib.import_module(f"{__package__}.upstream_verify")
     ideas = importlib.import_module(f"{__package__}.ideas_probe")
+    views = importlib.import_module(f"{__package__}.ideas_views")
+    marker = importlib.import_module(f"{__package__}.ideas_marker")
+    validate = importlib.import_module(f"{__package__}.ideas_validate")
     one_library = {oss_ab.REPOS_ENV: OSS_AB_DISPATCH_REPO}
     return {
         "noise": noise.noise_need(noise.noise_plan({})),
@@ -1826,6 +1839,9 @@ def _suite_needs() -> dict[str, float]:
         "watch": watch.watch_need(),
         "watch-cleanup": watch.cleanup_need(),
         "ideas-probe": ideas.probe_need(ideas.probe_plan(IDEAS_E1_DISPATCH)),
+        "ideas-views": views.views_need(),
+        "ideas-marker": marker.marker_need(marker.marker_plan(MARKER_CAP)),
+        "ideas-validate": validate.validate_need(validate.validate_plan({})),
         "sweep": sweep.sweep_need(sweep.sweep_plan({})),
         "sweep-fable": sweep.sweep_need(sweep.sweep_plan(SWEEP_FABLE_ENV)),
         "sweep-record": sweep.sweep_need(sweep.sweep_plan(SWEEP_RECORD_ENV)),
