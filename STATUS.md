@@ -783,12 +783,16 @@ blocks it.
   report, one pooled re-audit (no idea generation) per library pools the
   re-run's X1-1 ideas with run 1's A, X1-0, X1-2 and X1-3, and the report for
   those four libraries comes from that pooled audit. The self/cross measure
-  (O43), as the Lead builds it: self = auditor links between two ideas of the
-  same arm; cross = links between the arm and any other arm, counted for both
-  ends, because a link's direction only records which idea the auditor read
-  first (run 1: 11 links from X1-0 to X1-1 and 9 from X1-1 to X1-0). Run 1's
-  link matrix by source and target arm is recorded with the run; the owner's 15
-  against 2 and 22-35 are not reproduced by this or by the per-class count.
+  (O43, definition confirmed by the owner): the headline counts one
+  `duplicate_of` link per audit row, only for ideas in the arm's result, self or
+  cross by the link target's arm; one secondary row labelled "before the arm's
+  own filter" counts every audited row, including those the arm's own reviewer
+  or dedupe had already removed, since it shows the lever's effect at
+  generation. The whole-class version is dropped. On run 1 (summed over the four
+  libraries): headline self 0 for every arm (each arm's own filter removes its
+  self-repeats), cross X1-0 5, X1-1 13, X1-2 18, X1-3 16; before the own filter,
+  self 9, 3, 0, 0 and cross 18, 21, 37, 26. The owner's 15/2/2/2 is not
+  reproduced by these rows; the report prints the counts as defined.
 - **O43. X1's audit reading (owner, 2026-11-03, on run 1).** "Infeasible" is
   almost entirely `duplicate_of` (114 of 116 verdicts, verified), and the
   as-coded good count rewards whichever arm the auditor read first (arm A 19 of
