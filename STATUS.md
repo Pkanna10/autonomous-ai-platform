@@ -777,6 +777,40 @@ blocks it.
   lab's learning mechanism, W3 deferred. Budget: X1 (~42 USD) is ~28 % of Window
   1's 148.73 USD; read every idea list in full; some confirmatory rungs may
   spill into Window 2.
+- **O46. The slice, the pool and the report (owner, 2026-11-04).** Approved:
+  `ideas-slice` in two dispatches (need 75 each), `ideas-pool` (need 22) and the
+  offline X1 report. With 89.90 USD left in the window they run one after
+  another: slice 1 (sqlparse, pyparsing, cap 75) first, with its spend and the
+  balance after reported. Slice 2 (tomli, sortedcontainers) runs only if the
+  balance is still at least its 75 need; a cap is never lowered below the need
+  to fit, and if it does not fit, slice 2 waits for the next window. The pool
+  (cap 22) runs last. Before each next dispatch, three conditions must hold:
+  every library and configuration ran, no request stopped at max_tokens or was
+  refused, and the cost of each part is within range. Each library's pool size
+  and its tournament rounds are stated before the pool is dispatched. The report
+  builds offline meanwhile and gates nothing (the slice's selection rule is
+  pre-registered). Master stays unmerged into the lab branch until the slice and
+  pool are done.
+- **X1's slice and pool inputs (Lead, under O44 and O46).** The slice and pool
+  loaders refuse a library recorded in two files and read only `ideas-idea`,
+  `ideas-reply` and `ideas-audit` rows. So
+  `tests/fixtures/ideas_slice/x1-1.jsonl` (run 1's four libraries) is built from
+  three sources:
+  - run 1's idea and reply rows for every arm but X1-1;
+  - the re-run's X1-1 idea and reply rows (never its arm A);
+  - the pooled re-audit's 192 rows as `ideas-audit` rows (digest fields
+    dropped), with its auditor reply.
+
+  `x1-2.jsonl` is run 2a then run 2b, unchanged. Only those three kinds are
+  written. `marker.jsonl` is Vb's results file (Opus 5.5 chosen). Checked
+  through the real loaders: every X1-1 idea the slice can pick on pyparsing,
+  tomli and sortedcontainers comes from the re-run. Eligible ideas,
+  X1-0/X1-1/X1-2/X1-3: sqlparse 5/6/4/5, pyparsing 2/3/3/5, tomli 4/6/4/4,
+  sortedcontainers 6/7/6/6, so slice 1 runs 23 trials (pyparsing X1-0 has 2).
+  Both plans and both recorders load (needs 74.90 and 21.80). The report still
+  refuses X1-1 slice and pool rows on the re-run's libraries, by arm; it is to
+  accept those whose titles match the re-run's ideas.
+
 - **O45. X1-1's timeout and run 2's shape (owner, 2026-11-04).** X1-1's 951 s
   request timeout is approved, scoped to X1-1's lanes, on the condition that it
   rides on each request: the Anthropic SDK refuses an unstreamed request whose
