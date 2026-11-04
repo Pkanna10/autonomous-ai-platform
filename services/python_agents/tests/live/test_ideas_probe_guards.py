@@ -2044,6 +2044,43 @@ def test_x1_1s_lane_cap_reaches_s1_and_every_lens_request_on_the_wire(
     assert set(timeouts) == {300.0}  # X1-0: the defaults
 
 
+def test_every_x1_1_request_names_its_951_s_timeout_on_the_request_itself(
+    dry: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """O42, owner 2026-11-04: the SDK refuses an unstreamed request whose
+    max_tokens implies more than ten minutes unless the request names its
+    own timeout. Every request X1-1 builds (S1 and the lenses at 32,000, the
+    leap, the reviewer) passes ``timeout`` to ``messages.create`` with a
+    951 s read, and the wire carries it."""
+    sent: list[tuple[int, float]] = []
+    reads: list[float] = []
+
+    class _Seen(AnthropicTransport):
+        def __init__(self, cfg: Settings, **kw: Any) -> None:
+            super().__init__(cfg, **kw)
+            create = self._client.beta.messages.create
+
+            def recorded(**kwargs: Any) -> Any:
+                sent.append((kwargs["max_tokens"], kwargs["timeout"].read))
+                return create(**kwargs)
+
+            monkeypatch.setattr(self._client.beta.messages, "create", recorded)
+
+    class _Timed(dg.Wire):
+        def __call__(self, request: httpx2.Request) -> httpx2.Response:
+            if not request.url.path.endswith("/count_tokens"):  # its own 30 s
+                reads.append(request.extensions["timeout"]["read"])
+            return super().__call__(request)
+
+    monkeypatch.setattr(conftest, "AnthropicTransport", _Seen)
+    wire = _Timed(_Answers(), usages=[CACHED] * 12)
+    found = ip.run_arm(ip.ARM_X1_1, wire.run(), _facts(), base=_base(), reader=_reader)
+    assert found.error is None and found.result is not None
+    assert len(sent) == len(wire.bodies) == 1 + 6 + 2  # S1, lenses, leap, reviewer
+    assert sorted(cap for cap, _ in sent).count(32_000) == 7
+    assert {read for _, read in sent} == {951.0} == set(reads)
+
+
 def test_a_lane_stopped_at_max_tokens_is_recorded_so_and_never_retried(
     dry: Path, tmp_path: Path
 ) -> None:

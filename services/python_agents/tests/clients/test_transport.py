@@ -389,6 +389,28 @@ def test_the_client_has_the_settings_timeout_and_no_sdk_retries() -> None:
     }
 
 
+def test_the_timeout_rides_on_each_request_so_a_long_cap_is_never_refused() -> None:
+    """
+    GIVEN a client left at the SDK's own default timeout (so only a
+          per-request timeout can satisfy the SDK) and LLM_TIMEOUT_S=951
+    WHEN an unstreamed request with max_tokens=32,000 is sent (the SDK
+         refuses one that implies more than ten minutes unless the request
+         itself names a timeout)
+    THEN it goes out, once, with the 951 s timeout on the request
+    """
+    wire = Wire(messages=[_ok()])
+    transport = _transport(wire, _settings(LLM_TIMEOUT_S=951.0))
+    default = transport._client.with_options(timeout=anthropic.DEFAULT_TIMEOUT)
+    assert default.timeout == anthropic.DEFAULT_TIMEOUT
+    transport._client = default
+
+    transport.send(dataclasses.replace(BASE, max_tokens=32_000))
+
+    assert len(wire.sent) == 1
+    assert wire.sent[0].extensions["timeout"]["read"] == 951.0
+    assert wire.sent[0].extensions["timeout"]["connect"] == CONNECT_TIMEOUT_S
+
+
 # ---------------------------------------------------------------------------
 # AnthropicTransport: the request on the wire
 # ---------------------------------------------------------------------------

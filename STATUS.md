@@ -777,6 +777,20 @@ blocks it.
   lab's learning mechanism, W3 deferred. Budget: X1 (~42 USD) is ~28 % of Window
   1's 148.73 USD; read every idea list in full; some confirmatory rungs may
   spill into Window 2.
+- **O45. X1-1's timeout and run 2's shape (owner, 2026-11-04).** X1-1's 951 s
+  request timeout is approved, scoped to X1-1's lanes, on the condition that it
+  rides on each request: the Anthropic SDK refuses an unstreamed request whose
+  max_tokens implies more than ten minutes unless the request itself names a
+  timeout, and 32,000 crosses that line. Before this the timeout was set only on
+  the client, which passed the SDK's check only because it differed from the
+  SDK's default. `AnthropicTransport.send` now passes it to every
+  `messages.create`. Every phase gets the same values as before, so no other
+  caller changes. A transport test leaves the client at the SDK's default
+  timeout and sends 32,000 (red: "Streaming is required"), and an X1-1 test
+  asserts 951 s on each built request and on the wire. Run 2 is three libraries,
+  then one, at caps of 51 and 17 USD. Dispatch order: the X1-1 re-run (cap 33),
+  its results committed, `ideas-reaudit` (cap 3), then run 2's two dispatches.
+  O42's condition 2 stands throughout.
 - **O44. The X1-1 re-run is re-audited in the full pool (owner, 2026-11-03).**
   The re-run audits only arm A and X1-1, so its duplicate rate would be lower
   than run 1's by construction. Before its X1-1 rows replace run 1's in the
