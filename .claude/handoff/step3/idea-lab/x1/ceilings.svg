@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="240" viewBox="0 0 640 240" font-family="sans-serif" font-size="12">
+<title>Predicted ceiling less the floor, per configuration</title>
+<style>.s{fill:#fcfcfb}.t{fill:#0b0b0b}.m{fill:#52514e}.g{stroke:#d9d8d4}.b{fill:#2a78d6;fill-opacity:.25;stroke:#2a78d6}.k{stroke:#2a78d6;stroke-width:2}.d{fill:#2a78d6}.f{stroke:#52514e;stroke-dasharray:4 3}@media (prefers-color-scheme:dark){.s{fill:#1a1a19}.t{fill:#f0efec}.m{fill:#c3c2b7}.g{stroke:#3a3a37}.b{fill:#3987e5;stroke:#3987e5}.k{stroke:#3987e5}.d{fill:#3987e5}.f{stroke:#c3c2b7}}</style>
+<rect class="s" width="640" height="240"/>
+<line class="g" x1="96.0" x2="96.0" y1="16" y2="216"/>
+<text class="m" x="96.0" y="232" text-anchor="middle">-25 pp</text>
+<line class="f" x1="196.0" x2="196.0" y1="16" y2="216"/>
+<text class="m" x="196.0" y="232" text-anchor="middle">floor</text>
+<line class="g" x1="296.0" x2="296.0" y1="16" y2="216"/>
+<text class="m" x="296.0" y="232" text-anchor="middle">+25 pp</text>
+<line class="g" x1="396.0" x2="396.0" y1="16" y2="216"/>
+<text class="m" x="396.0" y="232" text-anchor="middle">+50 pp</text>
+<line class="g" x1="496.0" x2="496.0" y1="16" y2="216"/>
+<text class="m" x="496.0" y="232" text-anchor="middle">+75 pp</text>
+<line class="g" x1="596.0" x2="596.0" y1="16" y2="216"/>
+<text class="m" x="596.0" y="232" text-anchor="middle">+100 pp</text>
+<text class="t" x="8" y="40">A (0)</text>
+<text class="m" x="96.0" y="40">no ceiling</text>
+<text class="t" x="8" y="72">X1-0 (0)</text>
+<text class="m" x="96.0" y="72">no ceiling</text>
+<text class="t" x="8" y="104">X1-1 (0)</text>
+<text class="m" x="96.0" y="104">no ceiling</text>
+<text class="t" x="8" y="136">X1-2 (0)</text>
+<text class="m" x="96.0" y="136">no ceiling</text>
+<text class="t" x="8" y="168">X1-3 (0)</text>
+<text class="m" x="96.0" y="168">no ceiling</text>
+<text class="t" x="8" y="200">X1-4 (0)</text>
+<text class="m" x="96.0" y="200">no ceiling</text>
+</svg>
