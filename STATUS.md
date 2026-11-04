@@ -3330,6 +3330,32 @@ worktree", 4.4.0) or in the builder rules every brief carries.
   lines: the swap and its refusals, recomputed audit scores, three sections),
   accepted as harness code like the other V units.
 
+- V-rep2 (O44, O46: provenance of X1-1's slice and pool rows on run 1's
+  libraries). The arm-only refusal is replaced:
+  - **Slice trial:** run 1's X1-1 trial row is refused when its title is run 1's
+    idea at its key, not the re-run's.
+  - **Slice combine:** an X1-1 combine is accepted when its file holds that
+    library's X1-1 trials.
+  - **Pool result:** an X1-1 member or set-apart idea is accepted only when the
+    `ideas-pool-set` rows that showed it record the re-run's title.
+
+  Set rows did not record titles. So, as the Lead's addition after the review's
+  should_fix, `ideas_pool.rank_library` now writes `titles` (as shown, in `ids`
+  order) and the report matches them exactly. Rows written before the field
+  (slice 1 and slice 2's own pooled tournaments, dispatched on the old recorder)
+  get the weaker check: the recorded shuffle undone and the titles' order
+  compared. The reviewer's simulation on the real files refuses every round-1
+  set that holds a run 1 X1-1 idea. Every other report number is unchanged
+  (goldens). Today's committed files build the 53-file report with no refusal.
+
+  Left as they are:
+  - a legitimate zero-pick X1-1 combine on a re-run library would be refused; it
+    cannot happen there, since X1-1 has 3, 6 and 7 eligible ideas;
+  - a trial whose run 1 and re-run titles are identical is accepted, since the
+    two cannot be told apart.
+
+  Size about 1.5x its row.
+
 - G2 fix found by Va: `count_note` noted negative cuts, so every callers view
   under its limits said e.g. "-199 file(s) not scanned for callers"; it now
   notes only positive counts. Requests were byte-identical; the six viewed

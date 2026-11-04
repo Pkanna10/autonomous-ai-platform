@@ -312,12 +312,15 @@ class PoolSetLine(_Row):
     order: tuple[str, ...] | None  # the marker's, most likely first
     advanced: tuple[str, ...]
     error: str | None
+    titles: tuple[str, ...] | None = None  # clipped, in ``ids``' order, when recorded
 
     @model_validator(mode="after")
     def _set(self) -> Self:
         ids, order = sorted(self.ids), self.order
         if not 0 < len(ids) <= SET_SIZE:
             raise ValueError(f"a set of {len(ids)} ideas, past the validated set size")
+        if self.titles is not None and len(self.titles) != len(ids):
+            raise ValueError("the titles are not one per id")
         if sorted(self.shown) != ids or (order is not None and sorted(order) != ids):
             raise ValueError("the shown order or the order is not a permutation")
         top = () if order is None or self.of == 1 else order[: ipool.ADVANCE]
@@ -416,6 +419,72 @@ def _rerun_of(found: Mapping[str, list[_Row]]) -> set[str]:
     return {r for r, ps in arms.items() if {p.arm for p in ps} == {TODAY, "X1-1"}}
 
 
+def _at(i: IdeaLine | TrialLine) -> tuple[str, str, str, int]:
+    return (i.repo, i.arm, i.label, i.position)
+
+
+def _pool_id(i: IdeaLine) -> str:  # ``ideas_pool.idea_id``: the row key's hash
+    return ipool.idea_id(ipool.IdeaRow.model_validate(
+        {"experiment": IDEA_EXPERIMENT, **i.model_dump(mode="json")}))  # fmt: skip
+
+
+def _shows(s: PoolSetLine, title: Mapping[str, str], x: str) -> bool:
+    """Whether ``s`` showed ``x`` titled ``title[x]``: by the row's own title, or
+    else ``s.shown`` is ``ideas_marker.shown_order`` on ``title`` (ties in any
+    order: the change class is unrecorded) with the seed's shuffle undone."""
+    if s.titles is not None:
+        return dict(zip(s.ids, s.titles, strict=True))[x] == title[x]
+    perm, ranked = list(range(len(s.shown))), list(s.shown)
+    random.Random(s.seed).shuffle(perm)  # noqa: S311 - the marker's own shuffle
+    for j, y in zip(perm, s.shown, strict=True):
+        ranked[j] = y
+    names = [title[y] for y in ranked if y in title]
+    return len(names) == len(ranked) and names == sorted(names)
+
+
+def _provenance(
+    files: Mapping[Path, Mapping[str, list[_Row]]], redo: set[str],
+    run1: Mapping[tuple[str, str, str, int], str], ideas: Iterable[IdeaLine],
+) -> None:  # fmt: skip
+    """O44 under O46: X1-1 slice and pool rows on a re-run library are kept
+    only when the titles they recorded are the re-run's ideas' (``ideas``,
+    swapped): a trial its own (the join checks it), a combine through its
+    trials, a pool result through its dispatch's set rows (their titles, or
+    for rows from before ``titles`` the shown order the titles give)."""
+    now = {_at(i): i for i in ideas if i.repo in redo}
+    title = {_pool_id(i): i.title[: ipool.MARKER_TITLE_MAX] for i in now.values()}
+    for p, h in files.items():
+        trials = [t for t in _of(h, TRIAL_EXPERIMENT, TrialLine)
+                  if t.repo in redo and t.arm == "X1-1"]  # fmt: skip
+        for t in trials:  # run 1's title, not the re-run's at that key
+            if t.title == run1.get(_at(t)) != getattr(now.get(_at(t)), "title", None):
+                raise ValueError(f"{p.name}: {t.repo} X1-1 slice row names run 1's "
+                                 "idea, not the re-run's (O44)")  # fmt: skip
+        for c in _of(h, COMBINE_EXPERIMENT, CombineLine):
+            if (
+                c.repo in redo
+                and c.arm == "X1-1"
+                and c.repo not in {t.repo for t in trials}
+            ):
+                raise ValueError(f"{p.name}: {c.repo} X1-1 slice combine has no trial "
+                                 "row to prove its ideas (O44)")  # fmt: skip
+        sets = _of(h, SET_EXPERIMENT, PoolSetLine)
+        for r in _of(h, RESULT_EXPERIMENT, PoolResultLine):
+            keys = [k for k in (*r.members, *r.apart) if k.arm == "X1-1"]
+            if r.repo in redo and keys and r.marker not in {s.marker for s in sets
+                                                            if s.repo == r.repo}:  # fmt: skip
+                raise ValueError(f"{p.name}: {r.repo} {r.marker} pool result has no "
+                                 f"{SET_EXPERIMENT} row (O44)")  # fmt: skip
+            for k in keys if r.repo in redo else ():
+                i = now.get((r.repo, k.arm, k.label, k.position))
+                x = "" if i is None else _pool_id(i)
+                on = [s for s in sets if x in s.ids]
+                if not on or not all(_shows(s, title, x) for s in on):
+                    raise ValueError(f"{p.name}: {r.repo} {r.marker} pool: X1-1 "
+                                     f"{k.label} #{k.position} is not shown with the "
+                                     "re-run's title (O44)")  # fmt: skip
+
+
 def _swap(
     f: dict[str, list[_Row]], files: Mapping[Path, Mapping[str, list[_Row]]],
     rerun: Path, reaudit: Path,
@@ -438,18 +507,9 @@ def _swap(
     if (done := {a.repo for a in audits}) != redo:
         raise ValueError(f"{reaudit.name}: re-audits {sorted(done)}, the re-run "
                          f"ran {sorted(redo)}")  # fmt: skip
-    for p, h in files.items():  # joined by (label, position): run 1's ideas
-        sliced: tuple[TrialLine | CombineLine, ...] = (
-            *_of(h, TRIAL_EXPERIMENT, TrialLine),
-            *_of(h, COMBINE_EXPERIMENT, CombineLine),
-        )
-        stale = [r.repo for r in sliced if r.arm == "X1-1"] + [
-            r.repo for r in _of(h, RESULT_EXPERIMENT, PoolResultLine)
-            if any(k.arm == "X1-1" for k in (*r.members, *r.apart))]  # fmt: skip
-        if old := sorted(set(stale) & redo):
-            raise ValueError(f"{p.name}: {old[0]} X1-1 slice/pool rows are run 1's "
-                             "X1-1 ideas; re-slice or re-rank on the re-run before "
-                             "reporting (O44)")  # fmt: skip
+    run1 = {
+        _at(i): i.title for i in _of(f, IDEA_EXPERIMENT, IdeaLine) if i.arm == "X1-1"
+    }
     swapped = (IDEA_EXPERIMENT, ROW_EXPERIMENT, REPLY_EXPERIMENT, PROPOSAL_EXPERIMENT)
     for kind, rows in f.items():
         rows[:] = [r for r in rows if getattr(r, "repo", None) not in redo
@@ -460,6 +520,7 @@ def _swap(
     fields = set(AuditLine.model_fields)
     f[AUDIT_EXPERIMENT] += [AuditLine.model_validate(a.model_dump(include=fields))
                             for a in audits]  # fmt: skip
+    _provenance(files, redo, run1, _of(f, IDEA_EXPERIMENT, IdeaLine))
     return redo, (f"X1-1's probe, idea and reply rows from {rerun.name}; every "
                   "audit-based figure (share-new, self/cross, good counts, "
                   f"auditor-feasible) from {reaudit.name}; the rest from "

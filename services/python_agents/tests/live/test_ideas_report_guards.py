@@ -23,6 +23,7 @@ import sys
 from collections import Counter
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -37,12 +38,15 @@ from autonomous_ai_agents.common.models import (
 from autonomous_ai_agents.optimization import idea_dedupe as dd
 from autonomous_ai_agents.optimization.idea_types import Lane
 
+from . import ideas_marker as im
 from . import ideas_pool as ipool
 from . import ideas_probe as ip
 from . import ideas_report as ir
 from . import ideas_slice as sl
-from .conftest import TESTS_DIR
+from .conftest import TESTS_DIR, LiveRun
+from .corpus import RESULTS_ENV
 from .discovery import FABLE, OPUS, SONNET
+from .discovery_io import ResultsSink
 
 Row = dict[str, object]
 SERVICE = TESTS_DIR.parent
@@ -868,6 +872,8 @@ _GONE = {"p0z": ("X1-3", "far", 9)}
                                    [*MEMBERS][:7]), *SETS[3:], *RESULTS]},
          "past the validated set size"),
         ({"pool": [{**SETS[0], "repo": "flask"}, *SETS[1:], *RESULTS]}, "not one of the 8"),
+        ({"pool": [{**SETS[0], "titles": ["one"]}, *SETS[1:], *RESULTS]},
+         "the titles are not one per id"),
         ({"pool": [{**SETS[0], "advanced": ["p1a", "p4d"]}, *SETS[1:], *RESULTS]},
          "advanced is not the order's top two"),
         ({"pool": [*SETS, RESULTS[0], {**RESULTS[1], "top": None}]}, "not the final"),
@@ -1286,38 +1292,201 @@ TOMLI_X1_1_TITLE = next(str(r["title"]) for r in _lines(RUN1)
 
 
 @pytest.mark.parametrize(
-    "stale",
+    ("stale", "match"),
     [
-        _trial(*TOMLI_X1_1, TOMLI_X1_1_TITLE),  # Ve's trial of run 1's idea
-        {**COMBINE, "arm": "X1-1"},
-        _result("opus-5-5", {"p1": ("X1-1", "name_the_problem", 1)}, {}, ["p1"],
-                0, 0),  # a member (Fable 5.1's)
-        {**_result("sonnet-5", {"p1": ("X1-0", "far", 1)},
-                   {"q": ("X1-1", "resolve_tradeoff", 3)}, ["p1"], 0, 0),
-         "model": "claude-sonnet-5"},  # listed apart: the marker's own model's
+        (_trial(*TOMLI_X1_1, TOMLI_X1_1_TITLE),  # Ve's trial of run 1's idea
+         "tomli X1-1 slice row names run 1's idea, not the re-run's (O44)"),
+        ({**COMBINE, "arm": "X1-1"},  # no trial: nothing proves its ideas
+         "tomli X1-1 slice combine has no trial row to prove its ideas (O44)"),
+        (_result("opus-5-5", {"p1": ("X1-1", "name_the_problem", 1)}, {}, ["p1"],
+                 0, 0),  # a member (Fable 5.1's), no set row
+         "tomli opus-5-5 pool result has no ideas-pool-set row (O44)"),
+        ({**_result("sonnet-5", {"p1": ("X1-0", "far", 1)},
+                    {"q": ("X1-1", "resolve_tradeoff", 3)}, ["p1"], 0, 0),
+          "model": "claude-sonnet-5"},  # listed apart: the marker's own model's
+         "tomli sonnet-5 pool result has no ideas-pool-set row (O44)"),
     ],
 )  # fmt: skip
 def test_run_1s_x1_1_slice_and_pool_rows_beside_the_re_run_are_refused(
-    tmp_path: Path, stale: Row
+    tmp_path: Path, stale: Row, match: str
 ) -> None:
     """O44: run 1's X1-1 slice and pool rows on a re-run library would join the
     re-run's ideas by (label, position): refused, never silently attached."""
     more = _write(tmp_path, [stale], "slice.jsonl")
     _run1(more)  # without the re-run: run 1's own rows, accepted
-    with pytest.raises(ValueError, match=(
-            "slice.jsonl: tomli X1-1 slice/pool rows are run 1's X1-1 ideas; "
-            "re-slice or re-rank on the re-run before reporting")):  # fmt: skip
+    with pytest.raises(ValueError, match=re.escape(f"slice.jsonl: {match}")):
         _run1(more, **_rerun(tmp_path))
+
+
+O39 = im.Decision("opus-5-5", im.ONE, ("opus-5-5",), ())  # Vb's verdict
+
+
+def _pool_ideas(repo: str, x1_1: Path) -> list[Row]:
+    """The pool the report joins on a re-run library: run 1's X1-0, X1-2 and
+    X1-3 idea rows with ``x1_1``'s X1-1 ones."""
+    rows = [*(r for r in _lines(RUN1) if r.get("arm") != "X1-1"),
+            *(r for r in _lines(x1_1) if r.get("arm") == "X1-1")]  # fmt: skip
+    return [r for r in rows if r["experiment"] == "ideas-idea" and r["repo"] == repo]
+
+
+def _pool_of(rows: list[Row], change_class: str = "caching") -> list[ipool.PoolIdea]:
+    """``ideas_pool.members``' pool of ``rows`` (one change class for all)."""
+    fields = ipool.IdeaRow.model_fields
+    ideas = [ipool.IdeaRow.model_validate({k: v for k, v in r.items() if k in fields})
+             for r in rows]  # fmt: skip
+    found = [ipool.PoolIdea(i, change_class) for i in ideas if ipool.pooled(i)]
+    return sorted(found, key=lambda i: i.id)
+
+
+def _ranked(monkeypatch: pytest.MonkeyPatch, tmp: Path, repo: str,
+            pool: list[ipool.PoolIdea], name: str) -> list[Row]:  # fmt: skip
+    """``ideas_pool.rank_library``'s own rows on ``pool`` under O39 (the real
+    sets, shown orders and results), each marker's order faked as its rows
+    reversed: nothing is sent."""
+
+    def ask(marker: im.Marker, run: LiveRun, s: im.RankSet, hot: im.HotCode,
+            *, base: object) -> im.MarkerReply:  # fmt: skip
+        return im.MarkerReply(s, marker, tuple(map(float, range(len(s.rows)))),
+                              None, 0.02, None)  # fmt: skip
+
+    monkeypatch.setattr(im, "ask", ask)  # ``ideas_pool`` calls ``im.ask``
+    out = tmp / f"{name}.jsonl"
+    ipool.rank_library(repo, pool, O39, live=lambda cap: cast(LiveRun, object()),
+                       hot=lambda: im.HotCode(repo, "", ()),
+                       sink=ResultsSink({RESULTS_ENV: str(out)}))  # fmt: skip
+    return _lines(out)
+
+
+def test_the_re_runs_x1_1_slice_and_pool_rows_are_accepted_and_counted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """O44 under O46: the slice and the pool run on the re-run's X1-1 ideas;
+    their rows join, counted, beside the re-run."""
+    named = _rerun(tmp_path)
+    title = f"R {TOMLI_X1_1_TITLE}"  # ``_rerun``'s retitled X1-1 idea there
+    pooled = _ranked(monkeypatch, tmp_path, "more_itertools",
+                     _pool_of(_pool_ideas("more_itertools", named["rerun"])), "pool")  # fmt: skip
+    more = _write(tmp_path, [_trial(*TOMLI_X1_1, title), {**COMBINE, "arm": "X1-1"},
+                             *pooled], "slice.jsonl")  # fmt: skip
+    report = _run1(more, **named)
+    assert (report.costs["X1-1"].wins, report.costs["X1-1"].slice_usd) == (1, 0.6)
+    assert f"| 1 | {title} |" in ir.render(report)["tomli-X1-1.md"]
+    validated, other = report.pools["more_itertools"]
+    assert any(i.arm == "X1-1" for i in validated.members.values())
+    assert [i.arm for i in validated.apart] == ["X1-1"]  # Opus 5.5's: Opus 5 shows it
+    written = [r["counts"] for r in pooled if r["experiment"] == "ideas-pool-result"]
+    assert [validated.counts(), other.counts()] == written
+    assert all(isinstance(c, dict) and sum(c.values()) == 3 for c in written)
+
+
+def test_a_re_run_trial_with_another_title_is_still_refused_by_the_join(
+    tmp_path: Path,
+) -> None:
+    more = _write(tmp_path, [_trial(*TOMLI_X1_1, "Another idea")], "slice.jsonl")
+    with pytest.raises(ValueError, match="tomli X1-1 obvious #1: the trial's "
+                       "'Another idea' is not the idea there"):  # fmt: skip
+        _run1(more, **_rerun(tmp_path))
+
+
+@pytest.mark.parametrize(
+    ("drop", "match"),
+    [
+        ((), "opus-5-5 pool: X1-1 "),  # ranked on run 1's titles
+        (("opus-5-5", "opus-5"), "opus-5-5 pool result has no ideas-pool-set row"),
+        (("opus-5",), "opus-5-5 pool: X1-1 "),  # its apart idea shown nowhere
+    ],
+)
+def test_a_pool_not_shown_with_the_re_runs_titles_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, drop: tuple[str, ...], match: str
+) -> None:
+    named = _rerun(tmp_path)
+    x1_1 = named["rerun"] if drop else RUN1
+    pooled = _ranked(monkeypatch, tmp_path, "more_itertools",
+                     _pool_of(_pool_ideas("more_itertools", x1_1)), "pool")  # fmt: skip
+    more = _write(tmp_path, [r for r in pooled if r["experiment"] != "ideas-pool-set"
+                             or r["marker"] not in drop], "slice.jsonl")  # fmt: skip
+    if not drop:
+        _run1(more)  # run 1's own ranking without the re-run: accepted
+    with pytest.raises(
+        ValueError, match=re.escape(f"slice.jsonl: more_itertools {match}")
+    ):
+        _run1(more, **named)
+
+
+@pytest.mark.parametrize("shown", ["rerun", "run1"])
+def test_a_set_rows_own_titles_are_matched_exactly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shown: str
+) -> None:
+    """A set row that records its titles proves the pool by them, not by the
+    order: the re-run's ranking with run 1's titles written in passes the order
+    check and is refused."""
+    named = _rerun(tmp_path)
+    pool = _pool_of(_pool_ideas("more_itertools", named["rerun"]))
+    title = {i.id: i.row.title[: ipool.MARKER_TITLE_MAX] for i in pool}
+    if shown == "run1":  # the same keys, so the same ids: run 1's titles there
+        title |= {i.id: i.row.title[: ipool.MARKER_TITLE_MAX]
+                  for i in _pool_of(_pool_ideas("more_itertools", RUN1))}  # fmt: skip
+    pooled = _ranked(monkeypatch, tmp_path, "more_itertools", pool, "pool")
+    _run1(_write(tmp_path, pooled, "slice.jsonl"), **named)  # the order check passes
+    titled = [{**r, "titles": [title[x] for x in cast("list[str]", r["ids"])]}
+              if r["experiment"] == "ideas-pool-set" else r for r in pooled]  # fmt: skip
+    more = _write(tmp_path, titled, "slice.jsonl")
+    if shown == "rerun":
+        assert [p.counts() for p in _run1(more, **named).pools["more_itertools"]] == [
+            r["counts"] for r in pooled if r["experiment"] == "ideas-pool-result"]  # fmt: skip
+        return
+    with pytest.raises(ValueError, match=re.escape(
+            "slice.jsonl: more_itertools opus-5-5 pool: X1-1 ")):  # fmt: skip
+        _run1(more, **named)
 
 
 def test_other_arms_slice_rows_beside_the_re_run_are_kept(tmp_path: Path) -> None:
     title = next(str(r["title"]) for r in _lines(RUN1) if r["experiment"] == "ideas-idea"
                  and (r["repo"], r["arm"], r["label"], r["position"])
                  == ("tomli", "X1-0", "obvious", 1))  # fmt: skip
-    more = _write(tmp_path, [_trial("X1-0", "obvious", 1, title)], "slice.jsonl")
+    other = _result("opus-5-5", {"p1": ("X1-0", "far", 1)}, {}, ["p1"], 0, 0)
+    more = _write(tmp_path, [_trial("X1-0", "obvious", 1, title), other], "slice.jsonl")
     report = _run1(more, **_rerun(tmp_path))
     assert report.costs["X1-0"].wins == 1 and report.costs["X1-1"].wins == 0
     assert f"| 1 | {title} |" in ir.render(report)["tomli-X1-0.md"]
+    assert [p.counts() for p in report.pools["tomli"]] == [  # no X1-1 idea: no set
+        {"X1-0": 1, "X1-1": 0, "X1-2": 0, "X1-3": 0}]  # fmt: skip
+
+
+X1_DIR = RUN1.parent
+SLICE_X1_1 = TESTS_DIR / "fixtures/ideas_slice/x1-1.jsonl"  # O46's slice input
+TODAY_FILES = (RUN1, X1_DIR / "ideas-probe-x1-run2a-41773968543.jsonl",
+               X1_DIR / "ideas-probe-x1-run2b-41780421911.jsonl",
+               VALIDATION / "ideas-marker-41642619744.jsonl", SCORE)  # fmt: skip
+TODAY_RERUN = {"rerun": TESTS_DIR / "fixtures/ideas_reaudit/x1-1-rerun.jsonl",
+               "reaudit": X1_DIR / "ideas-reaudit-41772132719.jsonl"}  # fmt: skip
+
+
+def test_todays_committed_files_build_the_report_without_refusal() -> None:
+    """Run 1, run 2a and 2b, Vb's and Vc's results, the re-run and its re-audit."""
+    report = ir.report_of(TODAY_FILES, ir.E1_DIR, **TODAY_RERUN)
+    assert len(ir.render(report)) == 53
+
+
+def test_the_real_slice_inputs_rows_join_the_real_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The slice's real input (x1-1.jsonl: the re-run's X1-1) ranked from the
+    pool's own loader, with an X1-1 trial of it: accepted beside the real
+    re-run and re-audit; the same ranking on run 1's X1-1 titles is refused."""
+    repo = "pyparsing"
+    pool = list(ipool.load_pools([SLICE_X1_1], [repo])[repo])  # real classes
+    idea = next(i.row for i in pool if i.row.arm == "X1-1")
+    trial = {**_trial("X1-1", idea.label, idea.position, idea.title), "repo": repo}
+    more = _write(tmp_path, [trial, {**COMBINE, "repo": repo, "arm": "X1-1"},
+                             *_ranked(monkeypatch, tmp_path, repo, pool, "pool")],
+                  "slice.jsonl")  # fmt: skip
+    report = ir.report_of([*TODAY_FILES, more], ir.E1_DIR, **TODAY_RERUN)
+    assert report.costs["X1-1"].wins == 1 and len(report.pools[repo]) == 2
+    old = _ranked(monkeypatch, tmp_path, repo, _pool_of(_pool_ideas(repo, RUN1)), "old")
+    stale = _write(tmp_path, old, "stale.jsonl")
+    with pytest.raises(ValueError, match=f"stale.jsonl: {repo} opus-5-5 pool: X1-1 "):
+        ir.report_of([*TODAY_FILES, stale], ir.E1_DIR, **TODAY_RERUN)
 
 
 def test_a_trial_is_joined_to_its_idea_only_when_the_titles_match(

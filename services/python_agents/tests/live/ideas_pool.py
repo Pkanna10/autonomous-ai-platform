@@ -414,6 +414,7 @@ def rank_library(repo: str, pool: Sequence[PoolIdea], decision: im.Decision, *,
                 "experiment": SET_EXPERIMENT, **where, "round": rnd, "set": k, "of": of,
                 "name": s.arm, "ids": list(ids), "seed": f"{im.SHUFFLE_SEED}:{s.key}",
                 "shown": [ids[n] for n in im.shown_order(s)],
+                "titles": [r.title for r in s.rows],  # as shown, in ids' order (O44)
                 "order": None if order is None else list(order),
                 "advanced": [] if order is None or of == 1 else list(order[:ADVANCE]),
                 "error": None if reply.error is None else _fit(redact_keys(reply.error)),

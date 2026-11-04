@@ -409,6 +409,8 @@ def test_each_set_and_each_result_is_recorded(dry: Path, tmp_path: Path) -> None
         assert r["validated"] is (r["marker"] == "opus-5-5")
         assert r["sent"] and r["error"] is None and r["cost_usd"] > 0
         assert r["repo"] == REPO and r["model"] in (OPUS, O5.model)
+        shown = [by_id[x].row.title[: ipool.MARKER_TITLE_MAX] for x in r["ids"]]
+        assert r["titles"] == shown  # provenance for the report (O44)
     results = _records(out, ipool.RESULT_EXPERIMENT)
     assert [(r["marker"], r["validated"]) for r in results] == [
         ("opus-5-5", True), ("opus-5", False)]  # fmt: skip
