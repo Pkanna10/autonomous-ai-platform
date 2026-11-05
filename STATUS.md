@@ -777,6 +777,22 @@ blocks it.
   lab's learning mechanism, W3 deferred. Budget: X1 (~42 USD) is ~28 % of Window
   1's 148.73 USD; read every idea list in full; some confirmatory rungs may
   spill into Window 2.
+- **O49. The timing guards under gate load (owner, 2026-11-05).** The discovery
+  corpus's CPU-time guards fail only under the gate's parallel load and pass
+  alone: sitebackup on 2026-11-04 and 2026-11-05, auditchain earlier.
+  - **The unit:** a small test-only unit, built after X2 is dispatched. Either
+    the timed guards in `tests/live/test_discovery_corpus_guards.py` run as one
+    xdist load group on a worker nobody else shares, or they run after the
+    parallel suite.
+  - **The goal:** a gate failure in that file means something again.
+  - **Constraints:** no bar changes and no test weakened.
+  - **Lead's note for the brief:** an `xdist_group` marker takes effect only
+    under `--dist loadgroup`, which neither `pyproject.toml`'s addopts nor
+    `ci.yml`'s `-n auto` sets. A group's worker still shares the machine with
+    the other workers. So the unit measures both options under the gate's real
+    load before choosing: the group, and a serial run after the parallel suite
+    (in the gate script, `pnpm stage-gate` and `ci.yml`). The timed cases are
+    the `slow`-marked tests from line 608 on.
 - **O48. X2's answers, the reader dispatch and the ceiling bar (owner,
   2026-11-05).**
   - **X2:**
