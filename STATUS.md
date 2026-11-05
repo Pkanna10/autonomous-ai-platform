@@ -3470,6 +3470,35 @@ worktree", 4.4.0) or in the builder rules every brief carries.
   - **Review nit left:** the Extents line names the default views file even when
     `--views` names another.
   - **Size:** about 85 source lines against its row of 80.
+- V-picks (O48: the reader dispatch and the ceiling bar).
+  - **The suite:** `ideas-picks` (need 7.55, cap 8, 45 minutes). The blind
+    reader's seven would-try ideas (S04, S07, S09, S12, S13, S20, S23) are
+    resolved through the committed sample key against the slice's committed
+    inputs. Each is refused before spend if it does not resolve, resolves twice,
+    or its title differs from `owner-sample.md`'s.
+  - **The runs:** each idea runs as an ordinary engine trial through the slice's
+    path, one loop per library (sqlparse S20, S04, S12; more_itertools S13, S23;
+    mistune S07; tomli S09), with `OP_COUNT_JUDGE` on and asserted.
+  - **The need:** each loop is capped at its library's measured spend plus its
+    dearest request's reservation, from the slice's cost tables: sqlparse 1.60,
+    more_itertools 2.15, mistune 2.15, tomli 1.65. more_itertools and mistune,
+    which the slice did not run, take the widest measured rates. Taking the
+    widest rates everywhere would give 8.60, over the cap.
+  - **The review's should_fix:**
+    - O48's rule now refuses, rather than reading "no-Fable", when S13 or S20
+      has no judged trial (not trialled, no verdict, no result, not handed).
+    - S13 and S20 lead their loops, so a budget stop cannot land on them.
+  - **The ceiling bar:** `CEILING_BAR` 10 points. Only the count cells move:
+    ideas at or above the bar, X1-0 to X1-4: 18/37, 25/45, 27/40, 21/42, 9/18.
+  - **The Lead's integration** fixed the CI patch's suite description, which
+    broke `ci.yml`'s YAML with apostrophes in a single-quoted string (the
+    builder reported prettier clean). The gate also caught a missing
+    `ideas-picks` entry in `test_plumbing_guards.py`'s `STEP3_SUITES` (it takes
+    Step 3's noise rule, as the slice does); added.
+  - **Size:** about 330 source lines against its row of 180 (about 1.8x). The
+    trial and combine row writers copy the slice's, because `SliceRecorder` keys
+    `arm` by configuration. Accepted as harness code; a later unit can lift the
+    row builders into `ideas_slice` (about 50 lines fewer).
 - **Known gate flake: the discovery corpus's wall-clock guards on Python 3.11.**
   Under the lab gate's full parallel load, one of
   `test_discovery_corpus_guards.py`'s timed cases failed in two gates out of

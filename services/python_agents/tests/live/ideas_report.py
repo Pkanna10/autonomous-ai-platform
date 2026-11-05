@@ -53,7 +53,9 @@ ideas" counts every reply idea beside them), its audited ideas the reviewed
 the innermost profiled hotspot holding the idea's target lines
 (``amdahl_ceiling``'s rule on recorded rows: Vd's rows carry no anchor),
 a hotspot's extent its recorded lines or else the span Va's views recorded
-for its id (``with_extents``: cProfile records a function's first line);
+for its id (``with_extents``: cProfile records a function's first line),
+its count O48's (ceiling less floor at least ``CEILING_BAR``, 10 points;
+the distribution is the primary view);
 unique mechanisms are ``representatives`` of the ideas' mechanism keys within
 a library (a keyless idea is its own); an idea is new to today's generator
 when its class under the auditor's duplicate links, joined either way
@@ -156,6 +158,8 @@ HANDED_ON: Final = "what the arm handed on (in-result rows)"  # O44's headline
 GENERATED: Final = "every idea the lanes generated (all audit rows)"
 _BAD: Final = "infeasible"
 NO_BAND: Final = ("unique", "new", "above", "families")  # E1 has no idea rows
+CEILING_BAR: Final = 0.10  # O48: the count's bar on ceiling less floor (a share)
+BAR_POINTS: Final = f"{100 * CEILING_BAR:g}"  # "10" in every label
 SAMPLE_SEED: Final = 20261103
 SAMPLE_SIZE: Final = 24
 LENSES: Final = tuple(lane.value for lane in LENS_LANES)
@@ -648,6 +652,12 @@ def with_extents(
     return body.model_copy(update={"hotspots": tuple(out)}), taken
 
 
+def over_bar(margin: float) -> bool:
+    """O48's count: a ceiling less floor of at least ``CEILING_BAR``, to
+    1e-9 (a decimal tie such as 30 % less 20 % counts)."""
+    return round(margin, 9) >= CEILING_BAR
+
+
 def ceiling(idea: IdeaLine, body: FactsBody) -> float | None:
     """The innermost hotspot holding the target lines: its largest share
     over workloads, clipped to 1; ``None`` when no profiled span holds them."""
@@ -781,7 +791,7 @@ class Measures:
     audited: int
     new: int | None  # None for today's generator, the reference
     feasible: int
-    above: int
+    above: int  # known ideas whose ceiling less floor clears the bar (O48)
     known: int  # ideas with a predicted ceiling
     families: int
     cost_usd: float
@@ -964,7 +974,7 @@ def report_of(
             raw=len({(i.repo, " ".join(i.title.casefold().split())) for i in mine}),
             audited=len(audited), new=None if arm == TODAY else new,
             feasible=sum(a.auditor != "infeasible" for a in audited),
-            above=sum(over[i] >= 0 for i in mine if i in over),
+            above=sum(over_bar(over[i]) for i in mine if i in over),
             known=sum(i in over for i in mine),
             families=len({i.mechanism for i in mine if i.mechanism is not None}),
             cost_usd=math.fsum(p.cost_usd for p in rows.probes
@@ -1006,7 +1016,7 @@ def report_of(
         return None if not found or None in found else sum(found)
 
     square = {
-        k: (len(g), _unique(g), sum(over.get(i, -1.0) >= 0 for i in g))
+        k: (len(g), _unique(g), sum(i in over and over_bar(over[i]) for i in g))
         for by in (lambda i: (i.model, i.lane), lambda i: (i.model, "*"),
                    lambda i: ("*", i.lane))
         for k, g in _grouped(lens, by).items()
@@ -1378,7 +1388,8 @@ def _measures_file(r: Report, show_raw: bool, verdict: str) -> str:
         "ranking on them is provisional (6.3).", "",
         *_table(("configuration", "ideas proposed", "lane ideas",
                  f"unique mechanisms{tag}", *raw, f"new to today's generator{tag}",
-                 "ceiling over the floor (of known)", "mechanism families",
+                 f"ceiling at least {BAR_POINTS} points over the floor (of known)",
+                 "mechanism families",
                  "auditor-feasible (of audited)", "USD"), body),
         "", "## X1-4 proposals by rule relaxed (no score)", "",
         *_table(("rule", "proposals"), r.proposals.items()),
@@ -1405,7 +1416,7 @@ def _tables_file(r: Report, show_raw: bool) -> str:
     square = [[m if m != "*" else "all models",
                *("/".join(map(str, r.square[(m, x)])) if (m, x) in r.square else "-"
                  for x in (*LENSES, "*"))] for m in models]  # fmt: skip
-    ceil = [[a, len(v), r.measures[a].proposed - len(v), sum(x >= 0 for x in v),
+    ceil = [[a, len(v), r.measures[a].proposed - len(v), sum(map(over_bar, v)),
              *(_pct(x) for x in quantiles(v) or (None,) * 5)]
             for a, v in r.margins.items()]  # fmt: skip
     deltas = [[a, f"{m}{tag}" if m in ("unique", "new") else m, _num(d), _num(s),
@@ -1419,15 +1430,18 @@ def _tables_file(r: Report, show_raw: bool) -> str:
         "each configuration it holds.", "",
         *_table(("library", "mechanism", "cell", "target", *levers, "unique to",
                  *(("raw titles",) if show_raw else ())), overlap),
-        "", f"## 2 X1-1 model x lens (ideas/unique mechanisms{tag}/ceilings over "
-        "floor)", "",
+        "", f"## 2 X1-1 model x lens (ideas/unique mechanisms{tag}/ceilings "
+        f"{BAR_POINTS}+ points over floor)", "",
         *_table(("model", *LENSES, "all lenses"), square),
         "", *_lens_costs(r, tag), "## 3 Predicted ceilings against the floor (ceiling - floor)", "",
         f"Extents: {r.extents[0]} of {r.extents[1]} hotspots with no recorded "
         "line_end (cProfile records a function's first line) took the span Va's "
         f"views ({VIEWS.name}) recorded for their id; an idea no profiled "
-        "function holds has no ceiling (unknown).", "",
-        *_table(("configuration", "with a ceiling", "unknown", "over the floor",
+        "function holds has no ceiling (unknown). The count is of ideas whose "
+        f"ceiling less floor is at least {BAR_POINTS} points (O48); the "
+        "distribution (the quantiles and the plot) is the primary view.", "",
+        *_table(("configuration", "with a ceiling", "unknown",
+                 f"at least {BAR_POINTS} points over the floor",
                  "min", "q25", "median", "q75", "max"), ceil),
         "", "![ceiling less floor per configuration](ceilings.svg)", "",
         "## 4 Every lever's delta beside the noise", "",

@@ -79,7 +79,16 @@ from .test_corpus_guards import (
 SONNET = "claude-sonnet-5-5"
 REQUIRED = Isolation("required", None)
 STEP3_SUITES = frozenset(  # L0, L1a/b, L2a/b; V9's upstream verify and live
-    {"noise", "corpus", "hard", "oss", "upstream-verify", "upstream", "ideas-slice"}
+    {
+        "noise",
+        "corpus",
+        "hard",
+        "oss",
+        "upstream-verify",
+        "upstream",
+        "ideas-slice",
+        "ideas-picks",
+    }
 )
 RULES = {  # PAIRED_TRIALS, CONFIRM_WINNERS, NOISE_CALIBRATION_BLOCKS
     "step3": ("true", "true", "3"),

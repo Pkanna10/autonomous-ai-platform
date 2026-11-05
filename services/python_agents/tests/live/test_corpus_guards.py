@@ -1083,6 +1083,7 @@ SUITES = (
     "ideas-slice",  # Ve: X1's execution slice
     "ideas-pool",  # V-O40: the pooled ranking on the four outside the slice
     "ideas-reaudit",  # V-reaudit: the pooled re-audit of the X1-1 re-run (O44)
+    "ideas-picks",  # V-picks (O48): the blind reader's would-try ideas, trialled
 )
 DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_sweep_live.py",
@@ -1102,6 +1103,7 @@ DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_ideas_slice_live.py",  # Ve: the execution slice
     "tests/live/test_ideas_pool_live.py",  # V-O40: the pooled ranking
     "tests/live/test_ideas_reaudit_live.py",  # V-reaudit: the pooled re-audit
+    "tests/live/test_ideas_picks_live.py",  # V-picks: the reader dispatch
 )
 EXPERIMENT_MINUTES = {
     # the sweeps on 37 repositories (v1 + hard + v2), from the Window 0 jobs on
@@ -1134,6 +1136,7 @@ EXPERIMENT_MINUTES = {
     "ideas-slice": 150,  # ideas_slice.JOB_MINUTES: two libraries, 8 loops
     "ideas-pool": 60,  # ideas_pool.JOB_MINUTES: four clones, 88 set requests
     "ideas-reaudit": 30,  # ideas_reaudit.JOB_MINUTES: four clones, 4 requests
+    "ideas-picks": 45,  # ideas_picks.JOB_MINUTES: four engine loops, 7 trials
 }  # batch wait; 5 papers; 18 web runs
 SWEEP_FABLE_ENV = {  # Fable 5.1 beside the one arm whose run phase 1 shares
     "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
@@ -1839,6 +1842,7 @@ def _suite_needs() -> dict[str, float]:
     slice_ = importlib.import_module(f"{__package__}.ideas_slice")
     pool = importlib.import_module(f"{__package__}.ideas_pool")
     reaudit = importlib.import_module(f"{__package__}.ideas_reaudit")
+    picks = importlib.import_module(f"{__package__}.ideas_picks")
     one_library = {oss_ab.REPOS_ENV: OSS_AB_DISPATCH_REPO}
     return {
         "noise": noise.noise_need(noise.noise_plan({})),
@@ -1870,6 +1874,7 @@ def _suite_needs() -> dict[str, float]:
         "ideas-reaudit": reaudit.reaudit_need(  # its files are read in its fixture
             reaudit.ReauditPlan(reaudit.REAUDIT_LIBRARIES, Path(), Path())
         ),
+        "ideas-picks": picks.picks_need(picks.picks_plan({})),  # committed files
         "sweep": sweep.sweep_need(sweep.sweep_plan({})),
         "sweep-fable": sweep.sweep_need(sweep.sweep_plan(SWEEP_FABLE_ENV)),
         "sweep-record": sweep.sweep_need(sweep.sweep_plan(SWEEP_RECORD_ENV)),
@@ -2128,6 +2133,33 @@ def test_the_reaudit_suite_exports_its_two_results_files_alone(
     )
     assert (code, calls) == (1, "") and "suite_cap_usd 2.99 is below" in output
     assert _run_script().count("LIVE_REAUDIT_RUN1=") == 1  # for ideas-reaudit alone
+
+
+def test_the_picks_suite_exports_the_op_count_judge_alone(tmp_path: Path) -> None:
+    """V-picks (O48): its inputs are committed files the module fixture
+    resolves, so no input but the op-count judge on (spec 6.5) and the Step 3
+    noise rule (normal engine trials); need 8 (7.55, the owner's cap 8)."""
+    for name in ("ok", "below"):
+        (tmp_path / name).mkdir()
+    code, output, calls = _dispatch(
+        tmp_path / "ok", "ideas-picks", "claude-opus-5-5", "8"
+    )
+    assert code == 0, output
+    argv = "run pytest tests/live/test_ideas_picks_live.py -m live --no-cov -n 0 -rA"
+    assert calls.splitlines()[0] == argv
+    slice_env = (tmp_path / "ok" / "slice.txt").read_text(encoding="utf-8").split()
+    assert slice_env == ["unset", "true", "unset", "unset"]
+    rule = (tmp_path / "ok" / "rule.txt").read_text(encoding="utf-8").split()
+    assert rule[:3] == ["true", "true", "3"]  # step3: normal engine trials
+    code, output, calls = _dispatch(
+        tmp_path / "below", "ideas-picks", "claude-opus-5-5", "7.99"
+    )
+    assert (code, calls) == (1, "") and "suite_cap_usd 7.99 is below" in output
+    (tmp_path / "other").mkdir()
+    code, output, calls = _dispatch(tmp_path / "other", "ideas-pool", "claude-opus-5-5",
+                                    "22")  # fmt: skip
+    slice_env = (tmp_path / "other" / "slice.txt").read_text(encoding="utf-8").split()
+    assert code == 0 and slice_env[1] == "unset", output  # the picks' alone
 
 
 def test_slice_repos_is_required_strict_and_for_the_slice_only(

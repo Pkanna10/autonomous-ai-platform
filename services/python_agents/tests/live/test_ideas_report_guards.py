@@ -319,7 +319,8 @@ def test_measures_per_configuration(tmp_path: Path) -> None:
     # memoise repeats A's i01; A's i07 repeats X1-0's i02, which is so not new;
     # i08 is outside the result (in_result False): not audited here
     assert (x0.audited, x0.new, x0.feasible) == (3, 1, 2)
-    assert (x0.above, x0.known) == (3, 4)  # idna's 10 % is under its 20 % floor
+    # O48: only tomli's "Use a dict" (50 % less 2 %) is 10 points over its floor
+    assert (x0.above, x0.known) == (1, 4)
     assert x0.families == 3
     assert x0.cost_usd == pytest.approx(1.0)
     assert (m["X1-2"].audited, m["X1-2"].new, m["X1-2"].feasible) == (1, 0, 0)
@@ -327,6 +328,31 @@ def test_measures_per_configuration(tmp_path: Path) -> None:
     assert m["X1-4"].proposed == 0  # proposals are never counted as ideas
     assert m["X1-1"].unique == 2  # its two eliminate ideas share one mechanism
     assert m["A"].new is None  # today's generator is the reference
+
+
+def test_the_ceiling_count_is_of_ideas_ten_points_over_the_floor(
+    tmp_path: Path,
+) -> None:
+    """O48: the count is of ideas whose ceiling less floor is at least 10
+    points (``CEILING_BAR``), labelled so in measures.md and Tables 2 and 3;
+    the distribution (Table 3's quantiles, the plot) stays the primary view."""
+    assert ir.CEILING_BAR == 0.10
+    assert ir.over_bar(0.48) and ir.over_bar(0.3 - 0.2)  # a decimal tie counts
+    assert not ir.over_bar(0.08) and not ir.over_bar(0.0999)
+    report = _report(tmp_path)
+    assert report.margins["X1-0"] == pytest.approx((-0.1, 0.08, 0.08, 0.48))
+    assert report.square[(S5, "eliminate")] == (2, 1, 0)  # 8 points each: under
+    files = ir.render(report)
+    measures, tables = files["measures.md"], files["tables.md"]
+    assert "| ceiling at least 10 points over the floor (of known) |" in measures
+    row = next(x for x in measures.splitlines() if x.startswith("| X1-0 |"))
+    assert " | 1/4 | " in row
+    table3 = tables[tables.index("## 3 ") : tables.index("## 4 ")]
+    assert ("| configuration | with a ceiling | unknown | at least 10 points over "
+            "the floor | min |") in table3  # fmt: skip
+    assert "| X1-0 | 4 | 0 | 1 | -10.0% | " in table3
+    assert "at least 10 points (O48); the distribution" in table3
+    assert "ceilings 10+ points over floor)" in tables
 
 
 def test_new_to_today_joins_duplicate_links_either_way_as_the_slice_does(
@@ -419,11 +445,11 @@ def test_table_1_mechanism_by_configuration_overlap(tmp_path: Path) -> None:
 
 def test_table_2_model_by_lens_from_the_square(tmp_path: Path) -> None:
     square = _report(tmp_path).square
-    assert square[(S5, "eliminate")] == (2, 1, 2)
+    assert square[(S5, "eliminate")] == (2, 1, 0)  # O48: 8 points, under the bar
     assert square[(HK, "assume_less")] == (1, 1, 1)
     assert (SN, "eliminate") not in square  # only X1-1's lenses
     tables = ir.render(_report(tmp_path))["tables.md"]
-    assert "2/1/2" in tables
+    assert "2/1/0" in tables
 
 
 def test_table_3_ceiling_quantiles_and_a_deterministic_plot(tmp_path: Path) -> None:
@@ -934,9 +960,12 @@ def test_the_bound_is_read_from_vcs_score_row(tmp_path: Path) -> None:
     assert ir.bound(_scored(passed=True, show_raw=False)) is None
 
 
-GOLDEN = {  # sha256 of HEAD 2c3f76b's render on these fixtures, in this view
-    "failed": "8a2764d5cc49a6d90ae52a780695facaef77ce2024843b967283007b29680a66",
-    "passed": "dc53fb3ec5153003723eb8a34885441b13eddfbfe1b857344f2d938ad0e052e3",
+GOLDEN = {  # sha256 of HEAD 2c3f76b's render on these fixtures, in this view,
+    # re-recorded for O48's bar (V-picks): only its count cells and labels moved
+    # (measures' column, Tables 2 and 3, Table 4's "above"; c124667's were
+    # 8a2764d5... and dc53fb3e...)
+    "failed": "a7b93445bf3db5b669b9943bdf56a271990aa0868fc8cccbdbf940f88baeb0ec",
+    "passed": "fcf04c3031ee2d1b18d01f7edd0f51c788025f12f7dcbc38b206804553a3bfdb",
 }  # (8633ee3's, before V-rep's view: fd2abae2... and 3b70392f...)
 _GOOD_ROW = re.compile(r"\| X1-\d \| good")  # Table 4's good rows (O43 swapped them)
 
@@ -1588,7 +1617,8 @@ KNOWN = {
     "X1-3": (42, 53),
     "X1-4": (18, 30),
 }  # (with a ceiling, ideas): A has no target
-ABOVE = {"A": 0, "X1-0": 37, "X1-1": 45, "X1-2": 40, "X1-3": 42, "X1-4": 18}
+ABOVE = {"A": 0, "X1-0": 18, "X1-1": 25, "X1-2": 27, "X1-3": 21, "X1-4": 9}
+# (O48: ceiling at least 10 points over the floor; every known one clears 0)
 
 
 def test_the_views_change_only_the_ceilings() -> None:
@@ -1622,6 +1652,38 @@ def test_the_views_change_only_the_ceilings() -> None:
                 ), y
     assert changed["measures.md"] == 5 and changed["tables.md"] > 0
     assert changed["owner-sample.md"] == changed["owner-sample-key.json"] == 0
+
+
+def test_the_bar_changes_only_its_count_cells(monkeypatch: pytest.MonkeyPatch) -> None:
+    """O48 on the real files: against the bar at 0 (the old count: every known
+    ceiling clears its floor), only the count's cells move: measures.md's
+    column, Table 2's third figure, Table 3's count and Table 4's "above"
+    deltas (the same count per library); every other number is unchanged."""
+    after = ir.render(ir.report_of(FULL, ir.E1_DIR, **TODAY_RERUN))
+    monkeypatch.setattr(ir, "CEILING_BAR", 0.0)
+    before = ir.render(ir.report_of(FULL, ir.E1_DIR, **TODAY_RERUN))
+    assert before.keys() == after.keys()
+    changed: Counter[str] = Counter()
+    for name in sorted(after):
+        old, new = before[name].split("\n"), after[name].split("\n")
+        assert len(old) == len(new), name
+        for x, y in zip(old, new, strict=True):
+            if x == y:
+                continue
+            changed[name] += 1
+            xs, ys = x.split(" | "), y.split(" | ")
+            cols = [k for k, (u, v) in enumerate(zip(xs, ys, strict=True)) if u != v]
+            if name == "measures.md":
+                assert cols == [6], y  # the count column
+            elif xs[1] == "above":
+                assert cols == [2], y  # Table 4's delta
+            elif len(xs) == 9:
+                assert cols == [3], y  # Table 3's count
+            else:  # Table 2's cells: ideas/unique mechanisms/ceilings 10+ points
+                assert cols and all(u.split("/")[:2] == v.split("/")[:2]
+                                    for u, v in zip(xs, ys, strict=True)), y  # fmt: skip
+    assert set(changed) == {"measures.md", "tables.md"}
+    assert changed["measures.md"] == 5  # X1-0 to X1-4; A has no ceiling
 
 
 def test_the_full_real_report_is_byte_identical_in_other_processes(
@@ -1723,4 +1785,5 @@ def test_the_cli_reads_the_views_it_is_given(tmp_path: Path) -> None:
 def test_the_real_measure_reads_its_ceilings() -> None:
     measures = ir.render(ir.report_of(FULL, ir.E1_DIR, **TODAY_RERUN))["measures.md"]
     rows = [x for x in measures.splitlines() if x.startswith("| X1-0 | 51 |")]
-    assert len(rows) == 1 and "| 37/37 |" in rows[0], rows  # was 0/0 known
+    assert len(rows) == 1 and "| 18/37 |" in rows[0], rows  # was 0/0 known
+    # (O48: 18 of the 37 known clear the 10-point bar; all 37 clear 0)
