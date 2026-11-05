@@ -578,8 +578,9 @@ Nothing is built until both are approved.
 
 ## 9 X2: evolution on the levers that X1 kept (draft for approval, O47)
 
-**Status: a draft, not approved; nothing is built or dispatched from it.**
-Written 2026-11-05 from O47 and X1's measured rows
+**Status: approved to build (O48, 2026-11-05); nothing is dispatched until its
+need and caps are re-derived and reported.** Revision 2 applies the owner's
+answers (O48). Written 2026-11-05 from O47 and X1's measured rows
 (`.claude/handoff/step3/idea-lab/x1/`, STATUS's X1 ledger rows).
 
 ### 9.1 What X1 showed (provisional against the A/A band)
@@ -610,17 +611,20 @@ Written 2026-11-05 from O47 and X1's measured rows
 What every arm shares:
 
 - the leap and the reviewer, as today;
-- S1 and the six lens lanes on Sonnet 5.5, except one lens lane on Haiku 5.5;
+- S1 and the six lens lanes on Sonnet 5.5, except the **eliminate lens on Haiku
+  5.5** (O48);
 - the think line as in X1-0;
-- no sequential lanes, no mechanism dedupe in the pipeline, no Fable lane;
-- no rule-relaxing lanes (X1-4 stays quarantined, as reported).
+- no sequential lanes, no mechanism dedupe in the pipeline, no Fable lane
+  (unless the reader dispatch's rule adds one, §9.7);
+- no rule-relaxing lanes (X1-4 stays quarantined, as reported);
+- lessons (G11) off; they are X3's.
 
-| Arm   | Lever            | What changes                                                                                                   |
-| ----- | ---------------- | -------------------------------------------------------------------------------------------------------------- |
-| X2-0  | baseline         | the shared setup above                                                                                         |
-| X2-0' | A/A twin         | X2-0 again, an independent run on the same libraries; its spread is the noise band every delta is read against |
-| X2-V  | views (G2)       | each lens lane gets X1-3's view (the recorded lens-to-view map), with no framework                             |
-| X2-F  | frameworks (G5a) | each lens lane gets X1-3's framework on today's shared view                                                    |
+| Arm   | Lever            | Libraries                | What changes                                                                                    |
+| ----- | ---------------- | ------------------------ | ----------------------------------------------------------------------------------------------- |
+| X2-0  | baseline         | all eight                | the shared setup above                                                                          |
+| X2-0' | A/A twin         | the four slice libraries | X2-0 again, independent runs on sqlparse, pyparsing, tomli and sortedcontainers; the noise band |
+| X2-V  | views (G2)       | all eight                | each lens lane gets X1-3's view (its recorded lens-to-view map), with no framework              |
+| X2-F  | frameworks (G5a) | all eight                | each lens lane gets X1-3's framework on today's shared view                                     |
 
 `IDEAS_LANE_FRAMEWORKS` without `IDEAS_LANE_VIEWS` is a new combination. It is
 checked to be well-formed before dispatch, as Vd2's think line was.
@@ -628,8 +632,7 @@ checked to be well-formed before dispatch, as Vd2's think line was.
 ### 9.3 Evolution, the same eight libraries
 
 - **Engine runs, not a slice.** Each (arm, library) is one engine run with the
-  idea pipeline on. It runs `1 + PORTFOLIO_ROUNDS` rounds (proposed: 2 rounds in
-  all) with:
+  idea pipeline on: 2 rounds in all (`PORTFOLIO_ROUNDS` 1, O48), with
   - round seeds (`IDEAS_ROUND_SEEDS`);
   - near-miss compounds (`NEAR_MISS_COMPOUNDS`, G5b, at most one a round, by
     replay);
@@ -638,10 +641,12 @@ checked to be well-formed before dispatch, as Vd2's think line was.
   The engine picks its own hypotheses each round. The slice's marker pick is not
   used, so what X2 measures is the engine as it would run.
 
-- **The same eight libraries:**
-  - more_itertools, pyparsing, tomli, sortedcontainers (the control), mistune,
-    sqlparse, markdown, idna;
-  - at the commits E1 recorded, on E1's facts and Va's recorded views.
+- **Live, not recorded.** Each run profiles live and builds its views live, as
+  the engine does, at the commit E1 recorded for its library. X1 read E1's
+  recorded facts and Va's views because it generated ideas without the engine;
+  X2 runs the engine.
+- **The same eight libraries:** more_itertools, pyparsing, tomli,
+  sortedcontainers (the control), mistune, sqlparse, markdown, idna.
 
 ### 9.4 Measures
 
@@ -652,55 +657,76 @@ checked to be well-formed before dispatch, as Vd2's think line was.
   - the seeded call's cost line (D64);
   - compounds tried and kept;
   - cost per win.
-- **Read against the band:** every arm's delta against X2-0 is read beside the
-  X2-0/X2-0' spread. A delta inside it is not a result.
-- **The predicted-ceiling measure** works before X2 (V-rep3), so each idea's
-  ceiling against its floor is reported.
+- **Read against the band:** on the four slice libraries, every arm's delta
+  against X2-0 is read beside the X2-0/X2-0' spread. A delta inside it is not a
+  result. On the other four there is no band, and their deltas are reported as
+  unbanded.
+- **Predicted ceilings** (V-rep3, O48): the distribution of ceiling less floor
+  is the primary view; the count is of ideas whose ceiling less floor is at
+  least 10 points.
+- **Unique mechanisms** stay an upper bound (O48: the dedupe fix from the 380
+  pairs comes after X2).
 
 ### 9.5 Cost (from X1's measured rates)
 
-| Part                       | Measured basis                                                  | Per (arm, library), 2 rounds |
-| -------------------------- | --------------------------------------------------------------- | ---------------------------- |
-| The pipeline call, round 1 | X1-0 0.65 a library (0.53-0.91); X1-3 0.67                      | 0.65-0.70                    |
-| The seeded call, round 2   | none measured (D64's column read 0 in X1); taken as a full call | ~0.65                        |
-| Trials and the combine     | the slice: 0.40 an engine loop of about 3 trials (0.24-0.72)    | ~0.80 (two rounds)           |
-| A compound                 | replay costs no tokens; judged as a trial, ~0.13                | ~0.13                        |
-| **Per (arm, library)**     |                                                                 | **~2.26**                    |
+| Part                       | Measured basis                                                                                                                                                | Per run, 2 rounds |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| The pipeline call, round 1 | X1-0 0.65 a library (0.53-0.91), X1-3 0.67; the Haiku eliminate lens about 0.01 less (X1-1's Table 2b: 0.006 a Haiku request against 0.019 a Sonnet 5.5 lens) | 0.64-0.66         |
+| The seeded call, round 2   | none measured (D64's column read 0 in X1); taken as a full call                                                                                               | 0.64-0.66         |
+| Trials and the combine     | the slice: 0.40 an engine loop of about 3 trials (0.24-0.72)                                                                                                  | ~0.80             |
+| A compound                 | replay costs no tokens; judged as a trial, ~0.13                                                                                                              | ~0.13             |
+| **Per run**                |                                                                                                                                                               | **~2.21-2.25**    |
 
-- **Total:** 4 arms x 8 libraries = 32 runs, about 72 USD expected (about 54
-  without the A/A twin).
-- **Budget:** Window 1 has 81.46 USD left (expires 2026-11-25). With the twin,
-  X2 leaves about 9.
-- **Worst case:** each run carries a hard cost cap of 6 USD (about 3x expected),
-  so a dispatch of 13 runs stays under the 80 USD fuse. The 32 runs go as three
-  dispatches, each with its need derived and checked before spend, as in X1.
+- **Total:** X2-0, X2-V and X2-F on eight libraries (24 runs) and X2-0' on four
+  (4 runs): 28 runs, about **62 USD** expected (X2-0 17.7, X2-V 18.0, X2-F 17.7,
+  X2-0' 8.8).
+- **Budget:** Window 1 has 81.46 USD left before the reader dispatch (about 3).
+  X2 then leaves about 16.
+- **Worst case:** each run carries a hard cost cap, derived by the X2 suite from
+  the engine's own reservation rules so that a run at X1's measured rates is
+  never refused, proposed at 6 USD (about 3x expected). Three dispatches, each
+  under the 80 USD fuse: X2-0 with its twin (12 runs), X2-V (8), X2-F (8). Each
+  dispatch's need is derived and checked before spend, as in X1.
 
-### 9.6 Before X2 (build)
+### 9.6 Build (approved, O48)
 
-1. **V-rep3** (in progress): the per-lane attribution table and the
-   predicted-ceiling fix in the report.
-2. **The X2 suite:**
+1. **V-rep3:** landed (`e85999b`).
+2. **The reader dispatch (`ideas-picks`), before X2:** the blind reader's seven
+   would-try ideas (S04, S07, S09, S12, S13, S20, S23), resolved through the
+   sample key, run as ordinary trials on their libraries: one engine loop per
+   library (sqlparse 3, more_itertools 2, mistune 1, tomli 1), `OP_COUNT_JUDGE`
+   on. About 3 USD expected, cap 8. It tests:
+   - the reader against the judges;
+   - the marker's omission of S20;
+   - Fable's resolve_tradeoff ideas at trial (S13, S20).
+3. **The ceiling bar** in the report: the count of ideas whose ceiling less
+   floor is at least 10 points.
+4. **The X2 suite:**
    - the four arms' settings, guarded like Vd's;
    - the frameworks-without-views combination checked well-formed;
    - the per-run cost cap;
    - the per-round records (trials, seeds, compounds, the seeded-call column);
-   - the dispatch plan.
+   - the dispatch plan;
+   - an off-by-default setting for the Fable resolve_tradeoff lane (§9.7), so
+     the rule's outcome needs no rebuild.
 
    About 250 source lines, through Builder, Fable reviewer and gate as in the V
    suite.
 
-### 9.7 For the owner to decide
+### 9.7 The Fable rule (O48, fixed before the reader dispatch)
 
-1. **The Haiku lane:**
-   - Which lens? Proposed: eliminate, where Haiku's win came from. The other
-     choice is the lens Table 2b ranks best for Haiku.
-   - In every arm, so the arms still differ by one lever?
-2. **Rounds:** 2 in all (about 72 USD with the twin), or 3 (about 3.44 a run:
-   about 110 USD with the twin and about 82 without it, both past the 81.46
-   left).
-3. **The A/A twin:** keep it (recommended; the conclusions so far are
-   provisional for want of it) or drop it to save about 18 USD.
-4. **The dedupe fix (O39's 380 pairs):** X2's measures are outcome-based and do
-   not need it. Still wanted before X2, or deferred?
-5. **Lessons (G11):** off in every arm (proposed), so a round's seeds are the
-   only feedback, or on in every arm.
+If S13 or S20 is kept with a gain at least twice its floor, X2 adds one Fable
+resolve_tradeoff lane to every arm; otherwise the no-Fable call stands.
+
+- **Its cost:** X1 measured a Fable lens request at about 0.87 USD (Fable 5
+  0.88, Fable 5.1 0.86, at the 32,000-token cap). Two pipeline calls a run is
+  about +1.74 a run, so 28 runs add about 49 USD: X2 at about **111 USD**,
+  against about 78 left after the reader dispatch.
+- **Its caps:** each lane at 32,000 output tokens with the 951 s request timeout
+  (O42, O45). The per-run cap rises by about 4.2 USD (two Fable requests at
+  their worst case), to about 10, so about 7 runs a dispatch.
+- **If the rule fires,** X2 with the lane does not fit Window 1. The owner then
+  chooses, for example:
+  - X2 with the lane on the four slice libraries only (16 runs, about 63 USD);
+  - X2 without it now, and the lane in Window 2;
+  - X2 with the lane in Window 2.

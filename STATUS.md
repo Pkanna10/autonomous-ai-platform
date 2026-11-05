@@ -777,6 +777,27 @@ blocks it.
   lab's learning mechanism, W3 deferred. Budget: X1 (~42 USD) is ~28 % of Window
   1's 148.73 USD; read every idea list in full; some confirmatory rungs may
   spill into Window 2.
+- **O48. X2's answers, the reader dispatch and the ceiling bar (owner,
+  2026-11-05).**
+  - **X2:**
+    - Haiku 5.5 on the eliminate lens, in every arm.
+    - Two rounds.
+    - The A/A twin on the four slice libraries only (about 9 USD).
+    - No dedupe fix before X2; unique mechanisms stays an upper bound, fixed
+      afterwards from the 380 pairs.
+    - Lessons off (they are X3's).
+    - Re-costed at about 62 USD for 28 runs (spec §9.5), approved to build now
+      that V-rep3 has landed.
+  - **Before X2, the reader dispatch:** the blind reader's seven would-try ideas
+    (S04, S07, S09, S12, S13, S20, S23) as ordinary trials on their libraries,
+    about 3 USD, cap 8. It tests the reader against the judges, the marker's
+    omission of S20, and Fable's resolve_tradeoff ideas at trial.
+  - **The rule, fixed before the dispatch:** if S13 or S20 is kept with a gain
+    at least twice its floor, X2 adds one Fable resolve_tradeoff lane to every
+    arm (costed in spec §9.7: about +49 USD, past Window 1); otherwise the
+    no-Fable call stands.
+  - **The ceiling measure:** the count is of ideas whose ceiling less floor is
+    at least 10 points; the distribution stays the primary view.
 - **O47. X1's reading and X2's shape (owner, 2026-11-05).**
   - **The slice's 9 wins by lane:**
 
