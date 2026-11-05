@@ -777,6 +777,48 @@ blocks it.
   lab's learning mechanism, W3 deferred. Budget: X1 (~42 USD) is ~28 % of Window
   1's 148.73 USD; read every idea list in full; some confirmatory rungs may
   spill into Window 2.
+- **O47. X1's reading and X2's shape (owner, 2026-11-05).**
+  - **The slice's 9 wins by lane:**
+
+    | Lane | Wins | Gains                                               |
+    | ---- | ---: | --------------------------------------------------- |
+    | leap |    5 | 14.6, 9.9, 9.9, 7.0, 4.4 %                          |
+    | S1   |    2 |                                                     |
+    | lens |    2 | X1-3 far 9.5 %; X1-1 Haiku 3.54 % on a 3.53 % floor |
+
+    The per-configuration win count credits leap wins to levers that did not
+    produce them, so the report gains a per-lane attribution table.
+
+  - **Conclusions, provisional against the A/A band:** the levers remove
+    self-repetition, but the wins come from the leap. X1-2 is a loss and is
+    dropped. X1-1 ties X1-3 at 4x the cost; Haiku earns its place, Fable does
+    not. X1-3 is the lever to keep and to split.
+  - **Decisions:**
+    1. Merge master into `claude/step3-idea-lab` now.
+    2. Draft the X2 spec amendment for approval, not build:
+       - keep the leap and the views;
+       - drop sequential lanes and the Fable lanes;
+       - keep one Haiku lane;
+       - views and frameworks become separate arms;
+       - evolution rounds with round seeds and near-miss compounds (G5b), on the
+         same eight libraries;
+       - costed from X1's measured rates.
+    3. Fix the empty predicted-ceiling measure as a small unit before X2.
+  - **Owner-read sample:**
+    - Read blind by a separate session that saw only `owner-sample.md`; its
+      marks were recorded against the key after they arrived.
+    - The record is `owner-sample-marks.json` and `owner-sample-readout.md`
+      beside the report.
+    - Both insightful ideas (S13, S20) came from X1-1 Fable lens lanes
+      (resolve_tradeoff). Seven of the nine skips came from Sonnet 5.5 lanes.
+    - The reader's would-try set does not overlap the slice's keeps; none of it
+      was trialled:
+      - three ideas were outside the slice's libraries;
+      - three were not eligible (not new to today's generator by the auditor, or
+        not efficiency);
+      - S20 was eligible but not in the marker's top 3.
+    - The one sampled keep (S02, X1-1 Haiku) was marked maybe.
+    - The reader is Opus-family, the leap lane's family.
 - **O46. The slice, the pool and the report (owner, 2026-11-04).** Approved:
   `ideas-slice` in two dispatches (need 75 each), `ideas-pool` (need 22) and the
   offline X1 report. With 89.90 USD left in the window they run one after
