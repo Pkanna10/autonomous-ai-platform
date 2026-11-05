@@ -3400,6 +3400,50 @@ worktree", 4.4.0) or in the builder rules every brief carries.
 
   Size about 1.5x its row.
 
+- V-rep3 (O47: wins by lane; the empty predicted ceiling).
+  - **Wins by lane:** a "Slice wins by lane" section in `measures.md` and
+    `tables.md`. Each kept trial is counted once under the lane its idea row
+    names; X1-2's `leap-2` and `lane-N` labels are read through that lane.
+  - **Real result** (pinned, leap / S1 / lens): leap 5, S1 2, lens 2 (X1-3 far,
+    X1-1 eliminate on Haiku 5.5). Per configuration: X1-0 1/1/0, X1-1 2/0/1,
+    X1-2 1/0/0, X1-3 1/1/1.
+  - **Lane refusals:** the report is refused when a trial's lane disagrees with
+    its idea row, or when a win comes from a lane other than the leap, S1 or a
+    lens.
+  - **The empty ceiling, root cause (evidence on the real files):** all 80 of
+    E1's recorded hotspots have no `line_end`, because cProfile records a
+    function's first line. `ceiling()` needs a span holding the target lines, so
+    no idea ever had one. Paths were not the problem: all 253 targeted ideas
+    name a hotspot's file exactly.
+  - **The fix:** each hotspot takes its function's extent from the
+    `FunctionSpan`s Va's views recorded (`views.jsonl`, joined by hotspot id,
+    same file, only where the views carry the facts' commit and run). These are
+    the spans `idea_context._spans` builds, which `amdahl_ceiling` reads.
+    Nothing is cloned or fetched; `ceiling()` itself is unchanged.
+  - **Effect:** 50 of the 80 hotspots get an extent; the other 30 are not shown
+    in any view. Ideas with a ceiling: X1-0 37 of 51, X1-1 45 of 63, X1-2 40 of
+    56, X1-3 42 of 53, X1-4 18 of 30. Arm A has none, because its ideas carry no
+    target lines.
+  - **Every known ceiling clears its floor,** since floors are 2-5 % and
+    ceilings are function shares. So the "over the floor" count does not
+    separate configurations; the distribution in Table 3 does (median ceiling
+    less floor 9.0, 17.3, 21.2, 10.5 % for X1-0 to X1-3).
+  - **The report beside the results is rebuilt.** Only the ceiling figures and
+    the new sections changed, and a test enforces it.
+  - **Review nit left:** the Extents line names the default views file even when
+    `--views` names another.
+  - **Size:** about 85 source lines against its row of 80.
+- **Known gate flake: the discovery corpus's wall-clock guards on Python 3.11.**
+  Under the lab gate's full parallel load, one of
+  `test_discovery_corpus_guards.py`'s timed cases failed in two gates out of
+  four on 2026-11-04 and 2026-11-05, each time a different case:
+  - auditchain's reference fix measured 3.7 % against its 5 % bar;
+  - sitebackup's decoy measured 6.6 % against a 5 % ceiling.
+
+  Each passes 3 of 3 alone. Neither change touched those files. This is the same
+  family as the parcelindex timing case; the test stays as it is (never
+  weakened). Making these cases robust to load is a candidate unit.
+
 - G2 fix found by Va: `count_note` noted negative cuts, so every callers view
   under its limits said e.g. "-199 file(s) not scanned for callers"; it now
   notes only positive counts. Requests were byte-identical; the six viewed

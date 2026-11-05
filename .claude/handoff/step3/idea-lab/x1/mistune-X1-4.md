@@ -6,7 +6,7 @@ These rows are the raw list behind unique mechanisms and the share new to today'
 
 | # | title | mechanism | target lines | ceiling | audit | duplicate of | trial | gain / floor | op count | lane | model | returned |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | Replace char-by-char bracket scan in build_closing_bracket_map with regex-driven jumps | loop_or_control_flow | src/mistune/_inline/links.py\:240-245 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
+| 1 | Replace char-by-char bracket scan in build_closing_bracket_map with regex-driven jumps | loop_or_control_flow | src/mistune/_inline/links.py\:240-245 | 5.3% | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
 | 2 | Use regex to split text tokens in _split_text_token and _next_delimiter_run | loop_or_control_flow | src/mistune/_inline/emphasis.py\:218-220 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
 | 3 | Cache bound renderer methods in HTMLRenderer.render_token and skip _get_method try/except | precompute_or_cache | src/mistune/core.py\:258-260 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
 | 4 | Speed up _parse_link_href scanning with a regex for plain destination characters | loop_or_control_flow | src/mistune/helpers.py\:158-162 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |

@@ -18,7 +18,8 @@ fields by name, and a malformed row refuses the report): Vd's ``ideas-idea``,
 ``ideas-probe``, ``ideas-audit`` and ``ideas-proposal``; Vc's
 ``ideas-validate-score`` (exactly one; until its bar passes the raw titles
 show beside the dedupe); E1's ``ideas-facts`` (floors, hotspots) and its arms
-B, C and D's ``ideas-probe`` rows (``--e1``). Ve's slice, the contract this
+B, C and D's ``ideas-probe`` rows (``--e1``); Va's ``ideas-views`` rows
+(``--views``: the hot functions' spans). Ve's slice, the contract this
 report reads (optional rows, as ``ideas_slice.SliceRecorder`` writes them):
 ``ideas-slice-trial`` (repo, arm, label, position: the ``ideas-idea`` row it
 ran; title, verdict, gain_pct, floor_pct, op_count; ``keep`` is a win) and
@@ -50,7 +51,9 @@ Readings: a configuration's ideas are its result, the returned non-proposal
 ideas" counts every reply idea beside them), its audited ideas the reviewed
 ``ideas-audit`` rows with ``in_result``. A predicted ceiling is the share of
 the innermost profiled hotspot holding the idea's target lines
-(``amdahl_ceiling``'s rule on recorded rows: Vd's rows carry no anchor);
+(``amdahl_ceiling``'s rule on recorded rows: Vd's rows carry no anchor),
+a hotspot's extent its recorded lines or else the span Va's views recorded
+for its id (``with_extents``: cProfile records a function's first line);
 unique mechanisms are ``representatives`` of the ideas' mechanism keys within
 a library (a keyless idea is its own); an idea is new to today's generator
 when its class under the auditor's duplicate links, joined either way
@@ -101,6 +104,7 @@ from autonomous_ai_agents.optimization.idea_dedupe import (
 )
 from autonomous_ai_agents.optimization.idea_types import (
     LENS_LANES,
+    FunctionSpan,
     Lane,
     Mechanism,
     MorphCell,
@@ -119,6 +123,7 @@ from .ideas_probe import (
     ROW_EXPERIMENT,
     SERVICE_DIR,
     SQUARE_MODELS,
+    VIEWS_FIXTURE,
     X1_ARMS,
     FactsBody,
     load_facts,
@@ -127,6 +132,7 @@ from .ideas_reaudit import REAUDIT_EXPERIMENT
 from .ideas_reaudit import REAUDIT_REPOS as REAUDIT_REPOS
 from .ideas_validate import E1_DIR as E1_DIR
 from .ideas_validate import SCORE_EXPERIMENT as DEDUPE_EXPERIMENT
+from .ideas_views import load_views
 
 REPORT_DIR: Final = SERVICE_DIR.parents[1] / ".claude/handoff/step3/idea-lab/x1"
 SET_EXPERIMENT: Final = ipool.SET_EXPERIMENT
@@ -135,6 +141,8 @@ POOL_CONFIGS: Final = ipool.POOL_CONFIGS
 SET_SIZE: Final = ipool.SET_SIZE  # O41: the set size the marker was validated on
 VB_SETS: Final = ipool.VB_SETS
 MARKER_TOP: Final = ipool.TOP  # O40: the pool's top 3
+VIEWS: Final = SERVICE_DIR / VIEWS_FIXTURE  # Va's views: the hot functions' spans
+GROUPS: Final = ("leap", "S1 (obvious)", "lens lanes")  # O47: a win's lane
 TRIAL_EXPERIMENT: Final = "ideas-slice-trial"
 COMBINE_EXPERIMENT: Final = "ideas-slice-combine"
 NOTE_PREFIXES: Final = ("Vc's ", "These rows are the raw list")
@@ -266,6 +274,7 @@ class TrialLine(_Row):
     arm: str
     label: str
     position: int
+    lane: str
     title: str
     verdict: str
     gain_pct: float | None
@@ -605,6 +614,40 @@ def load_e1(e1_dir: Path) -> tuple[dict[str, FactsBody], tuple[ProbeLine, ...]]:
     return facts, noise
 
 
+def view_spans(
+    views: Path | None, facts: Mapping[str, FactsBody]
+) -> dict[str, tuple[FunctionSpan, ...]]:
+    """Every span of Va's views (``load_views``), by library, for a library
+    whose views were built from its facts' commit and run; none without."""
+    found = {} if views is None else load_views(views)
+    return {repo: tuple(s for b in v.bodies.values() if b.context is not None
+                        for d in b.context.documents for s in d.spans)
+            for repo, v in found.items() if repo in facts
+            and (v.commit, v.run_id) == (facts[repo].commit, facts[repo].run_id)}  # fmt: skip
+
+
+def with_extents(
+    body: FactsBody, spans: Iterable[FunctionSpan]
+) -> tuple[FactsBody, int]:
+    """``body`` with each hotspot that has no ``line_end`` given the span
+    recorded for its id in its file (``ast``'s enclosing ``def`` at the
+    profiled line, the span ``amdahl_ceiling`` reads), and how many took
+    one; refused when the views record two spans for one hotspot."""
+    by: dict[str, set[tuple[str, int, int]]] = defaultdict(set)
+    for s in spans:
+        for x in s.hotspot_ids:
+            by[x].add((s.path, s.start_line, s.end_line))
+    out, taken = [], 0
+    for h in body.hotspots:
+        if len(found := by.get(h.id, set())) > 1:
+            raise ValueError(f"{h.id}: Va's views record {len(found)} spans")
+        if h.line_end is None and found and (e := found.pop())[0] == h.file_path:
+            h = h.model_copy(update={"line_start": e[1], "line_end": e[2]})
+            taken += 1
+        out.append(h)
+    return body.model_copy(update={"hotspots": tuple(out)}), taken
+
+
 def ceiling(idea: IdeaLine, body: FactsBody) -> float | None:
     """The innermost hotspot holding the target lines: its largest share
     over workloads, clipped to 1; ``None`` when no profiled span holds them."""
@@ -772,6 +815,18 @@ class Cost:
 
 
 @dataclass(frozen=True)
+class Win:  # O47: a kept slice trial, under the lane that produced it
+    repo: str
+    arm: str
+    group: str
+    lane: str
+    label: str
+    model: str
+    gain_pct: float | None
+    floor_pct: float | None
+
+
+@dataclass(frozen=True)
 class Pool:
     marker: str
     model: str
@@ -851,6 +906,8 @@ class Report:
     good: dict[str, tuple[int | None, int | None]]  # corrected, strict (O43)
     repeats: dict[str, dict[tuple[str, str], Counter[str]]]  # by filter label
     lens_costs: dict[str, LensCost]  # by model
+    wins: tuple[Win, ...] = ()  # by group, then gain
+    extents: tuple[int, int] = (0, 0)  # hotspots given a span, of those with no end
 
 
 def _order(i: IdeaLine) -> tuple[object, ...]:
@@ -878,10 +935,14 @@ def owner_sample(
 
 def report_of(
     results: Sequence[Path], e1_dir: Path = E1_DIR, *,
-    rerun: Path | None = None, reaudit: Path | None = None,
+    rerun: Path | None = None, reaudit: Path | None = None, views: Path | None = VIEWS,
 ) -> Report:  # fmt: skip
     rows = load_rows(results, rerun, reaudit)
     facts, noise = load_e1(e1_dir)
+    spans = view_spans(views, facts)
+    open_ends = sum(h.line_end is None for b in facts.values() for h in b.hotspots)
+    fixed = {r: with_extents(b, spans.get(r, ())) for r, b in facts.items()}
+    facts = {r: b for r, (b, _) in fixed.items()}
     for repo in sorted({i.repo for i in rows.ideas} | {p.repo for p in rows.probes}):
         if repo not in facts:
             raise ValueError(f"{repo}: no facts in {e1_dir}")
@@ -996,6 +1057,22 @@ def report_of(
         if i.title != t.title:
             raise ValueError(f"{where}: the trial's {t.title!r} is not the idea "
                              f"there ({i.title!r})")  # fmt: skip
+        if i.lane != t.lane:
+            raise ValueError(f"{where}: the trial's lane {t.lane!r} is not the "
+                             f"idea's ({i.lane!r})")  # fmt: skip
+    won: list[Win] = []
+    for t in (t for t in rows.trials if t.verdict == "keep"):
+        i = at[_at(t)]
+        kind = {"leap": GROUPS[0], "obvious": GROUPS[1]}.get(
+            i.lane, GROUPS[2] if i.lane in LENSES else ""
+        )
+        if not kind:
+            raise ValueError(f"{t.repo} {t.arm} {t.label} #{t.position}: a win from "
+                             f"lane {i.lane!r}, not the leap, S1 or a lens")  # fmt: skip
+        won.append(Win(t.repo, t.arm, kind, i.lane, t.label, i.model, t.gain_pct,
+                        t.floor_pct))  # fmt: skip
+    won.sort(key=lambda w: (GROUPS.index(w.group), -(w.gain_pct or 0.0), w.repo,
+                             CONFIGS.index(w.arm), w.label))  # fmt: skip
     pools: dict[str, list[Pool]] = defaultdict(list)
     for p in sorted(rows.pool_results, key=lambda p: p.repo):  # each: as recorded
         pools[p.repo].append(pool_of(p, rows.pool_sets, at))
@@ -1012,6 +1089,7 @@ def report_of(
               for a in CONFIGS},
         repeats={label: repeats(rows.audits, label == HANDED_ON)
                  for label in (HANDED_ON, GENERATED)}, lens_costs=lens_costs,
+        wins=tuple(won), extents=(sum(n for _, n in fixed.values()), open_ends),
     )  # fmt: skip
 
 
@@ -1249,6 +1327,32 @@ def _lens_costs(r: Report, tag: str) -> list[str]:
     ]  # fmt: skip
 
 
+def _wins(r: Report) -> list[str]:
+    """O47: each win once, under the lane that produced it, per configuration."""
+
+    def row(arm: str, ws: Sequence[Win]) -> list[object]:
+        lens = [w.lane for w in ws if w.group == GROUPS[2]]
+        return [arm, *(sum(w.group == g for w in ws) for g in GROUPS[:2]),
+                f"{len(lens)} ({', '.join(lens)})" if lens else 0, len(ws)]  # fmt: skip
+
+    tried = [a for a in CONFIGS if any(t.arm == a for t in r.rows.trials)]
+    return [
+        "## Slice wins by lane (O47)", "",
+        "Each kept ideas-slice-trial row counted once, under the lane that produced "
+        "it (its idea row's lane: X1-2's sequential labels, leap-2 and lane-8 to "
+        "lane-12, read through it). A configuration's win count credits a leap or "
+        "S1 win to its lever; this table does not.", "",
+        *_table(("configuration", *GROUPS, "wins"),
+                [*(row(a, [w for w in r.wins if w.arm == a]) for a in tried),
+                 row("all configurations", r.wins)]), "",
+        *_table(("library", "configuration", "group", "lane", "label", "model",
+                 "gain / floor"),
+                [[w.repo, w.arm, w.group, w.lane, w.label, w.model or "-",
+                  f"{_num(w.gain_pct)}% / {_num(w.floor_pct)}%"] for w in r.wins]),
+        "",
+    ]  # fmt: skip
+
+
 def _measures_file(r: Report, show_raw: bool, verdict: str) -> str:
     raw = ("raw titles",) if show_raw else ()
     tag, score = _tag(bound(r.rows.dedupe)), r.rows.dedupe
@@ -1283,6 +1387,7 @@ def _measures_file(r: Report, show_raw: bool, verdict: str) -> str:
         "slice's USD is its engine runs', D64's seeded calls included.", "",
         *_table(("configuration", "ideas USD", "slice USD", "seeded calls",
                  "seeded USD", "wins", "slice USD per win"), costs), "",
+        *_wins(r),
         "## Marker-feasible ideas (6.2, O40, O41)", "", *_marker_section(r), "",
         *_vrep_sections(r),
     ])  # fmt: skip
@@ -1318,6 +1423,10 @@ def _tables_file(r: Report, show_raw: bool) -> str:
         "floor)", "",
         *_table(("model", *LENSES, "all lenses"), square),
         "", *_lens_costs(r, tag), "## 3 Predicted ceilings against the floor (ceiling - floor)", "",
+        f"Extents: {r.extents[0]} of {r.extents[1]} hotspots with no recorded "
+        "line_end (cProfile records a function's first line) took the span Va's "
+        f"views ({VIEWS.name}) recorded for their id; an idea no profiled "
+        "function holds has no ceiling (unknown).", "",
         *_table(("configuration", "with a ceiling", "unknown", "over the floor",
                  "min", "q25", "median", "q75", "max"), ceil),
         "", "![ceiling less floor per configuration](ceilings.svg)", "",
@@ -1327,6 +1436,7 @@ def _tables_file(r: Report, show_raw: bool) -> str:
         "per-library range over E1's arms B, C, D and X1-0. Unique, new, above "
         "and families come from idea rows E1 lacks: no A/A band.", "",
         *_table(("lever", "measure", "delta", "A/A spread", "reading"), deltas), "",
+        *_wins(r),
     ])  # fmt: skip
 
 
@@ -1409,13 +1519,14 @@ def main(argv: Sequence[str] | None = None, echo: Callable[[str], None] = print)
     parser = argparse.ArgumentParser(prog="ideas_report", description=__doc__)
     parser.add_argument("results", nargs="+", type=Path)
     parser.add_argument("--e1", type=Path, default=E1_DIR)
+    parser.add_argument("--views", type=Path, default=VIEWS, help="Va's views")
     parser.add_argument("--out", type=Path, default=REPORT_DIR)
     parser.add_argument("--rerun", type=Path, help="O42's X1-1 re-run results")
     parser.add_argument("--reaudit", type=Path, help="its pooled re-audit (O44)")
     args = parser.parse_args(argv)
     try:
         report = report_of(args.results, args.e1, rerun=args.rerun,
-                           reaudit=args.reaudit)  # fmt: skip
+                           reaudit=args.reaudit, views=args.views)  # fmt: skip
         files = render(report)
     except (OSError, ValueError) as error:
         echo(f"error: {error}")

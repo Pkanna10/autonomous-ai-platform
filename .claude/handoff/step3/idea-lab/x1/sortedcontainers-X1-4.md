@@ -6,8 +6,8 @@ These rows are the raw list behind unique mechanisms and the share new to today'
 
 | # | title | mechanism | target lines | ceiling | audit | duplicate of | trial | gain / floor | op count | lane | model | returned |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | Inline _expand fast path into SortedList.add to avoid a method call per add | remove_work | sortedcontainers/sortedlist.py\:278-281 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
-| 2 | Inline _expand fast path into SortedKeyList.add | remove_work | sortedcontainers/sortedlist.py\:1810-1813 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
+| 1 | Inline _expand fast path into SortedList.add to avoid a method call per add | remove_work | sortedcontainers/sortedlist.py\:278-281 | 26.4% | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
+| 2 | Inline _expand fast path into SortedKeyList.add | remove_work | sortedcontainers/sortedlist.py\:1810-1813 | 21.6% | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
 | 3 | SortedDict.__setitem__\: skip redundant double lookup via dict.__contains__ and bound locals | specialised_fast_path | sortedcontainers/sorteddict.py\:298-300 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
 
 ## Proposals (rule-relaxing, never scored or trialled)

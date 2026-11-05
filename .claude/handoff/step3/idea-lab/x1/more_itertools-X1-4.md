@@ -6,10 +6,10 @@ These rows are the raw list behind unique mechanisms and the share new to today'
 
 | # | title | mechanism | target lines | ceiling | audit | duplicate of | trial | gain / floor | op count | lane | model | returned |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | Hoist attribute lookups and use local cache bindings in bucket._get_values | remove_work | more_itertools/more.py\:1198-1199 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
-| 2 | Avoid tuple allocation and repeated indexing in _windowed_running_min/max via parallel deques | allocation_or_copying | more_itertools/recipes.py\:1470-1472 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
+| 1 | Hoist attribute lookups and use local cache bindings in bucket._get_values | remove_work | more_itertools/more.py\:1198-1199 | 10.3% | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
+| 2 | Avoid tuple allocation and repeated indexing in _windowed_running_min/max via parallel deques | allocation_or_copying | more_itertools/recipes.py\:1470-1472 | 7.3% | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
 | 3 | Cheaper windowed running mean with local method binding | loop_or_control_flow | more_itertools/recipes.py\:1425-1429 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
-| 4 | Fast path in collapse for leaf nodes without isinstance tuple checks per item | specialised_fast_path | more_itertools/more.py\:1433-1436 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
+| 4 | Fast path in collapse for leaf nodes without isinstance tuple checks per item | specialised_fast_path | more_itertools/more.py\:1433-1436 | 5.5% | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
 | 5 | Localise method lookups in _running_median_windowed | loop_or_control_flow | more_itertools/recipes.py\:1379-1381 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
 
 ## Proposals (rule-relaxing, never scored or trialled)

@@ -36,7 +36,7 @@ from autonomous_ai_agents.common.models import (
     Project,
 )
 from autonomous_ai_agents.optimization import idea_dedupe as dd
-from autonomous_ai_agents.optimization.idea_types import Lane
+from autonomous_ai_agents.optimization.idea_types import FunctionSpan, Lane
 
 from . import ideas_marker as im
 from . import ideas_pool as ipool
@@ -942,16 +942,16 @@ _GOOD_ROW = re.compile(r"\| X1-\d \| good")  # Table 4's good rows (O43 swapped 
 
 
 def _head_view(files: Mapping[str, str]) -> str:
-    """O39's and V-rep's additions taken out: the bound tags, the note and
-    source lines (each with its blank line), everything from the marker
-    section on in measures.md, Table 2b, and Table 4's good rows (as coded at
-    HEAD; corrected and strict now)."""
+    """O39's, V-rep's and V-rep3's additions taken out: the bound tags, the
+    note, source and extents lines (each with its blank line), everything
+    from the marker section on in measures.md, Table 2b, the wins by lane
+    and Table 4's good rows (as coded at HEAD; corrected and strict now)."""
     out = {}
-    notes = (*ir.NOTE_PREFIXES, "Sources (O44): ")
+    notes = (*ir.NOTE_PREFIXES, "Sources (O44): ", "Extents: ")
     for name, text in files.items():
         text = text.replace(f" ({UPPER})", "")
-        if "\n## Marker-feasible" in text:
-            text = text[: text.index("\n## Marker-feasible")]
+        for cut in ("\n## Marker-feasible", "\n## Slice wins by lane"):
+            text = text[: text.index(cut)] if cut in text else text
         if "\n## 2b " in text:
             text = text[: text.index("\n## 2b ")] + text[text.index("\n## 3 ") :]
         lines = text.split("\n")
@@ -1503,3 +1503,224 @@ def test_a_trial_is_joined_to_its_idea_only_when_the_titles_match(
     lost = _write(tmp_path, [_trial("X1-1", "obvious", 99, "Lost")], "lost.jsonl")
     with pytest.raises(ValueError, match="obvious #99: a trial with no ideas-idea"):
         _run1(lost)
+
+
+# ---------------------------------------------------------------------------
+# V-rep3 (O47): wins by lane; the predicted ceiling from Va's recorded spans
+# ---------------------------------------------------------------------------
+
+FULL = (*TODAY_FILES, X1_DIR / "ideas-slice-1-41796813265.jsonl",
+        X1_DIR / "ideas-slice-2-41803612871.jsonl",
+        X1_DIR / "ideas-pool-41808508958.jsonl")  # fmt: skip
+
+
+def _span(
+    name: str, first: int, last: int, *ids: str, path: str = "pkg/a.py"
+) -> FunctionSpan:
+    return FunctionSpan(path=path, qualname=name, start_line=first, end_line=last,
+                        hotspot_ids=ids)  # fmt: skip
+
+
+def _hand_body(tmp: Path) -> ip.FactsBody:
+    facts, _ = ir.load_e1(_e1(tmp))
+    body = facts["tomli"]  # f: 10-40 (50 %) around g: 20-30 (10 %)
+    spots = tuple(h.model_copy(update={"line_end": None}) for h in body.hotspots)
+    return body.model_copy(update={"hotspots": spots})
+
+
+def _aimed(first: int, last: int, path: str = "pkg/a.py") -> ir.IdeaLine:
+    return ir.IdeaLine.model_validate(
+        {k: v for k, v in _idea("tomli", "X1-0", "far", SN, 1, "T", lines=(first, last),
+                                path=path).items() if k != "experiment"})  # fmt: skip
+
+
+def test_a_hotspot_with_no_end_takes_its_recorded_functions_span(
+    tmp_path: Path,
+) -> None:
+    body = _hand_body(tmp_path)
+    spans = (
+        _span("f", 9, 40, "h-tomli-f"),  # decorated: the span starts above
+        _span("f.<locals>.g", 20, 30, "h-tomli-g"),
+        _span("f.<locals>.k", 32, 36),  # no hotspot of its own
+        _span("other", 50, 60, "h-tomli-f", path="pkg/b.py"),
+    )  # another file
+    assert ir.ceiling(_aimed(21, 22), body) is None  # cProfile's first line only
+    fixed, taken = ir.with_extents(body, spans[:3])
+    assert taken == 2
+    assert ir.ceiling(_aimed(21, 22), fixed) == pytest.approx(0.1)  # innermost: g
+    assert ir.ceiling(_aimed(35, 38), fixed) == pytest.approx(0.5)  # f, not g
+    assert ir.ceiling(_aimed(33, 34), fixed) == pytest.approx(0.5)  # k is unprofiled
+    assert ir.ceiling(_aimed(9, 9), fixed) == pytest.approx(0.5)  # the decorator
+    assert ir.ceiling(_aimed(41, 45), fixed) is None  # outside every hotspot
+    assert ir.ceiling(_aimed(38, 42), fixed) is None  # straddles f's end
+    assert ir.ceiling(_aimed(21, 22, "pkg/b.py"), fixed) is None  # another file
+    kept = body.model_copy(update={"hotspots": tuple(
+        h.model_copy(update={"line_end": 12}) for h in body.hotspots)})  # fmt: skip
+    assert ir.with_extents(kept, spans[:3])[1] == 0  # a recorded end is kept
+    with pytest.raises(ValueError, match="h-tomli-f: Va's views record 2 spans"):
+        ir.with_extents(body, spans)
+
+
+def test_the_real_profile_records_no_end_and_the_paths_already_match() -> None:
+    """The root cause, on the real files: E1's hotspots carry no line_end,
+    while every targeted idea's path is one of its library's hotspot paths."""
+    before = ir.report_of(FULL, ir.E1_DIR, views=None, **TODAY_RERUN)
+    spots = [h for b in before.facts.values() for h in b.hotspots]
+    assert len(spots) == 80 and all(h.line_end is None for h in spots)
+    aimed = [i for i in before.rows.ideas if i.returned and not i.proposal
+             and i.target is not None]  # fmt: skip
+    paths = {(r, h.file_path) for r, b in before.facts.items() for h in b.hotspots}
+    assert len(aimed) == 253 and all((i.repo, i.path) in paths for i in aimed)
+    assert {a: m.known for a, m in before.measures.items()} == dict.fromkeys(
+        ir.CONFIGS, 0
+    )
+    after = ir.report_of(FULL, ir.E1_DIR, **TODAY_RERUN)
+    assert after.extents == (50, 80)
+    assert {a: (m.known, m.proposed) for a, m in after.measures.items()} == KNOWN
+    assert {a: m.above for a, m in after.measures.items()} == ABOVE
+
+
+KNOWN = {
+    "A": (0, 39),
+    "X1-0": (37, 51),
+    "X1-1": (45, 63),
+    "X1-2": (40, 56),
+    "X1-3": (42, 53),
+    "X1-4": (18, 30),
+}  # (with a ceiling, ideas): A has no target
+ABOVE = {"A": 0, "X1-0": 37, "X1-1": 45, "X1-2": 40, "X1-3": 42, "X1-4": 18}
+
+
+def test_the_views_change_only_the_ceilings() -> None:
+    """Every figure but a ceiling's is the same with and without the views."""
+    before = ir.render(ir.report_of(FULL, ir.E1_DIR, views=None, **TODAY_RERUN))
+    after = ir.render(ir.report_of(FULL, ir.E1_DIR, **TODAY_RERUN))
+    assert before.keys() == after.keys() and len(after) == 53
+    changed: Counter[str] = Counter()
+    assert before["ceilings.svg"] != after["ceilings.svg"]  # one dot per ceiling
+    for name in sorted(set(after) - {"ceilings.svg"}):
+        old, new = before[name].split("\n"), after[name].split("\n")
+        assert len(old) == len(new), name
+        for x, y in zip(old, new, strict=True):
+            changed[name] += x != y
+            if x == y:
+                continue
+            xs, ys = x.split(" | "), y.split(" | ")
+            cols = [k for k, (u, v) in enumerate(zip(xs, ys, strict=True)) if u != v]
+            if name == "measures.md":
+                assert cols == [6], y  # ceiling over the floor (of known)
+            elif name != "tables.md":
+                assert cols == [4], y  # the library file's ceiling column
+            elif y.startswith("Extents: "):
+                assert x.startswith("Extents: 0 of 80 "), x
+            elif xs[0] in {f"| {c}" for c in ir.CONFIGS}:
+                assert len(xs) == 9 or xs[1] == "above", y  # Table 3; 4's above
+            else:  # Table 2's cells: ideas/unique mechanisms/ceilings over floor
+                assert all(
+                    u.split("/")[:2] == v.split("/")[:2]
+                    for u, v in zip(xs, ys, strict=True)
+                ), y
+    assert changed["measures.md"] == 5 and changed["tables.md"] > 0
+    assert changed["owner-sample.md"] == changed["owner-sample-key.json"] == 0
+
+
+def test_the_full_real_report_is_byte_identical_in_other_processes(
+    tmp_path: Path,
+) -> None:
+    outs = []
+    for seed in ("0", "12345"):
+        out = tmp_path / f"out-{seed}"
+        env = {**os.environ, "PYTHONHASHSEED": seed,
+               "PYTHONPATH": f"{SERVICE / 'src'}:{SERVICE / 'tests'}"}  # fmt: skip
+        done = subprocess.run(  # noqa: S603 - this interpreter, fixed arguments
+            [sys.executable, "-m", "live.ideas_report", *map(str, FULL),
+             "--rerun", str(TODAY_RERUN["rerun"]), "--reaudit",
+             str(TODAY_RERUN["reaudit"]), "--out", str(out)],
+            cwd=SERVICE / "tests", env=env, capture_output=True, text=True,
+            check=False, timeout=300,
+        )  # fmt: skip
+        assert done.returncode == 0, done.stdout + done.stderr
+        outs.append({p.name: p.read_bytes() for p in sorted(out.iterdir())})
+    assert outs[0] == outs[1] and len(outs[0]) == 53
+
+
+def test_the_slices_wins_by_the_lane_that_produced_them() -> None:
+    """O47: 9 wins, leap 5, S1 2, lens 2; X1-2's sequential labels read
+    through the idea row's lane (tomli's leap-2 is the leap)."""
+    wins = ir.report_of(FULL, ir.E1_DIR, **TODAY_RERUN).wins
+    by = _grouped_wins(wins)
+    assert [round(w.gain_pct or 0, 1) for w in by["leap"]] == [14.6, 9.9, 9.9, 7.0, 4.4]
+    assert [(w.repo, w.arm) for w in by["leap"]] == [
+        ("sqlparse", "X1-1"), ("tomli", "X1-1"), ("tomli", "X1-0"),
+        ("tomli", "X1-2"), ("pyparsing", "X1-3")]  # fmt: skip
+    assert by["leap"][3].label == "leap-2" and by["leap"][3].lane == "leap"
+    assert {w.model for w in by["leap"]} == {O55}
+    assert [(w.repo, w.arm) for w in by["S1 (obvious)"]] == [
+        ("sqlparse", "X1-3"), ("sqlparse", "X1-0")]  # fmt: skip
+    far, haiku = by["lens lanes"]
+    assert (far.repo, far.arm, far.lane, round(far.gain_pct or 0, 1)) == (
+        "sqlparse", "X1-3", "far", 9.5)  # fmt: skip
+    assert (haiku.arm, haiku.lane, haiku.model) == ("X1-1", "eliminate", HK)
+    assert (f"{haiku.gain_pct:.2f}", f"{haiku.floor_pct:.2f}") == ("3.54", "3.53")
+    files = ir.render(ir.report_of(FULL, ir.E1_DIR, **TODAY_RERUN))
+    for name in ("measures.md", "tables.md"):
+        text = files[name]
+        assert "## Slice wins by lane (O47)" in text, name
+        assert "| all configurations | 5 | 2 | 2 (far, eliminate) | 9 |" in text
+        assert "| X1-2 | 1 | 0 | 0 | 1 |" in text
+        assert "| X1-1 | 2 | 0 | 1 (eliminate) | 3 |" in text
+        assert (f"| pyparsing | X1-1 | lens lanes | eliminate | eliminate | {HK} "
+                "| 3.54% / 3.53% |") in text  # fmt: skip
+    measures = files["measures.md"]
+    assert (measures.index("## Cost per configuration")
+            < measures.index("## Slice wins by lane")
+            < measures.index("## Marker-feasible"))  # fmt: skip
+
+
+def _grouped_wins(wins: tuple[ir.Win, ...]) -> dict[str, list[ir.Win]]:
+    out: dict[str, list[ir.Win]] = {}
+    for w in wins:
+        out.setdefault(w.group, []).append(w)
+    return out
+
+
+def test_the_hand_made_win_is_counted_under_its_lane(tmp_path: Path) -> None:
+    report = _report(tmp_path)
+    assert [(w.arm, w.group, w.lane, w.model) for w in report.wins] == [
+        ("X1-0", "lens lanes", "eliminate", SN)]  # fmt: skip
+    text = ir.render(report)["tables.md"]
+    assert "| X1-0 | 0 | 0 | 1 (eliminate) | 1 |" in text
+    assert "| tomli | X1-0 | lens lanes | eliminate | eliminate | " in text
+
+
+@pytest.mark.parametrize(
+    ("trial", "match"),
+    [
+        ({**TRIALS[0], "lane": "far"},
+         "tomli X1-0 eliminate #1: the trial's lane 'far' is not the idea's "
+         "\\('eliminate'\\)"),
+        ({**TRIALS[0], "arm": "A", "label": "today", "lane": "today",
+          "title": "Inline lookups"},
+         "tomli A today #1: a win from lane 'today', not the leap, S1 or a lens"),
+    ],
+)  # fmt: skip
+def test_a_trial_off_its_ideas_lane_or_a_win_off_the_slices_lanes_is_refused(
+    tmp_path: Path, trial: Row, match: str
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        _report(tmp_path, _x1(trials=[trial]))
+
+
+def test_the_cli_reads_the_views_it_is_given(tmp_path: Path) -> None:
+    lines: list[str] = []
+    code = ir.main([str(_write(tmp_path, _x1())), "--e1", str(_e1(tmp_path)),
+                    "--views", str(tmp_path / "none.jsonl"), "--out",
+                    str(tmp_path / "o")], echo=lines.append)  # fmt: skip
+    assert code == 2 and "none.jsonl" in lines[0]
+    assert ir.VIEWS == SERVICE / ip.VIEWS_FIXTURE
+
+
+def test_the_real_measure_reads_its_ceilings() -> None:
+    measures = ir.render(ir.report_of(FULL, ir.E1_DIR, **TODAY_RERUN))["measures.md"]
+    rows = [x for x in measures.splitlines() if x.startswith("| X1-0 | 51 |")]
+    assert len(rows) == 1 and "| 37/37 |" in rows[0], rows  # was 0/0 known

@@ -13,11 +13,11 @@ Ideas: each configuration's result (returned, not a proposal: ideas-probe's and 
 | configuration | ideas proposed | lane ideas | unique mechanisms (upper bound, the dedupe under-merges (O39)) | raw titles | new to today's generator (upper bound, the dedupe under-merges (O39)) | ceiling over the floor (of known) | mechanism families | auditor-feasible (of audited) | USD |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | A | 39 | 39 | 39 | 39 | - | 0/0 | 0 | 37/39 | 0.2049 |
-| X1-0 | 51 | 187 | 51 | 51 | 31/49 | 0/0 | 7 | 26/49 | 5.2029 |
-| X1-1 | 63 | 201 | 62 | 63 | 42/59 | 0/0 | 8 | 32/59 | 21.5962 |
-| X1-2 | 56 | 162 | 56 | 56 | 32/50 | 0/0 | 8 | 15/50 | 5.0823 |
-| X1-3 | 53 | 130 | 53 | 53 | 32/50 | 0/0 | 7 | 19/50 | 5.3761 |
-| X1-4 | 30 | 30 | 30 | 30 | 0/0 | 0/0 | 6 | 0/0 | 1.0886 |
+| X1-0 | 51 | 187 | 51 | 51 | 31/49 | 37/37 | 7 | 26/49 | 5.2029 |
+| X1-1 | 63 | 201 | 62 | 63 | 42/59 | 45/45 | 8 | 32/59 | 21.5962 |
+| X1-2 | 56 | 162 | 56 | 56 | 32/50 | 40/40 | 8 | 15/50 | 5.0823 |
+| X1-3 | 53 | 130 | 53 | 53 | 32/50 | 42/42 | 7 | 19/50 | 5.3761 |
+| X1-4 | 30 | 30 | 30 | 30 | 0/0 | 18/18 | 6 | 0/0 | 1.0886 |
 
 ## X1-4 proposals by rule relaxed (no score)
 
@@ -40,6 +40,30 @@ Ideas USD excludes the pooled auditor (its own line per library); the slice's US
 | X1-2 | 5.0823 | 1.6355 | 0 | 0.0000 | 1 | 1.6355 |
 | X1-3 | 5.3761 | 1.8328 | 0 | 0.0000 | 3 | 0.6109 |
 | X1-4 | 1.0886 | 0.0000 | 0 | 0.0000 | 0 | - |
+
+## Slice wins by lane (O47)
+
+Each kept ideas-slice-trial row counted once, under the lane that produced it (its idea row's lane: X1-2's sequential labels, leap-2 and lane-8 to lane-12, read through it). A configuration's win count credits a leap or S1 win to its lever; this table does not.
+
+| configuration | leap | S1 (obvious) | lens lanes | wins |
+| --- | --- | --- | --- | --- |
+| X1-0 | 1 | 1 | 0 | 2 |
+| X1-1 | 2 | 0 | 1 (eliminate) | 3 |
+| X1-2 | 1 | 0 | 0 | 1 |
+| X1-3 | 1 | 1 | 1 (far) | 3 |
+| all configurations | 5 | 2 | 2 (far, eliminate) | 9 |
+
+| library | configuration | group | lane | label | model | gain / floor |
+| --- | --- | --- | --- | --- | --- | --- |
+| sqlparse | X1-1 | leap | leap | leap | claude-opus-5-5 | 14.57% / 6.16% |
+| tomli | X1-1 | leap | leap | leap | claude-opus-5-5 | 9.93% / 2.28% |
+| tomli | X1-0 | leap | leap | leap | claude-opus-5-5 | 9.89% / 3.23% |
+| tomli | X1-2 | leap | leap | leap-2 | claude-opus-5-5 | 6.97% / 3.32% |
+| pyparsing | X1-3 | leap | leap | leap | claude-opus-5-5 | 4.40% / 3.01% |
+| sqlparse | X1-3 | S1 (obvious) | obvious | obvious | claude-sonnet-5-5 | 3.60% / 2.00% |
+| sqlparse | X1-0 | S1 (obvious) | obvious | obvious | claude-sonnet-5-5 | 3.38% / 2.62% |
+| sqlparse | X1-3 | lens lanes | far | far | claude-sonnet-5-5 | 9.52% / 2.00% |
+| pyparsing | X1-1 | lens lanes | eliminate | eliminate | claude-haiku-5-5 | 3.54% / 3.53% |
 
 ## Marker-feasible ideas (6.2, O40, O41)
 

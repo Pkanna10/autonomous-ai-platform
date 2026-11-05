@@ -7,9 +7,9 @@ These rows are the raw list behind unique mechanisms and the share new to today'
 | # | title | mechanism | target lines | ceiling | audit | duplicate of | trial | gain / floor | op count | lane | model | returned |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | Skip ParseResults construction work for unnamed results in _parseNoCache fast path | remove_work | pyparsing/results.py\:214-218 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
-| 2 | Fast path in ParseResults.__new__ by reordering type checks | specialised_fast_path | pyparsing/results.py\:192-197 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
-| 3 | Cache whitespace skip via a precomputed fast check in preParse | specialised_fast_path | pyparsing/core.py\:902-905 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
-| 4 | Hoist _check_operand_follows and reduce_operators closure creation out of the parse loop | loop_or_control_flow | pyparsing/helpers.py\:1317-1321 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
+| 2 | Fast path in ParseResults.__new__ by reordering type checks | specialised_fast_path | pyparsing/results.py\:192-197 | 7.8% | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
+| 3 | Cache whitespace skip via a precomputed fast check in preParse | specialised_fast_path | pyparsing/core.py\:902-905 | 4.8% | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
+| 4 | Hoist _check_operand_follows and reduce_operators closure creation out of the parse loop | loop_or_control_flow | pyparsing/helpers.py\:1317-1321 | 67.8% | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
 
 ## Proposals (rule-relaxing, never scored or trialled)
 

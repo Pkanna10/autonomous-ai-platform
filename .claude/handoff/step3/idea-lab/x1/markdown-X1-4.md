@@ -6,8 +6,8 @@ These rows are the raw list behind unique mechanisms and the share new to today'
 
 | # | title | mechanism | target lines | ceiling | audit | duplicate of | trial | gain / floor | op count | lane | model | returned |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | Hoist inline pattern list lookup out of the __handleInline loop in InlineProcessor | precompute_or_cache | markdown/treeprocessors.py\:136-138 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
-| 2 | Replace stack.pop(0) with a deque in InlineProcessor.run | data_structure | markdown/treeprocessors.py\:376-376 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
+| 1 | Hoist inline pattern list lookup out of the __handleInline loop in InlineProcessor | precompute_or_cache | markdown/treeprocessors.py\:136-138 | 49.6% | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
+| 2 | Replace stack.pop(0) with a deque in InlineProcessor.run | data_structure | markdown/treeprocessors.py\:376-376 | 62.1% | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
 | 3 | Skip the abbr regex and list() copies for elements without text in AbbrTreeprocessor.iter_element | remove_work | markdown/extensions/abbr.py\:119-121 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
 
 ## Proposals (rule-relaxing, never scored or trialled)

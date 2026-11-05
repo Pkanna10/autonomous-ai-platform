@@ -6,7 +6,7 @@ These rows are the raw list behind unique mechanisms and the share new to today'
 
 | # | title | mechanism | target lines | ceiling | audit | duplicate of | trial | gain / floor | op count | lane | model | returned |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | Skip non-matching lexer regexes by dispatching on the first character in Lexer.get_tokens | precompute_or_cache | sqlparse/lexer.py\:139-143 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
+| 1 | Skip non-matching lexer regexes by dispatching on the first character in Lexer.get_tokens | precompute_or_cache | sqlparse/lexer.py\:139-143 | 21.4% | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
 | 2 | Fast path in imt for common argument shapes and avoid per-call lambda in token_next_by | loop_or_control_flow | sqlparse/sql.py\:265-266 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
 | 3 | Cache token type containment test in _TokenType.__contains__ users via identity fast path | precompute_or_cache | sqlparse/sql.py\:118-121 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
 | 4 | Cheaper statement splitter loop\: hoist checks and avoid repeated ttype containment tests | specialised_fast_path | sqlparse/engine/statement_splitter.py\:112-115 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |

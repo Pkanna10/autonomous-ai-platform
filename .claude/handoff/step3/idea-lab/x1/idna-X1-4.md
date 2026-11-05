@@ -6,9 +6,9 @@ These rows are the raw list behind unique mechanisms and the share new to today'
 
 | # | title | mechanism | target lines | ceiling | audit | duplicate of | trial | gain / floor | op count | lane | model | returned |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | Inline range decode/encode in intranges_contain to cut helper calls | remove_work | idna/intranges.py\:42-47 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
-| 2 | Cache PVALID membership per codepoint in check_label loop | precompute_or_cache | idna/core.py\:481-483 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
-| 3 | Skip unicodedata.bidirectional second pass for LTR-only labels in check_bidi | precompute_or_cache | idna/core.py\:224-228 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
+| 1 | Inline range decode/encode in intranges_contain to cut helper calls | remove_work | idna/intranges.py\:42-47 | 10.4% | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
+| 2 | Cache PVALID membership per codepoint in check_label loop | precompute_or_cache | idna/core.py\:481-483 | 24.8% | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
+| 3 | Skip unicodedata.bidirectional second pass for LTR-only labels in check_bidi | precompute_or_cache | idna/core.py\:224-228 | 3.4% | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
 
 ## Proposals (rule-relaxing, never scored or trialled)
 

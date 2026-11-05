@@ -6,9 +6,9 @@ These rows are the raw list behind unique mechanisms and the share new to today'
 
 | # | title | mechanism | target lines | ceiling | audit | duplicate of | trial | gain / floor | op count | lane | model | returned |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | Skip the regex attempts in parse_value for digit/sign-led values by trying RE_NUMBER-first dispatch | specialised_fast_path | src/tomli/_parser.py\:750-753 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
-| 2 | Inline the whitespace skip in skip_chars hot callers, using a regex or a direct char comparison | loop_or_control_flow | src/tomli/_parser.py\:379-381 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
-| 3 | Avoid generator and tuple building in key_value_rule for single-part keys | specialised_fast_path | src/tomli/_parser.py\:435-436 | - | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
+| 1 | Skip the regex attempts in parse_value for digit/sign-led values by trying RE_NUMBER-first dispatch | specialised_fast_path | src/tomli/_parser.py\:750-753 | 50.6% | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
+| 2 | Inline the whitespace skip in skip_chars hot callers, using a regex or a direct char comparison | loop_or_control_flow | src/tomli/_parser.py\:379-381 | 10.1% | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
+| 3 | Avoid generator and tuple building in key_value_rule for single-part keys | specialised_fast_path | src/tomli/_parser.py\:435-436 | 80.5% | - | - | - | - | - | obvious | claude-sonnet-5-5 | True |
 
 ## Proposals (rule-relaxing, never scored or trialled)
 

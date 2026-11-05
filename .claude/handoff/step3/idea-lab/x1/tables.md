@@ -185,13 +185,13 @@ Each deduplicated mechanism (keyed ideas only) and how many ideas of each config
 
 | model | eliminate | assume_less | name_the_problem | recombine | resolve_tradeoff | far | all lenses |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| claude-sonnet-5 | 1/1/0 | - | 1/1/0 | 1/1/0 | 1/1/0 | 1/1/0 | 5/5/0 |
-| claude-haiku-5-5 | 1/1/0 | 1/1/0 | 1/1/0 | - | 1/1/0 | - | 4/4/0 |
-| claude-opus-5-5 | - | - | 1/1/0 | - | - | - | 1/1/0 |
-| claude-fable-5 | 1/1/0 | 1/1/0 | 2/2/0 | 1/1/0 | 1/1/0 | 1/1/0 | 7/7/0 |
-| claude-fable-5-1 | 1/1/0 | - | 1/1/0 | 2/2/0 | 2/2/0 | 1/1/0 | 7/7/0 |
+| claude-sonnet-5 | 1/1/1 | - | 1/1/0 | 1/1/0 | 1/1/1 | 1/1/1 | 5/5/3 |
+| claude-haiku-5-5 | 1/1/1 | 1/1/1 | 1/1/0 | - | 1/1/1 | - | 4/4/3 |
+| claude-opus-5-5 | - | - | 1/1/1 | - | - | - | 1/1/1 |
+| claude-fable-5 | 1/1/1 | 1/1/1 | 2/2/2 | 1/1/0 | 1/1/0 | 1/1/1 | 7/7/5 |
+| claude-fable-5-1 | 1/1/0 | - | 1/1/1 | 2/2/1 | 2/2/2 | 1/1/1 | 7/7/5 |
 | claude-sonnet-5-5 | - | 1/1/0 | - | - | - | 2/2/0 | 3/3/0 |
-| all models | 4/4/0 | 3/3/0 | 6/6/0 | 4/4/0 | 5/5/0 | 5/5/0 | - |
+| all models | 4/4/3 | 3/3/2 | 6/6/4 | 4/4/1 | 5/5/4 | 5/5/3 | - |
 
 ## 2b X1-1 cost per unique new mechanism, per model (O42)
 
@@ -208,14 +208,16 @@ Per model of the Latin square: the USD of its X1-1 lens-lane requests (S1, the l
 
 ## 3 Predicted ceilings against the floor (ceiling - floor)
 
+Extents: 50 of 80 hotspots with no recorded line_end (cProfile records a function's first line) took the span Va's views (views.jsonl) recorded for their id; an idea no profiled function holds has no ceiling (unknown).
+
 | configuration | with a ceiling | unknown | over the floor | min | q25 | median | q75 | max |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | A | 0 | 39 | 0 | - | - | - | - | - |
-| X1-0 | 0 | 51 | 0 | - | - | - | - | - |
-| X1-1 | 0 | 63 | 0 | - | - | - | - | - |
-| X1-2 | 0 | 56 | 0 | - | - | - | - | - |
-| X1-3 | 0 | 53 | 0 | - | - | - | - | - |
-| X1-4 | 0 | 30 | 0 | - | - | - | - | - |
+| X1-0 | 37 | 14 | 37 | 1.4% | 3.7% | 9.0% | 47.6% | 78.5% |
+| X1-1 | 45 | 18 | 45 | 1.0% | 5.3% | 17.3% | 47.6% | 92.2% |
+| X1-2 | 40 | 16 | 40 | 1.4% | 8.2% | 21.2% | 60.1% | 78.5% |
+| X1-3 | 42 | 11 | 42 | 1.2% | 5.3% | 10.5% | 31.8% | 78.5% |
+| X1-4 | 18 | 12 | 18 | 1.4% | 5.4% | 13.9% | 41.8% | 78.5% |
 
 ![ceiling less floor per configuration](ceilings.svg)
 
@@ -257,11 +259,35 @@ Delta: mean over libraries of the lever's value less X1-0's (ideas-probe fields;
 | X1-2 | new (upper bound, the dedupe under-merges (O39)) | 0.12 | - | no A/A band (provisional) |
 | X1-3 | new (upper bound, the dedupe under-merges (O39)) | 0.12 | - | no A/A band (provisional) |
 | X1-4 | new (upper bound, the dedupe under-merges (O39)) | -3.88 | - | no A/A band (provisional) |
-| X1-1 | above | 0.00 | - | no A/A band (provisional) |
-| X1-2 | above | 0.00 | - | no A/A band (provisional) |
-| X1-3 | above | 0.00 | - | no A/A band (provisional) |
-| X1-4 | above | 0.00 | - | no A/A band (provisional) |
+| X1-1 | above | 1.00 | - | no A/A band (provisional) |
+| X1-2 | above | 0.38 | - | no A/A band (provisional) |
+| X1-3 | above | 0.62 | - | no A/A band (provisional) |
+| X1-4 | above | -2.38 | - | no A/A band (provisional) |
 | X1-1 | families | 1.00 | - | no A/A band (provisional) |
 | X1-2 | families | 0.25 | - | no A/A band (provisional) |
 | X1-3 | families | 0.38 | - | no A/A band (provisional) |
 | X1-4 | families | -0.88 | - | no A/A band (provisional) |
+
+## Slice wins by lane (O47)
+
+Each kept ideas-slice-trial row counted once, under the lane that produced it (its idea row's lane: X1-2's sequential labels, leap-2 and lane-8 to lane-12, read through it). A configuration's win count credits a leap or S1 win to its lever; this table does not.
+
+| configuration | leap | S1 (obvious) | lens lanes | wins |
+| --- | --- | --- | --- | --- |
+| X1-0 | 1 | 1 | 0 | 2 |
+| X1-1 | 2 | 0 | 1 (eliminate) | 3 |
+| X1-2 | 1 | 0 | 0 | 1 |
+| X1-3 | 1 | 1 | 1 (far) | 3 |
+| all configurations | 5 | 2 | 2 (far, eliminate) | 9 |
+
+| library | configuration | group | lane | label | model | gain / floor |
+| --- | --- | --- | --- | --- | --- | --- |
+| sqlparse | X1-1 | leap | leap | leap | claude-opus-5-5 | 14.57% / 6.16% |
+| tomli | X1-1 | leap | leap | leap | claude-opus-5-5 | 9.93% / 2.28% |
+| tomli | X1-0 | leap | leap | leap | claude-opus-5-5 | 9.89% / 3.23% |
+| tomli | X1-2 | leap | leap | leap-2 | claude-opus-5-5 | 6.97% / 3.32% |
+| pyparsing | X1-3 | leap | leap | leap | claude-opus-5-5 | 4.40% / 3.01% |
+| sqlparse | X1-3 | S1 (obvious) | obvious | obvious | claude-sonnet-5-5 | 3.60% / 2.00% |
+| sqlparse | X1-0 | S1 (obvious) | obvious | obvious | claude-sonnet-5-5 | 3.38% / 2.62% |
+| sqlparse | X1-3 | lens lanes | far | far | claude-sonnet-5-5 | 9.52% / 2.00% |
+| pyparsing | X1-1 | lens lanes | eliminate | eliminate | claude-haiku-5-5 | 3.54% / 3.53% |
