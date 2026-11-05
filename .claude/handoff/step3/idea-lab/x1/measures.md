@@ -10,14 +10,14 @@ Vc's 380 labelled pairs are the dedupe's development set for a fix before X2 (O3
 
 Ideas: each configuration's result (returned, not a proposal: ideas-probe's and the slice's population); lane ideas: every lane-reply idea, its reviewers' removals included; audited: reviewed audits with in_result. Only auditor-feasible has an A/A band (tables.md, Table 4); unique, new, ceilings and families have no A/A band offline, so a ranking on them is provisional (6.3).
 
-| configuration | ideas proposed | lane ideas | unique mechanisms (upper bound, the dedupe under-merges (O39)) | raw titles | new to today's generator (upper bound, the dedupe under-merges (O39)) | ceiling over the floor (of known) | mechanism families | auditor-feasible (of audited) | USD |
+| configuration | ideas proposed | lane ideas | unique mechanisms (upper bound, the dedupe under-merges (O39)) | raw titles | new to today's generator (upper bound, the dedupe under-merges (O39)) | ceiling at least 10 points over the floor (of known) | mechanism families | auditor-feasible (of audited) | USD |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | A | 39 | 39 | 39 | 39 | - | 0/0 | 0 | 37/39 | 0.2049 |
-| X1-0 | 51 | 187 | 51 | 51 | 31/49 | 37/37 | 7 | 26/49 | 5.2029 |
-| X1-1 | 63 | 201 | 62 | 63 | 42/59 | 45/45 | 8 | 32/59 | 21.5962 |
-| X1-2 | 56 | 162 | 56 | 56 | 32/50 | 40/40 | 8 | 15/50 | 5.0823 |
-| X1-3 | 53 | 130 | 53 | 53 | 32/50 | 42/42 | 7 | 19/50 | 5.3761 |
-| X1-4 | 30 | 30 | 30 | 30 | 0/0 | 18/18 | 6 | 0/0 | 1.0886 |
+| X1-0 | 51 | 187 | 51 | 51 | 31/49 | 18/37 | 7 | 26/49 | 5.2029 |
+| X1-1 | 63 | 201 | 62 | 63 | 42/59 | 25/45 | 8 | 32/59 | 21.5962 |
+| X1-2 | 56 | 162 | 56 | 56 | 32/50 | 27/40 | 8 | 15/50 | 5.0823 |
+| X1-3 | 53 | 130 | 53 | 53 | 32/50 | 21/42 | 7 | 19/50 | 5.3761 |
+| X1-4 | 30 | 30 | 30 | 30 | 0/0 | 9/18 | 6 | 0/0 | 1.0886 |
 
 ## X1-4 proposals by rule relaxed (no score)
 

@@ -181,17 +181,17 @@ Each deduplicated mechanism (keyed ideas only) and how many ideas of each config
 | tomli | remove_work | work\:eliminate | src/tomli/_parser.py\:750-753 | 0 | 0 | 0 | 1 | 0 | only X1-3 | Dispatch parse_value on first character to skip datetime/localtime regexes for non-digit starts |
 | tomli | loop_or_control_flow | algorithm\:better_constant | src/tomli/_parser.py\:379-381 | 0 | 0 | 0 | 0 | 1 | only X1-4 | Inline the whitespace skip in skip_chars hot callers, using a regex or a direct char comparison |
 
-## 2 X1-1 model x lens (ideas/unique mechanisms (upper bound, the dedupe under-merges (O39))/ceilings over floor)
+## 2 X1-1 model x lens (ideas/unique mechanisms (upper bound, the dedupe under-merges (O39))/ceilings 10+ points over floor)
 
 | model | eliminate | assume_less | name_the_problem | recombine | resolve_tradeoff | far | all lenses |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| claude-sonnet-5 | 1/1/1 | - | 1/1/0 | 1/1/0 | 1/1/1 | 1/1/1 | 5/5/3 |
-| claude-haiku-5-5 | 1/1/1 | 1/1/1 | 1/1/0 | - | 1/1/1 | - | 4/4/3 |
-| claude-opus-5-5 | - | - | 1/1/1 | - | - | - | 1/1/1 |
-| claude-fable-5 | 1/1/1 | 1/1/1 | 2/2/2 | 1/1/0 | 1/1/0 | 1/1/1 | 7/7/5 |
-| claude-fable-5-1 | 1/1/0 | - | 1/1/1 | 2/2/1 | 2/2/2 | 1/1/1 | 7/7/5 |
+| claude-sonnet-5 | 1/1/0 | - | 1/1/0 | 1/1/0 | 1/1/1 | 1/1/0 | 5/5/1 |
+| claude-haiku-5-5 | 1/1/1 | 1/1/1 | 1/1/0 | - | 1/1/0 | - | 4/4/2 |
+| claude-opus-5-5 | - | - | 1/1/0 | - | - | - | 1/1/0 |
+| claude-fable-5 | 1/1/0 | 1/1/1 | 2/2/1 | 1/1/0 | 1/1/0 | 1/1/1 | 7/7/3 |
+| claude-fable-5-1 | 1/1/0 | - | 1/1/1 | 2/2/1 | 2/2/0 | 1/1/1 | 7/7/3 |
 | claude-sonnet-5-5 | - | 1/1/0 | - | - | - | 2/2/0 | 3/3/0 |
-| all models | 4/4/3 | 3/3/2 | 6/6/4 | 4/4/1 | 5/5/4 | 5/5/3 | - |
+| all models | 4/4/1 | 3/3/2 | 6/6/2 | 4/4/1 | 5/5/1 | 5/5/2 | - |
 
 ## 2b X1-1 cost per unique new mechanism, per model (O42)
 
@@ -208,16 +208,16 @@ Per model of the Latin square: the USD of its X1-1 lens-lane requests (S1, the l
 
 ## 3 Predicted ceilings against the floor (ceiling - floor)
 
-Extents: 50 of 80 hotspots with no recorded line_end (cProfile records a function's first line) took the span Va's views (views.jsonl) recorded for their id; an idea no profiled function holds has no ceiling (unknown).
+Extents: 50 of 80 hotspots with no recorded line_end (cProfile records a function's first line) took the span Va's views (views.jsonl) recorded for their id; an idea no profiled function holds has no ceiling (unknown). The count is of ideas whose ceiling less floor is at least 10 points (O48); the distribution (the quantiles and the plot) is the primary view.
 
-| configuration | with a ceiling | unknown | over the floor | min | q25 | median | q75 | max |
+| configuration | with a ceiling | unknown | at least 10 points over the floor | min | q25 | median | q75 | max |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | A | 0 | 39 | 0 | - | - | - | - | - |
-| X1-0 | 37 | 14 | 37 | 1.4% | 3.7% | 9.0% | 47.6% | 78.5% |
-| X1-1 | 45 | 18 | 45 | 1.0% | 5.3% | 17.3% | 47.6% | 92.2% |
-| X1-2 | 40 | 16 | 40 | 1.4% | 8.2% | 21.2% | 60.1% | 78.5% |
-| X1-3 | 42 | 11 | 42 | 1.2% | 5.3% | 10.5% | 31.8% | 78.5% |
-| X1-4 | 18 | 12 | 18 | 1.4% | 5.4% | 13.9% | 41.8% | 78.5% |
+| X1-0 | 37 | 14 | 18 | 1.4% | 3.7% | 9.0% | 47.6% | 78.5% |
+| X1-1 | 45 | 18 | 25 | 1.0% | 5.3% | 17.3% | 47.6% | 92.2% |
+| X1-2 | 40 | 16 | 27 | 1.4% | 8.2% | 21.2% | 60.1% | 78.5% |
+| X1-3 | 42 | 11 | 21 | 1.2% | 5.3% | 10.5% | 31.8% | 78.5% |
+| X1-4 | 18 | 12 | 9 | 1.4% | 5.4% | 13.9% | 41.8% | 78.5% |
 
 ![ceiling less floor per configuration](ceilings.svg)
 
@@ -259,10 +259,10 @@ Delta: mean over libraries of the lever's value less X1-0's (ideas-probe fields;
 | X1-2 | new (upper bound, the dedupe under-merges (O39)) | 0.12 | - | no A/A band (provisional) |
 | X1-3 | new (upper bound, the dedupe under-merges (O39)) | 0.12 | - | no A/A band (provisional) |
 | X1-4 | new (upper bound, the dedupe under-merges (O39)) | -3.88 | - | no A/A band (provisional) |
-| X1-1 | above | 1.00 | - | no A/A band (provisional) |
-| X1-2 | above | 0.38 | - | no A/A band (provisional) |
-| X1-3 | above | 0.62 | - | no A/A band (provisional) |
-| X1-4 | above | -2.38 | - | no A/A band (provisional) |
+| X1-1 | above | 0.88 | - | no A/A band (provisional) |
+| X1-2 | above | 1.12 | - | no A/A band (provisional) |
+| X1-3 | above | 0.38 | - | no A/A band (provisional) |
+| X1-4 | above | -1.12 | - | no A/A band (provisional) |
 | X1-1 | families | 1.00 | - | no A/A band (provisional) |
 | X1-2 | families | 0.25 | - | no A/A band (provisional) |
 | X1-3 | families | 0.38 | - | no A/A band (provisional) |
