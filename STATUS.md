@@ -3499,6 +3499,47 @@ worktree", 4.4.0) or in the builder rules every brief carries.
     trial and combine row writers copy the slice's, because `SliceRecorder` keys
     `arm` by configuration. Accepted as harness code; a later unit can lift the
     row builders into `ideas_slice` (about 50 lines fewer).
+- X2a (O48: the X2 suite's three settings-only arms). New `ideas-x2` suite:
+  X2-0, X2-0' (the twin, held to the four slice libraries) and X2-V. X2-F and
+  the Fable lane are left out pending the owner (an X2 builder stopped there:
+  X2-F cannot be built from settings, since a lens on the shared view never gets
+  a framework, and a seventh lane is not a setting). The arm set is open, so
+  either is one more entry.
+  - **How arms reach the engine:** `start_oss_loop` reads the process-wide
+    settings, so each arm is an env mapping that `ci.yml` exports per dispatch
+    (`x2_dispatch`, `ARM:lib,lib`, validated by a `case` and a regex). Tests
+    prove an arm's mapping builds exactly that arm's `Settings`, and
+    `check_settings` refuses any drift before spend.
+  - **Two rounds take `PORTFOLIO_ROUNDS` 2 and `MAX_TRIAL_ROUNDS` 2,** not the
+    spec's 1: the router ends exploration at a keep once the round reaches
+    `PORTFOLIO_ROUNDS`, which a guard proves with the engine's own router.
+  - **The loop is built by `start_x2_loop`:** `start_oss_loop`'s body plus the
+    eliminate lane's transport, because `start_oss_loop` passes no
+    `lane_transports` and the factory refuses the Haiku lane without one. The
+    cleaner one-line fix is in `oss.py`, not the unit's file.
+  - **The review's should_fix: round 2's seeded call would never fire.** The
+    engine calls the generator only on an empty pool, and a call returns about 6
+    ideas against 3 trials a round. `WHOLE_POOL` (on) makes round 1 trial the
+    whole result (`max_hypotheses_per_round` 10), so round 2 is the seeded call;
+    a guard runs the hypotheses node to prove it.
+  - **What `WHOLE_POOL` costs:**
+
+    |            | `WHOLE_POOL` on                       | `WHOLE_POOL` off |
+    | ---------- | ------------------------------------- | ---------------- |
+    | Run cap    | 9.35 USD (X2-0), 9.45 (X2-V)          | 6.50, 6.70       |
+    | Expected   | about 3.0 a run, about 60 for 20 runs | about 44         |
+    | Minutes    | 89 a run                              | 44 a run         |
+    | Dispatches | 5 of 4 runs (need 38)                 | 3                |
+
+    Off, the seeds stay dormant; a one-line switch, both tested. The owner
+    decides before X2 is dispatched.
+
+  - **Records:** `ideas-x2-hypothesis`, `ideas-x2-round` and `ideas-x2-run`
+    rows, for V-rep3's per-lane wins and cost per win. Each run is refused
+    unless the clone's head is E1's recorded commit.
+  - **The Lead's integration** merged its CI patch with V-picks' by hand (both
+    edited the same enumerations).
+  - **Size:** about 292 code lines against 220 (1.33x).
 - **Known gate flake: the discovery corpus's wall-clock guards on Python 3.11.**
   Under the lab gate's full parallel load, one of
   `test_discovery_corpus_guards.py`'s timed cases failed in two gates out of
