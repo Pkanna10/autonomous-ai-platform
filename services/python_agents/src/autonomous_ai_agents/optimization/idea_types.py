@@ -372,3 +372,33 @@ class IdeaStats(EngineModel):
     cache_read_tokens: _Count = 0
     stop_reasons: dict[str, str | None] = Field(default_factory=dict)
     """Each request's ``stop_reason`` by its stage or lane label."""
+
+
+class RealisationLabel(StrEnum):
+    """How a trial's anchor's counted work moved (S1, ``evolve.realisation_label``)."""
+
+    fired = "fired"
+    weak = "weak"
+    not_fired = "not_fired"
+    reversed = "reversed"
+    uncounted = "uncounted"
+
+
+class Realisation(EngineModel):
+    """What a measured trial's edit touched and how its anchor's counted
+    work moved (S1, ``evolve.realisation``): engine numbers only. Units and
+    functions are ``PATH::NAME``; ``moved`` is the work's relative cut."""
+
+    files: tuple[str, ...]
+    hunks: _Count
+    functions: tuple[str, ...]
+    anchor: str | None
+    anchor_touched: bool | None
+    unit: str | None
+    base_calls: _Count | None
+    base_out: _Count | None
+    trial_calls: _Count | None
+    trial_out: _Count | None
+    moved: float | None
+    label: RealisationLabel
+    kept_not_fired: bool

@@ -77,7 +77,7 @@ import xml.etree.ElementTree as ElementTree  # nosec B405
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePath
-from typing import Protocol, TypeVar
+from typing import Final, Protocol, TypeVar
 
 from autonomous_ai_agents.common.config import IsolationMode, settings
 from autonomous_ai_agents.common.models import (
@@ -134,6 +134,8 @@ METRIC_OP_CALLS = "op_calls"
 """The counted run's row (G6a): every call of one run, Python and C."""
 PYTHON_CALLS_KEY, C_CALLS_KEY = "python_calls", "c_calls"
 """The ``op_calls`` row's ``hardware`` keys of the split."""
+METRIC_UNIT_CALLS = "unit_calls"
+UNIT_KEY, OUT_CALLS_KEY, CALLEE_KEY = "unit", "out_calls", "callee"
 OPCOUNT_NAME = "opcount.json"
 """The shim's output, in the phase's scratch root (wiped before every run)."""
 OPCOUNT_SHIM = Path(_opcount_shim.__file__).resolve()
@@ -767,11 +769,33 @@ class CountFormatError(Exception):
 
 
 @dataclass(frozen=True)
+class UnitCount:
+    """One unit of a version 2 count (S1): its calls, the calls its frames
+    made, its top callees by edge (name, calls)."""
+
+    unit: str
+    calls: int
+    out: int
+    callees: tuple[tuple[str, int], ...] = ()
+
+
+_UNIT: Final = re.compile(r"[!-9;-~]+(?:/[!-9;-~]+)*::[!-9;-~]+")
+"""``PATH::FUNCTION``: printable ASCII, no space, no other ``:``."""
+MAX_UNIT_CHARS: Final = 256
+
+
+def is_unit(spec: str) -> bool:
+    """Whether ``spec`` names a unit the shim can count (``PATH::FUNCTION``)."""
+    return len(spec) <= MAX_UNIT_CHARS and _UNIT.fullmatch(spec) is not None
+
+
+@dataclass(frozen=True)
 class OpCounts:
     """One counted run's calls."""
 
     python_calls: int
     c_calls: int
+    units: tuple[UnitCount, ...] = ()
 
     @property
     def total(self) -> int:
@@ -803,9 +827,40 @@ def _calls(value: object, what: str) -> int:
     return value
 
 
+def _callee(value: object) -> tuple[str, int]:
+    if not (
+        isinstance(value, list)
+        and len(value) == 2
+        and isinstance(value[0], str)
+        and len(value[0]) <= _opcount_shim.MAX_NAME_CHARS
+        and value[0].isprintable()
+    ):
+        raise CountFormatError("a callee must be a printable name and its calls")  # fmt: skip
+    return value[0], _calls(value[1], "a callee's calls")
+
+
+def _unit_count(value: object) -> UnitCount:
+    if not isinstance(value, dict) or set(value) != set(_opcount_shim.UNIT_KEYS):
+        raise CountFormatError("a unit must hold exactly unit, calls, out, callees")
+    unit, callees = value["unit"], value["callees"]
+    if not isinstance(unit, str) or not is_unit(unit):
+        raise CountFormatError("a unit name must be PATH::FUNCTION")
+    if not isinstance(callees, list) or len(callees) > _opcount_shim.MAX_CALLEES:
+        raise CountFormatError(f"callees must be a list of at most {_opcount_shim.MAX_CALLEES}")  # fmt: skip
+    return UnitCount(unit, _calls(value["calls"], "calls"), _calls(value["out"], "out"),
+                     tuple(map(_callee, callees)))  # fmt: skip
+
+
+def _unit_counts(value: object) -> tuple[UnitCount, ...]:
+    if not isinstance(value, list) or len(value) > _opcount_shim.MAX_UNITS:
+        raise CountFormatError(f"units must be a list of at most {_opcount_shim.MAX_UNITS}")  # fmt: skip
+    return tuple(map(_unit_count, value))
+
+
 def parse_counts(data: bytes) -> OpCounts:
     """The shim's document, or ``CountFormatError``: ASCII JSON of at most
-    the shim's cap, exactly its keys, version 1, bounded integer counts."""
+    the shim's cap, exactly its keys, version 1 (version 2 with units),
+    bounded integer counts, printable bounded names."""
     if len(data) > _opcount_shim.MAX_DOC_BYTES:
         raise CountFormatError(f"is larger than {_opcount_shim.MAX_DOC_BYTES} bytes")
     if not data.isascii():
@@ -816,40 +871,55 @@ def parse_counts(data: bytes) -> OpCounts:
         )
     except (ValueError, RecursionError):  # JSONDecodeError, int digit limit
         raise CountFormatError("is not valid JSON") from None
-    if not isinstance(doc, dict) or set(doc) != set(_opcount_shim.DOC_KEYS):
+    doc = doc if isinstance(doc, dict) else {}
+    units = set(doc) == set(_opcount_shim.UNITS_DOC_KEYS)
+    if not units and set(doc) != set(_opcount_shim.DOC_KEYS):
         raise CountFormatError(
             "its top level must hold exactly version, python_calls, c_calls"
         )
     version = doc["version"]
-    if type(version) is not int or version != _opcount_shim.FORMAT_VERSION:
-        raise CountFormatError(f"version must be the integer {_opcount_shim.FORMAT_VERSION}")  # fmt: skip
+    want = _opcount_shim.UNITS_VERSION if units else _opcount_shim.FORMAT_VERSION
+    if type(version) is not int or version != want:
+        raise CountFormatError(f"version must be the integer {want}")
     return OpCounts(
-        _calls(doc["python_calls"], "python_calls"), _calls(doc["c_calls"], "c_calls")
+        _calls(doc["python_calls"], "python_calls"),
+        _calls(doc["c_calls"], "c_calls"),
+        _unit_counts(doc["units"]) if units else (),
     )
 
 
-def counted_argv(command: Sequence[str], out: Path) -> list[str]:
-    """``command`` under the opcount shim, which writes ``out``; the
-    profiler's ``NotProfiledError`` when the shim cannot run it."""
+def counted_argv(command: Sequence[str], out: Path, units: Sequence[str] = ()) -> list[str]:  # fmt: skip
+    """``command`` under the opcount shim, which writes ``out`` and counts
+    ``units``; the profiler's ``NotProfiledError`` when the shim cannot run it."""
     # The profiler's CPython argv parser; imported here because the profiler
     # imports trial_runner, which imports this module.
     from autonomous_ai_agents.execution.profiler import _split
 
     options, kind, name, args = _split(command)
-    return [command[0], *options, str(OPCOUNT_SHIM), str(out), kind, name, *args]
+    flags = [part for unit in units for part in ("--unit", unit)]
+    return [command[0], *options, str(OPCOUNT_SHIM), str(out), *flags, kind, name, *args]  # fmt: skip
 
 
 def count_workload(
-    phase: Phase, workload: Workload, *, trial_id: str | None = None, side: str = ""
+    phase: Phase,
+    workload: Workload,
+    *,
+    trial_id: str | None = None,
+    side: str = "",
+    units: Sequence[str] = (),
 ) -> Counted:
     """One counted run of ``workload`` (module docstring); ``side`` (`` A``,
-    `` B``) names the side in its notes."""
+    `` B``) names the side in its notes. ``units`` (S1, each ``is_unit``,
+    else ``ValueError``) ride the same launch and add ``unit_calls`` rows."""
     from autonomous_ai_agents.execution.profiler import NotProfiledError
 
+    bad = [unit for unit in units if not is_unit(unit)]
+    if bad:
+        raise ValueError(f"{bad[0][:80]!r} is not a unit (PATH::FUNCTION)")
     label = f"workload {workload.name!r}{side}"
     out = phase.scratch / OPCOUNT_NAME
     try:
-        argv = counted_argv(workload.command, out)
+        argv = counted_argv(workload.command, out, units)
     except NotProfiledError as reason:
         return Counted((), (f"{label} is not counted: {reason}",))
     notes: list[str] = []
@@ -873,7 +943,24 @@ def count_workload(
     hardware |= {PYTHON_CALLS_KEY: counts.python_calls, C_CALLS_KEY: counts.c_calls}
     total = (float(counts.total),)
     row = _row(workload, trial_id, METRIC_OP_CALLS, "calls", total, hardware)
-    return Counted((row,), tuple(said))
+    return Counted((row, *_unit_rows(workload, trial_id, counts.units, hardware)), tuple(said))  # fmt: skip
+
+
+def _unit_rows(
+    workload: Workload, trial_id: str | None, units: Sequence[UnitCount],
+    host: Mapping[str, JsonScalar],
+) -> list[Measurement]:  # fmt: skip
+    """Per unit a ``unit_calls`` row (its calls; ``out_calls`` in hardware),
+    then one per callee edge (``callee``): never ``op_calls`` rows (S1)."""
+    base = {k: v for k, v in host.items() if k not in (PYTHON_CALLS_KEY, C_CALLS_KEY)}
+    rows: list[Measurement] = []
+    for one in units:
+        edges: list[tuple[dict[str, JsonScalar], int]] = [({OUT_CALLS_KEY: one.out}, one.calls)]  # fmt: skip
+        edges += [({CALLEE_KEY: name}, n) for name, n in one.callees]
+        for extra, n in edges:
+            hardware: dict[str, JsonScalar] = {**base, UNIT_KEY: one.unit, **extra}
+            rows.append(_row(workload, trial_id, METRIC_UNIT_CALLS, "calls", (float(n),), hardware))  # fmt: skip
+    return rows
 
 
 @dataclass(frozen=True)

@@ -578,6 +578,12 @@ class Settings(BaseSettings):
     call counts) and the operation-count judge, a report column that never
     decides a verdict. Off by default: each counted run costs about 1.5-3x
     one workload run."""
+    IDEAS_COUNT_CONTRACT: Literal["off", "record"] = "off"
+    """Emergence round 1, S1: ``record`` adds the trial brief's hot
+    functions (at most 4) as units to each counted run (``OP_COUNT_JUDGE``),
+    so each side also gives per-unit ``unit_calls`` rows (calls, caller
+    edges, top callees) for the realisation record; no request, prompt or
+    verdict changes. ``off`` keeps today's counted run byte for byte."""
     SCALING_JUDGE: bool = False
     """G6b, shadow mode: every workload with a size setting
     (``Workload.scale``) runs at its 2-3 sizes on both sides, and the scaling

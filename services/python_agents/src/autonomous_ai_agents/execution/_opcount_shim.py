@@ -35,6 +35,20 @@ OUT is ASCII JSON, at most ``MAX_DOC_BYTES``::
 
     {"version": 1, "python_calls": <int>, "c_calls": <int>}
 
+Given units (``--unit PATH::FUNCTION`` before the kind, at most
+``MAX_UNITS``; emergence round 1, S1), OUT is version 2: the same totals,
+then per unit (a Python function named by its file, the whole path or its
+end after a ``/``, and its ``co_name``; same-named functions of one file are
+summed) its own calls, the calls its frames made (``out``, cProfile's
+caller edges) and its top ``MAX_CALLEES`` callees by edge, names cut to
+``MAX_NAME_CHARS``; C methods are callees, so a pooled ``re.Pattern.match``
+is attributed to its caller. A document over the cap drops every callee
+list::
+
+    {"version": 2, "python_calls": <int>, "c_calls": <int>, "units":
+     [{"unit": "<PATH::FUNCTION>", "calls": <int>, "out": <int>,
+       "callees": [["<name>", <int>], ...]}, ...]}
+
 The workload controls this interpreter, so the engine treats OUT as
 untrusted (``measure.parse_counts``).
 """
@@ -82,10 +96,14 @@ from typing import TYPE_CHECKING  # noqa: E402
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-FORMAT_VERSION = 1
+FORMAT_VERSION, UNITS_VERSION = 1, 2
 MAX_DOC_BYTES = 4096
 DOC_KEYS = ("version", "python_calls", "c_calls")
-USAGE = "usage: _opcount_shim.py OUT (module NAME | script PATH) [ARG ...]"
+UNITS_DOC_KEYS = (*DOC_KEYS, "units")
+UNIT_KEYS = ("unit", "calls", "out", "callees")
+MAX_UNITS, MAX_CALLEES, MAX_NAME_CHARS = 4, 5, 96
+UNIT_FLAG = "--unit"
+USAGE = "usage: _opcount_shim.py OUT [--unit PATH::FUNCTION ...] (module NAME | script PATH) [ARG ...]"
 C_FILE = "~"
 """cProfile's file name for a C function."""
 
@@ -94,9 +112,11 @@ if TYPE_CHECKING:  # subscripted builtins at run time need Python 3.9
     Row = tuple[int, int, float, float, object]
 
 
-def encode(stats: Mapping[Label, Row], own_file: str) -> bytes:
+def encode(
+    stats: Mapping[Label, Row], own_file: str, units: Sequence[str] = ()
+) -> bytes:
     """The counts of ``cProfile.Profile.stats`` (total calls, recursion
-    included), without ``own_file``'s frames."""
+    included), without ``own_file``'s frames; version 2 with ``units``."""
     python = c = 0
     for (file, _, _), row in stats.items():
         if file == own_file:
@@ -106,15 +126,48 @@ def encode(stats: Mapping[Label, Row], own_file: str) -> bytes:
         else:
             python += row[1]
     doc = {"version": FORMAT_VERSION, "python_calls": python, "c_calls": c}
-    return json.dumps(doc).encode("ascii")
+    if not units:
+        return json.dumps(doc).encode("ascii")
+    doc["version"] = UNITS_VERSION
+    found = [_unit(stats, own_file, unit) for unit in units[:MAX_UNITS]]
+    data = json.dumps({**doc, "units": found}).encode("ascii")
+    if len(data) > MAX_DOC_BYTES:
+        cut = [{**one, "callees": []} for one in found]
+        data = json.dumps({**doc, "units": cut}).encode("ascii")
+    return data
+
+
+def _unit(stats: Mapping[Label, Row], own_file: str, unit: str) -> dict[str, object]:
+    path, _, name = unit.partition("::")
+    mine = [
+        key for key in stats if key[2] == name and key[0] not in (C_FILE, own_file)
+        and (key[0] == path or key[0].endswith("/" + path))
+    ]  # fmt: skip
+    edges: dict[str, int] = {}
+    for key, row in stats.items():
+        callers = row[4]
+        if key[0] == own_file or not isinstance(callers, dict):
+            continue
+        n = sum(callers[k][0] for k in mine if k in callers)
+        if n:
+            label = key[2][:MAX_NAME_CHARS]
+            edges[label] = edges.get(label, 0) + n
+    top = sorted(edges.items(), key=lambda edge: (-edge[1], edge[0]))[:MAX_CALLEES]
+    calls = sum(stats[key][1] for key in mine)
+    return {"unit": unit, "calls": calls, "out": sum(edges.values()),
+            "callees": [[label, n] for label, n in top]}  # fmt: skip
 
 
 def main(argv: Sequence[str], *, safe_path: bool | None = None) -> None:
-    """Run ``argv[3]`` as ``__main__`` under cProfile and write ``argv[1]``;
-    ``safe_path`` defaults to the interpreter's."""
-    if len(argv) < 4 or argv[2] not in ("module", "script"):
+    """Run the target as ``__main__`` under cProfile and write ``argv[1]``,
+    counting the ``--unit`` units; ``safe_path`` defaults to the interpreter's."""
+    rest, units = list(argv[2:]), []
+    while len(rest) >= 2 and rest[0] == UNIT_FLAG:
+        units.append(rest[1])
+        rest = rest[2:]
+    if len(argv) < 2 or len(rest) < 2 or rest[0] not in ("module", "script"):
         raise SystemExit(USAGE)
-    out, kind, target, args = argv[1], argv[2], argv[3], list(argv[4:])
+    out, kind, target, args = argv[1], rest[0], rest[1], rest[2:]
     keep_path = path_is_safe(sys.flags) if safe_path is None else safe_path
     sys.argv[:] = [target, *args]
     first: str | None = None
@@ -136,7 +189,7 @@ def main(argv: Sequence[str], *, safe_path: bool | None = None) -> None:
     finally:
         profiler.create_stats()
         with open(out, "wb") as file:
-            file.write(encode(profiler.stats, __file__))
+            file.write(encode(profiler.stats, __file__, units))
 
 
 if __name__ == "__main__":

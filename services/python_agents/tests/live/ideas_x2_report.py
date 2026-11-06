@@ -37,15 +37,19 @@ from typing import Annotated, Final
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from autonomous_ai_agents.optimization.idea_types import LENS_LANES, Lane
+from autonomous_ai_agents.optimization.idea_types import (
+    LENS_LANES,
+    Lane,
+    RealisationLabel,
+)
 
 from .conftest import redact_keys
 from .discovery_io import cells, flag, per
 from .ideas_probe import E1_REPOS, SERVICE_DIR
-from .ideas_x2 import IDEA_EXPERIMENT, ROUND_EXPERIMENT, RUN_EXPERIMENT, X2_ARMS
+from .ideas_x2 import EVERY_ARM, IDEA_EXPERIMENT, ROUND_EXPERIMENT, RUN_EXPERIMENT
 
 REPORT_DIR: Final = SERVICE_DIR.parents[1] / ".claude/handoff/step3/idea-lab/x2"
-ARMS: Final = tuple(a.key for a in X2_ARMS)  # X2-0, X2-0', X2-V
+ARMS: Final = tuple(a.key for a in EVERY_ARM)  # X2-0, X2-0', X2-V, X2-C
 BASE, TWIN = ARMS[0], ARMS[1]
 BAND_GAIN: Final = 4.0  # O51: points of combine gain
 BAND_KEPT: Final = 1.0  # O51: on the kept count
@@ -69,6 +73,13 @@ class _Row(BaseModel):
     arm: str
 
 
+class Realised(BaseModel):  # S1's record, the fields the report reads
+    model_config = ConfigDict(frozen=True, extra="ignore", strict=True)
+    label: Annotated[str, Field(pattern=f"^({'|'.join(RealisationLabel)})$")]
+    anchor_touched: bool | None
+    kept_not_fired: bool
+
+
 class IdeaLine(_Row):
     round: Annotated[int, Field(ge=1)] | None  # None: left in the pool
     hypothesis_id: str
@@ -76,6 +87,7 @@ class IdeaLine(_Row):
     model: str | None
     compound: bool
     verdict: str
+    realisation: Realised | None = None  # X2-C only (S1)
 
 
 class RoundLine(_Row):
@@ -309,6 +321,40 @@ def _seeds(arm: str, label: str, runs: Sequence[Run]) -> list[object]:
             sum(d.seeded_calls for d in late), f"{usd:.2f}", per(usd, kept)]  # fmt: skip
 
 
+def _realised(r: Report) -> list[str]:  # S1, only where a row holds a record
+    rows: list[list[object]] = []
+    sums: list[list[object]] = []
+    for arm in r.arms:
+        recs = [(i.realisation, i.verdict == "keep") for (a, _), x in r.runs.items()
+                if a == arm for i in x.ideas if i.realisation is not None]  # fmt: skip
+        by, won = (
+            Counter(c.label for c, _ in recs),
+            Counter(c.label for c, k in recs if k),
+        )
+        rows += [[arm, lab, by[lab], won[lab]] for lab in RealisationLabel if by[lab]]
+        few = (
+            ""
+            if min(by["fired"], by["not_fired"]) >= 10
+            else " (needs 10 or more each side)"
+        )
+        sides = ", ".join(
+            f"{lab} {won[lab]}/{by[lab]}" for lab in ("fired", "not_fired")
+        )
+        sums += [[arm, len(recs), sum(c.kept_not_fired for c, _ in recs),
+                  sum(c.anchor_touched is False for c, _ in recs), sides + few]] if recs else []  # fmt: skip
+    return [] if not rows else [
+        "## 6 Realisation (S1)", "",
+        "Each measured trial's engine label: how its anchor's counted work (its own "
+        "calls and its frames' calls) moved; fired at a cut of 10 % or more, not_fired "
+        "under 1 % either way. Counts are blind to per-unit speed, so this reads the "
+        "counted gap, never the physical gap. The premise (fired keeps at least twice "
+        "the not_fired rate, at least 10 trials each side) is read here, not decided.", "",
+        *_table(("arm", "label", "trialled", "kept"), rows),
+        *_table(("arm", "recorded", "kept, not fired", "anchor untouched",
+                 "premise, kept of trialled"), sums),
+    ]  # fmt: skip
+
+
 def render(r: Report) -> str:
     band, banded = _band(r)
     common = [n for n in E1_REPOS if all((a, n) in r.runs for a in r.arms)]
@@ -408,6 +454,7 @@ def render(r: Report) -> str:
         "## 5 Seeds (round 2)", "",
         *_table(("arm", "library", "trialled", "kept", "seeds shown", "seeded calls",
                  "seeded USD", "seeded USD per round-2 win"), seeds),
+        *_realised(r),
     ])  # fmt: skip
 
 

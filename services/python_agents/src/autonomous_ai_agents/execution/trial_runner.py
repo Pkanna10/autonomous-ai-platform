@@ -87,7 +87,9 @@ run per side (``measure.count_workload``): a paired trial on its twin (an
 ``op_calls`` row in ``base_measurements``) and on itself, an unpaired trial
 on itself, the baseline on the base. A counted run that cannot count is a
 note, never a failed trial or an ``EngineError``: the operation-count judge
-only records.
+only records. With ``count_units`` (S1; default ``IDEAS_COUNT_CONTRACT``
+not ``off``) a trial's counted runs on both sides also count the brief's hot
+functions (``trial_units``) and add ``unit_calls`` rows, never ``op_calls``.
 
 Replay (G5b, ``GitTrialRunner.replay``): a near-miss compound's commit is
 built by cherry-picking its measured parents' commits onto the base with the
@@ -168,6 +170,7 @@ from autonomous_ai_agents.common.paths import (
     normalize_path,
 )
 from autonomous_ai_agents.common.refnames import branch_prefix_problem
+from autonomous_ai_agents.execution import _opcount_shim
 from autonomous_ai_agents.execution.crash import parse_traceback
 from autonomous_ai_agents.execution.editor import STOP_BUDGET
 from autonomous_ai_agents.execution.editor_tools import EditorLimits
@@ -187,6 +190,7 @@ from autonomous_ai_agents.execution.measure import (
     RunOnce,
     baseline_test_count,
     count_workload,
+    is_unit,
     make_phase,
     measure_abab,
     measure_scaling,
@@ -589,6 +593,7 @@ class _PhaseOwner:
         baseline_count: int | None,
         twin: Phase | None = None,
         baseline: bool = False,
+        units: Sequence[str] = (),
     ) -> tuple[tuple[Measurement, ...], tuple[Measurement, ...]]:
         """``measure_workload`` per workload, or ABBA against ``twin`` (A), each
         side's quality row after its rows (``baseline``: scored twice), then
@@ -627,7 +632,7 @@ class _PhaseOwner:
             self._note(prefix, failure.notes)
             raise
         self._note(prefix, suite.notes)
-        counted_base, counted = self._count(phase, twin, workloads, prefix, trial_id)
+        counted_base, counted = self._count(phase, twin, workloads, prefix, trial_id, units)  # fmt: skip
         scaled_base, scaled = self._scale(phase, twin, workloads, prefix, trial_id)
         return (*base, *counted_base, *scaled_base), (
             *rows, *suite.measurements, *counted, *scaled,
@@ -640,20 +645,22 @@ class _PhaseOwner:
         workloads: Sequence[Workload],
         prefix: str,
         trial_id: str | None,
+        units: Sequence[str] = (),
     ) -> tuple[tuple[Measurement, ...], tuple[Measurement, ...]]:
         """With ``count_ops``, one counted run per workload on the twin (A)
-        and on ``phase``: (the twin's rows, ``phase``'s rows); notes emitted."""
+        and on ``phase``, each counting ``units``: (the twin's rows,
+        ``phase``'s rows); notes emitted."""
         if not self._count_ops:
             return (), ()
         base: list[Measurement] = []
         rows: list[Measurement] = []
         for workload in workloads:
             if twin is not None:
-                a = count_workload(twin, workload, side=" A")
+                a = count_workload(twin, workload, side=" A", units=units)
                 base.extend(a.rows)
                 self._note(prefix, a.notes)
             side = "" if twin is None else " B"
-            b = count_workload(phase, workload, trial_id=trial_id, side=side)
+            b = count_workload(phase, workload, trial_id=trial_id, side=side, units=units)  # fmt: skip
             rows.extend(b.rows)
             self._note(prefix, b.notes)
         return tuple(base), tuple(rows)
@@ -873,7 +880,10 @@ class GitTrialRunner(_PhaseOwner):
         scorer: RunnerScorer | None = None,
         count_ops: bool = False,
         scaling: bool = False,
+        count_units: bool | None = None,
     ) -> None:
+        default = settings.IDEAS_COUNT_CONTRACT != "off"
+        self._count_units = default if count_units is None else count_units
         if not 0 <= fix_retries <= FIX_RETRIES_MAX:
             raise ValueError(
                 f"fix_retries must be 0-{FIX_RETRIES_MAX}, got {fix_retries}"
@@ -1265,6 +1275,7 @@ class GitTrialRunner(_PhaseOwner):
                 trial_id=trial.id,
                 baseline_count=baseline_test_count(job.baseline.measurements),
                 twin=twin,
+                units=trial_units(job.brief) if self._count_units else (),
             )
         except RunFailure as failure:
             if (
@@ -1592,6 +1603,14 @@ def _merged(first: EditResult, second: EditResult) -> EditResult:
         first.tokens_used + second.tokens_used,
     )
     return EditResult(written, usd, tokens, second.stop, second.error)
+
+
+def trial_units(brief: TrialBrief) -> tuple[str, ...]:
+    """The brief's hot functions as count units (S1): ``PATH::SYMBOL``, each
+    once, functions only, at most ``MAX_UNITS``."""
+    found = (f"{spot.file_path}::{spot.symbol}" for spot in brief.hotspots)
+    units = dict.fromkeys(u for u in found if is_unit(u) and not u.endswith(">"))
+    return tuple(units)[: _opcount_shim.MAX_UNITS]
 
 
 def _over_limits(written: Mapping[str, int]) -> str | None:

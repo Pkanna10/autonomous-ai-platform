@@ -52,6 +52,13 @@ target lines, compound and parents, verdict, gain, floor, op counts),
 lanes, the seeded call's calls and USD, compounds tried and kept),
 ``ideas-x2-run`` per run (commit, cap, cost, discovery and D64's
 ``seeded_calls``/``seeded_cost_usd``, refusals, the combine, the guard).
+
+**X2-C** (emergence round 1, S1): X2-0 plus ``IDEAS_COUNT_CONTRACT=record``,
+no request changed, so the cap and minutes are X2-0's; off ``X2_ARMS`` and
+the plan until dispatched. Its hypothesis rows add ``realisation``, each
+measured trial's ``evolve.realisation`` over the base text of the files it
+changed (``base_sources``: the clone at E1's commit, which the engine never
+writes), the anchor its mechanism key's function.
 """
 
 from __future__ import annotations
@@ -79,10 +86,19 @@ from autonomous_ai_agents.common.models import (
     EngineEvent,
     Hypothesis,
     JsonScalar,
+    Trial,
+    TrialStatus,
+    Verdict,
     VerdictOutcome,
 )
-from autonomous_ai_agents.optimization.evolve import COMPOUND_TAG, compound_parents
-from autonomous_ai_agents.optimization.idea_dedupe import recorded_keys
+from autonomous_ai_agents.common.paths import normalize_path
+from autonomous_ai_agents.optimization.evolve import (
+    COMPOUND_TAG,
+    compound_parents,
+    diff_hunks,
+    realisation,
+)
+from autonomous_ai_agents.optimization.idea_dedupe import IdeaKey, recorded_keys
 from autonomous_ai_agents.optimization.idea_pipeline import SEEDED_CALL
 from autonomous_ai_agents.optimization.idea_types import LENS_LANES, Lane
 from autonomous_ai_agents.orchestrator.factory import build_context
@@ -141,6 +157,9 @@ X2_0_TWIN: Final = X2Arm("X2-0'", isl.SLICE_REPOS, SHARED,
 X2_V: Final = X2Arm("X2-V", ip.E1_REPOS, {**SHARED, "IDEAS_LANE_VIEWS": dict(ip.X1_VIEWS)},
                     "views (G2): each lens X1-3's view, no framework")  # fmt: skip
 X2_ARMS: Final = (X2_0, X2_0_TWIN, X2_V)
+X2_C: Final = X2Arm("X2-C", ip.E1_REPOS, {**SHARED, "IDEAS_COUNT_CONTRACT": "record"},
+                    "count record (S1): X2-0 with unit counts and realisation rows")  # fmt: skip
+EVERY_ARM: Final = (*X2_ARMS, X2_C)  # the plan's arms, then those off it
 LIBRARIES: Final = {r.name: r for r in dx.OSS_SELECTABLE if r.name in ip.E1_REPOS}
 Run = tuple[X2Arm, OssRepo]
 ALL_RUNS: Final[tuple[Run, ...]] = tuple(
@@ -268,7 +287,7 @@ def check_plan(plan: X2Plan, cap: float, base: Settings = settings) -> None:
 def x2_plan(environ: Mapping[str, str]) -> X2Plan:
     raw = environ.get(DISPATCH_ENV, "")
     key, _, names = raw.partition(":")
-    arm, wanted = next((a for a in X2_ARMS if a.key == key), None), names.split(",")
+    arm, wanted = next((a for a in EVERY_ARM if a.key == key), None), names.split(",")
     if arm is None or len(set(wanted)) < len(wanted) or not {*wanted} <= {*arm.repos}:
         raise ValueError(f"{DISPATCH_ENV}: an arm ({', '.join(a.key for a in X2_ARMS)}),"
                          f" ':' and its libraries, comma-separated; got {raw!r}")  # fmt: skip
@@ -316,8 +335,40 @@ def _num(data: Mapping[str, JsonScalar], key: str) -> float:
     return float(value) if isinstance(value, int | float) else 0.0
 
 
+def base_sources(root: Path, paths: Iterable[str], *,
+                 cap: int = settings.IDEAS_PARSE_MAX_BYTES) -> dict[str, str]:  # fmt: skip
+    """The base text of each normalised ``.py`` path under ``root``: no
+    link, at most ``cap`` bytes, UTF-8; any other path is left out."""
+    top, found = root.resolve(), {}
+    for path in paths:
+        file = root / path
+        try:
+            if (normalize_path(path) == path and path.endswith(".py") and not file.is_symlink()
+                    and file.resolve().is_relative_to(top) and file.stat().st_size <= cap):  # fmt: skip
+                found[path] = file.read_text(encoding="utf-8")
+        except (OSError, ValueError):  # PathTraversalError, UnicodeDecodeError
+            continue
+    return found
+
+
 def _tag(h: Hypothesis, key: str) -> str | None:
     return next((t.split(":", 1)[1] for t in h.tags if t.startswith(f"{key}:")), None)
+
+
+def _realised(trials: Iterable[Trial], keys: Mapping[str, IdeaKey],
+              verdicts: Mapping[str, Verdict], clone: Path) -> dict[str, object]:  # fmt: skip
+    """S1: the first measured trial's realisation record per hypothesis."""
+    out: dict[str, object] = {}
+    for t in trials:
+        if t.status is TrialStatus.measured and t.hypothesis_id not in out:
+            key, v = keys.get(t.hypothesis_id), verdicts.get(t.hypothesis_id)
+            fn = None if key is None else key.function
+            out[t.hypothesis_id] = realisation(
+                t, base_sources(clone, diff_hunks(t.diff)),
+                anchor=None if key is None or fn is None else (key.key.target.path, fn),
+                kept=v is not None and v.outcome is VerdictOutcome.keep,
+            ).model_dump(mode="json")  # fmt: skip
+    return out
 
 
 @dataclass
@@ -336,7 +387,7 @@ class X2Recorder:
 
     def record(self, arm: X2Arm, repo: str, run: LiveRun, commit: str,
                seen: list[EngineRunResult | None], outcome: CorpusOutcome,
-               result: EngineRunResult | None) -> None:  # fmt: skip
+               result: EngineRunResult | None, *, clone: Path | None = None) -> None:  # fmt: skip
         seen.append(result)
         st = None if result is None else result.state
         hyps = [] if st is None else [*st["hypotheses"], *st["candidate_pool"]]
@@ -351,6 +402,7 @@ class X2Recorder:
         }
         keys, cfg = recorded_keys(e.data for e in events), arm_settings(arm, self.base)
         head = {"repo": repo, "arm": arm.key}
+        realised = {} if st is None or clone is None else _realised(st["trials"], keys, verdicts, clone)  # fmt: skip
         for h, r in zip(hyps, ranks, strict=True):
             key, lane, parents = keys.get(h.id), _tag(h, "lane"), compound_parents(h)
             self.sink.write({**head, "experiment": IDEA_EXPERIMENT, "round": rounds.get(h.id),
@@ -361,7 +413,8 @@ class X2Recorder:
                 "compound": parents is not None,
                 "parents": [] if parents is None else [parents.first, parents.second],
                 "verdict": r.verdict, "gain_pct": r.gain_pct, "floor_pct": r.noise_floor_pct,
-                "op_count": isl._op_count(verdicts.get(h.id))})  # fmt: skip
+                "op_count": isl._op_count(verdicts.get(h.id)),
+                **({} if clone is None else {"realisation": realised.get(h.id)})})  # fmt: skip
         kept = [h for h in hyps if (v := verdicts.get(h.id)) is not None
                 and v.outcome is VerdictOutcome.keep]  # fmt: skip
         for n, data in sorted(_by_round(events).items()):
@@ -432,7 +485,7 @@ def run_one(arm: X2Arm, repo: OssRepo, *, live: StartLive, root: Path,
     check_settings(arm, recorder.base)
     cap = arm_cap(arm, recorder.base)
     run = live(cap)
-    where = root / f"{X2_ARMS.index(arm)}-{repo.name}"
+    where = root / f"{EVERY_ARM.index(arm)}-{repo.name}"
     where.mkdir(parents=True)
     loop = start_x2_loop(repo, run, where, isolation, policy=policy)
     commit = (recorder.commits or {}).get(repo.name, "")
@@ -442,7 +495,9 @@ def run_one(arm: X2Arm, repo: OssRepo, *, live: StartLive, root: Path,
         )
     isl.check_judges(loop)
     seen: list[EngineRunResult | None] = []
-    record = functools.partial(recorder.record, arm, repo.name, run, commit, seen)
+    counted = arm_settings(arm, recorder.base).IDEAS_COUNT_CONTRACT == "record"
+    record = functools.partial(recorder.record, arm, repo.name, run, commit, seen,
+                               clone=loop.user.path if counted else None)  # fmt: skip
     run_engine(loop, run, isolation, model=recorder.base.ENGINE_MODEL, record=record)
     run.note(ip._fit(f"X2 {arm.key} {repo.name}: {run.spent_usd:.3f} of {cap:.2f} USD"))
     isl.check_op_column(seen[-1])
