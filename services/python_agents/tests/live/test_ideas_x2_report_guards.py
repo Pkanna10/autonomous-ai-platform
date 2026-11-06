@@ -127,10 +127,116 @@ def test_the_twin_band_beside_o51s() -> None:
 def test_each_arm_against_x2_0_carries_its_band_label() -> None:
     text = _real()
     within, outside = "within the band (noise)", "outside the band"
-    assert f"| X2-V | pyparsing | +1 | {outside} | +0.2 | {within} |" in text
-    assert f"| X2-V | tomli | -2 | {outside} | +0.0 | {within} |" in text
-    assert f"| X2-V | sortedcontainers | -2 | {outside} | -13.4 | {outside} |" in text
+    one, out = "outside the measured band, not significant", "outside the measured band"
+    assert f"| X2-V | pyparsing | +1 | {one} | +0.2 | {within} |" in text
+    assert f"| X2-V | tomli | -2 | {out} | +0.0 | {within} |" in text
+    assert f"| X2-V | sortedcontainers | -2 | {out} | -13.4 | {outside} |" in text
     assert "| X2-0' | pyparsing |" not in text.split("## 3 ")[1].split("## 4 ")[0]
+
+
+def test_the_header_states_o52s_rules_before_any_comparison() -> None:
+    text = _real()
+    first = text.index("## 1 ")
+    for said in ("a kept-count gap of 0 is inside the measured band",
+                 "a gap of 1 is outside the measured band, not significant",
+                 "a gap of 2 or more is outside the measured band",
+                 "keeps more only if it keeps more on more libraries than it keeps fewer",
+                 "keeps fewer only if it keeps fewer on more libraries than it keeps more",
+                 "else no difference",
+                 "better only when it exceeds the twin's mean absolute gap",
+                 "worse only when it is below minus that gap",
+                 "else within the twin's mean gap",
+                 "No single library decides (O52)"):  # fmt: skip
+        assert -1 < text.index(said) < first, said
+    assert text.index("(O51)") < text.index("(O52)") < first
+
+
+def test_the_real_files_call_x2_v_against_x2_0() -> None:
+    """X2-V keeps +1, -2, -2 (1 more, 2 fewer); its combine differences
+    +0.15, +0.03, -13.38 points average -4.40, below minus the twin's mean
+    gap (2.70 + 3.94 + 3.22) / 3 = 3.29."""
+    text = _real()
+    assert ("The twin's mean gap over its 3 libraries is 3.3 points of combine "
+            "gain (O52's bar for an arm's combine).") in text  # fmt: skip
+    call = text.split("Arm-level calls")[1].split("## 4 ")[0]
+    assert ("| X2-V | pyparsing, tomli, sortedcontainers | 1 | 2 | 0 | "
+            "keeps fewer, on 3 libraries | -4.4 | 3.3, on 3 libraries | "
+            "worse, on 3 libraries |") in call  # fmt: skip
+    assert "No single library decides (O52)" in call
+    assert "| X2-0' |" not in call
+    report = xr.load(REAL)
+    assert xr.twin_gap(report) == pytest.approx(
+        (5.499097605674446 - 2.8012439621748024 + 22.5779199527674
+         - 18.635074871022987 + 13.37877315534008 - 10.160837166538679) / 3
+    )  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("diff", "banded", "label"),
+    [(0, True, "inside the measured band"),
+     (1, True, "outside the measured band, not significant"),
+     (-1, True, "outside the measured band, not significant"),
+     (2, True, "outside the measured band"), (-3, True, "outside the measured band"),
+     (0, False, "no band (unbanded)"), (2, False, "no band (unbanded)")],
+)  # fmt: skip
+def test_kept_reading(diff: int, banded: bool, label: str) -> None:
+    assert xr.kept_reading(diff, banded=banded) == label
+
+
+@pytest.mark.parametrize(
+    ("diffs", "call"),
+    [((1, -2, -2), "keeps fewer"), ((-1, 0, 0), "keeps fewer"),
+     ((2, 1, -3), "keeps more"), ((1, 0, 0), "keeps more"),
+     ((1, -1, 0), "no difference"), ((0, 0, 0), "no difference"),
+     ((3, -1, 2, -5), "no difference")],
+)  # fmt: skip
+def test_kept_call_is_a_sign_count(diffs: tuple[int, ...], call: str) -> None:
+    assert xr.kept_call(diffs) == call
+
+
+@pytest.mark.parametrize(
+    ("mean", "gap", "call"),
+    [(3.31, 3.3, "better"), (-3.31, 3.3, "worse"), (3.3, 3.3, "within the twin's mean gap"),
+     (-3.3, 3.3, "within the twin's mean gap"), (0.0, 0.0, "within the twin's mean gap"),
+     (0.1, 0.0, "better"), (-0.1, 0.0, "worse"), (9.0, None, "no band (unbanded)")],
+)  # fmt: skip
+def test_mean_call(mean: float, gap: float | None, call: str) -> None:
+    assert xr.mean_call(mean, gap) == call
+
+
+def test_an_arm_level_call_on_hand_made_rows(tmp_path: Path) -> None:
+    """Twin on tomli and pyparsing (gaps 2 and 4: mean 3); X2-V on those and
+    mistune keeps +1, +2, -1 (keeps more) and gains +4, +3, +3 (mean 3.33:
+    better). The single library with the largest kept gain does not decide."""
+    path = _write(tmp_path / "r.jsonl",
+                  _rows("X2-0", "tomli", [(3, ["leap"]), (1, [])], gain=10.0),
+                  _rows("X2-0'", "tomli", [(3, ["leap"]), (1, [])], gain=8.0),
+                  _rows("X2-V", "tomli", [(3, ["leap", "far"]), (1, [])], gain=14.0),
+                  _rows("X2-0", "pyparsing", [(3, ["leap"])], gain=6.0),
+                  _rows("X2-0'", "pyparsing", [(3, ["leap"])], gain=2.0),
+                  _rows("X2-V", "pyparsing", [(3, ["leap", "far", "far"])], gain=9.0),
+                  _rows("X2-0", "mistune", [(3, ["leap", "far"])], gain=4.0),
+                  _rows("X2-V", "mistune", [(3, ["leap"])], gain=7.0))  # fmt: skip
+    text = _text(path)
+    assert ("| X2-V | pyparsing, tomli, mistune | 2 | 1 | 0 | keeps more, on 3 libraries "
+            "| +3.3 | 3.0, on 2 libraries | better, on 3 libraries |") in text  # fmt: skip
+    assert (
+        "| X2-V | mistune | -1 | no band (unbanded) | +3.0 | no band (unbanded) |"
+        in text
+    )
+    assert ("| X2-V | pyparsing | +2 | outside the measured band | +3.0 | "
+            "within the band (noise) |") in text  # fmt: skip
+    assert "| X2-V | tomli | +1 | outside the measured band, not significant |" in text
+
+
+def test_an_arm_level_call_with_no_twin_is_unbanded(tmp_path: Path) -> None:
+    path = _write(tmp_path / "r.jsonl",
+                  _rows("X2-0", "mistune", [(3, ["leap"])], gain=4.0),
+                  _rows("X2-V", "mistune", [(3, [])], gain=None))  # fmt: skip
+    text = _text(path)
+    assert ("| X2-V | mistune | 0 | 1 | 0 | keeps fewer, on 1 library | -4.0 | none | "
+            "no band (unbanded), on 1 library |") in text  # fmt: skip
+    assert xr.twin_gap(xr.load([path])) is None
 
 
 def test_wins_by_lane_and_round() -> None:
