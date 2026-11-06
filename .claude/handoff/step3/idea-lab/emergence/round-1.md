@@ -384,3 +384,75 @@ of path dependence. It is the natural question for round 2's Contrarian.
    sections 6 and 7, and V-x2rep4 adds section 6. The Lead will do it
    (renumbered, then gated) before the dispatch, unless the owner prefers to
    keep the branches apart.
+
+## 12. The live runs (E1, E2) and what they show
+
+**The dispatches:**
+
+- **E1:** [run 42264126014](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/42264126014), `X2-S:sqlparse,tomli,mistune`, 7.61 USD.
+  - The first attempt, [run 42232651527](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/42232651527), ran no case and cost 0 USD. The harness bug behind it was fixed in `5b09306`, and `4da4402` now turns such a run red.
+- **E2:** [run 42272888210](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/42272888210), `X2-S:sqlparse,more_itertools`, 4.68 USD.
+- **Total:** 12.29 USD. The balance is now 21.08.
+- **O46's three conditions held on both:**
+  - every case ran;
+  - every hypothesis was judged, with no `max_tokens` stop and no refusal;
+  - each part's cost was within X2-0's range.
+
+**Per library, against X2-0.** Each library is read against its own twin gap (O51 amended), or the fixed band where it has no twin.
+
+| Library        | X2-S kept, combine      | X2-0 kept, combine | Kept, reading                    | Combine (points), reading                   |
+| -------------- | ----------------------- | ------------------ | -------------------------------- | ------------------------------------------- |
+| tomli          | 4, +16.3 %              | 6, +22.6 %         | −2, outside its twin gap (0)     | −6.3, outside its twin gap (3.9)            |
+| mistune        | 4, +18.1 %              | 6, +13.5 %         | −2, outside the fixed band       | +4.6, outside the fixed band (better)       |
+| sqlparse (E1)  | 11, +28.3 %             | 9, +39.8 %         | +2, inside its twin gap (2)      | −11.5, inside its twin gap (18.7)           |
+| sqlparse (E2)  | 3, +18.7 %              | 9, +39.8 %         | −6, outside its twin gap         | −21.1, outside its twin gap (18.7)          |
+| more_itertools | 0, none (no combine)    | 2, +7.8 %          | −2, outside the fixed band       | −7.8, outside the fixed band                |
+
+**O52's arm-level call**, X2-S against X2-0 over 4 libraries, with sqlparse as the mean of its two runs:
+
+- **Kept count:** X2-S keeps fewer, on 4 of 4 libraries.
+- **Combine:** the mean difference is −6.4 points against the twin's mean gap of 7.1, so it reads "within the twin's mean gap".
+
+**X2-S's own A/A pair** (sqlparse, E1 against E2):
+
+- combine gap 9.6 points, against X2-0's 18.7;
+- kept gap 8, against X2-0's 2.
+
+With one pair this is "consistent with" at most, and the two halves point opposite ways. The combine gap is smaller; the kept gap is much larger.
+
+**The pre-registered bars:**
+
+- **S1, records:**
+  - every trial row carries a record: 73 of 73. **Pass.**
+  - fired ideas keep at at least twice the not_fired rate, with at least 10 on each side: fired 12 of 36 kept (33 %), not_fired 0 of 11 (0 %). **Pass.**
+- **S2, records:**
+  - every undelivered keep names a reason and a blocker: 7 of 7. **Pass.**
+  - every conflict component delivered its max-sum subset: all of them. **Pass.**
+- **The no-harm bar, shared by the arm** (no library below X2-0 by more than its band): **fails** on tomli, more_itertools and sqlparse's E2 run.
+- **The kill** (a library below X2-0 beyond its band in both of its X2-S runs, which applies only to sqlparse): **not triggered.** E1 sits inside the band and E2 outside.
+
+**What can and cannot be attributed:**
+
+- S1's `record` mode changes no request and no verdict. Its fields came back on every row, and it sends the same requests as X2-0.
+- The harm is therefore S2's `on` delivery, or run-to-run variance in ideation, which is the path dependence the charter measures.
+- One run per library cannot tell them apart. The record does show that S2 always delivered the max-sum conflict-free subset of the confirmed gains. Yet the delivered tips combined lower than X2-0's on 3 of 4 libraries.
+
+**New facts for round 2:**
+
+- **Measure 5, idea to working diff, is now readable.** Of 73 trials:
+  - 36 fired (49 %);
+  - 8 were weak, 11 not_fired and 7 reversed;
+  - 11 were uncounted.
+  - The uncounted trials kept at 64 % (7 of 11). Keeps cluster where S1's counts cannot see, which is probably C-level or module-level work. That is a gap in the shim.
+- **Measure 8, path dependence:** X2-S's sqlparse twin gap is 9.6 points on combine and 8 on kept.
+
+**Points (O57's recompute):**
+
+- No proposal earns +10. Its live run had to beat its pre-registered bar, and the arm's no-harm bar failed.
+- S1's own record and premise bars passed, and S1 is behaviour-neutral by construction. Whether that earns S1's merged proposals the +10 is the owner's call.
+- Unless the owner rules otherwise, the points stand as in §9.
+
+**The Lead's recommendation:**
+
+- Keep `SITE_STACKS` at `record`, not `on`, until a matched X2-0 and X2-S pair on the same libraries separates S2's delivery from ideation variance.
+- Keep `IDEAS_COUNT_CONTRACT=record`. It is free and it made measure 5 readable.
