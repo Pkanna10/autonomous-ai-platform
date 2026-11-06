@@ -1260,6 +1260,10 @@ jobs:
           export ENGINE_MODEL="${INPUT_ENGINE_MODEL}"
           export LIVE_SUITE_CAP_USD="${INPUT_SUITE_CAP_USD}"
           export LIVE_CORPUS_MODE="${INPUT_MODE}"
+          # X2-zerocase: tests/live/conftest.py fails the session when no live
+          # case passed or failed in its body (all skipped or deselected), so a
+          # dispatch that runs nothing is red, not green with 0 USD spent
+          export LIVE_REQUIRE_CASES="${INPUT_SUITE}"
           : > "${LIVE_RESULTS_PATH}"
           echo "suite ${INPUT_SUITE}, mode ${LIVE_CORPUS_MODE}, ENGINE_MODEL ${ENGINE_MODEL}, EDITOR_MODEL ${EDITOR_MODEL:-default}, noise rule ${noise_rule}, LIVE_SUITE_CAP_USD ${LIVE_SUITE_CAP_USD}, idea pipeline ${INPUT_IDEA_PIPELINE-off}, portfolio rounds ${portfolio_rounds}, corpus select ${INPUT_CORPUS_SELECT-all}, ab arms ${ab_arms}"
           uv run pytest "${paths[@]}" -m live --no-cov -n 0 -rA

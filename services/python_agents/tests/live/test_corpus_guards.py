@@ -2245,6 +2245,25 @@ def test_the_x2_plan_is_the_x2_dispatch_inputs_description() -> None:
         assert repos in text and arm in text, dispatch
 
 
+@pytest.mark.parametrize(
+    ("suite", "cap", "x2_dispatch"),
+    [("stage-a", "9", None), ("ideas-x2", "38", X2_PLAN[0])],
+)
+def test_the_run_step_requires_cases_under_the_suite_name(
+    suite: str, cap: str, x2_dispatch: str | None, tmp_path: Path
+) -> None:
+    """X2-zerocase: the run step exports ``LIVE_REQUIRE_CASES`` as the suite
+    name, so tests/live/conftest.py fails a dispatch whose live cases all
+    skip; the name appears nowhere else in ci.yml (every other run is off)."""
+    code, output, _ = _dispatch(tmp_path, suite, "claude-opus-5-5", cap,
+                                x2_dispatch=x2_dispatch)  # fmt: skip
+    assert code == 0, output
+    lines = (tmp_path / "env.txt").read_text(encoding="utf-8").splitlines()
+    assert f"LIVE_REQUIRE_CASES={suite}" in lines
+    name, text = "LIVE_REQUIRE_CASES", CI_WORKFLOW.read_text(encoding="utf-8")
+    assert text.count(name) == _run_script().count(name)
+
+
 def test_x2_dispatch_is_required_strict_and_for_ideas_x2_only(tmp_path: Path) -> None:
     bad = (None, "", "X2-F:tomli", "X2-0", "X2-0:", "x2-0:tomli", "X2-0:Tomli",
            "X2-0;id:tomli", "X2-0:tomli;id", "X2-0:tomli,", "X2-0:a,b,c,d,e,f,g,h,i",

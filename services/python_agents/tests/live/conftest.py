@@ -22,6 +22,10 @@ and costs money, so three things hold before any of them spends a cent:
   ``RecordingTransport`` (every attempt priced exactly as ``call()`` charges
   it, with its worst-case estimate).
 
+With ``LIVE_REQUIRE_CASES`` set (the live job exports the suite's name), a
+session in which no live test passed or failed in its call phase ends
+non-zero with one ``::error::`` line: a dispatch that runs nothing is red.
+
 At the end of the session the ledger is written as a markdown cost table to
 ``$GITHUB_STEP_SUMMARY`` when it is set (printed otherwise): Stage B of the
 STATUS live API plan calibrates the worst-case estimate from it.
@@ -45,7 +49,7 @@ import os
 import re
 import shutil
 import sys
-from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Generator, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
@@ -759,6 +763,56 @@ def pytest_terminal_summary(
     ledger = config.stash.get(LEDGER_KEY, None)
     if ledger is not None and ledger.rows:
         write_cost_summary(ledger, os.environ, terminalreporter.write_line)
+    zero = config.stash.get(ZERO_CASES_KEY, None)
+    if zero is not None:
+        terminalreporter.write_line(zero, red=True)
+
+
+# The zero-case guard (X2-zerocase): the live job exports the suite's name as
+# LIVE_REQUIRE_CASES, and a session in which no live test passed or failed in
+# its call phase (every one skipped or deselected) then ends non-zero. Unset
+# or empty (every gate and Python CI run), nothing changes.
+REQUIRE_CASES_ENV: Final = "LIVE_REQUIRE_CASES"
+CASES_RUN_KEY: Final = pytest.StashKey[int]()
+ZERO_CASES_KEY: Final = pytest.StashKey[str]()
+
+
+class _CaseCounter:
+    """Counts the live cases that ran. A plugin object, not a conftest hook:
+    pytest calls runtest hooks through ``item.ihook``, which drops this
+    conftest for items outside tests/live (stage-a's test_editor.py case)."""
+
+    @pytest.hookimpl(wrapper=True)
+    def pytest_runtest_makereport(
+        self, item: pytest.Item, call: pytest.CallInfo[None]
+    ) -> Generator[None, pytest.TestReport, pytest.TestReport]:
+        report = yield
+        if (
+            report.when == "call"
+            and not report.skipped
+            and item.get_closest_marker("live")
+        ):
+            item.config.stash[CASES_RUN_KEY] = (
+                item.config.stash.get(CASES_RUN_KEY, 0) + 1
+            )
+        return report
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    if os.environ.get(REQUIRE_CASES_ENV):
+        config.pluginmanager.register(_CaseCounter(), "live-zerocase")
+
+
+def pytest_sessionfinish(session: pytest.Session) -> None:
+    suite = os.environ.get(REQUIRE_CASES_ENV, "")
+    if not suite or session.config.stash.get(CASES_RUN_KEY, 0):
+        return
+    name = re.sub(r"[^a-z0-9-]", "?", suite)  # never a second workflow command
+    session.config.stash[ZERO_CASES_KEY] = (
+        f"::error::live suite {name}: 0 cases ran; the dispatch selected nothing"
+    )
+    if session.exitstatus == pytest.ExitCode.OK:  # 5 (nothing collected) stays
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 # ---------------------------------------------------------------------------
