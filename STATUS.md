@@ -806,6 +806,21 @@ blocks it.
     - its own knowledge of public upstream fixes.
   - **Why:** V9 is O19's held-out exam and the charter's K4 rung, and a prior
     built from its keys would contaminate both.
+- **O56. X2's read, and the lab's next question (owner, 2026-11-06).**
+  - **X2's read:** accepted as reported (`x2/report/x2.md` at 33bcc8b).
+  - **Two additions to the X2 report:**
+    - per lane, kept divided by trialled, so S1's dominance reads as a hit rate
+      and not a volume;
+    - the twin-gap table listed under the charter's path-dependence measure.
+  - **X3:** not started from the X2 design.
+  - **The lab's next question:** selection and compounding with less path
+    dependence, the target of BND-2 and the Compounder proposals.
+    - Round 1 carries BND-2 inside PRM-2 ([90]): its reordering was withdrawn
+      after [85] showed the sqlparse twin gap forms in round 1 and at combine.
+    - The Compounder's role sits with TNX-2 (stacked steps) and TNX-3 (the
+      combine unit).
+  - **The window's remaining balance:** 33.37 USD, reserved for emergence round
+    1's dispatch plans.
 - **O55. Society rules for emergence round 2 onward (owner, 2026-11-06).** The
   rules are in full in the charter
   (`.claude/handoff/step3/idea-lab/emergence/charter.md`, "Society rules").
