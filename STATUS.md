@@ -3778,6 +3778,37 @@ worktree", 4.4.0) or in the builder rules every brief carries.
     - kept +1, -2, -2, so "keeps fewer, on 3 libraries";
     - combine differences +0.15, +0.03, -13.38, mean -4.40 against the twin's
       mean gap 3.29 (2.70, 3.94, 3.22), so "worse, on 3 libraries".
+- V-x2band (O51 as amended, in the X2 report; task 40).
+  - **A library with a twin** is read against its own twin gaps: tg on combine,
+    tk on kept.
+    - Combine: inside when |difference| <= tg.
+    - Kept: inside when |difference| <= tk; one beyond reads "not significant";
+      two or more beyond reads "outside".
+  - **A library without a twin** takes O51's fixed band: under 4 points of
+    combine and under 1 kept. Nothing X2-0 ran reads "unbanded" any more.
+  - **Arm-level calls:** unchanged (O52).
+  - **The twins' gaps:**
+
+    | Library          | tg (points) | tk (kept) |
+    | ---------------- | ----------: | --------: |
+    | pyparsing        |         2.7 |         0 |
+    | tomli            |         3.9 |         0 |
+    | sortedcontainers |         3.2 |         0 |
+    | sqlparse         |        18.7 |         2 |
+
+    The mean tg, O52's arm bar for combine, is 7.1 points.
+
+  - **On all eight dispatches, X2-V against X2-0:**
+    - kept: more on 2 libraries, fewer on 5, so "keeps fewer, on 8 libraries";
+    - combine: mean -0.5 against 7.1, so "within the twin's mean gap, on 8
+      libraries".
+  - **Review:** a Fable reviewer found 2 nits and no blockers.
+    - The outside kept labels do not carry tk; accepted as the builder's
+      deviation.
+    - A mypy error in `tests/e2e/conftest.py` came from a local cache and does
+      not reproduce in the gate.
+  - **Gate:** green on a8eda9b with the unit: ruff, format, mypy, bandit, pytest
+    3.13 and 3.11 with their timed passes (100 % coverage), prettier.
 
     Provisional until all eight libraries are in.
 
