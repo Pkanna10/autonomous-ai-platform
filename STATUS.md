@@ -101,13 +101,15 @@ history at `5ce95a4` (`git show 5ce95a4:.claude/handoff/step2/spec.md`).
   `uv run bandit -q -r src -c pyproject.toml`,
   `TEST_DATABASE_URL=postgresql://dev:devpass@localhost:5432/postgres uv run pytest -q`
   (coverage gate 90 %; 100 % line and branch with Postgres), and the suite on a
-  Python 3.11 venv with `-o addopts="-n auto --no-cov -m 'not live'"`. The
-  Lead's gate runs alone on a clean copy of the branch: it is the authority for
-  timing guards, which concurrent Builders' gates are not.
+  Python 3.11 venv with
+  `-o addopts="-n auto --no-cov -m 'not live and not timed'"` followed by
+  `-o addopts="-n 0 --no-cov -m 'timed and not live'"` (O49). The Lead's gate
+  runs alone on a clean copy of the branch: it is the authority for timing
+  guards, which concurrent Builders' gates are not.
 - **Never run live tests from a container**: always pass `-m "not live"` when
-  overriding `addopts`. Live suites run only in CI's `live-smoke` job. Cloud
-  containers set `ANTHROPIC_BASE_URL` for their own use; the engine follows only
-  `ENGINE_API_BASE_URL`.
+  overriding `addopts` (and `not timed` with `-n`, O49). Live suites run only in
+  CI's `live-smoke` job. Cloud containers set `ANTHROPIC_BASE_URL` for their own
+  use; the engine follows only `ENGINE_API_BASE_URL`.
 
 ---
 
@@ -793,6 +795,19 @@ blocks it.
     load before choosing: the group, and a serial run after the parallel suite
     (in the gate script, `pnpm stage-gate` and `ci.yml`). The timed cases are
     the `slow`-marked tests from line 608 on.
+- **O51. The CI timeout, V-cal's calls and X2's noise band (owner,
+  2026-11-06).**
+  - **CI:** the Python CI job's timeout rises from 15 to 20 minutes, for O49's
+    timed pass; O49 is committed when its gate passes.
+  - **V-cal:** both calls are confirmed: S23, on a library the marker never
+    ranked, is listed apart and not counted as a miss, and the unit's size is
+    accepted as harness code.
+  - **X2's noise band:** X2-V and the other arms are read against the A/A twin's
+    band. An arm-to-arm difference under about 4 points of combine gain, or
+    under 1 on the kept count, is noise. The X2 report says so before any arm is
+    called better. (The twin against X2-0 on pyparsing, tomli and
+    sortedcontainers: kept counts 1/6/2 both, combines +5.5/+22.6/+13.4 against
+    +2.8/+18.6/+10.2 %.)
 - **O50. X2's dispatch, an engine finding and two standing records (owner,
   2026-11-06).**
   - **X2:**
@@ -3617,7 +3632,15 @@ worktree", 4.4.0) or in the builder rules every brief carries.
 
   Each passes 3 of 3 alone. Neither change touched those files. This is the same
   family as the parcelindex timing case; the test stays as it is (never
-  weakened). Making these cases robust to load is a candidate unit.
+  weakened). O49 takes these cases out of the parallel pass: they carry the
+  `timed` marker and run once, alone, after it
+  (`-m "timed and not live" -n 0 --cov-append`) in CI, the stage gate and the
+  lab gate, so a failure there no longer comes from the suite's own load. Host
+  noise remains: under O49's measurements the quietest serial runs still came
+  within 0.7 points (sitebackup's decoy) and 1.9 (auditchain's small ceiling) of
+  the bars, so a local gate sharing the machine can still fail one.
+  `test_hard_corpus_guards.py` (textindex, eventagg) and `test_corpus_guards.py`
+  (parcelindex) hold the same family and could take the marker next.
 
 - G2 fix found by Va: `count_note` noted negative cuts, so every callers view
   under its limits said e.g. "-199 file(s) not scanned for callers"; it now

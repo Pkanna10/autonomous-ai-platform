@@ -606,6 +606,7 @@ def test_discovery_repo_suite_passes(repo: DiscoveryRepo, tmp_path: Path) -> Non
 
 
 @pytest.mark.slow
+@pytest.mark.timed  # CPU time: alone, after the parallel pass (O49)
 @pytest.mark.parametrize("repo", SLOWDOWNS, ids=_ids(SLOWDOWNS))
 def test_reference_fix_reaches_its_gain_and_the_textbook_falls_short(
     repo: DiscoveryRepo, tmp_path: Path
@@ -635,6 +636,7 @@ def test_reference_fix_reaches_its_gain_and_the_textbook_falls_short(
 
 
 @pytest.mark.slow
+@pytest.mark.timed  # CPU time: alone, after the parallel pass (O49)
 @pytest.mark.parametrize("repo", DECOYS, ids=_ids(DECOYS))
 def test_a_decoy_tempting_idea_gains_nothing(
     repo: DiscoveryRepo, tmp_path: Path
@@ -664,6 +666,7 @@ def _main_key(frames: Sequence[Frame], root: Path, repo: DiscoveryRepo) -> Key:
 
 
 @pytest.mark.slow
+@pytest.mark.timed  # CPU time: alone, after the parallel pass (O49)
 @pytest.mark.parametrize("repo", DEEP, ids=_ids(DEEP))
 def test_a_deep_cost_is_a_builtin_far_below_main(
     repo: DiscoveryRepo, tmp_path: Path
@@ -678,6 +681,7 @@ def test_a_deep_cost_is_a_builtin_far_below_main(
 
 
 @pytest.mark.slow
+@pytest.mark.timed  # CPU time: alone, after the parallel pass (O49)
 @pytest.mark.parametrize("repo", SPREAD, ids=_ids(SPREAD))
 def test_a_spread_cost_has_no_dominant_hotspot(
     repo: DiscoveryRepo, tmp_path: Path
@@ -692,6 +696,7 @@ def test_a_spread_cost_has_no_dominant_hotspot(
 
 
 @pytest.mark.slow
+@pytest.mark.timed  # CPU time: alone, after the parallel pass (O49)
 @pytest.mark.parametrize("repo", MISLEADING, ids=_ids(MISLEADING))
 def test_a_misleading_fix_sits_below_the_top_hotspots(
     repo: DiscoveryRepo, tmp_path: Path
@@ -709,6 +714,7 @@ def test_a_misleading_fix_sits_below_the_top_hotspots(
 
 
 @pytest.mark.slow
+@pytest.mark.timed  # CPU time: alone, after the parallel pass (O49)
 @pytest.mark.parametrize("repo", DECOYS, ids=_ids(DECOYS))
 def test_a_decoy_spends_its_time_outside_the_project(
     repo: DiscoveryRepo, tmp_path: Path

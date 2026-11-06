@@ -730,6 +730,9 @@ checked to be well-formed before dispatch, as Vd2's think line was.
   wins are compared across X2's arms, not against X1's.
 - **The Fable rule did not fire** (S20 kept at 1.83x its floor, S13
   rejected): no Fable lane.
+- **The noise band (O51):** on the twin's libraries, an arm-to-arm
+  difference under about 4 points of combine gain, or under 1 on the kept
+  count, is noise. The X2 report states this before calling any arm better.
 
 ### 9.7 The Fable rule (O48, fixed before the reader dispatch)
 

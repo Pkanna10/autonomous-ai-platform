@@ -66,7 +66,7 @@
     "python:lint": "cd services/python_agents && ruff check .",
     "python:format": "cd services/python_agents && black .",
     "python:typecheck": "cd services/python_agents && mypy .",
-    "python:test": "cd services/python_agents && pytest"
+    "python:test": "cd services/python_agents && pytest && pytest -m 'timed and not live' -n 0 --cov-append"
   },
   "packageManager": "pnpm@10.20.0",
   "devDependencies": {

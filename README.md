@@ -315,9 +315,10 @@ pnpm format:check         # Prettier
 # Python (from services/python_agents)
 uv run ruff check . && uv run ruff format --check .
 uv run mypy src tests
-uv run pytest             # -m "not live" by default; coverage >= 90% enforced
+uv run pytest             # -m "not live and not timed" by default, in parallel
+uv run pytest -m "timed and not live" -n 0 --cov-append  # then the timed guards
 uv run pytest tests/e2e --no-cov            # the E2E scenarios only
-uv run pytest -m "not live and not slow"    # everything except the E2E
+uv run pytest -m "not live and not slow and not timed"   # all but the E2E
 
 # Security
 pnpm security             # pnpm audit, OSV, Trivy, Docker scans
@@ -330,8 +331,15 @@ pnpm stage-gate:quick     # quality checks only
 
 ### Tests
 
-- **Default:** `pyproject.toml` adds `-m "not live"`, so a plain `pytest` never
-  calls the Claude API. A `-m` you pass replaces it: keep `not live` in it.
+- **Default:** `pyproject.toml` adds `-m "not live and not timed"` and
+  `-n auto`, so a plain `pytest` never calls the Claude API and runs in
+  parallel. A `-m` you pass replaces it: keep `not live` in it, and `not timed`
+  with `-n`.
+- **Timed guards** (`timed` marker, the discovery corpus's CPU-time guards) fail
+  under the parallel suite's own load, so they run once, alone, in a second
+  pass: `uv run pytest -m "timed and not live" -n 0 --cov-append`. Coverage, at
+  least 90 % enforced, combines both passes. CI and `pnpm stage-gate` do the
+  same.
 - **Database tests** (`postgres` marker) run against PostgreSQL 16 with pgvector
   at `TEST_DATABASE_URL` and skip when it is unset. The role must be allowed to
   create databases: each pytest worker creates its own database, applies
