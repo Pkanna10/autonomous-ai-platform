@@ -795,6 +795,59 @@ blocks it.
     load before choosing: the group, and a serial run after the parallel suite
     (in the gate script, `pnpm stage-gate` and `ci.yml`). The timed cases are
     the `slow`-marked tests from line 608 on.
+- **O53. V9 stays sealed; the substitute Expert-prior pack (owner,
+  2026-11-06).** Emergence round 1's Expert-prior agent never reads V9's sealed
+  maintainer fixes (`tests/fixtures/upstream_corpus/_keys` and `_notes`).
+  - **Its pack instead:**
+    - the development corpus's reference fixes
+      (`live_corpus_discovery/_solutions`);
+    - V9's manifest metadata only (touched functions, hints);
+    - the X1, X2 and picks keeps;
+    - its own knowledge of public upstream fixes.
+  - **Why:** V9 is O19's held-out exam and the charter's K4 rung, and a prior
+    built from its keys would contaminate both.
+- **O54. The charter: the engine and its improvement loop (owner, 2026-11-06).**
+  Recorded in full in `.claude/handoff/step3/idea-lab/emergence/charter.md`. The
+  owner's message numbered it O51, but that number already held the CI timeout
+  and X2's noise band, and the owner then named O53 for V9, so the charter is
+  O54.
+  - **Level 1, the engine:** a multi-agent, multi-framework
+    ideation-and-realisation engine.
+    - Lanes on different models, each with its own evidence and a thinking
+      framework with a forcing output, propose improvements.
+    - The realisation path implements, judges, compounds and ships them under
+      the frozen judges.
+    - "State of the art" is claimed only at a sealed rung (K2 unseen problems,
+      K3 held-out OSS, K4 V9, K5 SWE-Perf/GSO/SWE-fficiency), never from the
+      development set.
+  - **Level 2, the emergence round:** a society of agents applies the same
+    diverse thinking to the engine and builds what survives. A round produces
+    engine changes; the libraries are evidence.
+  - **The chain:** round N, then engine change units (tests first,
+    different-model review, gate, one commit each), then an engine run on the
+    development set read against the A/A twin, which becomes round N+1's facts
+    card.
+    - Nothing enters the engine without a build.
+    - Nothing counts without a measured run.
+    - Nothing is state of the art without a sealed rung.
+  - **Fixed:** the frozen judges, anticheat, protected paths, benchmarks, the
+    libraries' tests, the sealed sets and O28. The Lead is the only writer and
+    dispatcher, and live spend needs the owner's approval.
+  - **Measures every round, against the twin's band:**
+    - the share of ideas with a named cost model;
+    - the share of the physical gap that kept ideas close;
+    - wins per run and their size against the floor;
+    - the compounding curve;
+    - the idea-to-working-diff hit rate;
+    - cost per win;
+    - marker misses;
+    - the twin gap on combine, per library, as the path-dependence measure
+      (owner's addition, the same day: sqlparse's twin kept 9 against 7 and
+      combined +39.8 % against +21.1 % on identical settings).
+  - **Why:** without a sealed rung, a gain on the development set may be
+    overfitting, so rounds are judged only by measured engine runs. Building
+    first and measuring after keeps the society's debate from counting as
+    progress on its own.
 - **O52. Reading X2's arms (owner, 2026-11-06).** No single library decides.
   - **Per library, the kept count:**
     - a gap of 0 is inside the measured band (the twin's three pairs);
@@ -819,6 +872,15 @@ blocks it.
     called better. (The twin against X2-0 on pyparsing, tomli and
     sortedcontainers: kept counts 1/6/2 both, combines +5.5/+22.6/+13.4 against
     +2.8/+18.6/+10.2 %.)
+  - **Amended (owner, 2026-11-06, after d5):** each library is read against its
+    own twin gap where a twin exists.
+    - **Libraries with a twin:** a combine or kept-count difference counts only
+      beyond that library's twin gap. The gaps are pyparsing 2.7 points and 0
+      kept, tomli 4.0 and 0, sortedcontainers 3.2 and 0, sqlparse 18.7 and 2.
+    - **Libraries without a twin:** the fixed "about 4 points" still applies.
+    - **The arm-level call:** unchanged (O52).
+    - **The X2 report:** it reads the fixed band per library today (V-x2rep2),
+      so a small follow-up unit brings it in line before X2's final report.
 - **O50. X2's dispatch, an engine finding and two standing records (owner,
   2026-11-06).**
   - **X2:**
