@@ -1,6 +1,6 @@
 # X1 idea measures (spec-idea-lab 6.2)
 
-Sources (O44): more_itertools: X1-1's probe, idea and reply rows from x1-1-rerun.jsonl; every audit-based figure (share-new, self/cross, good counts, auditor-feasible) from ideas-reaudit-41772132719.jsonl; the rest from ideas-probe-x1-run1-41679255224.jsonl; pyparsing: X1-1's probe, idea and reply rows from x1-1-rerun.jsonl; every audit-based figure (share-new, self/cross, good counts, auditor-feasible) from ideas-reaudit-41772132719.jsonl; the rest from ideas-probe-x1-run1-41679255224.jsonl; tomli: X1-1's probe, idea and reply rows from x1-1-rerun.jsonl; every audit-based figure (share-new, self/cross, good counts, auditor-feasible) from ideas-reaudit-41772132719.jsonl; the rest from ideas-probe-x1-run1-41679255224.jsonl; sortedcontainers: X1-1's probe, idea and reply rows from x1-1-rerun.jsonl; every audit-based figure (share-new, self/cross, good counts, auditor-feasible) from ideas-reaudit-41772132719.jsonl; the rest from ideas-probe-x1-run1-41679255224.jsonl; mistune: ideas-probe-x1-run2a-41773968543.jsonl; sqlparse: ideas-probe-x1-run2a-41773968543.jsonl; markdown: ideas-probe-x1-run2a-41773968543.jsonl; idna: ideas-probe-x1-run2b-41780421911.jsonl
+Sources (O44): more_itertools: X1-1's probe, idea and reply rows from x1-1-rerun.jsonl; every audit-based figure (share-new, self/cross, good counts, auditor-feasible) from ideas-reaudit-41772132719.jsonl; the rest from ideas-probe-x1-run1-41679255224.jsonl; pyparsing: X1-1's probe, idea and reply rows from x1-1-rerun.jsonl; every audit-based figure (share-new, self/cross, good counts, auditor-feasible) from ideas-reaudit-41772132719.jsonl; the rest from ideas-probe-x1-run1-41679255224.jsonl; tomli: X1-1's probe, idea and reply rows from x1-1-rerun.jsonl; every audit-based figure (share-new, self/cross, good counts, auditor-feasible) from ideas-reaudit-41772132719.jsonl; the rest from ideas-probe-x1-run1-41679255224.jsonl; sortedcontainers: X1-1's probe, idea and reply rows from x1-1-rerun.jsonl; every audit-based figure (share-new, self/cross, good counts, auditor-feasible) from ideas-reaudit-41772132719.jsonl; the rest from ideas-probe-x1-run1-41679255224.jsonl; mistune: ideas-probe-x1-run2a-41773968543.jsonl; sqlparse: ideas-probe-x1-run2a-41773968543.jsonl; markdown: ideas-probe-x1-run2a-41773968543.jsonl; idna: ideas-probe-x1-run2b-41780421911.jsonl; the reader dispatch (O48): ideas-picks-42096064178.jsonl
 
 | dedupe (G4) | verdict |
 | --- | --- |
@@ -858,3 +858,19 @@ Each audit row's duplicate_of link counted once: self when its target is the sam
 | tomli | X1-2 | 3 | 3 | 1 |
 | tomli | X1-3 | 3 | 2 | 2 |
 | tomli | X1-4 | - | - | - |
+
+## Marker calibration (O50)
+
+Every kept trial (ideas-slice-trial and the reader dispatch's ideas-picks-trial, verdict keep) whose idea the validated marker (O37's choice) did not place in its top 3 for its library and configuration: ranked below 3 in the slice's ideas-slice-marker sets, or not shown. The rank is the slice's pick order recomputed from those rows: each idea takes the grade of the set that graded it (an Opus 5.5 idea Opus 5's, unvalidated, O39), ties to the shown order.
+
+| library | configuration | idea | lane | model | the marker's rank | grader | gain / floor | source |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| sqlparse | X1-1 | S20 resolve_tradeoff #3 | resolve_tradeoff | claude-fable-5 | 5 | opus-5-5 (validated) | 3.67% / 2.00% | ideas-picks-42096064178.jsonl |
+
+Kept and placed in the marker's top 3: 9 (the slice's own: 9 of its 9 keeps; the reader dispatch's: 0).
+
+Kept where the slice ranked no set for the library and configuration (never shown to the marker, so not a miss):
+
+| library | configuration | idea | lane | model | the marker's rank | grader | gain / floor | source |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| more_itertools | X1-1 | S23 obvious #4 | obvious | claude-sonnet-5-5 | no marker set | - | 3.16% / 2.29% | ideas-picks-42096064178.jsonl |
