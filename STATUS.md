@@ -806,6 +806,48 @@ blocks it.
     - its own knowledge of public upstream fixes.
   - **Why:** V9 is O19's held-out exam and the charter's K4 rung, and a prior
     built from its keys would contaminate both.
+- **O57. Emergence round 1's dispatches, points and round-2 seats (owner,
+  2026-11-06).**
+  - **E1 and E2:** approved.
+    - E1 is `X2-S:sqlparse,tomli,mistune`, cap 29, dispatched as run 42232651527
+      on b5af278.
+    - E2 is `X2-S:sqlparse,more_itertools`, cap 19. It goes only if E1 passes
+      O46's three conditions and the balance still covers its cap.
+  - **Points:** the round-1 points in `emergence/round-1.md` section 9 are
+    confirmed.
+    - Bounds first and Pre-mortem tie at the top. Both library files are
+      required reading, and both seats take the Fable budget.
+    - The points are recomputed after E1 and E2 add any +10s.
+  - **Round 2's seats:**
+    - Out: Contradiction, Analogy transfer and Shape specialisation.
+    - In: Scaling, Contrarian, and Memory & allocation.
+  - **Expert prior's defensive scanner:** not commissioned. It is in scope under
+    O28 but is not this lab's priority.
+    - It is parked in the seat's library file.
+    - A scope spec and a security review are required before any build.
+    - It is revisited after K2.
+  - **Merging the lab branch into the emergence branch:** after E1 is
+    dispatched, with the report's sections renumbered and a gate.
+  - **The verifier, from round 2:** it gets a longer limit or a split job. It
+    must not be completed by the Lead again, as round 1's was ([121]).
+  - **Why:** the +10 for a live win is the only outcome that tests a proposal
+    against the engine, so the points wait for E1 and E2. A verifier the Lead
+    completes is no longer independent of the Lead.
+- **O56. X2's read, and the lab's next question (owner, 2026-11-06).**
+  - **X2's read:** accepted as reported (`x2/report/x2.md` at 33bcc8b).
+  - **Two additions to the X2 report:**
+    - per lane, kept divided by trialled, so S1's dominance reads as a hit rate
+      and not a volume;
+    - the twin-gap table listed under the charter's path-dependence measure.
+  - **X3:** not started from the X2 design.
+  - **The lab's next question:** selection and compounding with less path
+    dependence, the target of BND-2 and the Compounder proposals.
+    - Round 1 carries BND-2 inside PRM-2 ([90]): its reordering was withdrawn
+      after [85] showed the sqlparse twin gap forms in round 1 and at combine.
+    - The Compounder's role sits with TNX-2 (stacked steps) and TNX-3 (the
+      combine unit).
+  - **The window's remaining balance:** 33.37 USD, reserved for emergence round
+    1's dispatch plans.
 - **O55. Society rules for emergence round 2 onward (owner, 2026-11-06).** The
   rules are in full in the charter
   (`.claude/handoff/step3/idea-lab/emergence/charter.md`, "Society rules").
@@ -2779,6 +2821,8 @@ builds it.
 | 2026-11-06 | 1      | [42165247794](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/42165247794)                                                                                                                                                                                         | X2 4 of 8 (X2-0)            | 7.21       | `ideas-x2`, `X2-0:sqlparse,more_itertools,mistune`, cap 29, on 47ce0fe, 62 min: all three runs ran both rounds with a held combine, the seeded call fired in round 2 of each (0.39-0.71), every hypothesis judged, nothing unaffordable; X2's first near-miss compound (sqlparse round 2), tried and kept. Per run: more_itertools 1.73 (12 trialled, 2 kept, combine +7.8 %), mistune 2.48 (15 trialled, 6 kept, combine +13.5 %), sqlparse 2.99 (16 trialled, 9 kept, combine +39.8 %). Balance after: 59.51 - 7.21 = 52.30. Archived at `.claude/handoff/step3/idea-lab/x2/ideas-x2-d4-42165247794.jsonl`.                                                                                                                                                                                                                                                                                                                                       |
 | 2026-11-06 | 1      | [42171711130](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/42171711130)                                                                                                                                                                                         | X2 5 of 8 (X2-0', A/A twin) | 2.77       | `ideas-x2`, `X2-0':sqlparse`, cap 10, on 3ff07a1, 20 min: the run ran both rounds with a held combine, the seeded call fired in round 2 (0.67), a compound tried (not kept), every hypothesis judged, nothing unaffordable. sqlparse 17 trialled, 7 kept, combine +21.1 %; X2-0 on sqlparse kept 9, combine +39.8 %: **a twin gap of 2 kept and 18.7 points**, far past the 2.7-3.9 points of the first three libraries. Balance after: 52.30 - 2.77 = 49.53. Archived at `.claude/handoff/step3/idea-lab/x2/ideas-x2-d5-42171711130.jsonl`.                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 2026-11-06 | 1      | [42175276141](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/42175276141)                                                                                                                                                                                         | X2 6 of 8 (X2-V)            | 6.87       | `ideas-x2`, `X2-V:sqlparse,more_itertools,mistune`, cap 29, on 294a9dc, 49 min: every run ran both rounds with a held combine, the seeded call fired once a run (0.47, 0.68, 0.75), every hypothesis judged, nothing unaffordable. Trialled / kept / combine: more_itertools 13 / 2 / +5.0 %, mistune 13 / 4 / +25.1 %, sqlparse 14 / 5 / +26.5 %; compounds kept on mistune and sqlparse (1 each). X2-0 on the same three (d4) kept 2 / 6 / 9 at +7.8 / +13.5 / +39.8 %. Balance after: 49.53 - 6.87 = 42.66. Archived at `.claude/handoff/step3/idea-lab/x2/ideas-x2-d6-42175276141.jsonl`.                                                                                                                                                                                                                                                                                                                                                       |
+| 2026-11-06 | 1      | [42181939377](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/42181939377)                                                                                                                                                                                         | X2 7 of 8 (X2-0)            | 4.52       | `ideas-x2`, `X2-0:markdown,idna`, cap 19, on ab974b8, 26 min: both runs ran both rounds with a held combine, the seeded call fired once a run (0.70, 0.48), every hypothesis judged, nothing unaffordable; one HTTP 520 on an idna request (no JSON error body) was retried and the run completed. Trialled / kept / combine: markdown 14 / 6 / +10.4 %, idna 12 / 3 / +13.5 %; no compounds tried. Balance after: 42.66 - 4.52 = 38.14. Archived at `.claude/handoff/step3/idea-lab/x2/ideas-x2-d7-42181939377.jsonl`.                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 2026-11-06 | 1      | [42186788761](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/42186788761)                                                                                                                                                                                         | X2 8 of 8 (X2-V)            | 4.77       | `ideas-x2`, `X2-V:markdown,idna`, cap 19, on 3ea45c3, 29 min: both runs ran both rounds with a held combine, the seeded call fired once a run (0.67, 0.57), every hypothesis judged, nothing unaffordable. Trialled / kept / combine: markdown 13 / 4 / +25.2 %, idna 13 / 6 / +12.1 %; no compounds tried. X2-0 on the same two (d7) kept 6 / 3 at +10.4 / +13.5 %. X2 is complete: 8 dispatches, 46.82 USD. Balance after: 38.14 - 4.77 = 33.37. Archived at `.claude/handoff/step3/idea-lab/x2/ideas-x2-d8-42186788761.jsonl`.                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 ### 2026-10-24 (Window 0 final experiments: what they decide)
 
@@ -3776,6 +3820,56 @@ worktree", 4.4.0) or in the builder rules every brief carries.
     - kept +1, -2, -2, so "keeps fewer, on 3 libraries";
     - combine differences +0.15, +0.03, -13.38, mean -4.40 against the twin's
       mean gap 3.29 (2.70, 3.94, 3.22), so "worse, on 3 libraries".
+- V-x2rep4 (O56, two additions to the X2 report).
+  - **Section 4b, hit rate by lane:** per arm, lane and model, kept over
+    trialled for round 1, round 2 and the total. A trialled hypothesis reached a
+    keep, inconclusive or reject verdict, counted once; compounds are their own
+    lane; 0 trialled reads n/a.
+  - **Section 6, the charter's path-dependence measure (O54):** the twin gap on
+    combine per library, from the same `twin_gaps` call section 1 uses.
+  - **On d1-d8, by total hit rate:**
+
+    | Lane      | X2-0              | X2-0'            | X2-V             |
+    | --------- | ----------------- | ---------------- | ---------------- |
+    | S1        | 20 of 49, 40.8 %  | 8 of 25, 32.0 %  | 13 of 48, 27.1 % |
+    | leap      | 3 of 5, 60.0 %    | 2 of 3, 66.7 %   | 3 of 9, 33.3 %   |
+    | all lanes | 35 of 102, 34.3 % | 16 of 53, 30.2 % | 27 of 99, 27.3 % |
+
+    S1's lead is mostly volume; its rate is near the arm's.
+
+  - **Review:** one docstring nit, fixed by the Lead.
+  - **Gate:** green on 57c92be with the unit.
+- V-x2band (O51 as amended, in the X2 report; task 40).
+  - **A library with a twin** is read against its own twin gaps: tg on combine,
+    tk on kept.
+    - Combine: inside when |difference| <= tg.
+    - Kept: inside when |difference| <= tk; one beyond reads "not significant";
+      two or more beyond reads "outside".
+  - **A library without a twin** takes O51's fixed band: under 4 points of
+    combine and under 1 kept. Nothing X2-0 ran reads "unbanded" any more.
+  - **Arm-level calls:** unchanged (O52).
+  - **The twins' gaps:**
+
+    | Library          | tg (points) | tk (kept) |
+    | ---------------- | ----------: | --------: |
+    | pyparsing        |         2.7 |         0 |
+    | tomli            |         3.9 |         0 |
+    | sortedcontainers |         3.2 |         0 |
+    | sqlparse         |        18.7 |         2 |
+
+    The mean tg, O52's arm bar for combine, is 7.1 points.
+
+  - **On all eight dispatches, X2-V against X2-0:**
+    - kept: more on 2 libraries, fewer on 5, so "keeps fewer, on 8 libraries";
+    - combine: mean -0.5 against 7.1, so "within the twin's mean gap, on 8
+      libraries".
+  - **Review:** a Fable reviewer found 2 nits and no blockers.
+    - The outside kept labels do not carry tk; accepted as the builder's
+      deviation.
+    - A mypy error in `tests/e2e/conftest.py` came from a local cache and does
+      not reproduce in the gate.
+  - **Gate:** green on a8eda9b with the unit: ruff, format, mypy, bandit, pytest
+    3.13 and 3.11 with their timed passes (100 % coverage), prettier.
 
     Provisional until all eight libraries are in.
 

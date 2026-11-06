@@ -9,15 +9,21 @@ kind skipped; a kind read is parsed strictly, its fields by name), and writes
 ``x2.md`` under ``--out`` (``REPORT_DIR`` by default).
 
 Before any comparison it says that X2 is read arm to arm only (O50), states
-O51's noise band and O52's reading rules and lists its sources. Then: the
-A/A band (X2-0 against its twin X2-0', per library), each arm and library's
-figures with totals over the libraries every arm has and over the arm's own,
-each arm against X2-0 with its band label, then O52's arm-level calls (a
+the noise band (O51 as amended: each library against its own twin gap where
+a twin exists, the fixed 4 points / 1 kept only without one) and O52's
+reading rules and lists its sources. Then: the A/A band (X2-0 against its
+twin X2-0', each twinned library's gaps), each arm and library's figures with
+totals over the libraries every arm has and over the arm's own, each arm
+against X2-0 with its band label, then O52's arm-level calls (a
 kept-count sign count, and the mean combine difference against the twin's
-mean gap), wins by lane and round, and round 2's seeds. A combine's
-gain counts only when it held: a run with no held combine delivers 0 in
-every difference and mean. Rounds after the second count as round 2's
-(X2 runs two). Refused, nothing written: a malformed row, an arm or library
+mean gap), wins by lane and round, each lane's hit rate (4b: kept over
+trialled, a trialled hypothesis being one that reached a keep, inconclusive
+or reject verdict in a round), round 2's seeds, and the charter's
+path-dependence measure (6, O54: section 1's twin gaps, by the same
+function). A combine's gain counts only when it held: a run with no held
+combine delivers 0 in every difference and mean. Rounds after the second
+count as round 2's (X2 runs two). Refused, nothing written: a malformed
+row, an arm or library
 X2 does not run, a run, round or hypothesis recorded twice, rounds or
 hypotheses with no run row, a run with no round or a gap in its rounds, and
 kept counts that disagree between a run, its rounds and its ideas.
@@ -37,6 +43,7 @@ from typing import Annotated, Final
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from autonomous_ai_agents.common.models import VerdictOutcome
 from autonomous_ai_agents.optimization.idea_types import (
     LENS_LANES,
     Lane,
@@ -51,17 +58,21 @@ from .ideas_x2 import EVERY_ARM, IDEA_EXPERIMENT, ROUND_EXPERIMENT, RUN_EXPERIME
 REPORT_DIR: Final = SERVICE_DIR.parents[1] / ".claude/handoff/step3/idea-lab/x2"
 ARMS: Final = tuple(a.key for a in EVERY_ARM)  # X2-0, X2-0', X2-V, X2-C
 BASE, TWIN = ARMS[0], ARMS[1]
-BAND_GAIN: Final = 4.0  # O51: points of combine gain
-BAND_KEPT: Final = 1.0  # O51: on the kept count
-WITHIN, OUTSIDE = "within the band (noise)", "outside the band"
-UNBANDED: Final = "no band (unbanded)"
-# O52, per library: a kept-count gap of 0, of 1, of 2 or more
+BAND_GAIN: Final = 4.0  # O51, a library without a twin: points of combine gain
+BAND_KEPT: Final = 1.0  # O51, a library without a twin: on the kept count
+FIXED: Final = ("within the fixed band (no twin)", "outside the fixed band (no twin)")
+UNBANDED: Final = "no band (unbanded)"  # O52's arm-level combine call with no twin
+# O52 as O51 amended: a kept-count difference within the library's twin gap,
+# one beyond it, two or more beyond it
 KEPT: Final = ("inside the measured band", "outside the measured band, not significant",
                "outside the measured band")  # fmt: skip
+Gaps = dict[str, tuple[float, int]]  # twinned library: (tg points, tk kept)
 GROUPS: Final = {Lane.leap.value: "leap", Lane.obvious.value: "S1 (obvious)",
                  **{lane.value: lane.value for lane in LENS_LANES}}  # fmt: skip
 COMPOUND: Final = "compound"
 ORDER: Final = (*GROUPS.values(), COMPOUND)
+TRIED: Final = frozenset(v.value for v in (VerdictOutcome.keep, VerdictOutcome.inconclusive,
+                                           VerdictOutcome.reject))  # fmt: skip
 Count = Annotated[int, Field(ge=0)]
 Usd = Annotated[float, Field(ge=0)]
 Key = tuple[str, str]  # (arm, library)
@@ -261,12 +272,21 @@ def gain_cell(run: Run) -> str:
     return f"{g:+.1f}%" + ("" if run.row.holds else " (did not hold)")
 
 
-def reading(diff: float, band: float, *, banded: bool) -> str:
-    return UNBANDED if not banded else WITHIN if abs(diff) < band else OUTSIDE
+def reading(diff: float, gap: float | None) -> str:  # O51 as amended, combine
+    if gap is None:  # no twin: the fixed band
+        return FIXED[abs(diff) >= BAND_GAIN]
+    if abs(diff) <= gap:
+        return f"inside its twin gap ({gap:.1f} points)"
+    return "outside its twin gap"
 
 
-def kept_reading(diff: int, *, banded: bool) -> str:  # O52, per library
-    return KEPT[min(abs(diff), 2)] if banded else UNBANDED
+def kept_reading(diff: int, gap: int | None) -> str:  # O52 as O51 amended
+    if gap is None:  # no twin: the fixed band
+        return FIXED[abs(diff) >= BAND_KEPT]
+    beyond = max(abs(diff) - gap, 0)
+    return (
+        f"{KEPT[0]} (its twin gap, {gap} kept)" if not beyond else KEPT[min(beyond, 2)]
+    )
 
 
 def kept_call(diffs: Sequence[int]) -> str:  # O52: a sign count, no library decides
@@ -288,31 +308,63 @@ def _on(n: int) -> str:
     return f"on {n} librar{'y' if n == 1 else 'ies'}"
 
 
+def twin_gaps(r: Report) -> Gaps:  # each twinned library's (tg, tk): sections 1, 6
+    gaps: Gaps = {}
+    for n in (n for n in r.libs(TWIN) if (BASE, n) in r.runs):
+        a, b = r.runs[BASE, n], r.runs[TWIN, n]
+        gaps[n] = abs(a.delivered - b.delivered), abs(a.row.kept - b.row.kept)
+    return gaps
+
+
 def twin_gap(r: Report) -> float | None:  # the twin's mean absolute combine gap
-    gaps = [abs(r.runs[BASE, n].delivered - r.runs[TWIN, n].delivered)
-            for n in r.libs(TWIN) if (BASE, n) in r.runs]  # fmt: skip
+    gaps = [tg for tg, _ in twin_gaps(r).values()]
     return math.fsum(gaps) / len(gaps) if gaps else None
 
 
-def _band(r: Report) -> tuple[list[str], frozenset[str]]:
-    libs = [n for n in r.libs(TWIN) if (BASE, n) in r.runs]
-    if not libs:
-        return ["No twin rows: every difference below is unbanded.", ""], frozenset()
-    body, kg, gg = [], 0, 0.0
-    for n in libs:
-        a, b = r.runs[BASE, n], r.runs[TWIN, n]
-        k, g = abs(a.row.kept - b.row.kept), abs(a.delivered - b.delivered)
-        kg, gg = max(kg, k), max(gg, g)
-        body.append(
-            [n, a.row.kept, b.row.kept, k, gain_cell(a), gain_cell(b), f"{g:.1f}"]
-        )
-    return [*_table(("library", f"{BASE} kept", f"{TWIN} kept", "kept gap", f"{BASE} combine",
-                     f"{TWIN} combine", "gain gap (points)"), body),
-            f"O51 fixed the band at under {BAND_GAIN:g} points of combine gain and under "
-            f"{BAND_KEPT:g} on the kept count; the twin measured a largest gap of "
-            f"{gg:.1f} points and {kg} on the kept count.", "",
-            f"The twin's mean gap over its {len(libs)} libraries is {twin_gap(r):.1f} "
-            "points of combine gain (O52's bar for an arm's combine).", ""], frozenset(libs)  # fmt: skip
+def hit_rate(kept: int, trialled: int) -> str:
+    return f"{100 * kept / trialled:.1f} %" if trialled else "n/a"
+
+
+def _hits(kept: tuple[int, int], tried: tuple[int, int]) -> list[object]:
+    """Round 1, round 2 and the total: kept, trialled, the hit rate."""
+    return [v for k, t in (*zip(kept, tried, strict=True), (sum(kept), sum(tried)))
+            for v in (k, t, hit_rate(k, t))]  # fmt: skip
+
+
+def _lane(i: IdeaLine) -> tuple[str, str, bool]:  # lane, model, round 1
+    return COMPOUND if i.compound else GROUPS[str(i.lane)], i.model or "-", i.round == 1
+
+
+def _path(r: Report, gaps: Gaps) -> list[str]:  # O54's measure, section 1's values
+    if not gaps:
+        return ["No twin rows: no path-dependence measure.", ""]
+    body = [[n, gain_cell(r.runs[BASE, n]), gain_cell(r.runs[TWIN, n]), f"{tg:.1f}",
+             r.runs[BASE, n].row.kept, r.runs[TWIN, n].row.kept, tk]
+            for n, (tg, tk) in gaps.items()]  # fmt: skip
+    many = "library" if len(gaps) == 1 else "libraries"
+    return [*_table(("library", f"{BASE} combine", f"{TWIN} combine", "tg (points)",
+                     f"{BASE} kept", f"{TWIN} kept", "tk (kept)"), body),
+            f"The mean tg over {len(gaps)} {many} is {twin_gap(r):.1f} points.", "",
+            "Identical settings, two runs: the gap measures how much the evolution "
+            "loop's early keeps shape the outcome (O54), read with only one A/A pair "
+            "per library.", ""]  # fmt: skip
+
+
+def _band(r: Report, gaps: Gaps) -> list[str]:
+    if not gaps:
+        return ["No twin rows: every library below takes the fixed band (O51 as "
+                "amended).", ""]  # fmt: skip
+    body = [[n, r.runs[BASE, n].row.kept, r.runs[TWIN, n].row.kept, tk,
+             gain_cell(r.runs[BASE, n]), gain_cell(r.runs[TWIN, n]), f"{tg:.1f}"]
+            for n, (tg, tk) in gaps.items()]  # fmt: skip
+    return [*_table(("library", f"{BASE} kept", f"{TWIN} kept", "kept gap (tk)", f"{BASE} combine",
+                     f"{TWIN} combine", "combine gap (tg, points)"), body),
+            "O51 as amended: each library with a twin is read against its own gaps above, "
+            "a combine difference counting only beyond its tg and a kept-count difference "
+            "only beyond its tk; only a library without a twin takes the fixed band of "
+            f"{BAND_GAIN:g} points of combine gain and {BAND_KEPT:g} on the kept count.", "",
+            f"The twin's mean gap over its {len(gaps)} libraries is {twin_gap(r):.1f} "
+            "points of combine gain (O52's bar for an arm's combine).", ""]  # fmt: skip
 
 
 def _sums(runs: Sequence[Run]) -> list[object]:
@@ -355,7 +407,7 @@ def _realised(r: Report) -> list[str]:  # S1, only where a row holds a record
         sums += [[arm, len(recs), sum(c.kept_not_fired for c, _ in recs),
                   sum(c.anchor_touched is False for c, _ in recs), sides + few]] if recs else []  # fmt: skip
     return [] if not rows else [
-        "## 6 Realisation (S1)", "",
+        "## 7 Realisation (S1)", "",
         "Each measured trial's engine label: how its anchor's counted work (its own "
         "calls and its frames' calls) moved; fired at a cut of 10 % or more, not_fired "
         "under 1 % either way. Counts are blind to per-unit speed, so this reads the "
@@ -393,7 +445,7 @@ def _combined(r: Report) -> list[str]:  # S2, only where a row holds a record
         top = math.fsum(c.gain_pct or 0.0 for g in hit for c in g if c.best_subset)
         parts.append([arm, lib, len(hit), same, f"{got:.1f}", f"{top:.1f}"])
     return [] if not runs else [
-        "## 7 Combine record (S2)", "",
+        "## 8 Combine record (S2)", "",
         "Each kept change at combine: delivered, or the reason it was not (its skip, "
         "or the combination's); hunk-identical keeps count once; eligible is part 3's "
         "record (the survivor left the blocked keep's counted unit made), no trial.", "",
@@ -410,7 +462,7 @@ def _combined(r: Report) -> list[str]:  # S2, only where a row holds a record
 
 
 def render(r: Report) -> str:
-    band, banded = _band(r)
+    banded = twin_gaps(r)  # each twinned library's (tg, tk), sections 1 and 6
     common = [n for n in E1_REPOS if all((a, n) in r.runs for a in r.arms)]
     each = [[a, n, x.trialled, x.row.kept, gain_cell(x),
              "-" if x.row.floor_pct is None else f"{x.row.floor_pct:.1f}%", flag(x.row.holds),
@@ -420,6 +472,7 @@ def render(r: Report) -> str:
     totals: list[list[object]] = []
     against: list[list[object]] = []
     lanes: list[list[object]] = []
+    rates: list[list[object]] = []
     seeds: list[list[object]] = []
     calls: list[list[object]] = []
     gap = twin_gap(r)
@@ -438,16 +491,22 @@ def render(r: Report) -> str:
             dk, dg = b.row.kept - a.row.kept, b.delivered - a.delivered
             dks.append(dk)
             dgs.append(dg)
-            against.append([arm, n, f"{dk:+d}", kept_reading(dk, banded=n in banded),
-                            f"{dg:+.1f}", reading(dg, BAND_GAIN, banded=n in banded)])  # fmt: skip
+            tg, tk = banded.get(n, (None, None))
+            against.append([arm, n, f"{dk:+d}", kept_reading(dk, tk), f"{dg:+.1f}",
+                            reading(dg, tg)])  # fmt: skip
         if both:
             mean, on = math.fsum(dgs) / len(dgs), _on(len(both))
             calls.append([arm, ", ".join(both), sum(d > 0 for d in dks),
                           sum(d < 0 for d in dks), dks.count(0), f"{kept_call(dks)}, {on}",
                           f"{mean:+.1f}", "none" if gap is None else f"{gap:.1f}, {_on(len(banded))}",
                           f"{mean_call(mean, gap)}, {on}"])  # fmt: skip
-        won = Counter((COMPOUND if i.compound else GROUPS[str(i.lane)], i.model or "-",
-                       i.round == 1) for x in own for i in x.ideas if i.verdict == "keep")  # fmt: skip
+        won = Counter(_lane(i) for x in own for i in x.ideas if i.verdict == "keep")
+        tried = Counter(_lane(i) for x in own for i in x.ideas
+                        if i.verdict in TRIED and i.round is not None)  # fmt: skip
+        for g, m in sorted({(g, m) for g, m, _ in tried},
+                           key=lambda k: (ORDER.index(k[0]), k[1])):  # fmt: skip
+            rates.append([arm, g, m, *_hits((won[g, m, True], won[g, m, False]),
+                                            (tried[g, m, True], tried[g, m, False]))])  # fmt: skip
         for g, m in sorted(
             {(g, m) for g, m, _ in won}, key=lambda k: (ORDER.index(k[0]), k[1])
         ):
@@ -455,6 +514,9 @@ def render(r: Report) -> str:
                           won[g, m, True] + won[g, m, False]])  # fmt: skip
         first = sum(v for k, v in won.items() if k[2])
         lanes.append([arm, "all lanes", "-", first, won.total() - first, won.total()])
+        one = sum(v for k, v in tried.items() if k[2])
+        rates.append([arm, "all lanes", "-",
+                      *_hits((first, won.total() - first), (one, tried.total() - one))])  # fmt: skip
         seeds += [*(_seeds(arm, n, [r.runs[arm, n]]) for n in r.libs(arm)),
                   _seeds(arm, "all (own libraries)", own)]  # fmt: skip
     return "\n".join([
@@ -463,14 +525,18 @@ def render(r: Report) -> str:
         "- **Arm to arm only.** X2 is read arm to arm only, not against X1 on wins: "
         "round 1 trials the whole idea result (O50), where X1's slice trialled the "
         "marker's top 3 and the engine's default is 3 a round.",
-        f"- **The noise band.** On the twin's libraries an arm-to-arm difference under "
-        f"about {BAND_GAIN:g} points of combine gain, or under {BAND_KEPT:g} on the kept "
-        "count, is noise (O51). A library with no twin run has no band: its "
-        "differences are unbanded.",
-        f"- **Reading the arms (O52).** Per library, a kept-count gap of 0 is inside "
-        "the measured band (the twin's), a gap of 1 is outside the measured band, not "
-        "significant, and a gap of 2 or more is outside the measured band; the combine "
-        f"label stays O51's. Per arm, against {BASE} over the libraries both ran: the "
+        "- **The noise band (O51 as amended).** Each library is read against its own "
+        f"twin gap where a twin exists: a difference from {BASE} counts only beyond "
+        f"that library's gap between {BASE} and {TWIN}, in points of combine gain and "
+        "on the kept count, and the gap itself is inside. Only a library without a "
+        f"twin takes O51's fixed band: there an arm-to-arm difference under about "
+        f"{BAND_GAIN:g} points of combine gain, or under {BAND_KEPT:g} on the kept "
+        "count, is noise (O51).",
+        "- **Reading the arms (O52).** Per library with a twin, a kept-count "
+        "difference within its twin gap is inside the measured band, one beyond it is "
+        "outside the measured band, not significant, and two or more beyond it are "
+        "outside the measured band (with a twin gap of 0, O52's gaps of 0, 1 and 2 or "
+        f"more). Per arm, against {BASE} over the libraries both ran: the "
         "kept count is a sign count, and the arm keeps more only if it keeps more on "
         "more libraries than it keeps fewer, keeps fewer only if it keeps fewer on more "
         "libraries than it keeps more, else no difference; the combine's mean "
@@ -481,7 +547,7 @@ def render(r: Report) -> str:
         "no held combine delivers 0 in every difference and mean.",
         "- **Sources:** each results file, its SHA-256 prefix and its dispatches.", "",
         *_table(("file", "sha256", "dispatches"), r.sources),
-        f"## 1 The A/A band ({BASE} against {TWIN})", "", *band,
+        f"## 1 The A/A band ({BASE} against {TWIN})", "", *_band(r, banded),
         "## 2 Each arm and library", "",
         *_table(("arm", "library", "trialled", "kept", "combine", "floor", "held",
                  "cost USD", "seeded calls", "seeded USD", "compounds tried",
@@ -505,9 +571,23 @@ def render(r: Report) -> str:
         "## 4 Wins by lane", "",
         "Each kept hypothesis once, under its lane and model; round 2 is the seeded call's.", "",
         *_table(("arm", "lane", "model", "round 1", "round 2 (seeded)", "total"), lanes),
+        "## 4b Hit rate by lane", "",
+        "The hit rate is kept / trialled, so a lane's volume and its rate read apart. "
+        "Trialled: each hypothesis of the lane, once, that reached a verdict (keep, "
+        "inconclusive or reject) in a round, from section 4's rows; compounds are their "
+        "own lane, and a lane with none trialled reads n/a.", "",
+        *_table(("arm", "lane", "model", "round 1 kept", "round 1 trialled",
+                 "round 1 hit rate", "round 2 kept", "round 2 trialled",
+                 "round 2 hit rate", "total kept", "total trialled", "total hit rate"),
+                rates),
         "## 5 Seeds (round 2)", "",
         *_table(("arm", "library", "trialled", "kept", "seeds shown", "seeded calls",
                  "seeded USD", "seeded USD per round-2 win"), seeds),
+        "## 6 Path dependence (the charter's measure, O54): the twin gap on combine, "
+        "per library", "",
+        f"Section 1's values, by the same function: {BASE} and {TWIN} combine and "
+        "their gap tg, kept and their gap tk.", "",
+        *_path(r, banded),
         *_realised(r),
         *_combined(r),
     ])  # fmt: skip

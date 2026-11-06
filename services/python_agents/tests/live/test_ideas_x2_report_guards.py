@@ -107,7 +107,9 @@ def test_the_header_reads_arm_to_arm_and_the_band_before_any_comparison() -> Non
     for said in ("arm to arm only", "not against X1 on wins",
                  "round 1 trials the whole idea result (O50)",
                  "under about 4 points of combine gain", "under 1 on the kept count",
-                 "is noise (O51)"):  # fmt: skip
+                 "is noise (O51)", "O51 as amended",
+                 "against its own twin gap where a twin exists",
+                 "Only a library without a twin takes O51's fixed band"):  # fmt: skip
         assert -1 < text.index(said) < first, said
     for name, dispatch in zip(REAL, ("X2-0", "X2-0'", "X2-V"), strict=True):
         assert f"| {name.name} |" in text[:first]
@@ -119,27 +121,38 @@ def test_the_twin_band_beside_o51s() -> None:
     assert "| pyparsing | 1 | 1 | 0 | +5.5% | +2.8% | 2.7 |" in text
     assert "| tomli | 6 | 6 | 0 | +22.6% | +18.6% | 3.9 |" in text
     assert "| sortedcontainers | 2 | 2 | 0 | +13.4% | +10.2% | 3.2 |" in text
-    assert ("O51 fixed the band at under 4 points of combine gain and under 1 on "
-            "the kept count; the twin measured a largest gap of 3.9 points and "
-            "0 on the kept count.") in text  # fmt: skip
+    band = text.split("## 1 ")[1].split("## 2 ")[0]
+    assert "| kept gap (tk) |" in band and "| combine gap (tg, points) |" in band
+    assert ("O51 as amended: each library with a twin is read against its own gaps "
+            "above, a combine difference counting only beyond its tg and a kept-count "
+            "difference only beyond its tk; only a library without a twin takes the "
+            "fixed band of 4 points of combine gain and 1 on the kept count.") in band  # fmt: skip
+    assert "O51 fixed the band" not in text
 
 
 def test_each_arm_against_x2_0_carries_its_band_label() -> None:
     text = _real()
-    within, outside = "within the band (noise)", "outside the band"
     one, out = "outside the measured band, not significant", "outside the measured band"
-    assert f"| X2-V | pyparsing | +1 | {one} | +0.2 | {within} |" in text
-    assert f"| X2-V | tomli | -2 | {out} | +0.0 | {within} |" in text
-    assert f"| X2-V | sortedcontainers | -2 | {out} | -13.4 | {outside} |" in text
+    assert (
+        f"| X2-V | pyparsing | +1 | {one} | +0.2 | inside its twin gap (2.7 points) |"
+        in text
+    )
+    assert (
+        f"| X2-V | tomli | -2 | {out} | +0.0 | inside its twin gap (3.9 points) |"
+        in text
+    )
+    assert (f"| X2-V | sortedcontainers | -2 | {out} | -13.4 | outside its twin gap |"
+            in text)  # fmt: skip
     assert "| X2-0' | pyparsing |" not in text.split("## 3 ")[1].split("## 4 ")[0]
 
 
 def test_the_header_states_o52s_rules_before_any_comparison() -> None:
     text = _real()
     first = text.index("## 1 ")
-    for said in ("a kept-count gap of 0 is inside the measured band",
-                 "a gap of 1 is outside the measured band, not significant",
-                 "a gap of 2 or more is outside the measured band",
+    for said in ("a kept-count difference within its twin gap is inside the measured band",
+                 "one beyond it is outside the measured band, not significant",
+                 "two or more beyond it are outside the measured band",
+                 "with a twin gap of 0, O52's gaps of 0, 1 and 2 or more",
                  "keeps more only if it keeps more on more libraries than it keeps fewer",
                  "keeps fewer only if it keeps fewer on more libraries than it keeps more",
                  "else no difference",
@@ -171,16 +184,28 @@ def test_the_real_files_call_x2_v_against_x2_0() -> None:
     )  # fmt: skip
 
 
+NOT_SIG, OUT_KEPT = (
+    "outside the measured band, not significant",
+    "outside the measured band",
+)
+FIXED_IN, FIXED_OUT = (
+    "within the fixed band (no twin)",
+    "outside the fixed band (no twin)",
+)
+
+
 @pytest.mark.parametrize(
-    ("diff", "banded", "label"),
-    [(0, True, "inside the measured band"),
-     (1, True, "outside the measured band, not significant"),
-     (-1, True, "outside the measured band, not significant"),
-     (2, True, "outside the measured band"), (-3, True, "outside the measured band"),
-     (0, False, "no band (unbanded)"), (2, False, "no band (unbanded)")],
+    ("diff", "gap", "label"),
+    [(0, 0, "inside the measured band (its twin gap, 0 kept)"),
+     (1, 0, NOT_SIG), (-1, 0, NOT_SIG), (2, 0, OUT_KEPT), (-3, 0, OUT_KEPT),
+     (3, 2, NOT_SIG), (-3, 2, NOT_SIG), (2, 2, "inside the measured band (its twin gap, 2 kept)"),
+     (-1, 2, "inside the measured band (its twin gap, 2 kept)"), (4, 2, OUT_KEPT),
+     (0, None, FIXED_IN), (1, None, FIXED_OUT), (-1, None, FIXED_OUT), (2, None, FIXED_OUT)],
 )  # fmt: skip
-def test_kept_reading(diff: int, banded: bool, label: str) -> None:
-    assert xr.kept_reading(diff, banded=banded) == label
+def test_kept_reading(diff: int, gap: int | None, label: str) -> None:
+    """O51 as amended: beyond the library's own kept gap tk (tk + 1 not
+    significant, O52's 1 when tk is 0); without a twin, under 1 is noise."""
+    assert xr.kept_reading(diff, gap) == label
 
 
 @pytest.mark.parametrize(
@@ -220,13 +245,11 @@ def test_an_arm_level_call_on_hand_made_rows(tmp_path: Path) -> None:
     text = _text(path)
     assert ("| X2-V | pyparsing, tomli, mistune | 2 | 1 | 0 | keeps more, on 3 libraries "
             "| +3.3 | 3.0, on 2 libraries | better, on 3 libraries |") in text  # fmt: skip
-    assert (
-        "| X2-V | mistune | -1 | no band (unbanded) | +3.0 | no band (unbanded) |"
-        in text
-    )
+    assert f"| X2-V | mistune | -1 | {FIXED_OUT} | +3.0 | {FIXED_IN} |" in text
     assert ("| X2-V | pyparsing | +2 | outside the measured band | +3.0 | "
-            "within the band (noise) |") in text  # fmt: skip
-    assert "| X2-V | tomli | +1 | outside the measured band, not significant |" in text
+            "inside its twin gap (4.0 points) |") in text  # fmt: skip
+    assert (f"| X2-V | tomli | +1 | {NOT_SIG} | +4.0 | outside its twin gap |"
+            in text)  # fmt: skip
 
 
 def test_an_arm_level_call_with_no_twin_is_unbanded(tmp_path: Path) -> None:
@@ -252,6 +275,128 @@ def test_wins_by_lane_and_round() -> None:
     lanes = text.split("## 4 ")[1].split("## 5 ")[0]
     assert lanes.index("| X2-0 | leap |") < lanes.index("| X2-0 | S1 (obvious) |")
     assert lanes.index("| X2-0 | S1 (obvious) |") < lanes.index("| X2-0 | name_the")
+
+
+@pytest.mark.parametrize(
+    ("kept", "trialled", "cell"),
+    [(1, 1, "100.0 %"), (3, 10, "30.0 %"), (1, 3, "33.3 %"), (0, 4, "0.0 %"),
+     (0, 0, "n/a")],
+)  # fmt: skip
+def test_hit_rate(kept: int, trialled: int, cell: str) -> None:
+    assert xr.hit_rate(kept, trialled) == cell
+
+
+def _section(text: str, head: str, end: str | None) -> str:
+    assert head in text, head
+    part = text.split(head)[1]
+    return part if end is None else part.split(end)[0]
+
+
+def test_hit_rate_per_lane_on_hand_made_rows(tmp_path: Path) -> None:
+    """The leap keeps 1 of 1 (round 1), S1 3 of 10 (2 of 6, then 1 of 4,
+    one of them a reject); a round-2 leap row with no verdict and a pooled
+    leap row are not trialled, so the leap's round 2 is n/a."""
+    run = _rows("X2-0", "mistune", [(7, ["leap", "obvious", "obvious"]),
+                                    (4, ["obvious"])])  # fmt: skip
+    run[5] = {**run[5], "verdict": "reject"}
+    head: Row = {"arm": "X2-0", "repo": "mistune", "experiment": x2.IDEA_EXPERIMENT,
+                 "compound": False, "lane": "leap", "model": OPUS}  # fmt: skip
+    run += [{**head, "round": 2, "hypothesis_id": "late", "verdict": "no_verdict"},
+            {**head, "round": None, "hypothesis_id": "pool", "verdict": "not_trialled"}]  # fmt: skip
+    text = _text(_write(tmp_path / "r.jsonl", run))
+    lanes = _section(text, "## 4 ", "## 4b ")
+    assert "| X2-0 | leap | claude-opus-5-5 | 1 | 0 | 1 |" in lanes  # as it was
+    assert "| X2-0 | S1 (obvious) | claude-sonnet-5-5 | 2 | 1 | 3 |" in lanes
+    rate = _section(text, "## 4b ", "## 5 ")
+    assert ("The hit rate is kept / trialled, so a lane's volume and its rate read "
+            "apart.") in rate  # fmt: skip
+    assert ("| X2-0 | leap | claude-opus-5-5 | 1 | 1 | 100.0 % | 0 | 0 | n/a | 1 | 1 "
+            "| 100.0 % |") in rate  # fmt: skip
+    assert ("| X2-0 | S1 (obvious) | claude-sonnet-5-5 | 2 | 6 | 33.3 % | 1 | 4 | "
+            "25.0 % | 3 | 10 | 30.0 % |") in rate  # fmt: skip
+    assert ("| X2-0 | all lanes | - | 3 | 7 | 42.9 % | 1 | 4 | 25.0 % | 4 | 11 | "
+            "36.4 % |") in rate  # fmt: skip
+    assert rate.index("| X2-0 | leap |") < rate.index("| X2-0 | S1 (obvious) |")
+
+
+def test_a_lane_trialled_but_never_kept_shows_its_rate(tmp_path: Path) -> None:
+    """A lane with trials and no keep is absent from section 4 (it counts
+    keeps) but present in 4b at 0.0 %; a compound is its own lane."""
+    run = _rows("X2-V", "idna", [(2, ["compound"]), (1, [])])
+    text = _text(_write(tmp_path / "r.jsonl", run))
+    assert "| X2-V | S1 (obvious) |" not in _section(text, "## 4 ", "## 4b ")
+    rate = _section(text, "## 4b ", "## 5 ")
+    assert ("| X2-V | S1 (obvious) | claude-sonnet-5-5 | 0 | 1 | 0.0 % | 0 | 1 | "
+            "0.0 % | 0 | 2 | 0.0 % |") in rate  # fmt: skip
+    assert ("| X2-V | compound | - | 1 | 1 | 100.0 % | 0 | 0 | n/a | 1 | 1 | 100.0 % |"
+            in rate)  # fmt: skip
+    assert rate.index("| X2-V | S1 (obvious) |") < rate.index("| X2-V | compound |")
+
+
+def _table_rows(part: str) -> dict[str, list[str]]:
+    rows = [line.strip("|").split(" | ") for line in part.splitlines()
+            if line.startswith("| ")]  # fmt: skip
+    return {r[0].strip(): [c.strip() for c in r[1:]] for r in rows}
+
+
+def test_the_path_dependence_measure_is_section_1s_values(tmp_path: Path) -> None:
+    """The same fixture as the per-library twin gaps: section 6's
+    numbers are section 1's, reordered (combines and tg, then kept and tk)."""
+    path = _write(tmp_path / "r.jsonl",
+                  _rows("X2-0", "sqlparse", [(9, ["leap"] * 7)], gain=21.1),
+                  _rows("X2-0'", "sqlparse", [(9, ["leap"] * 9)], gain=39.8),
+                  _rows("X2-0", "pyparsing", [(3, ["leap"])], gain=5.5),
+                  _rows("X2-0'", "pyparsing", [(3, ["leap"])], gain=2.8),
+                  _rows("X2-0", "mistune", [(3, ["leap"])], gain=4.0))  # fmt: skip
+    text = _text(path)
+    band = _table_rows(_section(text, "## 1 ", "## 2 "))
+    head = ("Path dependence (the charter's measure, O54): the twin gap on combine, "
+            "per library")  # fmt: skip
+    assert f"## 6 {head}" in text
+    six = _section(text, f"## 6 {head}", None)
+    measure = _table_rows(six)
+    for lib in ("sqlparse", "pyparsing"):
+        k0, k1, tk, c0, c1, tg = band[lib]
+        assert measure[lib] == [c0, c1, tg, k0, k1, tk], lib
+    assert "| sqlparse | +21.1% | +39.8% | 18.7 | 7 | 9 | 2 |" in six
+    assert "mistune" not in six
+    report = xr.load([path])
+    gap = xr.twin_gap(report)
+    assert gap is not None
+    assert f"The mean tg over 2 libraries is {gap:.1f} points." in six
+    assert "The mean tg over 2 libraries is 10.7 points." in six
+    assert ("Identical settings, two runs: the gap measures how much the evolution "
+            "loop's early keeps shape the outcome (O54), read with only one A/A pair "
+            "per library.") in six  # fmt: skip
+    gaps = xr.twin_gaps(report)
+    assert list(gaps) == ["pyparsing", "sqlparse"]  # X2's library order
+    assert gaps["sqlparse"][0] == pytest.approx(18.7)
+    assert gaps["pyparsing"][0] == pytest.approx(2.7)
+    assert (gaps["sqlparse"][1], gaps["pyparsing"][1]) == (2, 0)
+
+
+def test_the_path_dependence_measure_with_no_twin(tmp_path: Path) -> None:
+    path = _write(tmp_path / "r.jsonl", _rows("X2-0", "mistune", [(3, ["leap"])]))
+    six = _section(_text(path), "## 6 ", None)
+    assert "No twin rows: no path-dependence measure." in six
+    assert "The mean tg" not in six
+
+
+def test_the_real_files_path_dependence_and_hit_rates() -> None:
+    text = _real()
+    six = _section(text, "## 6 ", None)
+    assert "| pyparsing | +5.5% | +2.8% | 2.7 | 1 | 1 | 0 |" in six
+    assert "| tomli | +22.6% | +18.6% | 3.9 | 6 | 6 | 0 |" in six
+    assert "| sortedcontainers | +13.4% | +10.2% | 3.2 | 2 | 2 | 0 |" in six
+    assert "The mean tg over 3 libraries is 3.3 points." in six
+    rate = _section(text, "## 4b ", "## 5 ")
+    for row in ("| X2-0 | S1 (obvious) | claude-sonnet-5-5 | 1 | 7 | 14.3 % | 2 | 6 | "
+                "33.3 % | 3 | 13 | 23.1 % |",
+                "| X2-0 | all lanes | - | 6 | 17 | 35.3 % | 3 | 16 | 18.8 % | 9 | 33 | "
+                "27.3 % |",
+                "| X2-V | all lanes | - | 3 | 18 | 16.7 % | 3 | 15 | 20.0 % | 6 | 33 | "
+                "18.2 % |"):  # fmt: skip
+        assert row in rate, row  # counted from the rows apart from the report
 
 
 def test_seeds_and_totals() -> None:
@@ -284,25 +429,63 @@ def test_the_output_is_byte_identical_whatever_the_order(tmp_path: Path) -> None
 
 
 @pytest.mark.parametrize(
-    ("diff", "band", "banded", "label"),
-    [(3.99, 4.0, True, "within the band (noise)"), (-3.99, 4.0, True, "within the band (noise)"),
-     (4.0, 4.0, True, "outside the band"), (-4.0, 4.0, True, "outside the band"),
-     (0.0, 1.0, True, "within the band (noise)"), (1.0, 1.0, True, "outside the band"),
-     (0.0, 1.0, False, "no band (unbanded)")],
+    ("diff", "gap", "label"),
+    [(10.0, 18.7, "inside its twin gap (18.7 points)"),
+     (-18.7, 18.7, "inside its twin gap (18.7 points)"), (18.71, 18.7, "outside its twin gap"),
+     (3.0, 2.7, "outside its twin gap"), (-3.0, 2.7, "outside its twin gap"),
+     (2.7, 2.7, "inside its twin gap (2.7 points)"), (0.0, 0.0, "inside its twin gap (0.0 points)"),
+     (0.1, 0.0, "outside its twin gap"),
+     (3.9, None, FIXED_IN), (-3.99, None, FIXED_IN), (4.0, None, FIXED_OUT),
+     (-4.0, None, FIXED_OUT), (0.0, None, FIXED_IN)],
 )  # fmt: skip
-def test_reading(diff: float, band: float, banded: bool, label: str) -> None:
-    assert xr.reading(diff, band, banded=banded) == label
+def test_reading(diff: float, gap: float | None, label: str) -> None:
+    """O51 as amended: a combine difference counts only beyond the library's
+    own twin gap tg (the gap itself is inside); without a twin, under 4."""
+    assert xr.reading(diff, gap) == label
 
 
-def test_a_library_without_a_twin_is_unbanded(tmp_path: Path) -> None:
+def test_each_library_against_its_own_twin_gap(tmp_path: Path) -> None:
+    """sqlparse-like: twin gaps 18.7 points and 2 kept, so +10 points is
+    inside and +3 kept one beyond (not significant); pyparsing: 2.7 points and
+    0 kept, so +3 points is outside; tomli: gap 2 points, 1 kept, both met
+    exactly (inside); mistune, no twin: the fixed band. Arm calls as before."""
+    path = _write(tmp_path / "r.jsonl",
+                  _rows("X2-0", "sqlparse", [(9, ["leap"] * 7)], gain=21.1),
+                  _rows("X2-0'", "sqlparse", [(9, ["leap"] * 9)], gain=39.8),
+                  _rows("X2-V", "sqlparse", [(10, ["leap"] * 10)], gain=31.1),
+                  _rows("X2-0", "pyparsing", [(3, ["leap"])], gain=5.5),
+                  _rows("X2-0'", "pyparsing", [(3, ["leap"])], gain=2.8),
+                  _rows("X2-V", "pyparsing", [(3, ["leap"])], gain=8.5),
+                  _rows("X2-0", "tomli", [(3, ["leap"])], gain=10.0),
+                  _rows("X2-0'", "tomli", [(3, ["leap", "far"])], gain=8.0),
+                  _rows("X2-V", "tomli", [(3, [])], gain=12.0),
+                  _rows("X2-0", "mistune", [(3, ["leap"])], gain=4.0),
+                  _rows("X2-V", "mistune", [(3, ["leap"])], gain=7.9))  # fmt: skip
+    text = _text(path)
+    assert "| sqlparse | 7 | 9 | 2 | +21.1% | +39.8% | 18.7 |" in text
+    assert (f"| X2-V | sqlparse | +3 | {NOT_SIG} | +10.0 | "
+            "inside its twin gap (18.7 points) |") in text  # fmt: skip
+    assert ("| X2-V | pyparsing | +0 | inside the measured band (its twin gap, 0 kept) | "
+            "+3.0 | outside its twin gap |") in text  # fmt: skip
+    assert ("| X2-V | tomli | -1 | inside the measured band (its twin gap, 1 kept) | +2.0 | "
+            "inside its twin gap (2.0 points) |") in text  # fmt: skip
+    assert f"| X2-V | mistune | +0 | {FIXED_IN} | +3.9 | {FIXED_IN} |" in text
+    assert "unbanded" not in text.split("## 3 ")[1].split("Arm-level calls")[0]
+    assert ("| X2-V | pyparsing, tomli, mistune, sqlparse | 1 | 1 | 2 | no difference, "
+            "on 4 libraries | +4.7 | 7.8, on 3 libraries | within the twin's mean gap, "
+            "on 4 libraries |") in text  # fmt: skip
+
+
+def test_a_library_without_a_twin_takes_the_fixed_band(tmp_path: Path) -> None:
     path = _write(tmp_path / "r.jsonl",
                   _rows("X2-0", "mistune", [(3, ["leap"]), (2, [])], gain=4.0),
                   _rows("X2-V", "mistune", [(3, ["far", "leap"]), (2, ["compound"])],
                         gain=12.0))  # fmt: skip
     text = _text(path)
-    assert ("| X2-V | mistune | +2 | no band (unbanded) | +8.0 | no band (unbanded) |"
-            in text)  # fmt: skip
-    assert "No twin rows: every difference below is unbanded." in text
+    assert f"| X2-V | mistune | +2 | {FIXED_OUT} | +8.0 | {FIXED_OUT} |" in text
+    assert ("No twin rows: every library below takes the fixed band (O51 as "
+            "amended).") in text  # fmt: skip
+    assert "unbanded" not in text.split("## 3 ")[1].split("Arm-level calls")[0]
     assert "| X2-V | compound | - | 0 | 1 | 1 |" in text
     assert (
         "| X2-V | mistune | 5 | 3 | +12.0% | 2.0% | yes | 2.00 | 1 | 0.50 | 1 | 1 | 0.6667 |"
@@ -316,9 +499,7 @@ def test_a_combine_that_did_not_hold_delivers_nothing(tmp_path: Path) -> None:
                   _rows("X2-V", "idna", [(2, ["leap"]), (1, [])], gain=9.0, holds=False))  # fmt: skip
     text = _text(path)
     assert "| X2-V | idna | 3 | 1 | +9.0% (did not hold) | 2.0% | no |" in text
-    assert (
-        "| X2-V | idna | +0 | no band (unbanded) | -9.0 | no band (unbanded) |" in text
-    )
+    assert f"| X2-V | idna | +0 | {FIXED_IN} | -9.0 | {FIXED_OUT} |" in text
 
 
 # ---------------------------------------------------------------------------

@@ -190,7 +190,7 @@ def test_the_report_reads_the_realisation_labels_by_arm(tmp_path: Path) -> None:
     text = rg._text(rg._write(tmp_path / "x.jsonl", base, arm))
 
     assert "| X2-C | tomli | +1 |" in text
-    section = text[text.index("## 6 Realisation (S1)") :]
+    section = text[text.index("## 7 Realisation (S1)") :]
     assert "| X2-C | fired | 2 | 1 |" in section
     assert "| X2-C | not_fired | 1 | 1 |" in section
     assert "| X2-C | uncounted | 1 | 0 |" in section

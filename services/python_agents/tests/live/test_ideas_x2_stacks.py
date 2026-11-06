@@ -147,7 +147,7 @@ def test_the_report_reads_the_combine_record_by_run(tmp_path: Path) -> None:
 
     text = rg._text(rg._write(tmp_path / "x.jsonl", base, arm))
 
-    section = text[text.index("## 7 Combine record (S2)") :]
+    section = text[text.index("## 8 Combine record (S2)") :]
     assert "| X2-S | tomli | 4 | 3 | 4 | 1 | 3 | 1 | 1 |" in section
     assert "| X2-S | tomli | conflict | 1 |" in section
     assert "| X2-S | tomli | nothing left to apply | 1 |" in section
