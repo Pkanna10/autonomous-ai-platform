@@ -806,6 +806,33 @@ blocks it.
     - its own knowledge of public upstream fixes.
   - **Why:** V9 is O19's held-out exam and the charter's K4 rung, and a prior
     built from its keys would contaminate both.
+- **O57. Emergence round 1's dispatches, points and round-2 seats (owner,
+  2026-11-06).**
+  - **E1 and E2:** approved.
+    - E1 is `X2-S:sqlparse,tomli,mistune`, cap 29, dispatched as run 42232651527
+      on b5af278.
+    - E2 is `X2-S:sqlparse,more_itertools`, cap 19. It goes only if E1 passes
+      O46's three conditions and the balance still covers its cap.
+  - **Points:** the round-1 points in `emergence/round-1.md` section 9 are
+    confirmed.
+    - Bounds first and Pre-mortem tie at the top. Both library files are
+      required reading, and both seats take the Fable budget.
+    - The points are recomputed after E1 and E2 add any +10s.
+  - **Round 2's seats:**
+    - Out: Contradiction, Analogy transfer and Shape specialisation.
+    - In: Scaling, Contrarian, and Memory & allocation.
+  - **Expert prior's defensive scanner:** not commissioned. It is in scope under
+    O28 but is not this lab's priority.
+    - It is parked in the seat's library file.
+    - A scope spec and a security review are required before any build.
+    - It is revisited after K2.
+  - **Merging the lab branch into the emergence branch:** after E1 is
+    dispatched, with the report's sections renumbered and a gate.
+  - **The verifier, from round 2:** it gets a longer limit or a split job. It
+    must not be completed by the Lead again, as round 1's was ([121]).
+  - **Why:** the +10 for a live win is the only outcome that tests a proposal
+    against the engine, so the points wait for E1 and E2. A verifier the Lead
+    completes is no longer independent of the Lead.
 - **O56. X2's read, and the lab's next question (owner, 2026-11-06).**
   - **X2's read:** accepted as reported (`x2/report/x2.md` at 33bcc8b).
   - **Two additions to the X2 report:**
