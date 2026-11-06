@@ -2647,7 +2647,7 @@ builds it.
 | 2026-11-04 | 1      | [41803612871](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/41803612871)                                                                                                                                                                                         | X1 slice 2 of 2            | 3.26       | `ideas-slice`, tomli and sortedcontainers (the control), cap 75, on 77588d1, 29 min: all 8 (library, configuration) loops ran with their combine, 24 trials, 16 marker requests and both pooled tournaments with both rankers (12 set requests), no error. Cost: engine loops 2.54, markers 0.42, pooled tournament 0.30. Keeps: tomli X1-0 1 (the leap +9.9 %; combine +11.6 %, held), X1-1 1 (the leap +9.9 %; combine +10.2 %, held), X1-2 1 (the sequential leap +7.0 %; combine +7.3 %, held), X1-3 0; sortedcontainers none in any configuration (every pick an S1 idea, floors 5-16 %, the control). Balance after (O46): 85.31 - 3.26 = 82.05, at least the pool's 22 need. Archived at `.claude/handoff/step3/idea-lab/x1/ideas-slice-2-41803612871.jsonl`.                                                                                                                                                                                |
 | 2026-11-04 | 1      | [41808508958](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/41808508958)                                                                                                                                                                                         | X1 pooled ranking          | 0.59       | `ideas-pool`, more_itertools, mistune, markdown, idna, cap 22 (need 21.80), on d978811, 3.3 min: every library ranked by both Opus 5.5 (validated) and Opus 5 (unvalidated), 2 rounds and 3 requests each, 24 set requests, all sent and ordered, no error; every set row records its titles; more_itertools' validated ranking set its 1 Opus 5.5 idea apart. Balance after (O46): 82.05 - 0.59 = 81.46. The slice and the pool are done; X1's live work cost 62.14 USD in all (configurations 53.70, slices 7.84, pool 0.59). Archived at `.claude/handoff/step3/idea-lab/x1/ideas-pool-41808508958.jsonl`; the full report (53 files) beside it.                                                                                                                                                                                                                                                                                                 |
 | 2026-11-05 | 1      | [42096064178](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/42096064178)                                                                                                                                                                                         | reader dispatch (O48)      | 1.27       | `ideas-picks`, cap 8 (need 7.55), on c6ee63c, 15 min: all four loops ran (sqlparse S20, S04, S12; more_itertools S13, S23; mistune S07; tomli S09), every idea judged, no error. Verdicts (gain / floor): S20 keep 3.67 / 2.00, S23 keep 3.16 / 2.29, S04 inconclusive 1.37, S07 inconclusive 2.21, S12 inconclusive -0.59, S13 reject -5.81, S09 reject -8.44. Combines: sqlparse +4.29 % held, more_itertools +2.76 % held. **O48's rule does not fire:** S20 was kept at 1.83x its floor (under 2x) and S13 rejected, so the no-Fable call stands. Balance after: 81.46 - 1.27 = 80.19. Archived at `.claude/handoff/step3/idea-lab/x1/ideas-picks-42096064178.jsonl`.                                                                                                                                                                                                                                                                           |
-| 2026-11-06 | 1 | [42149964562](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/42149964562) | X2 1 of 8 (X2-0) | 6.45 | `ideas-x2`, `X2-0:pyparsing,tomli,sortedcontainers`, cap 29, on eed30d1, 36 min: all three runs ran both rounds with a held combine, the seeded call fired in round 2 of each (0.50-0.65), no compound (no qualifying pair), every hypothesis judged, nothing unaffordable. Per run: pyparsing 2.12 (9 trialled, 1 kept, combine +5.5 %), tomli 1.99 (12 trialled, 6 kept, combine +22.6 %), sortedcontainers 2.33 (12 trialled, 2 kept, combine +13.4 %). Balance after: 80.19 - 6.45 = 73.74. Archived at `.claude/handoff/step3/idea-lab/x2/ideas-x2-d1-42149964562.jsonl`. |
+| 2026-11-06 | 1      | [42149964562](https://github.com/Pkanna10/autonomous-ai-platform/actions/runs/42149964562)                                                                                                                                                                                         | X2 1 of 8 (X2-0)           | 6.45       | `ideas-x2`, `X2-0:pyparsing,tomli,sortedcontainers`, cap 29, on eed30d1, 36 min: all three runs ran both rounds with a held combine, the seeded call fired in round 2 of each (0.50-0.65), no compound (no qualifying pair), every hypothesis judged, nothing unaffordable. Per run: pyparsing 2.12 (9 trialled, 1 kept, combine +5.5 %), tomli 1.99 (12 trialled, 6 kept, combine +22.6 %), sortedcontainers 2.33 (12 trialled, 2 kept, combine +13.4 %). Balance after: 80.19 - 6.45 = 73.74. Archived at `.claude/handoff/step3/idea-lab/x2/ideas-x2-d1-42149964562.jsonl`.                                                                                                                                                                                                                                                                                                                                                                      |
 
 ### 2026-10-24 (Window 0 final experiments: what they decide)
 
@@ -3584,12 +3584,35 @@ worktree", 4.4.0) or in the builder rules every brief carries.
   - **The Lead's integration** merged its CI patch with V-picks' by hand (both
     edited the same enumerations).
   - **Size:** about 292 code lines against 220 (1.33x).
+- V-cal (O50: the standing marker-calibration measure).
+  - **The section:** a "Marker calibration" section in `measures.md` lists every
+    kept trial whose idea the validated marker (Opus 5.5) placed outside its top
+    3 for its library and configuration. It reads the slice's and the reader
+    dispatch's rows, and any later rows of those kinds.
+  - **The ranks:** recomputed from the recorded marker sets, each idea scored by
+    the one set that graded it. This reproduces all 47 recorded slice ranks and
+    graders, and the report is refused if a slice keep's rank differs.
+  - **On the real files:**
+    - one entry, S20 (sqlparse X1-1 resolve_tradeoff, Fable 5), ranked 5th, kept
+      at +3.67 % on a 2.00 % floor;
+    - 9 of the slice's 9 keeps were in the top 3 (asserted, so a future slice
+      keep outside it breaks loudly).
+  - **Ideas the marker never saw:** S23 (more_itertools, a library the slice's
+    marker never ranked) is listed in its own table, "no marker set", and not
+    counted as a miss. O50 counts ideas the marker ranked outside its top 3.
+  - **Size:** about 184 source lines against its row of 60 (3x), past the 1.5x
+    stop. The strict row models and their refusals make the S20 entry and the 9
+    of 9 count trustworthy. The reviewer's trim would reach about 2.6x and drop
+    the picks combine cross-check. Accepted as harness code, like V-rep3 and
+    V-picks.
 - **Known gate flake: the discovery corpus's wall-clock guards on Python 3.11.**
   Under the lab gate's full parallel load, one of
   `test_discovery_corpus_guards.py`'s timed cases failed in two gates out of
   four on 2026-11-04 and 2026-11-05, each time a different case:
   - auditchain's reference fix measured 3.7 % against its 5 % bar;
   - sitebackup's decoy measured 6.6 % against a 5 % ceiling.
+  - logarchive's decoy measured 9.4 % against a 5 % ceiling (2026-11-06, V-cal's
+    gate, while O49's builder measured under load on the same machine).
 
   Each passes 3 of 3 alone. Neither change touched those files. This is the same
   family as the parcelindex timing case; the test stays as it is (never

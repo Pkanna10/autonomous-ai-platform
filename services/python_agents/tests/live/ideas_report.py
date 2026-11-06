@@ -32,6 +32,12 @@ four libraries, the ``ideas-pool`` suite for the other four): one
 ``ideas-pool-set`` a set request (repo, marker, model, validated, round, set,
 of, ids, seed, shown, order, advanced, error) and one ``ideas-pool-result``
 a library and marker (members with their ids, apart, top, requests, rounds).
+O50's marker calibration, read only beside V-picks' reader dispatch (its
+``ideas-picks-trial`` and ``ideas-picks-combine`` rows, as
+``ideas_picks.PicksRecorder`` writes them): each kept trial's place in the
+ranking the slice's ``ideas-slice-marker`` rows record for its library and
+configuration (``marker_ranks``), joined by (repo, configuration, label,
+position).
 
 O40/O41 (owner, 2026-11-03): marker-feasible is pooled. Per library, every
 returned lens-lane idea of X1-0 to X1-3 forms one pool, ranked by a
@@ -147,6 +153,10 @@ VIEWS: Final = SERVICE_DIR / VIEWS_FIXTURE  # Va's views: the hot functions' spa
 GROUPS: Final = ("leap", "S1 (obvious)", "lens lanes")  # O47: a win's lane
 TRIAL_EXPERIMENT: Final = "ideas-slice-trial"
 COMBINE_EXPERIMENT: Final = "ideas-slice-combine"
+PICKS_TRIAL: Final = "ideas-picks-trial"  # V-picks' reader dispatch (O48)
+PICKS_COMBINE: Final = "ideas-picks-combine"
+SLICE_MARKER: Final = "ideas-slice-marker"  # read for O50's calibration only
+READER: Final = "reader"  # the reader dispatch's combine arm
 NOTE_PREFIXES: Final = ("Vc's ", "These rows are the raw list")
 CONFIGS: Final = tuple(a.key for a in X1_ARMS)  # A, then X1-0 to X1-4
 TODAY, BASELINE = "A", "X1-0"
@@ -286,6 +296,7 @@ class TrialLine(_Row):
     op_count: OpCount
     grader: str | None  # None: the fallback order, no marker
     grader_validated: bool | None
+    rank: int | None = None  # its place in the pick (V-cal checks the slice's)
 
     @model_validator(mode="after")
     def _graded(self) -> Self:
@@ -367,6 +378,38 @@ class DedupeLine(_Row):
     score: DedupeScore | None
 
 
+class PicksTrialLine(TrialLine):  # V-picks: no marker graded the reader's picks
+    sample: str
+
+
+class PicksCombineLine(_Row):
+    repo: str
+    arm: str
+    samples: tuple[str, ...]
+    kept: int
+
+
+class Shown(_Row):
+    label: str
+    position: int
+
+
+class SliceMarkerLine(_Row):  # ``SliceRecorder.marker``'s row
+    repo: str
+    arm: str
+    marker: str
+    validated: bool | None
+    shown: tuple[Shown, ...]
+    grades: tuple[bool, ...]  # which shown ideas take this set's score
+    scores: tuple[float, ...] | None
+
+    @model_validator(mode="after")
+    def _sized(self) -> Self:
+        if {len(self.grades), len(self.scores or self.grades)} != {len(self.shown)}:
+            raise ValueError("grades and scores are not one per shown idea")
+        return self
+
+
 _KINDS: Final[Mapping[str, type[_Row]]] = {
     IDEA_EXPERIMENT: IdeaLine, ROW_EXPERIMENT: ProbeLine, AUDIT_EXPERIMENT: AuditLine,
     PROPOSAL_EXPERIMENT: ProposalLine, TRIAL_EXPERIMENT: TrialLine,
@@ -377,7 +420,11 @@ _KINDS: Final[Mapping[str, type[_Row]]] = {
 _READ: Final[Mapping[str, type[_Row]]] = {
     **_KINDS,
     REAUDIT_EXPERIMENT: ReauditLine,
-}  # the re-audit: opted in
+    PICKS_TRIAL: PicksTrialLine,
+    PICKS_COMBINE: PicksCombineLine,
+    SLICE_MARKER: SliceMarkerLine,
+}  # the re-audit: opted in; O50's three, beside the reader dispatch only
+_CAL: Final = (PICKS_TRIAL, PICKS_COMBINE, SLICE_MARKER)
 
 
 def _parsed(paths: Iterable[Path], kinds: Iterable[str]) -> dict[str, list[_Row]]:
@@ -420,6 +467,10 @@ class Rows:
     pool_results: tuple[PoolResultLine, ...] = ()
     replies: tuple[ReplyLine, ...] = ()
     sources: tuple[tuple[str, str], ...] = ()  # (library, the files its figures use)
+    picks: tuple[PicksTrialLine, ...] = ()  # O50: the reader dispatch's trials
+    marker_sets: tuple[SliceMarkerLine, ...] = ()  # beside them only
+    kept: tuple[tuple[str, TrialLine], ...] = ()  # (file, a kept slice or picks trial)
+    picks_files: tuple[str, ...] = ()
 
 
 def _sha(path: Path) -> str:
@@ -548,7 +599,7 @@ def load_rows(
     if (rerun is None) != (reaudit is None):
         raise ValueError("the X1-1 re-run and its pooled re-audit go together "
                          "(--rerun and --reaudit, O44), never one alone")  # fmt: skip
-    files = {p: _parsed([p], _KINDS) for p in paths}
+    files = {p: _parsed([p], (*_KINDS, *_CAL)) for p in paths}
     for p, g in files.items():
         if held := _rerun_of(g):
             raise ValueError(f"{p.name}: holds the X1-1 re-run (arms A and X1-1 "
@@ -582,8 +633,25 @@ def load_rows(
     if len(scores) != 1:
         raise ValueError(f"no {DEDUPE_EXPERIMENT} row (Vc's dedupe validation)"
                          if not scores else f"{DEDUPE_EXPERIMENT} row twice")  # fmt: skip
+    picks = [(p.name, t) for p, g in files.items()
+             for t in _of(g, PICKS_TRIAL, PicksTrialLine)]  # fmt: skip
+    combined = [
+        c for g in files.values() for c in _of(g, PICKS_COMBINE, PicksCombineLine)
+    ]
+    named_picks = tuple(dict.fromkeys(p.name for p, g in files.items()
+                                      if g[PICKS_TRIAL] or g[PICKS_COMBINE]))  # fmt: skip
+    if named_picks:
+        rows = dataclasses.replace(
+            rows, picks=tuple(t for _, t in picks), picks_files=named_picks,
+            marker_sets=tuple(m for g in files.values()
+                              for m in _of(g, SLICE_MARKER, SliceMarkerLine)),
+            kept=(*((p.name, t) for p, g in files.items() for t in
+                    _of(g, TRIAL_EXPERIMENT, TrialLine) if t.verdict == "keep"),
+                  *((n, t) for n, t in picks if t.verdict == "keep")),
+        )  # fmt: skip
     keyed: Sequence[ProbeLine | IdeaLine | AuditLine | TrialLine | CombineLine]
-    for keyed in (rows.ideas, rows.probes, rows.audits, rows.trials, rows.combines):
+    for keyed in (rows.ideas, rows.probes, rows.audits, rows.trials, rows.combines,
+                  rows.picks):  # fmt: skip
         for r in keyed:
             if r.arm not in CONFIGS or r.repo not in E1_REPOS:
                 raise ValueError(f"{r.repo} {r.arm!r}: not an X1 arm on one of the "
@@ -599,6 +667,16 @@ def load_rows(
     pools = Counter((p.repo, p.marker) for p in rows.pool_results)
     if again := [k for k, n in pools.items() if n > 1]:
         raise ValueError(f"{RESULT_EXPERIMENT}: {' '.join(again[0])} twice")
+    by = _grouped(combined, lambda c: c.repo)
+    for repo in dict.fromkeys([*(t.repo for t in rows.picks), *by]):
+        mine, cs = [t for t in rows.picks if t.repo == repo], by.get(repo, [])
+        kept = sum(t.verdict == "keep" for t in mine)
+        if len(cs) != 1:
+            raise ValueError(f"{repo}: {len(cs)} {PICKS_COMBINE} rows for its "
+                             f"{PICKS_TRIAL} rows")  # fmt: skip
+        if (cs[0].arm, cs[0].samples, cs[0].kept) != (READER, tuple(t.sample for t in mine), kept):  # fmt: skip
+            raise ValueError(f"{repo}: its {PICKS_COMBINE} row does not match its "
+                             f"{PICKS_TRIAL} rows")  # fmt: skip
     return dataclasses.replace(rows, dedupe=scores[0].score)
 
 
@@ -837,6 +915,90 @@ class Win:  # O47: a kept slice trial, under the lane that produced it
 
 
 @dataclass(frozen=True)
+class Miss:  # O50: a kept trial the marker did not place in its top 3
+    repo: str
+    arm: str
+    label: str
+    position: int
+    lane: str
+    model: str
+    sample: str | None  # the reader dispatch's id; None: the slice's own
+    rank: int | None  # None: not shown (or no marker set)
+    grader: str | None
+    validated: bool | None
+    gain_pct: float | None
+    floor_pct: float | None
+    source: str
+
+
+@dataclass(frozen=True)
+class Calibration:
+    misses: tuple[Miss, ...]
+    unranked: tuple[Miss, ...]  # kept where the slice ranked no set
+    top: int  # kept trials the marker placed in its top 3
+    slice_top: int
+    slice_kept: int
+
+
+def marker_ranks(
+    sets: Sequence[SliceMarkerLine],
+) -> dict[tuple[str, int], tuple[int, SliceMarkerLine]]:
+    """``ideas_slice.picks``' order from one (library, configuration)'s
+    recorded requests: each shown idea takes the score of the one set that
+    grades it; ties and unanswered ideas fall to the shown (pool) order."""
+    where, shown = f"{sets[0].repo} {sets[0].arm}", sets[0].shown
+    keys = [(x.label, x.position) for x in shown]
+    if (len(set(keys)) != len(keys) or any(s.shown != shown for s in sets)
+            or len({s.marker for s in sets}) != len(sets)):  # fmt: skip
+        raise ValueError(f"{where}: ambiguous {SLICE_MARKER} sets (one a marker, "
+                         "each showing the same ideas once)")  # fmt: skip
+    scored: list[tuple[bool, float, int, SliceMarkerLine]] = []
+    for k, (label, n) in enumerate(keys):
+        by = [s for s in sets if s.grades[k]]
+        if len(by) != 1:
+            raise ValueError(f"{where} {label} #{n}: ambiguous, graded by {len(by)} "
+                             f"{SLICE_MARKER} sets")  # fmt: skip
+        v = None if by[0].scores is None else by[0].scores[k]
+        scored.append((v is None, -(v or 0.0), k, by[0]))
+    scored.sort(key=lambda t: t[:3])
+    return {keys[k]: (n, s) for n, (_, _, k, s) in enumerate(scored, 1)}
+
+
+def calibration(
+    rows: Rows, at: Mapping[tuple[str, str, str, int], IdeaLine]
+) -> Calibration:
+    """O50: each kept trial's place in its library and configuration's
+    ranking; a slice keep must sit where the slice's own pick put it."""
+    ranked = {k: marker_ranks(v) for k, v in
+              _grouped(rows.marker_sets, lambda s: (s.repo, s.arm)).items()}  # fmt: skip
+    misses: list[Miss] = []
+    unranked: list[Miss] = []
+    top: Counter[bool] = Counter()
+    for source, t in rows.kept:
+        sample = t.sample if isinstance(t, PicksTrialLine) else None
+        where = f"{t.repo} {t.arm} {t.label} #{t.position}"
+        got = ranked.get((t.repo, t.arm))
+        if got is None and sample is None:
+            raise ValueError(f"{where}: a slice keep with no {SLICE_MARKER} set")
+        rank, s = (got or {}).get((t.label, t.position), (None, None))
+        if sample is None and (
+            rank != t.rank or getattr(s, "marker", None) != t.grader
+        ):
+            raise ValueError(f"{where}: the {SLICE_MARKER} sets do not reproduce the "
+                             f"slice's pick (rank {t.rank} by {t.grader})")  # fmt: skip
+        if rank is not None and rank <= MARKER_TOP:
+            top[sample is None] += 1
+            continue
+        (misses if got is not None else unranked).append(Miss(
+            t.repo, t.arm, t.label, t.position, t.lane, at[_at(t)].model, sample, rank,
+            None if s is None else s.marker, None if s is None else s.validated,
+            t.gain_pct, t.floor_pct, source))  # fmt: skip
+    return Calibration(tuple(misses), tuple(unranked), top[True] + top[False],
+                       top[True], sum(not isinstance(t, PicksTrialLine)
+                                      for _, t in rows.kept))  # fmt: skip
+
+
+@dataclass(frozen=True)
 class Pool:
     marker: str
     model: str
@@ -918,6 +1080,7 @@ class Report:
     lens_costs: dict[str, LensCost]  # by model
     wins: tuple[Win, ...] = ()  # by group, then gain
     extents: tuple[int, int] = (0, 0)  # hotspots given a span, of those with no end
+    calibration: Calibration | None = None  # O50: beside the reader dispatch only
 
 
 def _order(i: IdeaLine) -> tuple[object, ...]:
@@ -1060,7 +1223,7 @@ def report_of(
             math.fsum(c.seeded_cost_usd for c in runs), wins, usd / wins if wins else None,
         )  # fmt: skip
     at = {(i.repo, i.arm, i.label, i.position): i for i in rows.ideas}
-    for t in rows.trials:  # the library file joins them by (label, position)
+    for t in (*rows.trials, *rows.picks):  # the library file joins by (label, position)
         where = f"{t.repo} {t.arm} {t.label} #{t.position}"
         if (i := at.get((t.repo, t.arm, t.label, t.position))) is None:
             raise ValueError(f"{where}: a trial with no ideas-idea row")
@@ -1100,6 +1263,7 @@ def report_of(
         repeats={label: repeats(rows.audits, label == HANDED_ON)
                  for label in (HANDED_ON, GENERATED)}, lens_costs=lens_costs,
         wins=tuple(won), extents=(sum(n for _, n in fixed.values()), open_ends),
+        calibration=calibration(rows, at) if rows.picks_files else None,
     )  # fmt: skip
 
 
@@ -1277,7 +1441,42 @@ def _marker_section(r: Report) -> list[str]:
 
 def _sources(r: Report) -> list[str]:
     found = "; ".join(f"{repo}: {files}" for repo, files in r.rows.sources)
-    return [f"Sources (O44): {found}", ""]
+    picks = "".join(f"; the reader dispatch (O48): {n}" for n in r.rows.picks_files)
+    return [f"Sources (O44): {found}{picks}", ""]
+
+
+def _calibration(c: Calibration | None) -> list[str]:
+    """O50's standing record: kept ideas the marker left out of its top 3."""
+    if c is None:
+        return []
+
+    def row(m: Miss, none: str) -> list[object]:
+        by = "-" if m.grader is None else f"{m.grader} (validated)" if m.validated else (
+            f"{m.grader} (unvalidated, O39; the validated marker never grades its "
+            "own model's ideas)")  # fmt: skip
+        return [m.repo, m.arm, f"{m.sample + ' ' if m.sample else ''}{m.label} "
+                f"#{m.position}", m.lane, m.model, none if m.rank is None else m.rank,
+                by, f"{_num(m.gain_pct)}% / {_num(m.floor_pct)}%", m.source]  # fmt: skip
+
+    head = ("library", "configuration", "idea", "lane", "model", "the marker's rank",
+            "grader", "gain / floor", "source")  # fmt: skip
+    return [
+        "## Marker calibration (O50)", "",
+        f"Every kept trial ({TRIAL_EXPERIMENT} and the reader dispatch's "
+        f"{PICKS_TRIAL}, verdict keep) whose idea the validated marker (O37's "
+        f"choice) did not place in its top {MARKER_TOP} for its library and "
+        f"configuration: ranked below {MARKER_TOP} in the slice's {SLICE_MARKER} "
+        "sets, or not shown. The rank is the slice's pick order recomputed from "
+        "those rows: each idea takes the grade of the set that graded it (an Opus "
+        "5.5 idea Opus 5's, unvalidated, O39), ties to the shown order.", "",
+        *_table(head, [row(m, "not shown") for m in c.misses]), "",
+        f"Kept and placed in the marker's top {MARKER_TOP}: {c.top} (the slice's "
+        f"own: {c.slice_top} of its {c.slice_kept} keeps; the reader dispatch's: "
+        f"{c.top - c.slice_top}).", "",
+        "Kept where the slice ranked no set for the library and configuration "
+        "(never shown to the marker, so not a miss):", "",
+        *_table(head, [row(m, "no marker set") for m in c.unranked]), "",
+    ]  # fmt: skip
 
 
 def _known(value: int | None) -> object:
@@ -1400,7 +1599,7 @@ def _measures_file(r: Report, show_raw: bool, verdict: str) -> str:
                  "seeded USD", "wins", "slice USD per win"), costs), "",
         *_wins(r),
         "## Marker-feasible ideas (6.2, O40, O41)", "", *_marker_section(r), "",
-        *_vrep_sections(r),
+        *_vrep_sections(r), *_calibration(r.calibration),
     ])  # fmt: skip
 
 

@@ -1787,3 +1787,210 @@ def test_the_real_measure_reads_its_ceilings() -> None:
     rows = [x for x in measures.splitlines() if x.startswith("| X1-0 | 51 |")]
     assert len(rows) == 1 and "| 18/37 |" in rows[0], rows  # was 0/0 known
     # (O48: 18 of the 37 known clear the 10-point bar; all 37 clear 0)
+
+
+# ---------------------------------------------------------------------------
+# V-cal (O50): the standing marker-calibration measure. Fakes: these rows for
+# V-picks' ideas-picks-trial and ideas-picks-combine rows (as
+# ``ideas_picks.PicksRecorder`` writes them) and for the slice's
+# ideas-slice-marker rows (``SliceRecorder.marker``'s); the real files below.
+# ---------------------------------------------------------------------------
+
+PICKS = X1_DIR / "ideas-picks-42096064178.jsonl"  # O48's reader dispatch
+
+
+def _mset(marker: str, grades: list[bool], scores: list[float] | None,
+          arm: str = "X1-0") -> Row:  # fmt: skip
+    """tomli X1-0's two marker requests: eliminate, obvious, far #1, leap."""
+    shown = [("eliminate", 1), ("obvious", 1), ("far", 1), ("leap", 1)]
+    return {"experiment": "ideas-slice-marker", "repo": "tomli", "arm": arm,
+            "marker": marker, "model": O55 if marker == "opus-5-5" else O5,
+            "shown": [{"label": x, "position": n} for x, n in shown],
+            "grades": grades, "validated": marker == "opus-5-5", "scores": scores,
+            "error": None, "cost_usd": 0.01, "counted": 900, "sent": True,
+            "chunks": []}  # fmt: skip
+
+
+MSETS: list[Row] = [  # eliminate 4, far 2, obvious 1 (k 1), leap 1 (k 3)
+    _mset("opus-5-5", [True, True, True, False], [4.0, 1.0, 2.0, 3.0]),
+    _mset("opus-5", [False, False, False, True], [4.0, 3.0, 2.0, 1.0]),
+]
+
+
+def _pick(sample: str, label: str, n: int, title: str, verdict: str = "keep",
+          repo: str = "tomli", rank: int = 1) -> Row:  # fmt: skip
+    return {**TRIALS[0], "experiment": "ideas-picks-trial", "sample": sample,
+            "reader": "would try", "repo": repo, "label": label, "lane": label,
+            "position": n, "title": title, "verdict": verdict, "gain_pct": 4.0,
+            "floor_pct": 2.0, "grader": None, "grader_validated": None,
+            "rank": rank, "selection": "the blind reader's would-try ideas (O48)"}  # fmt: skip
+
+
+PICK_ROWS: list[Row] = [
+    _pick("P1", "leap", 1, "Leap idea"),  # ranked 4th, by Opus 5 (O39)
+    _pick("P2", "far", 2, "Precompute keys", rank=2),  # not shown
+    _pick("P3", "far", 1, "Memoise tables", rank=3),  # ranked 2nd: top 3
+    _pick("P5", "obvious", 1, "Use a dict", "inconclusive", rank=4),  # not kept
+    _pick("P4", "eliminate", 1, "Fast | path", repo="idna"),  # no marker set
+]
+
+
+def _pcomb(repo: str, samples: list[str], kept: int) -> Row:
+    return {"experiment": "ideas-picks-combine", "repo": repo, "arm": "reader",
+            "samples": samples, "selection": "the blind reader's would-try ideas "
+            "(O48)", "eligible": len(samples), "picked": len(samples), "kept": kept,
+            "combined": False, "holds": None, "applied": 0, "fallback": False,
+            "gain_pct": None, "floor_pct": None, "delivered": False, "summary": [],
+            "cost_usd": 0.5, "guard": "ok", "seeded_calls": 0,
+            "seeded_cost_usd": 0.0}  # fmt: skip
+
+
+PCOMBS: list[Row] = [_pcomb("tomli", ["P1", "P2", "P3", "P5"], 3),
+                     _pcomb("idna", ["P4"], 1)]  # fmt: skip
+SIX: list[Row] = [_pcomb("tomli", ["P1", "P2", "P3", "P5", "P6"], 4), PCOMBS[1]]
+SLICE_KEEP: Row = {**TRIALS[0], "rank": 1}  # eliminate #1, the marker's first
+
+
+def _calibrated(**override: list[Row]) -> list[Row]:
+    kinds: dict[str, list[Row]] = {"trials": [SLICE_KEEP, TRIALS[1]], "sets": MSETS,
+                                   "picks": PICK_ROWS, "pcombs": PCOMBS}  # fmt: skip
+    kinds.update(override)
+    trials = kinds.pop("trials")
+    return _x1(trials=trials, other=[LEAP, *(r for v in kinds.values() for r in v)])
+
+
+def test_the_picks_kinds_are_the_reader_dispatchs() -> None:
+    from . import ideas_picks as pk
+
+    assert (ir.PICKS_TRIAL, ir.PICKS_COMBINE) == (
+        pk.TRIAL_EXPERIMENT, pk.COMBINE_EXPERIMENT)  # fmt: skip
+    assert ir.SLICE_MARKER == sl.MARKER_EXPERIMENT
+    assert ir.MARKER_TOP == sl.TOP == 3
+    assert ir.SLICE_MARKER not in ir._KINDS  # O40's within-set count stays gone
+
+
+def test_the_kept_ideas_the_marker_left_out_of_its_top_3(tmp_path: Path) -> None:
+    cal = _report(tmp_path, _calibrated()).calibration
+    assert cal is not None
+    assert [(m.sample, m.label, m.position, m.rank, m.grader, m.validated)
+            for m in cal.misses] == [("P1", "leap", 1, 4, "opus-5", False),
+                                     ("P2", "far", 2, None, None, None)]  # fmt: skip
+    assert (cal.top, cal.slice_top, cal.slice_kept) == (2, 1, 1)
+    assert [(m.repo, m.sample, m.rank) for m in cal.unranked] == [("idna", "P4", None)]
+    leap = cal.misses[0]
+    assert (leap.model, leap.lane, leap.source) == (O55, "leap", "x1.jsonl")
+    text = ir.render(_report(tmp_path, _calibrated()))["measures.md"]
+    section = text[text.index("## Marker calibration (O50)") :]
+    assert (
+        f"| tomli | X1-0 | P1 leap #1 | leap | {O55} | 4 | opus-5 (unvalidated, "
+        "O39; the validated marker never grades its own model's ideas) | "
+        "4.00% / 2.00% | x1.jsonl |"
+    ) in section
+    assert (
+        "| tomli | X1-0 | P2 far #2 | far | claude-sonnet-5-5 | not shown | - "
+        "| 4.00% / 2.00% | x1.jsonl |"
+    ) in section
+    assert (
+        "Kept and placed in the marker's top 3: 2 (the slice's own: 1 of its 1 "
+        "keeps; the reader dispatch's: 1)."
+    ) in section
+    assert (
+        "| idna | X1-0 | P4 eliminate #1 | eliminate | claude-sonnet-5-5 | "
+        "no marker set | - | 4.00% / 2.00% | x1.jsonl |"
+    ) in section
+    assert text.index("## Marker-feasible") < text.index("## Marker calibration")
+
+
+def test_without_the_reader_dispatch_there_is_no_calibration(tmp_path: Path) -> None:
+    report = _report(tmp_path, _calibrated(picks=[], pcombs=[]))
+    assert report.calibration is None and report.rows.picks_files == ()
+    assert "Marker calibration" not in ir.render(report)["measures.md"]
+
+
+def _graded_twice() -> list[Row]:
+    return [MSETS[0], {**MSETS[1], "grades": [True, False, False, True]}]
+
+
+def _reshown() -> list[Row]:
+    return [MSETS[0], {**MSETS[1], "shown": list(reversed(
+        cast(list[Row], MSETS[1]["shown"])))}]  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("override", "match"),
+    [
+        ({"sets": [MSETS[0], MSETS[0], MSETS[1]]},
+         "tomli X1-0: ambiguous ideas-slice-marker sets"),
+        ({"sets": _reshown()}, "tomli X1-0: ambiguous ideas-slice-marker sets"),
+        ({"sets": _graded_twice()},
+         "tomli X1-0 eliminate #1: ambiguous, graded by 2 ideas-slice-marker sets"),
+        ({"trials": [{**SLICE_KEEP, "rank": 2}, TRIALS[1]]},
+         "tomli X1-0 eliminate #1: the ideas-slice-marker sets do not reproduce "
+         "the slice's pick \\(rank 2 by opus-5-5\\)"),
+        ({"trials": [{**SLICE_KEEP, "label": "far", "lane": "far", "position": 2,
+                      "title": "Precompute keys"}, TRIALS[1]]},
+         "tomli X1-0 far #2: the ideas-slice-marker sets do not reproduce"),
+        ({"sets": [_mset("opus-5-5", [True] * 4, None, "X1-2")]},
+         "tomli X1-0 eliminate #1: a slice keep with no ideas-slice-marker set"),
+        ({"pcombs": [_pcomb("tomli", ["P1", "P2", "P3", "P5"], 2), PCOMBS[1]]},
+         "tomli: its ideas-picks-combine row does not match its ideas-picks-trial"),
+        ({"pcombs": [PCOMBS[0]]},
+         "idna: 0 ideas-picks-combine rows for its ideas-picks-trial rows"),
+        ({"pcombs": [*PCOMBS, {**PCOMBS[1], "repo": "tomli"}]},
+         "tomli: 2 ideas-picks-combine rows"),
+        ({"picks": [*PICK_ROWS, {**_pick("P6", "far", 1, "Memoise tables"),
+                                 "arm": "B"}], "pcombs": SIX},
+         "tomli 'B': not an X1 arm"),
+        ({"picks": [_pick("P1", "leap", 1, "Another idea"), *PICK_ROWS[1:]]},
+         "tomli X1-0 leap #1: the trial's 'Another idea' is not the idea there"),
+        ({"picks": [*PICK_ROWS, _pick("P6", "far", 9, "Lost")], "pcombs": SIX},
+         "tomli X1-0 far #9: a trial with no ideas-idea row"),
+    ],
+)  # fmt: skip
+def test_an_ambiguous_or_missing_join_is_refused(
+    tmp_path: Path, override: dict[str, list[Row]], match: str
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        _report(tmp_path, _calibrated(**override))
+
+
+def test_the_real_calibration_s20_first_and_the_slices_keeps_in_its_top_3() -> None:
+    """O50's first entry: S20 (sqlparse X1-1 resolve_tradeoff, Fable 5), the
+    validated marker's 5th, kept at +3.67 % on a 2.00 % floor. The slice
+    trialled only the marker's top 3, so each of its 9 keeps is in it: a slice
+    row that is not would break this count loudly."""
+    report = ir.report_of([*FULL, PICKS], ir.E1_DIR, **TODAY_RERUN)
+    cal = report.calibration
+    assert cal is not None and cal.misses
+    s20 = cal.misses[0]
+    assert (s20.sample, s20.repo, s20.arm, s20.label, s20.position, s20.lane,
+            s20.model, s20.rank, s20.grader, s20.validated, s20.source) == (
+        "S20", "sqlparse", "X1-1", "resolve_tradeoff", 3, "resolve_tradeoff",
+        FABLE_5, 5, "opus-5-5", True, PICKS.name)  # fmt: skip
+    assert (f"{s20.gain_pct:.2f}", f"{s20.floor_pct:.2f}") == ("3.67", "2.00")
+    assert len(cal.misses) == 1  # S23's library had no marker set: never ranked
+    assert (cal.slice_top, cal.slice_kept, cal.top) == (9, 9, 9)
+    assert [(m.sample, m.repo, m.arm) for m in cal.unranked] == [
+        ("S23", "more_itertools", "X1-1")]  # fmt: skip
+    measures = ir.render(report)["measures.md"]
+    assert (f"| sqlparse | X1-1 | S20 resolve_tradeoff #3 | resolve_tradeoff | "
+            f"{FABLE_5} | 5 | opus-5-5 (validated) | 3.67% / 2.00% | "
+            f"{PICKS.name} |") in measures  # fmt: skip
+
+
+def test_the_picks_file_changes_only_the_new_section_and_the_sources_line() -> None:
+    before = ir.render(ir.report_of(FULL, ir.E1_DIR, **TODAY_RERUN))
+    after = ir.render(ir.report_of([*FULL, PICKS], ir.E1_DIR, **TODAY_RERUN))
+    assert before.keys() == after.keys() and len(after) == 53
+    named = f"; the reader dispatch (O48): {PICKS.name}"
+    for name in sorted(after):
+        old, new = before[name], after[name]
+        if name == "measures.md":
+            cut = new.index("\n## Marker calibration (O50)")
+            assert new[cut:].count("\n## ") == 1  # the section ends the file
+            new = new[:cut]
+        old_lines, new_lines = old.split("\n"), new.split("\n")
+        assert len(old_lines) == len(new_lines), name
+        for x, y in zip(old_lines, new_lines, strict=True):
+            assert x == y or (x.startswith("Sources (O44): ") and y == x + named), y
+    assert named in after["measures.md"] and named in after["tables.md"]
