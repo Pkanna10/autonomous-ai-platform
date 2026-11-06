@@ -793,6 +793,37 @@ blocks it.
     load before choosing: the group, and a serial run after the parallel suite
     (in the gate script, `pnpm stage-gate` and `ci.yml`). The timed cases are
     the `slow`-marked tests from line 608 on.
+- **O50. X2's dispatch, an engine finding and two standing records (owner,
+  2026-11-06).**
+  - **X2:**
+    - Seeds live (`WHOLE_POOL`: round 1 trials the whole idea result, so round 2
+      is the seeded call).
+    - At most 3 runs a dispatch; X2-F moves to Window 2.
+    - Dispatched when ready, each run link sent, with O46's three conditions
+      between dispatches.
+    - One arm a dispatch makes 8 dispatches of 20 runs (X2-0 3+3+2, X2-0' 3+1,
+      X2-V 3+3+2), interleaved by library group: pyparsing, tomli and
+      sortedcontainers first, each arm in turn; then sqlparse, more_itertools
+      and mistune; then markdown and idna.
+  - **The finding about the engine, not only X2: round seeds have never fired in
+    production.**
+    - The generator is called again only on an empty pool (`nodes.py`). A call
+      returns about 6 ideas against 3 trials a round, so round 2 always drew
+      from the pool and never sent the seeded call. D64's seeded-call column
+      read 0 in X1 for this reason.
+    - After X2, decide between firing the seeded call at a round boundary
+      whenever seeds exist, or trialling the whole first result (X2's
+      `WHOLE_POOL`).
+    - Until then, X2 is compared arm to arm only, not to X1 on wins (its rounds
+      trial more ideas than X1's slice), and the X2 report says so.
+  - **A standing marker-calibration measure:** kept ideas the marker ranked
+    outside its top 3, kept across rounds. The first entry is S20 (sqlparse X1-1
+    resolve_tradeoff on Fable 5): left out of the marker's top 3, kept at +3.67
+    % on a 2.00 % floor in the reader dispatch.
+  - **The shadow-judge record:** S13 (more_itertools, the van Herk sliding
+    min/max) cut calls by 7.7 % while its wall time rose 5.8 % (rejected). This
+    is why the op count stays a second signal beside the frozen judges, never a
+    judge.
 - **O48's reader dispatch, read (Lead, 2026-11-05).**
   - **The reader against the judges:** 2 of the reader's 7 would-try ideas were
     kept (S20, S23), 3 were inconclusive (S04, S07, S12) and 2 were rejected
@@ -3605,6 +3636,9 @@ worktree", 4.4.0) or in the builder rules every brief carries.
   `SCALING_JUDGE` spends sizes x runs extra base launches for nothing (cost
   only, as G6a's counted base run). No migration was needed: a `Workload` lives
   in the run state's JSONB, never the 003 `workloads` table.
+- **G6a, the shadow record (O50):** S13 in the reader dispatch cut function
+  calls by 7.7 % and ran 5.8 % slower. A lower operation count is not a speed
+  gain, so `OP_COUNT_JUDGE` stays a recorded second signal, never a judge.
 - G6a review nits, left as they are: `OpCountJudge` counts a workload as
   uncounted only from the base side (a trial-side-only count is dropped
   silently); `measure.counted_argv` imports the profiler's private `_split`

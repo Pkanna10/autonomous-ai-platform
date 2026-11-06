@@ -713,6 +713,24 @@ checked to be well-formed before dispatch, as Vd2's think line was.
    About 250 source lines, through Builder, Fable reviewer and gate as in the V
    suite.
 
+### 9.6b As dispatched (O50, 2026-11-06)
+
+- **Seeds live:** round 1 trials the whole idea result (`WHOLE_POOL`), so
+  round 2 is the seeded call. Two rounds take `PORTFOLIO_ROUNDS` 2 and
+  `MAX_TRIAL_ROUNDS` 2: the router ends exploration at a keep once the round
+  reaches `PORTFOLIO_ROUNDS`.
+- **Arms:** X2-0, X2-0' and X2-V. X2-F moves to Window 2: it needs a `src`
+  setting, since a lens on the shared view never gets a framework.
+- **Dispatches:** at most 3 runs each, one arm each, 8 in all, interleaved by
+  library group. Each run's cap is 9.35 USD (X2-V 9.45), and each dispatch's
+  need is its libraries times that.
+- **Expected:** about 3.0 USD a run, about 60 for the 20 runs.
+- **Read arm to arm only.** Round 1 trials every idea, where X1's slice
+  trialled the marker's top 3 and the engine's default is 3 a round. So X2's
+  wins are compared across X2's arms, not against X1's.
+- **The Fable rule did not fire** (S20 kept at 1.83x its floor, S13
+  rejected): no Fable lane.
+
 ### 9.7 The Fable rule (O48, fixed before the reader dispatch)
 
 If S13 or S20 is kept with a gain at least twice its floor, X2 adds one Fable
