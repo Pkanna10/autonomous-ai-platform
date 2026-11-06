@@ -2184,7 +2184,16 @@ def test_the_picks_suite_exports_the_op_count_judge_alone(tmp_path: Path) -> Non
     assert code == 0 and slice_env[1] == "unset", output  # the picks' alone
 
 
-@pytest.mark.parametrize("dispatch", [*X2_PLAN, "X2-V:tomli", "X2-0':idna,tomli"])
+@pytest.mark.parametrize(
+    "dispatch",
+    [
+        *X2_PLAN,
+        "X2-V:tomli",
+        "X2-0':idna,tomli",
+        "X2-C:sqlparse",
+        "X2-S:sqlparse,tomli",
+    ],
+)
 def test_the_x2_suite_exports_its_arms_settings_exactly(
     dispatch: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2195,7 +2204,7 @@ def test_the_x2_suite_exports_its_arms_settings_exactly(
     libraries x the arm's cap, rounded up to the dollar (a library off the
     arm's, X2-0' on idna, is ``ideas_x2.x2_plan``'s to refuse)."""
     x2 = importlib.import_module(f"{__package__}.ideas_x2")
-    arm = next(a for a in x2.X2_ARMS if dispatch.startswith(f"{a.key}:"))
+    arm = next(a for a in x2.EVERY_ARM if dispatch.startswith(f"{a.key}:"))
     count = dispatch.count(",") + 1
     need = str(math.ceil(count * x2.arm_cap(arm)))
     if dispatch in X2_PLAN:

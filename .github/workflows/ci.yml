@@ -125,7 +125,7 @@ on:
         type: string
         default: ''
       x2_dispatch:
-        description: "ideas-x2 only, and required there: LIVE_X2_DISPATCH, one arm and its libraries as ARM:lib,lib (X2-0, its A/A twin X2-0' on sqlparse, pyparsing, tomli and sortedcontainers only, or X2-V), the arm's settings exported from ideas_x2.arm_env; the plan (ideas_x2.dispatches) is five dispatches of four: X2-0:more_itertools,pyparsing,tomli,sortedcontainers then X2-0:mistune,sqlparse,markdown,idna, X2-0':sqlparse,pyparsing,tomli,sortedcontainers, and X2-V on the same two fours; the need is the libraries x 9.35 (X2-V 9.45), rounded up: 38 for four"
+        description: "ideas-x2 only, and required there: LIVE_X2_DISPATCH, one arm and its libraries as ARM:lib,lib (X2-0, its A/A twin X2-0' on sqlparse, pyparsing, tomli and sortedcontainers only, X2-V, X2-C, X2-0 with IDEAS_COUNT_CONTRACT=record, emergence round 1 S1, off the plan, or X2-S, X2-C with SITE_STACKS=on on more_itertools, tomli, mistune and sqlparse, emergence round 1 S2, off the plan), the arm's settings exported from ideas_x2.arm_env; the plan (ideas_x2.dispatches) is five dispatches of four: X2-0:more_itertools,pyparsing,tomli,sortedcontainers then X2-0:mistune,sqlparse,markdown,idna, X2-0':sqlparse,pyparsing,tomli,sortedcontainers, and X2-V on the same two fours; the need is the libraries x 9.35 (X2-V 9.45), rounded up: 38 for four"
         type: string
         default: ''
 
@@ -1082,20 +1082,24 @@ jobs:
           if [ "${INPUT_SUITE}" = ideas-x2 ]; then
             x2_cents=935
             x2_views='{}'
+            x2_count=off
+            x2_stacks=off
             case "${x2_dispatch%%:*}" in
               X2-0 | "X2-0'") ;;
+              X2-C) x2_count=record ;;
+              X2-S) x2_count=record x2_stacks=on ;;
               X2-V)
                 x2_cents=945
                 x2_views='{"eliminate":"callers","assume_less":"input_shape","name_the_problem":"data_structures","recombine":"whole_module","resolve_tradeoff":"next_hotspots","far":"history"}'
                 ;;
               *)
-                echo "::error::ideas-x2 needs x2_dispatch, an arm (X2-0, X2-0' or X2-V), ':' and its libraries"
+                echo "::error::ideas-x2 needs x2_dispatch, an arm (X2-0, X2-0', X2-V, X2-C or X2-S), ':' and its libraries"
                 exit 1
                 ;;
             esac
             x2_repos="${x2_dispatch#*:}"
             if [[ "${x2_dispatch}" != *:* ]] || ! [[ "${x2_repos}" =~ ^[a-z][a-z0-9_]{0,39}(,[a-z][a-z0-9_]{0,39}){0,7}$ ]]; then
-              echo "::error::ideas-x2 needs x2_dispatch, an arm (X2-0, X2-0' or X2-V), ':' and its libraries"
+              echo "::error::ideas-x2 needs x2_dispatch, an arm (X2-0, X2-0', X2-V, X2-C or X2-S), ':' and its libraries"
               exit 1
             fi
             commas="${x2_repos//[^,]/}"
@@ -1107,7 +1111,7 @@ jobs:
             export IDEAS_LENSES='["eliminate","assume_less","name_the_problem","recombine","resolve_tradeoff","far"]'
             export IDEAS_LANE_MODEL=claude-sonnet-5-5 IDEAS_LANE_MODELS='{"eliminate":"claude-haiku-5-5"}'
             export IDEAS_LEAP_MODEL=claude-opus-5-5 IDEAS_REVIEWER_MODEL=claude-opus-5-5
-            export IDEAS_LANE_VIEWS="${x2_views}"
+            export IDEAS_LANE_VIEWS="${x2_views}" IDEAS_COUNT_CONTRACT="${x2_count}" SITE_STACKS="${x2_stacks}"
           elif [ -n "${x2_dispatch}" ]; then
             echo "::error::x2_dispatch is only for the ideas-x2 suite"
             exit 1
