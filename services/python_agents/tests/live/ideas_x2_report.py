@@ -16,10 +16,14 @@ twin X2-0', each twinned library's gaps), each arm and library's figures with
 totals over the libraries every arm has and over the arm's own, each arm
 against X2-0 with its band label, then O52's arm-level calls (a
 kept-count sign count, and the mean combine difference against the twin's
-mean gap), wins by lane and round, and round 2's seeds. A combine's
-gain counts only when it held: a run with no held combine delivers 0 in
-every difference and mean. Rounds after the second count as round 2's
-(X2 runs two). Refused, nothing written: a malformed row, an arm or library
+mean gap), wins by lane and round, each lane's hit rate (4b: kept over
+trialled, a trialled hypothesis being one that reached a keep, inconclusive
+or reject verdict in a round), round 2's seeds, and the charter's
+path-dependence measure (6, O54: section 1's twin gaps, by the same
+function). A combine's gain counts only when it held: a run with no held
+combine delivers 0 in every difference and mean. Rounds after the second
+count as round 2's (X2 runs two). Refused, nothing written: a malformed
+row, an arm or library
 X2 does not run, a run, round or hypothesis recorded twice, rounds or
 hypotheses with no run row, a run with no round or a gap in its rounds, and
 kept counts that disagree between a run, its rounds and its ideas.
@@ -39,6 +43,7 @@ from typing import Annotated, Final
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from autonomous_ai_agents.common.models import VerdictOutcome
 from autonomous_ai_agents.optimization.idea_types import LENS_LANES, Lane
 
 from .conftest import redact_keys
@@ -62,6 +67,8 @@ GROUPS: Final = {Lane.leap.value: "leap", Lane.obvious.value: "S1 (obvious)",
                  **{lane.value: lane.value for lane in LENS_LANES}}  # fmt: skip
 COMPOUND: Final = "compound"
 ORDER: Final = (*GROUPS.values(), COMPOUND)
+TRIED: Final = frozenset(v.value for v in (VerdictOutcome.keep, VerdictOutcome.inconclusive,
+                                           VerdictOutcome.reject))  # fmt: skip
 Count = Annotated[int, Field(ge=0)]
 Usd = Annotated[float, Field(ge=0)]
 Key = tuple[str, str]  # (arm, library)
@@ -277,20 +284,52 @@ def _on(n: int) -> str:
     return f"on {n} librar{'y' if n == 1 else 'ies'}"
 
 
-def twin_gap(r: Report) -> float | None:  # the twin's mean absolute combine gap
-    gaps = [abs(r.runs[BASE, n].delivered - r.runs[TWIN, n].delivered)
-            for n in r.libs(TWIN) if (BASE, n) in r.runs]  # fmt: skip
-    return math.fsum(gaps) / len(gaps) if gaps else None
-
-
-def _band(r: Report) -> tuple[list[str], Gaps]:
+def twin_gaps(r: Report) -> Gaps:  # each twinned library's (tg, tk): sections 1, 6
     gaps: Gaps = {}
     for n in (n for n in r.libs(TWIN) if (BASE, n) in r.runs):
         a, b = r.runs[BASE, n], r.runs[TWIN, n]
         gaps[n] = abs(a.delivered - b.delivered), abs(a.row.kept - b.row.kept)
+    return gaps
+
+
+def twin_gap(r: Report) -> float | None:  # the twin's mean absolute combine gap
+    gaps = [tg for tg, _ in twin_gaps(r).values()]
+    return math.fsum(gaps) / len(gaps) if gaps else None
+
+
+def hit_rate(kept: int, trialled: int) -> str:
+    return f"{100 * kept / trialled:.1f} %" if trialled else "n/a"
+
+
+def _hits(kept: tuple[int, int], tried: tuple[int, int]) -> list[object]:
+    """Round 1, round 2 and the total: kept, trialled, the hit rate."""
+    return [v for k, t in (*zip(kept, tried, strict=True), (sum(kept), sum(tried)))
+            for v in (k, t, hit_rate(k, t))]  # fmt: skip
+
+
+def _lane(i: IdeaLine) -> tuple[str, str, bool]:  # lane, model, round 1
+    return COMPOUND if i.compound else GROUPS[str(i.lane)], i.model or "-", i.round == 1
+
+
+def _path(r: Report, gaps: Gaps) -> list[str]:  # O54's measure, section 1's values
+    if not gaps:
+        return ["No twin rows: no path-dependence measure.", ""]
+    body = [[n, gain_cell(r.runs[BASE, n]), gain_cell(r.runs[TWIN, n]), f"{tg:.1f}",
+             r.runs[BASE, n].row.kept, r.runs[TWIN, n].row.kept, tk]
+            for n, (tg, tk) in gaps.items()]  # fmt: skip
+    many = "library" if len(gaps) == 1 else "libraries"
+    return [*_table(("library", f"{BASE} combine", f"{TWIN} combine", "tg (points)",
+                     f"{BASE} kept", f"{TWIN} kept", "tk (kept)"), body),
+            f"The mean tg over {len(gaps)} {many} is {twin_gap(r):.1f} points.", "",
+            "Identical settings, two runs: the gap measures how much the evolution "
+            "loop's early keeps shape the outcome (O54), read with only one A/A pair "
+            "per library.", ""]  # fmt: skip
+
+
+def _band(r: Report, gaps: Gaps) -> list[str]:
     if not gaps:
         return ["No twin rows: every library below takes the fixed band (O51 as "
-                "amended).", ""], gaps  # fmt: skip
+                "amended).", ""]  # fmt: skip
     body = [[n, r.runs[BASE, n].row.kept, r.runs[TWIN, n].row.kept, tk,
              gain_cell(r.runs[BASE, n]), gain_cell(r.runs[TWIN, n]), f"{tg:.1f}"]
             for n, (tg, tk) in gaps.items()]  # fmt: skip
@@ -301,7 +340,7 @@ def _band(r: Report) -> tuple[list[str], Gaps]:
             "only beyond its tk; only a library without a twin takes the fixed band of "
             f"{BAND_GAIN:g} points of combine gain and {BAND_KEPT:g} on the kept count.", "",
             f"The twin's mean gap over its {len(gaps)} libraries is {twin_gap(r):.1f} "
-            "points of combine gain (O52's bar for an arm's combine).", ""], gaps  # fmt: skip
+            "points of combine gain (O52's bar for an arm's combine).", ""]  # fmt: skip
 
 
 def _sums(runs: Sequence[Run]) -> list[object]:
@@ -323,7 +362,7 @@ def _seeds(arm: str, label: str, runs: Sequence[Run]) -> list[object]:
 
 
 def render(r: Report) -> str:
-    band, banded = _band(r)  # banded: each twinned library's (tg, tk)
+    banded = twin_gaps(r)  # each twinned library's (tg, tk), sections 1 and 6
     common = [n for n in E1_REPOS if all((a, n) in r.runs for a in r.arms)]
     each = [[a, n, x.trialled, x.row.kept, gain_cell(x),
              "-" if x.row.floor_pct is None else f"{x.row.floor_pct:.1f}%", flag(x.row.holds),
@@ -333,6 +372,7 @@ def render(r: Report) -> str:
     totals: list[list[object]] = []
     against: list[list[object]] = []
     lanes: list[list[object]] = []
+    rates: list[list[object]] = []
     seeds: list[list[object]] = []
     calls: list[list[object]] = []
     gap = twin_gap(r)
@@ -360,8 +400,13 @@ def render(r: Report) -> str:
                           sum(d < 0 for d in dks), dks.count(0), f"{kept_call(dks)}, {on}",
                           f"{mean:+.1f}", "none" if gap is None else f"{gap:.1f}, {_on(len(banded))}",
                           f"{mean_call(mean, gap)}, {on}"])  # fmt: skip
-        won = Counter((COMPOUND if i.compound else GROUPS[str(i.lane)], i.model or "-",
-                       i.round == 1) for x in own for i in x.ideas if i.verdict == "keep")  # fmt: skip
+        won = Counter(_lane(i) for x in own for i in x.ideas if i.verdict == "keep")
+        tried = Counter(_lane(i) for x in own for i in x.ideas
+                        if i.verdict in TRIED and i.round is not None)  # fmt: skip
+        for g, m in sorted({(g, m) for g, m, _ in tried},
+                           key=lambda k: (ORDER.index(k[0]), k[1])):  # fmt: skip
+            rates.append([arm, g, m, *_hits((won[g, m, True], won[g, m, False]),
+                                            (tried[g, m, True], tried[g, m, False]))])  # fmt: skip
         for g, m in sorted(
             {(g, m) for g, m, _ in won}, key=lambda k: (ORDER.index(k[0]), k[1])
         ):
@@ -369,6 +414,9 @@ def render(r: Report) -> str:
                           won[g, m, True] + won[g, m, False]])  # fmt: skip
         first = sum(v for k, v in won.items() if k[2])
         lanes.append([arm, "all lanes", "-", first, won.total() - first, won.total()])
+        one = sum(v for k, v in tried.items() if k[2])
+        rates.append([arm, "all lanes", "-",
+                      *_hits((first, won.total() - first), (one, tried.total() - one))])  # fmt: skip
         seeds += [*(_seeds(arm, n, [r.runs[arm, n]]) for n in r.libs(arm)),
                   _seeds(arm, "all (own libraries)", own)]  # fmt: skip
     return "\n".join([
@@ -399,7 +447,7 @@ def render(r: Report) -> str:
         "no held combine delivers 0 in every difference and mean.",
         "- **Sources:** each results file, its SHA-256 prefix and its dispatches.", "",
         *_table(("file", "sha256", "dispatches"), r.sources),
-        f"## 1 The A/A band ({BASE} against {TWIN})", "", *band,
+        f"## 1 The A/A band ({BASE} against {TWIN})", "", *_band(r, banded),
         "## 2 Each arm and library", "",
         *_table(("arm", "library", "trialled", "kept", "combine", "floor", "held",
                  "cost USD", "seeded calls", "seeded USD", "compounds tried",
@@ -423,9 +471,23 @@ def render(r: Report) -> str:
         "## 4 Wins by lane", "",
         "Each kept hypothesis once, under its lane and model; round 2 is the seeded call's.", "",
         *_table(("arm", "lane", "model", "round 1", "round 2 (seeded)", "total"), lanes),
+        "## 4b Hit rate by lane", "",
+        "The hit rate is kept / trialled, so a lane's volume and its rate read apart. "
+        "Trialled: each hypothesis of the lane, once, that reached a verdict (keep, "
+        "inconclusive or reject) in a round, from section 4's rows; compounds are their "
+        "own lane, and a lane with none trialled reads n/a.", "",
+        *_table(("arm", "lane", "model", "round 1 kept", "round 1 trialled",
+                 "round 1 hit rate", "round 2 kept", "round 2 trialled",
+                 "round 2 hit rate", "total kept", "total trialled", "total hit rate"),
+                rates),
         "## 5 Seeds (round 2)", "",
         *_table(("arm", "library", "trialled", "kept", "seeds shown", "seeded calls",
                  "seeded USD", "seeded USD per round-2 win"), seeds),
+        "## 6 Path dependence (the charter's measure, O54): the twin gap on combine, "
+        "per library", "",
+        f"Section 1's values, by the same function: {BASE} and {TWIN} combine and "
+        "their gap tg, kept and their gap tk.", "",
+        *_path(r, banded),
     ])  # fmt: skip
 
 

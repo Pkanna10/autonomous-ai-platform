@@ -3793,6 +3793,25 @@ worktree", 4.4.0) or in the builder rules every brief carries.
     - kept +1, -2, -2, so "keeps fewer, on 3 libraries";
     - combine differences +0.15, +0.03, -13.38, mean -4.40 against the twin's
       mean gap 3.29 (2.70, 3.94, 3.22), so "worse, on 3 libraries".
+- V-x2rep4 (O56, two additions to the X2 report).
+  - **Section 4b, hit rate by lane:** per arm, lane and model, kept over
+    trialled for round 1, round 2 and the total. A trialled hypothesis reached a
+    keep, inconclusive or reject verdict, counted once; compounds are their own
+    lane; 0 trialled reads n/a.
+  - **Section 6, the charter's path-dependence measure (O54):** the twin gap on
+    combine per library, from the same `twin_gaps` call section 1 uses.
+  - **On d1-d8, by total hit rate:**
+
+    | Lane      | X2-0              | X2-0'            | X2-V             |
+    | --------- | ----------------- | ---------------- | ---------------- |
+    | S1        | 20 of 49, 40.8 %  | 8 of 25, 32.0 %  | 13 of 48, 27.1 % |
+    | leap      | 3 of 5, 60.0 %    | 2 of 3, 66.7 %   | 3 of 9, 33.3 %   |
+    | all lanes | 35 of 102, 34.3 % | 16 of 53, 30.2 % | 27 of 99, 27.3 % |
+
+    S1's lead is mostly volume; its rate is near the arm's.
+
+  - **Review:** one docstring nit, fixed by the Lead.
+  - **Gate:** green on 57c92be with the unit.
 - V-x2band (O51 as amended, in the X2 report; task 40).
   - **A library with a twin** is read against its own twin gaps: tg on combine,
     tk on kept.

@@ -277,6 +277,128 @@ def test_wins_by_lane_and_round() -> None:
     assert lanes.index("| X2-0 | S1 (obvious) |") < lanes.index("| X2-0 | name_the")
 
 
+@pytest.mark.parametrize(
+    ("kept", "trialled", "cell"),
+    [(1, 1, "100.0 %"), (3, 10, "30.0 %"), (1, 3, "33.3 %"), (0, 4, "0.0 %"),
+     (0, 0, "n/a")],
+)  # fmt: skip
+def test_hit_rate(kept: int, trialled: int, cell: str) -> None:
+    assert xr.hit_rate(kept, trialled) == cell
+
+
+def _section(text: str, head: str, end: str | None) -> str:
+    assert head in text, head
+    part = text.split(head)[1]
+    return part if end is None else part.split(end)[0]
+
+
+def test_hit_rate_per_lane_on_hand_made_rows(tmp_path: Path) -> None:
+    """The leap keeps 1 of 1 (round 1), S1 3 of 10 (2 of 6, then 1 of 4,
+    one of them a reject); a round-2 leap row with no verdict and a pooled
+    leap row are not trialled, so the leap's round 2 is n/a."""
+    run = _rows("X2-0", "mistune", [(7, ["leap", "obvious", "obvious"]),
+                                    (4, ["obvious"])])  # fmt: skip
+    run[5] = {**run[5], "verdict": "reject"}
+    head: Row = {"arm": "X2-0", "repo": "mistune", "experiment": x2.IDEA_EXPERIMENT,
+                 "compound": False, "lane": "leap", "model": OPUS}  # fmt: skip
+    run += [{**head, "round": 2, "hypothesis_id": "late", "verdict": "no_verdict"},
+            {**head, "round": None, "hypothesis_id": "pool", "verdict": "not_trialled"}]  # fmt: skip
+    text = _text(_write(tmp_path / "r.jsonl", run))
+    lanes = _section(text, "## 4 ", "## 4b ")
+    assert "| X2-0 | leap | claude-opus-5-5 | 1 | 0 | 1 |" in lanes  # as it was
+    assert "| X2-0 | S1 (obvious) | claude-sonnet-5-5 | 2 | 1 | 3 |" in lanes
+    rate = _section(text, "## 4b ", "## 5 ")
+    assert ("The hit rate is kept / trialled, so a lane's volume and its rate read "
+            "apart.") in rate  # fmt: skip
+    assert ("| X2-0 | leap | claude-opus-5-5 | 1 | 1 | 100.0 % | 0 | 0 | n/a | 1 | 1 "
+            "| 100.0 % |") in rate  # fmt: skip
+    assert ("| X2-0 | S1 (obvious) | claude-sonnet-5-5 | 2 | 6 | 33.3 % | 1 | 4 | "
+            "25.0 % | 3 | 10 | 30.0 % |") in rate  # fmt: skip
+    assert ("| X2-0 | all lanes | - | 3 | 7 | 42.9 % | 1 | 4 | 25.0 % | 4 | 11 | "
+            "36.4 % |") in rate  # fmt: skip
+    assert rate.index("| X2-0 | leap |") < rate.index("| X2-0 | S1 (obvious) |")
+
+
+def test_a_lane_trialled_but_never_kept_shows_its_rate(tmp_path: Path) -> None:
+    """A lane with trials and no keep is absent from section 4 (it counts
+    keeps) but present in 4b at 0.0 %; a compound is its own lane."""
+    run = _rows("X2-V", "idna", [(2, ["compound"]), (1, [])])
+    text = _text(_write(tmp_path / "r.jsonl", run))
+    assert "| X2-V | S1 (obvious) |" not in _section(text, "## 4 ", "## 4b ")
+    rate = _section(text, "## 4b ", "## 5 ")
+    assert ("| X2-V | S1 (obvious) | claude-sonnet-5-5 | 0 | 1 | 0.0 % | 0 | 1 | "
+            "0.0 % | 0 | 2 | 0.0 % |") in rate  # fmt: skip
+    assert ("| X2-V | compound | - | 1 | 1 | 100.0 % | 0 | 0 | n/a | 1 | 1 | 100.0 % |"
+            in rate)  # fmt: skip
+    assert rate.index("| X2-V | S1 (obvious) |") < rate.index("| X2-V | compound |")
+
+
+def _table_rows(part: str) -> dict[str, list[str]]:
+    rows = [line.strip("|").split(" | ") for line in part.splitlines()
+            if line.startswith("| ")]  # fmt: skip
+    return {r[0].strip(): [c.strip() for c in r[1:]] for r in rows}
+
+
+def test_the_path_dependence_measure_is_section_1s_values(tmp_path: Path) -> None:
+    """The same fixture as the per-library twin gaps: section 6's
+    numbers are section 1's, reordered (combines and tg, then kept and tk)."""
+    path = _write(tmp_path / "r.jsonl",
+                  _rows("X2-0", "sqlparse", [(9, ["leap"] * 7)], gain=21.1),
+                  _rows("X2-0'", "sqlparse", [(9, ["leap"] * 9)], gain=39.8),
+                  _rows("X2-0", "pyparsing", [(3, ["leap"])], gain=5.5),
+                  _rows("X2-0'", "pyparsing", [(3, ["leap"])], gain=2.8),
+                  _rows("X2-0", "mistune", [(3, ["leap"])], gain=4.0))  # fmt: skip
+    text = _text(path)
+    band = _table_rows(_section(text, "## 1 ", "## 2 "))
+    head = ("Path dependence (the charter's measure, O54): the twin gap on combine, "
+            "per library")  # fmt: skip
+    assert f"## 6 {head}" in text
+    six = _section(text, f"## 6 {head}", None)
+    measure = _table_rows(six)
+    for lib in ("sqlparse", "pyparsing"):
+        k0, k1, tk, c0, c1, tg = band[lib]
+        assert measure[lib] == [c0, c1, tg, k0, k1, tk], lib
+    assert "| sqlparse | +21.1% | +39.8% | 18.7 | 7 | 9 | 2 |" in six
+    assert "mistune" not in six
+    report = xr.load([path])
+    gap = xr.twin_gap(report)
+    assert gap is not None
+    assert f"The mean tg over 2 libraries is {gap:.1f} points." in six
+    assert "The mean tg over 2 libraries is 10.7 points." in six
+    assert ("Identical settings, two runs: the gap measures how much the evolution "
+            "loop's early keeps shape the outcome (O54), read with only one A/A pair "
+            "per library.") in six  # fmt: skip
+    gaps = xr.twin_gaps(report)
+    assert list(gaps) == ["pyparsing", "sqlparse"]  # X2's library order
+    assert gaps["sqlparse"][0] == pytest.approx(18.7)
+    assert gaps["pyparsing"][0] == pytest.approx(2.7)
+    assert (gaps["sqlparse"][1], gaps["pyparsing"][1]) == (2, 0)
+
+
+def test_the_path_dependence_measure_with_no_twin(tmp_path: Path) -> None:
+    path = _write(tmp_path / "r.jsonl", _rows("X2-0", "mistune", [(3, ["leap"])]))
+    six = _section(_text(path), "## 6 ", None)
+    assert "No twin rows: no path-dependence measure." in six
+    assert "The mean tg" not in six
+
+
+def test_the_real_files_path_dependence_and_hit_rates() -> None:
+    text = _real()
+    six = _section(text, "## 6 ", None)
+    assert "| pyparsing | +5.5% | +2.8% | 2.7 | 1 | 1 | 0 |" in six
+    assert "| tomli | +22.6% | +18.6% | 3.9 | 6 | 6 | 0 |" in six
+    assert "| sortedcontainers | +13.4% | +10.2% | 3.2 | 2 | 2 | 0 |" in six
+    assert "The mean tg over 3 libraries is 3.3 points." in six
+    rate = _section(text, "## 4b ", "## 5 ")
+    for row in ("| X2-0 | S1 (obvious) | claude-sonnet-5-5 | 1 | 7 | 14.3 % | 2 | 6 | "
+                "33.3 % | 3 | 13 | 23.1 % |",
+                "| X2-0 | all lanes | - | 6 | 17 | 35.3 % | 3 | 16 | 18.8 % | 9 | 33 | "
+                "27.3 % |",
+                "| X2-V | all lanes | - | 3 | 18 | 16.7 % | 3 | 15 | 20.0 % | 6 | 33 | "
+                "18.2 % |"):  # fmt: skip
+        assert row in rate, row  # counted from the rows apart from the report
+
+
 def test_seeds_and_totals() -> None:
     text = _real()
     assert "| X2-0 | pyparsing | 5 | 0 | 4 | 1 | 0.65 | n/a |" in text
