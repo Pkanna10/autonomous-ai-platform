@@ -91,6 +91,7 @@ from autonomous_ai_agents.common.models import (
     ApprovalRequest,
     Baseline,
     ChangeClass,
+    CombineSkip,
     Delivery,
     DeliveryKind,
     Direction,
@@ -188,9 +189,13 @@ from autonomous_ai_agents.orchestrator.combine_node import (
     CombineOutcome,
     CombineRules,
     CombineTarget,
+    ConflictProbe,
     combine_kept,
     is_commit,
+    keep_records,
     kept_changes,
+    order_gain,
+    plan_delivery,
 )
 from autonomous_ai_agents.orchestrator.confirm import (
     CONFIRMABLE,
@@ -2620,6 +2625,12 @@ def _await_decision(request: ApprovalRequest) -> ApprovalDecision:
         payload = request.model_copy(update={"error": error}).model_dump(mode="json")
 
 
+def _skip_line(skip: CombineSkip) -> str:
+    """S2's event text for one combine skip: id, reason and blocker."""
+    by = "" if skip.blocked_by is None else f", blocked by {skip.blocked_by[:8]}"
+    return f"{skip.trial_id[:8]}: {skip.reason}{by}"
+
+
 def _combine_rules(ctx: NodeContext, baseline: Baseline) -> CombineRules:
     """The verdicts node's judges, primary metric and completeness rule."""
     objective_metrics = _objective_metrics(baseline.objectives)
@@ -3433,16 +3444,32 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             round=max(1, state["round"]),
             quality_files=measured.quality_files,
         )
-        changes = kept_changes(
-            verdicts,
-            {trial.id: trial for trial in state["trials"]},
-            _by_id(state["hypotheses"]),
-        )
+        trials = {trial.id: trial for trial in state["trials"]}
+        changes = kept_changes(verdicts, trials, _by_id(state["hypotheses"]))
         rules = _combine_rules(ctx, measured)
         if kind == "review":
             rules = replace(rules, accept=CONFIRMABLE)
-        outcome = combine_kept(combiner, changes, rules, target)
+        stacks = combiner.site_stacks if isinstance(combiner, ConflictProbe) else "off"
+        if isinstance(combiner, ConflictProbe) and stacks != "off":  # S2
+            gains = {v.trial_id: order_gain(v) for v in verdicts}
+            dry = combiner.dry_merge(target.project, target.base_commit, changes)
+            plan = plan_delivery(changes, gains, dry, by_gain=stacks == "on")
+            outcome = combine_kept(
+                combiner, plan.order, rules, target, conflicts=plan.conflicts
+            )
+            outcome = keep_records(plan, outcome, trials)
+            changes = list(plan.order)
+        else:
+            outcome = combine_kept(combiner, changes, rules, target)
         combination = outcome.combination
+        stacked: ScalarDict = (
+            {}
+            if stacks == "off"
+            else {
+                "site_stacks": stacks,
+                "skips": _capped("; ".join(map(_skip_line, combination.skipped))),
+            }  # fmt: skip
+        )
         held = "held" if combination.holds else "did not hold"
         events.append(
             _announce(
@@ -3463,6 +3490,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                     "holds": combination.holds,
                     "fallback": combination.fallback_trial_id is not None,
                     "delivered": len(outcome.kept_verdict_ids),
+                    **stacked,
                 },
             )
         )

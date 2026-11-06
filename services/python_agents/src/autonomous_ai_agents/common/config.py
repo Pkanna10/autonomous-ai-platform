@@ -39,6 +39,9 @@ Retrieval = Literal["blind", "matched"]
 """How research picks techniques for the generator (D1): ``blind`` shows the
 context's techniques as they are; ``matched`` asks the matcher first."""
 
+SiteStacks = Literal["off", "record", "on"]
+"""S2's combine modes (``SITE_STACKS``)."""
+
 IdeaView = Literal[
     "callers", "data_structures", "input_shape", "whole_module", "next_hotspots",
     "history",
@@ -584,6 +587,13 @@ class Settings(BaseSettings):
     so each side also gives per-unit ``unit_calls`` rows (calls, caller
     edges, top callees) for the realisation record; no request, prompt or
     verdict changes. ``off`` keeps today's counted run byte for byte."""
+    SITE_STACKS: SiteStacks = "off"
+    """Emergence round 1, S2: ``record`` dry-merges the kept changes
+    pairwise before combine (git objects only) and records per keep whether
+    it was delivered and why not (``Combination.keeps``), the order staying
+    today's score order; ``on`` also offers each conflict component's
+    max-sum conflict-free subset first, by confirmed gain. ``off`` is
+    today's combine byte for byte. Read by ``GitCombiner``."""
     SCALING_JUDGE: bool = False
     """G6b, shadow mode: every workload with a size setting
     (``Workload.scale``) runs at its 2-3 sizes on both sides, and the scaling

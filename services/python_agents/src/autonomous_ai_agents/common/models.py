@@ -1108,11 +1108,41 @@ class ProjectUnderstanding(EngineModel):
 
 
 class CombineSkip(EngineModel):
-    """A kept change the greedy combine could not apply, and why."""
+    """A kept change the greedy combine could not apply, and why.
+
+    ``blocked_by`` (S2, ``SITE_STACKS`` on or record) is the first applied
+    change its own merge-tree with this one conflicts with, when there is one.
+    """
 
     trial_id: str
     reason: str
     paths: tuple[str, ...] = ()
+    blocked_by: str | None = None
+
+
+class KeepRecord(EngineModel):
+    """S2: one kept change at combine, delivered or why not.
+
+    ``gain`` is the order key (both looks' mean, else the first look);
+    ``component`` its conflict component (hunk-identical keeps are one node),
+    ``best_subset`` whether it is in that component's max-sum conflict-free
+    subset; ``duplicate_of`` the hunk-identical keep that stands for it;
+    ``superseded_by`` a reconciliation that contains it (none yet: part 3
+    records, trials none); ``reconcile`` part 3's eligibility for a blocked
+    keep ("eligible" or "ineligible: why").
+    """
+
+    trial_id: str
+    verdict_id: str
+    gain: float | None
+    component: int = Field(ge=0)
+    best_subset: bool
+    delivered: bool
+    skip_reason: str | None = None
+    blocked_by: str | None = None
+    duplicate_of: str | None = None
+    superseded_by: str | None = None
+    reconcile: str | None = None
 
 
 class Combination(EngineModel):
@@ -1132,6 +1162,10 @@ class Combination(EngineModel):
     holds: bool
     fallback_trial_id: str | None = None
     summary: str
+    keeps: tuple[KeepRecord, ...] = ()
+    """S2: one record per kept change offered (empty with ``SITE_STACKS`` off)."""
+    conflicts: tuple[tuple[str, str], ...] = ()
+    """S2: the dry merge's conflicting trial pairs, each sorted."""
 
 
 class TechniqueMatchRecord(EngineModel):
@@ -1177,6 +1211,7 @@ ENGINE_MODEL_CLASSES: tuple[type[EngineModel], ...] = (
     CandidateModule,
     ProjectUnderstanding,
     CombineSkip,
+    KeepRecord,
     Combination,
     TechniqueMatchRecord,
     OutputTolerance,

@@ -59,6 +59,14 @@ the plan until dispatched. Its hypothesis rows add ``realisation``, each
 measured trial's ``evolve.realisation`` over the base text of the files it
 changed (``base_sources``: the clone at E1's commit, which the engine never
 writes), the anchor its mechanism key's function.
+
+**X2-S** (emergence round 1, S2): X2-0 plus ``IDEAS_COUNT_CONTRACT=record``
+(the unit counts part 3's eligibility reads) and ``SITE_STACKS=on``, on the
+four libraries with same-site conflicts in X2; no request changed and part
+3 trials none, so the cap and minutes are X2-0's; off the plan. A run whose
+combination holds keep records (``SITE_STACKS`` on or record) writes per
+kept hypothesis ``combine`` (``combine_row``: ids as hypothesis ids) and on
+the run row its ``conflicts``; other runs write neither.
 """
 
 from __future__ import annotations
@@ -86,6 +94,7 @@ from autonomous_ai_agents.common.models import (
     EngineEvent,
     Hypothesis,
     JsonScalar,
+    KeepRecord,
     Trial,
     TrialStatus,
     Verdict,
@@ -159,7 +168,10 @@ X2_V: Final = X2Arm("X2-V", ip.E1_REPOS, {**SHARED, "IDEAS_LANE_VIEWS": dict(ip.
 X2_ARMS: Final = (X2_0, X2_0_TWIN, X2_V)
 X2_C: Final = X2Arm("X2-C", ip.E1_REPOS, {**SHARED, "IDEAS_COUNT_CONTRACT": "record"},
                     "count record (S1): X2-0 with unit counts and realisation rows")  # fmt: skip
-EVERY_ARM: Final = (*X2_ARMS, X2_C)  # the plan's arms, then those off it
+X2_S: Final = X2Arm("X2-S", ("more_itertools", "tomli", "mistune", "sqlparse"),
+                    {**SHARED, "IDEAS_COUNT_CONTRACT": "record", "SITE_STACKS": "on"},
+                    "site stacks (S2): X2-0 with the combine record and delivery by gain")  # fmt: skip
+EVERY_ARM: Final = (*X2_ARMS, X2_S, X2_C)  # the plan's arms, then those off it
 LIBRARIES: Final = {r.name: r for r in dx.OSS_SELECTABLE if r.name in ip.E1_REPOS}
 Run = tuple[X2Arm, OssRepo]
 ALL_RUNS: Final[tuple[Run, ...]] = tuple(
@@ -371,6 +383,19 @@ def _realised(trials: Iterable[Trial], keys: Mapping[str, IdeaKey],
     return out
 
 
+def combine_row(keep: KeepRecord | None, owner: Mapping[str, str]) -> dict[str, object] | None:  # fmt: skip
+    """S2's record of one kept hypothesis, trial ids as hypothesis ids
+    (``owner``), the order gain in percent; ``None`` for no record."""
+    if keep is None:
+        return None
+    ids = {k: None if (v := getattr(keep, k)) is None else owner.get(v, v)
+           for k in ("blocked_by", "duplicate_of", "superseded_by")}  # fmt: skip
+    return {"delivered": keep.delivered, "skip_reason": keep.skip_reason, **ids,
+            "component": keep.component, "best_subset": keep.best_subset,
+            "gain_pct": dx._pct(keep.gain),
+            "reconcile": keep.reconcile}  # fmt: skip
+
+
 @dataclass
 class X2Recorder:
     plan: X2Plan
@@ -403,6 +428,9 @@ class X2Recorder:
         keys, cfg = recorded_keys(e.data for e in events), arm_settings(arm, self.base)
         head = {"repo": repo, "arm": arm.key}
         realised = {} if st is None or clone is None else _realised(st["trials"], keys, verdicts, clone)  # fmt: skip
+        comb = None if st is None else st["combination"]
+        owner = {} if st is None else {t.id: t.hypothesis_id for t in st["trials"]}
+        stacked = {owner.get(k.trial_id, k.trial_id): k for k in (() if comb is None else comb.keeps)}  # fmt: skip
         for h, r in zip(hyps, ranks, strict=True):
             key, lane, parents = keys.get(h.id), _tag(h, "lane"), compound_parents(h)
             self.sink.write({**head, "experiment": IDEA_EXPERIMENT, "round": rounds.get(h.id),
@@ -414,7 +442,8 @@ class X2Recorder:
                 "parents": [] if parents is None else [parents.first, parents.second],
                 "verdict": r.verdict, "gain_pct": r.gain_pct, "floor_pct": r.noise_floor_pct,
                 "op_count": isl._op_count(verdicts.get(h.id)),
-                **({} if clone is None else {"realisation": realised.get(h.id)})})  # fmt: skip
+                **({} if clone is None else {"realisation": realised.get(h.id)}),
+                **({} if not stacked else {"combine": combine_row(stacked.get(h.id), owner)})})  # fmt: skip
         kept = [h for h in hyps if (v := verdicts.get(h.id)) is not None
                 and v.outcome is VerdictOutcome.keep]  # fmt: skip
         for n, data in sorted(_by_round(events).items()):
@@ -430,7 +459,7 @@ class X2Recorder:
                 "compounds": sum(d.get("code") == "compound" for d in data),
                 "compounds_kept": sum(rounds.get(h.id) == n and COMPOUND_TAG in h.tags
                                       for h in kept)})  # fmt: skip
-        comb, j = None if st is None else st["combination"], isl._primary(result)
+        j = isl._primary(result)
         self.sink.write({**head, "experiment": RUN_EXPERIMENT, "dispatch": self.plan.dispatch,
             "commit": commit, "cap_usd": run.cap_usd, "cost_usd": run.spent_usd,
             "discovery_cost_usd": 0.0 if st is None else st["discovery_cost_usd"],
@@ -443,7 +472,9 @@ class X2Recorder:
             "applied": 0 if comb is None else len(comb.applied_trial_ids),
             "gain_pct": None if j is None else dx._pct(j.gain),
             "floor_pct": None if j is None else dx._pct(j.noise_floor),
-            "delivered": st is not None and st["delivery"] is not None, "guard": guard})  # fmt: skip
+            "delivered": st is not None and st["delivery"] is not None, "guard": guard,
+            **({} if not stacked else {"conflicts": [[owner.get(t, t) for t in pair]
+                                                     for pair in (() if comb is None else comb.conflicts)]})})  # fmt: skip
 
 
 # ---------------------------------------------------------------------------

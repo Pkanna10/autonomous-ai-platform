@@ -32,6 +32,8 @@ an unfit parent): the trials node records it as a note, never a trial.
 from __future__ import annotations
 
 import ast
+import hashlib
+import json
 import math
 import re
 import uuid
@@ -57,6 +59,7 @@ from autonomous_ai_agents.common.models import (
 )
 from autonomous_ai_agents.execution.measure import (
     CALLEE_KEY,
+    METRIC_OP_CALLS,
     METRIC_UNIT_CALLS,
     OUT_CALLS_KEY,
     UNIT_KEY,
@@ -421,3 +424,74 @@ def realisation(
         moved=moved, label=label,
         kept_not_fired=kept and label is RealisationLabel.not_fired,
     )  # fmt: skip
+
+
+# --------------------------------------------------------------------------
+# Combine record (emergence round 1, S2): hunk identity and part 3's record
+# --------------------------------------------------------------------------
+
+RECONCILE_MIN_SHARE: Final = 0.02
+"""Part 3: the least of the base's counted calls the survivor must still
+make of the blocked keep's most-cut unit (S2)."""
+_TRUNCATED: Final = "\n[diff truncated: "
+_FILE_LINES: Final = ("Binary files ", "new file mode", "deleted file mode",
+                      "old mode", "new mode", "rename from", "rename to")  # fmt: skip
+
+
+def hunk_signature(diff: str) -> str | None:
+    """A keep's change as hunk identity (``duplicate_of``): per file, each
+    ``-`` line at its base line and each ``+`` line at the base line it
+    precedes, whitespace collapsed and context dropped, so ``-U3`` and
+    ``-U0`` agree; file-level lines (binary, mode, rename) as they are.
+    ``None`` for an empty or truncated diff: it is nobody's duplicate."""
+    if not diff.strip() or _TRUNCATED in diff:
+        return None
+    items: list[list[object]] = []
+    path, old, in_hunk = "", 0, False
+    for line in diff.splitlines():
+        if (head := _DIFF_HEAD.fullmatch(line)) is not None:
+            path, in_hunk = head.group(2), False
+        elif (hunk := _HUNK.match(line)) is not None:
+            start, count = int(hunk.group(1)), int(hunk.group(2) or 1)
+            old, in_hunk = start + (count == 0), True
+        elif not in_hunk:
+            if line.startswith(_FILE_LINES):
+                items.append([path, line])
+        elif line[:1] in ("-", "+"):
+            items.append([path, old, line[0], " ".join(line[1:].split())])
+            old += line[0] == "-"
+        elif line[:1] == " ":
+            old += 1
+    return hashlib.sha256(json.dumps(items).encode()).hexdigest()
+
+
+def reconcile_eligibility(applied: Trial, blocked: Trial) -> str:
+    """Part 3's record for a keep ``blocked`` by ``applied``: "eligible" when
+    ``blocked``'s most-cut counted unit (S1's rows, its twin against itself)
+    is still made on ``applied``'s commit by ``RECONCILE_MIN_SHARE`` or more
+    of the base's counted calls, else "ineligible: <why>". Counts only: a
+    count-invisible keep (a hoist) is never eligible."""
+    units = {m.hardware.get(UNIT_KEY) for m in blocked.measurements
+             if m.metric == METRIC_UNIT_CALLS and CALLEE_KEY not in m.hardware}  # fmt: skip
+    if not units:
+        return "ineligible: uncounted (no unit rows)"
+    cuts = []
+    for unit in sorted(u for u in units if isinstance(u, str)):
+        base = _unit_counts(blocked.base_measurements, unit)
+        own = _unit_counts(blocked.measurements, unit)
+        if base is not None and own is not None and sum(base) > sum(own):
+            cuts.append((sum(base) - sum(own), unit, sum(own)))
+    if not cuts:
+        return "ineligible: count-invisible (no counted unit cut)"
+    _, unit, left = max(cuts)
+    survivor = _unit_counts(applied.measurements, unit)
+    if survivor is None:
+        return "ineligible: the survivor did not count the unit"
+    total = sum(
+        m.samples[0] for m in blocked.base_measurements if m.metric == METRIC_OP_CALLS
+    )
+    if total <= 0:
+        return "ineligible: no base op count"
+    if sum(survivor) - left >= RECONCILE_MIN_SHARE * total:
+        return "eligible"
+    return "ineligible: the survivor left under 2 % of the base's counted calls"

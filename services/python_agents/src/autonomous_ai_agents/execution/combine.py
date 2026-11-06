@@ -41,12 +41,14 @@ or the default branch.
 from __future__ import annotations
 
 import functools
+import itertools
 import re
 import sys
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from autonomous_ai_agents.common.config import IsolationMode, settings
+from autonomous_ai_agents.common.config import IsolationMode, SiteStacks, settings
 from autonomous_ai_agents.common.errors import DeliveryError, RepoTamperedError
 from autonomous_ai_agents.common.models import (
     CombineSkip,
@@ -94,6 +96,15 @@ def _require_id(what: str, value: str) -> None:
         raise ValueError(f"{what} {_quote(value)!r} is not a safe id: {problem}")
 
 
+@dataclass(frozen=True)
+class DryMerge:
+    """S2's dry merge: the kept trial pairs whose own ``merge-tree`` conflicts,
+    and each fit keep's ``base..commit`` diff (``diff_commits``, capped)."""
+
+    conflicts: frozenset[frozenset[str]] = frozenset()
+    diffs: Mapping[str, str] = field(default_factory=dict)
+
+
 class GitCombiner:
     """The real ``Combiner``. ``git`` defaults to the project's ``GitWorkspace``;
     the modes default to the settings (``make_phase``); ``scorer`` is the run's
@@ -109,7 +120,9 @@ class GitCombiner:
         base_env: Mapping[str, str] | None = None,
         run: RunOnce = run_once,
         scorer: RunnerScorer | None = None,
+        site_stacks: SiteStacks | None = None,
     ) -> None:
+        self.site_stacks: SiteStacks = site_stacks or settings.SITE_STACKS
         self._git = git
         self._quality = QualityHooks(scorer)
         self._phase = functools.partial(
@@ -187,6 +200,31 @@ class GitCombiner:
                     " refs, config or hooks differ from before the run"
                 )
         return CombineMeasured(tip, tuple(applied), skipped, *rows)
+
+    def dry_merge(
+        self, project: Project, base_commit: str, kept: Sequence[KeptChange]
+    ) -> DryMerge:
+        """S2: ``merge-tree`` for every pair of fit keeps and each one's diff
+        against ``base_commit``; objects only (no worktree, ref or run). An
+        unfit commit (``_unfit``) is in neither; a diff git cannot decode is
+        left out (that keep is nobody's duplicate)."""
+        if _OID.fullmatch(base_commit) is None:
+            raise ValueError(f"base_commit {_quote(base_commit)!r} is not a commit id")
+        git = self._git or GitWorkspace(Path(project.root_path))
+        fit = [c for c in kept if _unfit(git, base_commit, c.commit) is None]
+        pairs = itertools.combinations(fit, 2)
+        conflicts = frozenset(
+            frozenset({a.trial_id, b.trial_id})
+            for a, b in pairs
+            if git.merge(a.commit, b.commit).tree is None
+        )
+        diffs: dict[str, str] = {}
+        for change in fit:
+            try:
+                diffs[change.trial_id] = git.diff_commits(base_commit, change.commit)
+            except GitError:
+                continue
+        return DryMerge(conflicts, diffs)
 
     def _merge(
         self, git: GitWorkspace, base: str, kept: Sequence[KeptChange]

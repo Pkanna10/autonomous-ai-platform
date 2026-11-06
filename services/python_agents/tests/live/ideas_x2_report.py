@@ -80,6 +80,17 @@ class Realised(BaseModel):  # S1's record, the fields the report reads
     kept_not_fired: bool
 
 
+class Combined(BaseModel):  # S2's per-keep combine record, the fields the report reads
+    model_config = ConfigDict(frozen=True, extra="ignore", strict=True)
+    delivered: bool
+    skip_reason: str | None
+    duplicate_of: str | None
+    component: Count
+    best_subset: bool
+    gain_pct: float | None
+    reconcile: str | None
+
+
 class IdeaLine(_Row):
     round: Annotated[int, Field(ge=1)] | None  # None: left in the pool
     hypothesis_id: str
@@ -88,6 +99,7 @@ class IdeaLine(_Row):
     compound: bool
     verdict: str
     realisation: Realised | None = None  # X2-C only (S1)
+    combine: Combined | None = None  # SITE_STACKS on or record only (S2)
 
 
 class RoundLine(_Row):
@@ -355,6 +367,48 @@ def _realised(r: Report) -> list[str]:  # S1, only where a row holds a record
     ]  # fmt: skip
 
 
+def _combined(r: Report) -> list[str]:  # S2, only where a row holds a record
+    runs: list[list[object]] = []
+    why: list[list[object]] = []
+    parts: list[list[object]] = []
+    for (arm, lib), x in r.runs.items():
+        recs = [(i.hypothesis_id, i.combine) for i in x.ideas if i.combine is not None]
+        if not recs:
+            continue
+        lost = [c for _, c in recs if not c.delivered]
+        runs.append([arm, lib, x.row.kept, x.row.kept - sum(c.duplicate_of is not None for _, c in recs),
+                     len(recs), len(recs) - len(lost), len(lost),
+                     sum(c.skip_reason is None for c in lost),
+                     sum(c.reconcile == "eligible" for _, c in recs)])  # fmt: skip
+        reasons = Counter(c.skip_reason or "(no reason)" for c in lost)
+        why += [[arm, lib, k, reasons[k]] for k in sorted(reasons)]
+        groups: dict[int, list[Combined]] = defaultdict(list)
+        for _, c in recs:
+            if c.duplicate_of is None:
+                groups[c.component].append(c)
+        hit = [g for g in groups.values() if len(g) > 1]
+        same = sum({id(c) for c in g if c.delivered} == {id(c) for c in g if c.best_subset}
+                   for g in hit)  # fmt: skip
+        got = math.fsum(c.gain_pct or 0.0 for g in hit for c in g if c.delivered)
+        top = math.fsum(c.gain_pct or 0.0 for g in hit for c in g if c.best_subset)
+        parts.append([arm, lib, len(hit), same, f"{got:.1f}", f"{top:.1f}"])
+    return [] if not runs else [
+        "## 7 Combine record (S2)", "",
+        "Each kept change at combine: delivered, or the reason it was not (its skip, "
+        "or the combination's); hunk-identical keeps count once; eligible is part 3's "
+        "record (the survivor left the blocked keep's counted unit made), no trial.", "",
+        *_table(("arm", "library", "kept", "kept (duplicates once)", "recorded",
+                 "delivered", "not delivered", "no reason", "eligible pairs"), runs),
+        *_table(("arm", "library", "not delivered because", "keeps"), why),
+        "Per run, the conflict components (two or more keeps that are not duplicates): "
+        "how many delivered their max-sum conflict-free subset, and the standalone "
+        "gains delivered against that subset's. Sums are not combines: only the tip's "
+        "re-test is a delivered gain.", "",
+        *_table(("arm", "library", "conflict components", "delivering the max-sum subset",
+                 "delivered (standalone points)", "max-sum subset (standalone points)"), parts),
+    ]  # fmt: skip
+
+
 def render(r: Report) -> str:
     band, banded = _band(r)
     common = [n for n in E1_REPOS if all((a, n) in r.runs for a in r.arms)]
@@ -455,6 +509,7 @@ def render(r: Report) -> str:
         *_table(("arm", "library", "trialled", "kept", "seeds shown", "seeded calls",
                  "seeded USD", "seeded USD per round-2 win"), seeds),
         *_realised(r),
+        *_combined(r),
     ])  # fmt: skip
 
 
