@@ -806,6 +806,44 @@ blocks it.
     - its own knowledge of public upstream fixes.
   - **Why:** V9 is O19's held-out exam and the charter's K4 rung, and a prior
     built from its keys would contaminate both.
+- **O55. Society rules for emergence round 2 onward (owner, 2026-11-06).** The
+  rules are in full in the charter
+  (`.claude/handoff/step3/idea-lab/emergence/charter.md`, "Society rules").
+  - **Seats:** ten a round plus a bench of three.
+    - Round 2 has the eight frameworks plus Scaling and Contrarian.
+    - The bench, in order: Memory & allocation, Verifier-designer, Interpreter
+      specialist, then Editor's advocate, Workload designer, Diversity
+      archivist, Budget economist.
+  - **Memory:** each seat keeps an append-only library file at
+    `emergence/library/<seat>.md`. Before posting, a seat reads its own file,
+    the top scorer's file and the university pack.
+  - **Office hours:** one factual question per proposer per wave, answered on
+    the board.
+  - **Mentoring:** a judge writes into each refuted seat's file what evidence
+    would have saved the proposal.
+  - **Points (verified outcomes only):**
+    - +1 for surviving the judges;
+    - +3 for a unit built, reviewed and gated;
+    - +10 for a live run that beats its pre-registered bar;
+    - +2 for a critique that led to a withdrawal or a kept merge;
+    - −3 for a fabricated number or a touch of the FIXED list.
+    - Merges split the credit, points halve each round, and judges earn nothing
+      for refutations.
+  - **Points control:**
+    - The bottom three seats rotate against the bench.
+    - The top two seats get the Fable budget.
+    - Points never touch the judges, the bars, the band, the FIXED list or what
+      counts as a win.
+    - A seat that survives three rounds running without a live win stops earning
+      survival points.
+  - **Round 1 under O55:** the round-1 report seeds the library files and the
+    first points from round 1's verified outcomes. Round 1's judges already
+    write the mentoring notes.
+  - **Why:**
+    - Points track verified outcomes only, so a seat cannot score by persuasion.
+    - Halving keeps old wins from protecting a stale seat.
+    - Points never reach the judges, the bars or the band, which keeps the
+      incentive away from the measures.
 - **O54. The charter: the engine and its improvement loop (owner, 2026-11-06).**
   Recorded in full in `.claude/handoff/step3/idea-lab/emergence/charter.md`. The
   owner's message numbered it O51, but that number already held the CI timeout

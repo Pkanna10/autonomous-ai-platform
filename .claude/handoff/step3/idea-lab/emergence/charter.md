@@ -70,3 +70,63 @@ All are read against the twin's band.
    owner added it the same day. On sqlparse, identical settings kept 9 ideas
    against 7 and combined +39.8 % against +21.1 %: round 1's keeps shape
    round 2.
+
+## Society rules, from round 2 (O55, owner, 2026-11-06)
+
+### Seats
+
+Each round has ten seats, plus a bench of three.
+
+- **Round 2's seats:**
+  - the eight current frameworks;
+  - **Scaling:** shadow scaling-judge rows and slope-changing ideas;
+  - **Contrarian:** reads all of wave 1's proposals and names the shared belief
+    most likely to be wrong, with its test.
+- **The bench, in order:** Memory & allocation, Verifier-designer, Interpreter
+  specialist, then Editor's advocate, Workload designer, Diversity archivist,
+  Budget economist.
+
+### Memory
+
+- **Library files:** each seat has `emergence/library/<seat>.md`, append-only
+  across rounds. It holds the seat's proposals, their fates, the critics'
+  objections and the judges' refutation notes.
+- **Reading before posting:** a seat reads its own file and the round's top
+  scorer's file. It also reads the university pack: the charter, the last
+  round report and the judges' refutation patterns.
+
+### Office hours
+
+Each proposer may ask the facts agent one factual question per wave. The answer
+goes on the board.
+
+### Mentoring
+
+For each proposal it refutes, a judge writes into that seat's library file what
+evidence would have saved it.
+
+### Points
+
+Points come from verified outcomes only.
+
+| Outcome | Points |
+| --- | ---: |
+| Survives the judges | +1 |
+| Built, reviewed and gated | +3 |
+| A live run beats its pre-registered bar against the twin's band | +10 |
+| A critic's critique led to a withdrawal, or to a merge the judges kept | +2 |
+| A fabricated number, or a touch of the FIXED list | −3 |
+
+- Merged proposals split the credit.
+- Points halve each round.
+- Judges earn nothing for refutations.
+
+### Points control
+
+- The bottom three seats rotate out against the bench.
+- The top two seats get the Fable budget.
+- The top scorer's library file is required reading for all seats.
+- Points never touch the judges, the bars, the band, the FIXED list or what
+  counts as a win.
+- A seat that survives the judges three rounds running without a live win stops
+  earning survival points.
