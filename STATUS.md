@@ -795,6 +795,17 @@ blocks it.
     load before choosing: the group, and a serial run after the parallel suite
     (in the gate script, `pnpm stage-gate` and `ci.yml`). The timed cases are
     the `slow`-marked tests from line 608 on.
+- **O52. Reading X2's arms (owner, 2026-11-06).** No single library decides.
+  - **Per library, the kept count:**
+    - a gap of 0 is inside the measured band (the twin's three pairs);
+    - a gap of 1 is "outside the measured band, not significant";
+    - larger gaps are outside the measured band.
+  - **Per arm, the kept count:** a sign count across the eight libraries; an arm
+    keeps more only if it keeps more on more libraries than it keeps fewer.
+  - **Per arm, combine gain:** the mean difference against X2-0 across the
+    libraries must exceed the twin's mean gap.
+  - **The build:** the X2 report is built that way (V-x2rep2, a follow-up to
+    V-x2rep's literal "under 1" reading).
 - **O51. The CI timeout, V-cal's calls and X2's noise band (owner,
   2026-11-06).**
   - **CI:** the Python CI job's timeout rises from 15 to 20 minutes, for O49's
@@ -3622,6 +3633,32 @@ worktree", 4.4.0) or in the builder rules every brief carries.
     of 9 count trustworthy. The reviewer's trim would reach about 2.6x and drop
     the picks combine cross-check. Accepted as harness code, like V-rep3 and
     V-picks.
+- V-x2rep (O50, O51: the X2 report). `tests/live/ideas_x2_report.py` writes
+  `x2.md` from X2's rows, offline and deterministic.
+  - **The header** says, before any comparison, that X2 is read arm to arm only
+    (O50) and states O51's noise band; then the sources.
+  - **The sections:**
+    - the twin's band, measured;
+    - per arm and library: trialled, kept, combine, cost, seeded calls,
+      compounds, cost per win;
+    - each arm against X2-0, labelled within the band (noise), outside it, or
+      unbanded;
+    - wins by lane, round 1 against round 2;
+    - the seeded call's cost per round-2 win.
+  - **Reading rules:**
+    - a run with no combine, or a combine that did not hold, delivers 0 gain;
+    - band labels use the unrounded difference;
+    - "under 1 on the kept count" was read literally (a gap of 1 outside the
+      band); O52 replaces it (V-x2rep2).
+  - **On dispatches 1-3:** the twin's largest gaps are 3.9 points of combine
+    gain and 0 kept. X2-V against X2-0 reads pyparsing +1 kept (outside), +0.2
+    points (noise); tomli -2 kept (outside), +0.0 (noise); sortedcontainers -2
+    kept and -13.4 points (both outside).
+  - **Review nits, left as they are:**
+    - an arm library with no X2-0 run is omitted silently from the
+      arm-against-X2-0 section (unreachable in the dispatch order);
+    - a 3.96-point delta prints as +4.0 but is labelled noise.
+  - **Size:** 290 code lines against its row of 200 (1.45x).
 - **Known gate flake: the discovery corpus's wall-clock guards on Python 3.11.**
   Under the lab gate's full parallel load, one of
   `test_discovery_corpus_guards.py`'s timed cases failed in two gates out of
