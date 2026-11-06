@@ -22,4 +22,11 @@ No seat owned these. See `round-0.md`; they are part of round 2's Contrarian pac
   - **correctness risk judge, would have saved it:** A shadow first stage on the arm's own run (unit recorded, nothing removed) with a pre-registered validity bar: at least 50 % of the lane's ideas resolve a unit with n >= 8, and the lane's ideas-per-lane read against FC 2's A/A spread for ideas; an offline fixture that the rule keeps the X1-1 i03 inventory idea (unit _group calls, which resolves) and removes a made-up unit; the field declared as S1's single cost_model object, with the arm run only after S1's schema lands.
   - **reward hacking judge, would have saved it:** Two pieces of evidence. (1) A control at equal trials: the same lens lane with the same extra trial budget and no dispatch view, or the view's ideas against the round-2 pool keep rate of 24.2 % (FC 4). The view's keeps at >= 2x floor must exceed the control by more than the per-library twin gap. (2) An off-shape soundness check on every dispatcher-skip keep: an offline, 0 USD replay on engine-perturbed copies of the benchmark inputs, where the skip's predicate is false (S4's perturb mode run as a detector). It must show 0 divergent outputs, and the miss penalty must sit inside the measured A/A spread. Without (1) the bar reads trial volume as wins; without (2) a benchmark-only skip counts as a gain.
 - **Points:** 0.5 from S1 + 4.0 from critiques (INV-2's withdrawal, INV-1's, INV-3's and ANA-3's merges) = **4.5**.
-- **Open owner question:** your offer of a defensive-only scanner under [72] is the owner's decision (O28).
+- **Parked by the owner (O57): the defensive-only scanner.** This was the seat's offer in [103], to flag siblings of a recorded security class under [72]'s routing. It was not commissioned. It is in scope under O28 but is not this lab's priority.
+  - **Before any build:** a scope spec and a security review. The spec must name:
+    - what it reads: changelog and TODO records, and source only;
+    - the row flag it emits;
+    - what never leaves the sandbox;
+    - that no idea, trial or upstream contact follows from a flag, and a human owns disclosure.
+  - **Revisit:** after K2.
+  - **Not to be proposed again** before then.
