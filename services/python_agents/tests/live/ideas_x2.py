@@ -30,7 +30,8 @@ another engine than Opus 5.5 (``ideas_slice.check_engine``).
 on, its profile and views live, on a fresh clone at the commit E1 recorded
 (``ideas_probe``'s facts fixture, refused otherwise), every corpus guard
 (``discovery.run_engine``). ``$LIVE_X2_DISPATCH`` names a dispatch's arm and
-libraries, ``ARM:lib,lib`` (``dispatches``: four runs each, five dispatches).
+libraries, ``ARM:lib,lib`` (``dispatches``: four runs each, five dispatches);
+the live module's cases are ``EVERY_RUN``, every arm's runs, the plan's first.
 
 **Spend**: a run's hard cap (``run_cap``) is the least that lets the seeded
 second call (D64) pass the engine's own reservations (``nodes._discovery_cap``,
@@ -176,6 +177,11 @@ LIBRARIES: Final = {r.name: r for r in dx.OSS_SELECTABLE if r.name in ip.E1_REPO
 Run = tuple[X2Arm, OssRepo]
 ALL_RUNS: Final[tuple[Run, ...]] = tuple(
     (a, LIBRARIES[n]) for a in X2_ARMS for n in a.repos
+)
+# the live module's cases: the plan's 20, then the off-plan arms' runs, so
+# a dispatch of any arm selects a case (E1, run 42232651527, skipped all 20)
+EVERY_RUN: Final[tuple[Run, ...]] = tuple(
+    (a, LIBRARIES[n]) for a in EVERY_ARM for n in a.repos
 )
 
 

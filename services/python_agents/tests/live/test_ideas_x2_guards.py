@@ -77,6 +77,7 @@ from . import ideas_slice as isl
 from . import ideas_x2 as x2
 from . import oss
 from . import test_ideas_slice_guards as sg
+from . import test_ideas_x2_live as live
 from . import test_oss_guards as og
 from .conftest import SUITE_CAP_ENV, TESTS_DIR, LiveRun, StartLive, restore_host_key
 from .corpus import RESULTS_ENV, settings_trial_budget
@@ -728,3 +729,39 @@ def test_the_live_module_reads_its_plan_first_and_runs_each_planned_run() -> Non
     assert len(x2.ALL_RUNS) == 20 and {(a.key, r.name) for a, r in x2.ALL_RUNS} == {
         (a.key, n) for a in x2.X2_ARMS for n in a.repos
     }
+
+
+def _live_cases() -> tuple[x2.Run, ...]:
+    """``test_ideas_x2``'s parametrised (arm, library) cases, as collected."""
+    marks = cast(list[pytest.Mark], vars(live.test_ideas_x2)["pytestmark"])
+    (mark,) = [m for m in marks if m.name == "parametrize"]
+    assert mark.kwargs["ids"] == [f"{a.key}-{r.name}" for a, r in mark.args[1]]
+    return tuple(mark.args[1])
+
+
+def _arm_plan(arm: x2.X2Arm, names: str) -> x2.X2Plan:
+    environ = {**x2.arm_env(arm), x2.DISPATCH_ENV: f"{arm.key}:{names}"}
+    return x2.x2_plan({**environ, SUITE_CAP_ENV: "38"})
+
+
+def test_every_arms_dispatch_selects_live_cases_only() -> None:
+    """E1 (run 42232651527): ``X2-S:sqlparse,tomli,mistune`` selected runs no
+    case held, so the job skipped all 20 and passed at 0 USD. Every arm's
+    every library, and E1's and E2's dispatches, select only live cases."""
+    cases = _live_cases()
+    for arm in x2.EVERY_ARM:
+        for name in arm.repos:
+            runs = _arm_plan(arm, name).runs
+            assert len(runs) == 1 and runs[0] in cases, f"{arm.key}:{name}"
+    for names, n in (("sqlparse,tomli,mistune", 3), ("sqlparse,more_itertools", 2)):
+        runs = _arm_plan(x2.X2_S, names).runs
+        assert len(runs) == n and all(r in cases for r in runs), names
+
+
+def test_the_live_cases_are_every_arms_runs_the_plans_first() -> None:
+    assert _live_cases() == x2.EVERY_RUN
+    assert x2.EVERY_RUN[: len(x2.ALL_RUNS)] == x2.ALL_RUNS  # the 20 ids unchanged
+    assert [(a.key, r.name) for a, r in x2.EVERY_RUN] == [
+        (a.key, n) for a in x2.EVERY_ARM for n in a.repos
+    ]
+    assert len({(a.key, r.name) for a, r in x2.EVERY_RUN}) == len(x2.EVERY_RUN) == 32
