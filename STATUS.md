@@ -818,9 +818,14 @@ blocks it.
     - Bounds first and Pre-mortem tie at the top. Both library files are
       required reading, and both seats take the Fable budget.
     - The points are recomputed after E1 and E2 add any +10s.
-  - **Round 2's seats:**
-    - Out: Contradiction, Analogy transfer and Shape specialisation.
-    - In: Scaling, Contrarian, and Memory & allocation.
+  - **Round 2's seats:** ten, as O55 sets. Corrected by the owner the same day;
+    the first record read as three out and three in, which leaves eight.
+    - Kept: Bounds first, Expert prior, Inversion, Ten-x and Pre-mortem.
+    - New: Scaling, Contrarian, Memory & allocation, Verifier-designer and
+      Interpreter specialist.
+    - Bench, in order: Contradiction, Analogy transfer, Shape specialisation,
+      then Editor's advocate, Workload designer, Diversity archivist and Budget
+      economist.
   - **Expert prior's defensive scanner:** not commissioned. It is in scope under
     O28 but is not this lab's priority.
     - It is parked in the seat's library file.
