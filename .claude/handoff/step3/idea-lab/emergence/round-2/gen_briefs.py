@@ -48,6 +48,12 @@ LIVE = ('Live plans (O58): the balance is 21.08 USD for the whole round; a run c
         'runs fit the round. Plans must handle variance: several runs on fewer libraries (for example the same library '
         'two or three times), each read against that library\'s own twin gap and O52\'s arm call. Nothing is dispatched '
         'without the owner\'s approval.')
+LIVE2 = ('Window 2 (owner, round-2 board entry [5]): round 2\'s live ceiling is now 120 USD under the variance rule '
+         '(at least 3 runs per library per arm, several libraries, twins wherever arms are compared); 80 USD is reserved '
+         'for the ladder and not available; a run\'s cap need is 9.35 USD and its spend about 2-3 USD; no plan is costed '
+         'against the new key until the ideas-validate smoke confirms it. In this revision you may rewrite your live '
+         'plan to that ceiling: say the arms, libraries, runs per library per arm, the twin, the total cap need and the '
+         'expected spend.')
 COMMON = (
     'Every proposal targets the ENGINE (what lanes see, what they must produce, how ideas are selected, realised, '
     'compounded or judged; shadow judges and the marker may be proposed on, frozen judges may not) and carries these '
@@ -147,7 +153,7 @@ for i, s in enumerate(SEATS):
         f'with exactly one of: KEPT (unchanged, and why the objection does not hold), REVISED (the changed parts in full: '
         f'mechanism, engine files, measure and bar with the twin\'s band, record-only or gain-bearing, cost and live plan '
         f'under the rule, strongest failure), WITHDRAWN (why), or MERGED INTO <other id> (why, and what of yours it must keep). '
-        f'Do not post new proposals. No office-hours question in this wave. {HANDBACK} Form: KEPT: <ids> REVISED: <ids> WITHDRAWN: <ids> MERGED: <id -> into> ENTRIES: <entry numbers>.')
+        f'{LIVE2} Do not post new proposals. No office-hours question in this wave. {HANDBACK} Form: KEPT: <ids> REVISED: <ids> WITHDRAWN: <ids> MERGED: <id -> into> ENTRIES: <entry numbers>.')
 
 briefs['facts'] = (
     f'You are the Facts agent (role: facts) of emergence round 2, read-only. {CHARTER} {SAFETY} {BOARDRULE}\n'
