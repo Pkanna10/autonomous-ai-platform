@@ -765,4 +765,4 @@ def test_the_live_cases_are_every_arms_runs_the_plans_first() -> None:
     assert [(a.key, r.name) for a, r in x2.EVERY_RUN] == [
         (a.key, n) for a in x2.EVERY_ARM for n in a.repos
     ]
-    assert len({(a.key, r.name) for a, r in x2.EVERY_RUN}) == len(x2.EVERY_RUN) == 32
+    assert len({(a.key, r.name) for a, r in x2.EVERY_RUN}) == len(x2.EVERY_RUN) == 35

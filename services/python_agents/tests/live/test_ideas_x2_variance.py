@@ -52,8 +52,9 @@ def test_only_arms_with_x2_0s_requests_and_delivery_are_pool_draws() -> None:
     delivery and O52 called its kept count, so it never joins the pool."""
     assert {a.key: a.aa for a in x2.EVERY_ARM} == {
         "X2-0": "full", "X2-0'": "full", "X2-V": "none", "X2-S": "none", "X2-C": "full",
+        "X2-SV": "full",
     }  # fmt: skip
-    assert xr.POOL == frozenset({"X2-0", "X2-0'", "X2-C"})
+    assert xr.POOL == frozenset({"X2-0", "X2-0'", "X2-C", "X2-SV"})
 
 
 def test_every_arm_records_its_views_and_the_engine_default_is_off() -> None:
@@ -74,7 +75,11 @@ def _need(runs: int) -> dict[str, str]:
 
 def test_the_default_ledger_adds_no_minute() -> None:
     cfg = x2.arm_settings(x2.X2_0)
-    assert x2.RIDER_SECONDS == {VIEW: x2.Rider()} and x2.RIDER_MEASURED == {}
+    assert x2.RIDER_SECONDS == {
+        VIEW: x2.Rider(),
+        ("SHADOW_VERIFY", "record"): x2.SHADOW_RIDER,
+    }
+    assert x2.RIDER_MEASURED == {}
     assert x2.rider_seconds(cfg) == 0.0 and x2.run_minutes(cfg) == 89
 
 

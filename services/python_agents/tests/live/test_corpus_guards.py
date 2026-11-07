@@ -2192,6 +2192,7 @@ def test_the_picks_suite_exports_the_op_count_judge_alone(tmp_path: Path) -> Non
         "X2-0':idna,tomli",
         "X2-C:sqlparse",
         "X2-S:sqlparse,tomli",
+        "X2-SV:sqlparse",
     ],
 )
 def test_the_x2_suite_exports_its_arms_settings_exactly(

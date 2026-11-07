@@ -92,7 +92,7 @@ from autonomous_ai_agents.common.models import (
     Workload,
 )
 from autonomous_ai_agents.common.paths import normalize_path
-from autonomous_ai_agents.execution import _opcount_shim
+from autonomous_ai_agents.execution import _capture_shim, _opcount_shim
 from autonomous_ai_agents.execution.outputs import (
     Retained,
     RunOutput,
@@ -961,6 +961,133 @@ def _unit_rows(
             hardware: dict[str, JsonScalar] = {**base, UNIT_KEY: one.unit, **extra}
             rows.append(_row(workload, trial_id, METRIC_UNIT_CALLS, "calls", (float(n),), hardware))  # fmt: skip
     return rows
+
+
+METRIC_SHADOW_CALLS = "shadow_calls"
+"""The capture launch's rows (S4): the ``sequence`` leg, then one per point."""
+SHADOW_LEG_KEY, SHADOW_CORPUS_KEY = "shadow_leg", "shadow_corpus"
+SHADOW_SEQUENCE = "sequence"
+SHADOW_CAPTURED_KEY, SHADOW_DISTINCT_KEY = "shadow_captured", "shadow_distinct"
+SHADOW_RAISED_KEY, SHADOW_SKIPPED_KEY = "shadow_raised", "shadow_skipped"
+CAPTURE_NAME = "capture.json"
+"""The capture shim's output, in the phase's scratch root."""
+CAPTURE_SHIM = Path(_capture_shim.__file__).resolve()
+CAPTURE_TIMEOUT_FACTOR = 6.0
+"""The capture launch runs the workload once, then replays its calls twice
+under cProfile: the workload's timeout times this (the launch is not timed)."""
+_POINT = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+", re.ASCII)
+_CORPUS = re.compile(r"[0-9a-f]{64}")
+
+
+@dataclass(frozen=True)
+class CapturePoint:
+    """One point of a capture: its captured calls, distinct inputs, the
+    distinct-once leg's counted calls and the replayed calls that raised."""
+
+    point: str
+    calls: int
+    distinct: int
+    counted: int
+    raised: int
+
+
+@dataclass(frozen=True)
+class Captured:
+    """One capture launch (S4): the corpus hash, the sequence leg's counted
+    calls, the skipped points and each point's leg."""
+
+    corpus: str
+    sequence: int
+    skipped: int
+    points: tuple[CapturePoint, ...]
+
+
+def _capture_point(value: object) -> CapturePoint:
+    if not isinstance(value, dict) or set(value) != set(_capture_shim.POINT_KEYS):
+        raise CountFormatError("a point must hold exactly point, calls, distinct, counted, raised")  # fmt: skip
+    name = value["point"]
+    if not (isinstance(name, str) and len(name) <= _capture_shim.MAX_NAME_CHARS
+            and _POINT.fullmatch(name)):  # fmt: skip
+        raise CountFormatError("a point must be named module.function")
+    found = CapturePoint(name, *(_calls(value[k], k) for k in _capture_shim.POINT_KEYS[1:]))  # fmt: skip
+    if found.distinct > found.calls or found.raised > found.distinct:
+        raise CountFormatError("a point's distinct inputs and raised calls exceed its calls")  # fmt: skip
+    return found
+
+
+def parse_capture(data: bytes) -> Captured:
+    """The capture shim's document, or ``CountFormatError``: ASCII JSON of at
+    most the shim's cap, exactly its keys, version 1, a sha256 corpus,
+    bounded integer counts and at most ``MAX_POINTS`` named points."""
+    if len(data) > _capture_shim.MAX_DOC_BYTES:
+        raise CountFormatError(f"is larger than {_capture_shim.MAX_DOC_BYTES} bytes")
+    if not data.isascii():
+        raise CountFormatError("is not ASCII JSON")
+    try:
+        doc: object = json.loads(
+            data.decode("ascii"), object_pairs_hook=_unique, parse_constant=_constant
+        )
+    except (ValueError, RecursionError):
+        raise CountFormatError("is not valid JSON") from None
+    if not isinstance(doc, dict) or set(doc) != set(_capture_shim.DOC_KEYS):
+        raise CountFormatError(f"its top level must hold exactly {', '.join(_capture_shim.DOC_KEYS)}")  # fmt: skip
+    if type(doc["version"]) is not int or doc["version"] != _capture_shim.VERSION:
+        raise CountFormatError(f"version must be the integer {_capture_shim.VERSION}")
+    corpus, points = doc["corpus"], doc["points"]
+    if not isinstance(corpus, str) or not _CORPUS.fullmatch(corpus):
+        raise CountFormatError("corpus must be a sha256 in lower-case hex")
+    if not isinstance(points, list) or len(points) > _capture_shim.MAX_POINTS:
+        raise CountFormatError(f"points must be a list of at most {_capture_shim.MAX_POINTS}")  # fmt: skip
+    return Captured(corpus, _calls(doc["sequence"], "sequence"),
+                    _calls(doc["skipped"], "skipped"), tuple(map(_capture_point, points)))  # fmt: skip
+
+
+def capture_argv(command: Sequence[str], out: Path, root: Path) -> list[str]:
+    """``command`` under the capture shim, which writes ``out`` and wraps the
+    modules under ``root``; the profiler's ``NotProfiledError`` when the
+    shim cannot run it."""
+    from autonomous_ai_agents.execution.profiler import _split
+
+    options, kind, name, args = _split(command)
+    return [command[0], *options, str(CAPTURE_SHIM), str(out), str(root), kind, name, *args]  # fmt: skip
+
+
+def capture_workload(
+    phase: Phase, workload: Workload, *, trial_id: str | None = None, side: str = ""
+) -> Counted:
+    """One capture launch of ``workload`` in ``phase`` (S4): a ``sequence``
+    row and one row per point, or a note and no row (never a failure)."""
+    from autonomous_ai_agents.execution.profiler import NotProfiledError
+
+    label = f"workload {workload.name!r}{side}"
+    out = phase.scratch / CAPTURE_NAME
+    try:
+        argv = capture_argv(workload.command, out, phase.worktree)
+    except NotProfiledError as reason:
+        return Counted((), (f"{label} is not captured: {reason}",))
+    notes: list[str] = []
+    timeout = workload.timeout_s * CAPTURE_TIMEOUT_FACTOR
+    try:
+        sample = launch(phase, argv, workload.working_dir, timeout, "the capture run",
+                        notes, workload_id=workload.id)  # fmt: skip
+        data = bytearray()
+        read_capped(out, _capture_shim.MAX_DOC_BYTES, data.extend)
+        found = parse_capture(bytes(data))
+    except RunFailure as failure:
+        said = [f"{label}: {note}" for note in notes]
+        return Counted((), (*said, f"{label} is not captured: {failure.reason}"))
+    except (UnusableError, CountFormatError) as problem:
+        said = [f"{label}: {note}" for note in notes]
+        return Counted((), (*said, f"{label} is not captured: the capture output {problem}"))  # fmt: skip
+    host = _host(phase.policy, 1, int(sample.fs_isolated), int(sample.net_isolated))
+    host[SHADOW_CORPUS_KEY] = found.corpus
+    first: dict[str, JsonScalar] = {SHADOW_LEG_KEY: SHADOW_SEQUENCE, SHADOW_SKIPPED_KEY: found.skipped}  # fmt: skip
+    legs: list[tuple[dict[str, JsonScalar], int]] = [(first, found.sequence)]
+    legs += [({SHADOW_LEG_KEY: p.point, SHADOW_CAPTURED_KEY: p.calls, SHADOW_DISTINCT_KEY: p.distinct,
+               SHADOW_RAISED_KEY: p.raised}, p.counted) for p in found.points]  # fmt: skip
+    rows = tuple(_row(workload, trial_id, METRIC_SHADOW_CALLS, "calls", (float(n),), host | extra)
+                 for extra, n in legs)  # fmt: skip
+    return Counted(rows, tuple(f"{label}: {note}" for note in notes))
 
 
 @dataclass(frozen=True)

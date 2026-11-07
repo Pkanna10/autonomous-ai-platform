@@ -202,7 +202,7 @@ def test_without_a_record_the_report_has_no_realisation_section(tmp_path: Path) 
     base = rg._rows("X2-0", "tomli", [(2, ["obvious"])])
 
     assert "Realisation" not in rg._text(rg._write(tmp_path / "x.jsonl", base))
-    assert xr.ARMS[-1] == "X2-C"
+    assert xr.ARMS[-2:] == ("X2-C", "X2-SV")
 
 
 def test_a_malformed_realisation_is_refused(tmp_path: Path) -> None:

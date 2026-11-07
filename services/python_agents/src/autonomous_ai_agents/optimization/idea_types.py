@@ -402,3 +402,32 @@ class Realisation(EngineModel):
     moved: float | None
     label: RealisationLabel
     kept_not_fired: bool
+
+
+class ShadowLabel(StrEnum):
+    """How a trial's counted cut holds on distinct inputs (S4, VER-1,
+    ``shadow_verify.shadow_reading``)."""
+
+    repetition_fit = "repetition_fit"
+    partial = "partial"
+    clear = "clear"
+    no_count_gain = "no_count_gain"
+    corpus_mismatch = "corpus_mismatch"
+    uncapturable = "uncapturable"
+
+
+class ShadowReading(EngineModel):
+    """A trial's shadow reading (S4): the benchmark's counted cut over its
+    captured calls (``bench_cut``, the sequence legs), the distinct-once
+    cut (``distinct_cut``) and the share of the first the second loses;
+    the trial side's points, captured calls, distinct inputs and replayed
+    calls that raised. A record only: never a verdict, seed or prompt."""
+
+    label: ShadowLabel
+    share: _Unit | None
+    bench_cut: float | None
+    distinct_cut: float | None
+    points: _Count
+    calls: _Count
+    distinct: _Count
+    raised: _Count

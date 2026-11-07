@@ -700,6 +700,9 @@ numbers that decide anything are copied into the ledger).
     ([49]); the pool without self-inclusion reads the archives' X2-S runs as O51
     does, 4 of 5 outside, so the change is the printed rate, not the call.
   - **Until the owner rules,** O51 as amended and O52 stay the ruling reading.
+  - **Pool amended with S4 (Lead, before any run):** listing X2-SV (X2-C plus
+    record-only shadow readings, requests identical to X2-C) adds it to the
+    pool, which is now X2-0, X2-0', X2-C and X2-SV, still fixed before any run.
 
 ### 2026-11-01 (owner: the marker-validation bar, O37; fixed before any marker result)
 

@@ -45,7 +45,7 @@ def test_x2_s_is_x2_0_with_the_count_record_and_site_stacks_on() -> None:
     assert x2.run_minutes(x2.arm_settings(x2.X2_S)) == x2.run_minutes(x2.arm_settings(x2.X2_0))  # fmt: skip
     plan = x2.x2_plan({x2.DISPATCH_ENV: "X2-S:sqlparse,tomli", SUITE_CAP_ENV: "19"})
     assert [(a.key, r.name) for a, r in plan.runs] == [("X2-S", "tomli"), ("X2-S", "sqlparse")]  # fmt: skip
-    assert xr.ARMS[-2:] == ("X2-S", "X2-C")
+    assert xr.ARMS[-3:] == ("X2-S", "X2-C", "X2-SV")
 
 
 class _Stacked(xg._Engine):

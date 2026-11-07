@@ -600,6 +600,13 @@ class Settings(BaseSettings):
     with the fence token masked, and the model that served it), so twin
     runs show whether they were shown the same view. No request changes;
     off keeps every result byte for byte."""
+    SHADOW_VERIFY: Literal["off", "record"] = "off"
+    """Emergence round 2, S4: ``record`` adds one capture launch per
+    workload and side after the counted runs (``_capture_shim``: the
+    benchmark's own package calls replayed with their repetition and each
+    distinct input once), so the trial and its base give ``shadow_calls``
+    rows for the shadow reading (``shadow_verify``); no request, prompt or
+    verdict changes. ``off`` launches nothing and keeps every row."""
     SCALING_JUDGE: bool = False
     """G6b, shadow mode: every workload with a size setting
     (``Workload.scale``) runs at its 2-3 sizes on both sides, and the scaling

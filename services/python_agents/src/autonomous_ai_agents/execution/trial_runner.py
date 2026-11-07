@@ -112,6 +112,14 @@ its sizes (``measure.measure_scaling``): a paired trial interleaved with its
 twin (``scale_wall_time_s`` rows in ``base_measurements``), an unpaired trial
 on itself, the baseline on the base. A scaling run that fails is a note,
 never a failed trial or an ``EngineError``: the scaling judge only records.
+
+Capture runs (emergence round 2, S4, ``shadow``; default ``SHADOW_VERIFY``
+not ``off``): after the scaling runs, every workload gets one capture launch
+per side (``measure.capture_workload``): a paired trial on its twin
+(``shadow_calls`` rows in ``base_measurements``) and on itself, an unpaired
+trial on itself, the baseline on the base. A capture that fails is a note,
+never a failed trial or an ``EngineError``; no judge reads the rows (the
+shadow reading, ``shadow_verify``, is a record).
 """
 
 from __future__ import annotations
@@ -189,6 +197,7 @@ from autonomous_ai_agents.execution.measure import (
     Phase,
     RunOnce,
     baseline_test_count,
+    capture_workload,
     count_workload,
     is_unit,
     make_phase,
@@ -555,9 +564,11 @@ class _PhaseOwner:
         scorer_notes: NoteTap | None = None,
         count_ops: bool = False,
         scaling: bool = False,
+        shadow: bool | None = None,
     ) -> None:
         self._project = project
         self._count_ops, self._scaling = count_ops, scaling
+        self._shadow = settings.SHADOW_VERIFY != "off" if shadow is None else shadow
         self._quality, self._scorer_notes = QualityHooks(scorer), scorer_notes
         self._git = GitWorkspace(Path(project.root_path)) if git is None else git
         self._phase = functools.partial(
@@ -634,8 +645,9 @@ class _PhaseOwner:
         self._note(prefix, suite.notes)
         counted_base, counted = self._count(phase, twin, workloads, prefix, trial_id, units)  # fmt: skip
         scaled_base, scaled = self._scale(phase, twin, workloads, prefix, trial_id)
-        return (*base, *counted_base, *scaled_base), (
-            *rows, *suite.measurements, *counted, *scaled,
+        shadow_base, shadow = self._shadow_runs(phase, twin, workloads, prefix, trial_id)  # fmt: skip
+        return (*base, *counted_base, *scaled_base, *shadow_base), (
+            *rows, *suite.measurements, *counted, *scaled, *shadow,
         )  # fmt: skip
 
     def _count(
@@ -683,6 +695,30 @@ class _PhaseOwner:
             base.extend(scaled.a)
             rows.extend(scaled.b)
             self._note(prefix, scaled.notes)
+        return tuple(base), tuple(rows)
+
+    def _shadow_runs(
+        self,
+        phase: Phase,
+        twin: Phase | None,
+        workloads: Sequence[Workload],
+        prefix: str,
+        trial_id: str | None,
+    ) -> tuple[tuple[Measurement, ...], tuple[Measurement, ...]]:
+        """With ``shadow`` (S4), one capture launch per workload on the twin
+        (A) and on ``phase``: (the twin's rows, ``phase``'s rows); notes
+        emitted."""
+        base: list[Measurement] = []
+        rows: list[Measurement] = []
+        for workload in workloads if self._shadow else ():
+            if twin is not None:
+                a = capture_workload(twin, workload, side=" A")
+                base.extend(a.rows)
+                self._note(prefix, a.notes)
+            side = "" if twin is None else " B"
+            b = capture_workload(phase, workload, trial_id=trial_id, side=side)
+            rows.extend(b.rows)
+            self._note(prefix, b.notes)
         return tuple(base), tuple(rows)
 
     def _checked_out(self, ref: str) -> bool:
@@ -881,6 +917,7 @@ class GitTrialRunner(_PhaseOwner):
         count_ops: bool = False,
         scaling: bool = False,
         count_units: bool | None = None,
+        shadow: bool | None = None,
     ) -> None:
         default = settings.IDEAS_COUNT_CONTRACT != "off"
         self._count_units = default if count_units is None else count_units
@@ -897,7 +934,7 @@ class GitTrialRunner(_PhaseOwner):
         super().__init__(
             project, git=git, network=network, fs=fs, platform=platform,
             base_env=base_env, run=run, on_note=on_note, scorer=scorer,
-            count_ops=count_ops, scaling=scaling,
+            count_ops=count_ops, scaling=scaling, shadow=shadow,
         )  # fmt: skip
         self._prefix = settings.TRIAL_BRANCH_PREFIX if prefix is None else prefix
         problem = branch_prefix_problem(self._prefix)

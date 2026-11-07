@@ -78,6 +78,14 @@ served model per lane request) and the run row ``minutes_planned`` and
 CPU (per run, trial and keep; ``RIDER_MEASURED`` the last measured, the
 larger counts), which ``run_minutes`` adds, so ``check_plan`` refuses a
 dispatch past the job's minutes with its riders.
+
+**Shadow** (emergence round 2, S4): X2-SV is X2-C with
+``SHADOW_VERIFY=record`` on sqlparse, tomli and mistune, off the plan (a pool
+draw: the trial runner reads the setting, no request); it is dispatchable,
+in ``EVERY_ARM`` with its ci.yml case. Its hypothesis rows
+add ``shadow_verify``, the first measured trial's reading
+(``shadow_verify.shadow_reading``, its twin against itself), and its run row
+``shadow_aa``, the twins that differ from the first (the A/A, 0).
 """
 
 from __future__ import annotations
@@ -122,6 +130,7 @@ from autonomous_ai_agents.optimization.evolve import (
 from autonomous_ai_agents.optimization.idea_dedupe import IdeaKey, recorded_keys
 from autonomous_ai_agents.optimization.idea_pipeline import LANE_VIEW, SEEDED_CALL
 from autonomous_ai_agents.optimization.idea_types import LENS_LANES, Lane
+from autonomous_ai_agents.optimization.shadow_verify import shadow_aa, shadow_reading
 from autonomous_ai_agents.orchestrator.factory import build_context
 from autonomous_ai_agents.orchestrator.main import EngineRunResult
 
@@ -184,7 +193,10 @@ X2_C: Final = X2Arm("X2-C", ip.E1_REPOS, {**SHARED, "IDEAS_COUNT_CONTRACT": "rec
 X2_S: Final = X2Arm("X2-S", ("more_itertools", "tomli", "mistune", "sqlparse"),
                     {**SHARED, "IDEAS_COUNT_CONTRACT": "record", "SITE_STACKS": "on"},
                     "site stacks (S2): X2-0 with the combine record and delivery by gain")  # fmt: skip
-EVERY_ARM: Final = (*X2_ARMS, X2_S, X2_C)  # the plan's arms, then those off it
+X2_SV: Final = X2Arm("X2-SV", ("sqlparse", "tomli", "mistune"),
+                     {**X2_C.update, "SHADOW_VERIFY": "record"},
+                     "shadow record (S4): X2-C with capture rows and shadow readings", "full")  # fmt: skip
+EVERY_ARM: Final = (*X2_ARMS, X2_S, X2_C, X2_SV)  # the plan's arms, then those off it
 LIBRARIES: Final = {r.name: r for r in dx.OSS_SELECTABLE if r.name in ip.E1_REPOS}
 Run = tuple[X2Arm, OssRepo]
 ALL_RUNS: Final[tuple[Run, ...]] = tuple(
@@ -289,8 +301,13 @@ class Rider:
 
 
 RiderKey = tuple[str, str]  # a setting and its value as ``arm_env`` writes it
+# S4's rider: 1 capture launch at the baseline and 2 a trial (twin and trial),
+# 7.4-7.9 s each on sqlparse (3.11, this container); the ledger takes the
+# larger measured figure
+SHADOW_RIDER: Final = Rider(run_s=8.0, trial_s=16.0)
 RIDER_SECONDS: Mapping[RiderKey, Rider] = {
     ("IDEAS_VIEW_RECORD", "true"): Rider(),  # one sha256 a lane request
+    ("SHADOW_VERIFY", "record"): SHADOW_RIDER,
 }  # each rider's own declared figures, added by the unit that builds it
 RIDER_MEASURED: Mapping[RiderKey, Rider] = {}  # from run rows: the larger counts
 
@@ -431,6 +448,17 @@ def _realised(trials: Iterable[Trial], keys: Mapping[str, IdeaKey],
     return out
 
 
+def _shadowed(trials: Iterable[Trial]) -> tuple[dict[str, object], int]:
+    """S4: the first measured trial's shadow reading per hypothesis (its
+    twin against itself), and the base A/A over every measured twin."""
+    out: dict[str, object] = {}
+    measured = [t for t in trials if t.status is TrialStatus.measured]
+    for t in measured:
+        if t.hypothesis_id not in out:
+            out[t.hypothesis_id] = shadow_reading(t.base_measurements, t.measurements).model_dump(mode="json")  # fmt: skip
+    return out, shadow_aa(t.base_measurements for t in measured)
+
+
 def combine_row(keep: KeepRecord | None, owner: Mapping[str, str]) -> dict[str, object] | None:  # fmt: skip
     """S2's record of one kept hypothesis, trial ids as hypothesis ids
     (``owner``), the order gain in percent; ``None`` for no record."""
@@ -478,6 +506,8 @@ class X2Recorder:
         viewed = cfg.IDEAS_VIEW_RECORD
         head = {"repo": repo, "arm": arm.key}
         realised = {} if st is None or clone is None else _realised(st["trials"], keys, verdicts, clone)  # fmt: skip
+        shadow, aa = ({}, 0) if st is None else _shadowed(st["trials"])
+        shadowed = cfg.SHADOW_VERIFY == "record"
         comb = None if st is None else st["combination"]
         owner = {} if st is None else {t.id: t.hypothesis_id for t in st["trials"]}
         stacked = {owner.get(k.trial_id, k.trial_id): k for k in (() if comb is None else comb.keeps)}  # fmt: skip
@@ -493,6 +523,7 @@ class X2Recorder:
                 "verdict": r.verdict, "gain_pct": r.gain_pct, "floor_pct": r.noise_floor_pct,
                 "op_count": isl._op_count(verdicts.get(h.id)),
                 **({} if clone is None else {"realisation": realised.get(h.id)}),
+                **({} if not shadowed else {"shadow_verify": shadow.get(h.id)}),
                 **({} if not stacked else {"combine": combine_row(stacked.get(h.id), owner)})})  # fmt: skip
         kept = [h for h in hyps if (v := verdicts.get(h.id)) is not None
                 and v.outcome is VerdictOutcome.keep]  # fmt: skip
@@ -526,6 +557,7 @@ class X2Recorder:
             "gain_pct": None if j is None else dx._pct(j.gain),
             "floor_pct": None if j is None else dx._pct(j.noise_floor),
             "delivered": st is not None and st["delivery"] is not None, "guard": guard,
+            **({} if not shadowed else {"shadow_aa": aa}),
             **({} if not viewed or started is None else {"minutes_planned": run_minutes(cfg),
                "seconds_measured": round(time.monotonic() - started, 1)}),
             **({} if not stacked else {"conflicts": [[owner.get(t, t) for t in pair]
