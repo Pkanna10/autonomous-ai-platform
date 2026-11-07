@@ -22,3 +22,16 @@ No seat owned these. See `round-0.md`; they are part of round 2's Contrarian pac
 - **Points:** 0.5 (S1) + 1.0 from critiques (BND-1's merge) = **1.5**. Round 2: bottom three, rotates against the bench. The Lead carries SHP-3's perturb half alone into round 2.
 
 - **After E1 and E2 (O58):** +1.25 from S1's live pass, its +10 split over 8 merged proposals. Total **2.75**.
+
+## Round 2 (2026-11-07)
+
+Benched (O57 as amended; [1]). No proposals and no critiques.
+
+- **Carry-forward 3 (SHP-3's judge-side half) was taken up and credited** by VER-1 [9] and VER-2 [12], and SCL-1 [8] shared its capture point (r1[110]). All three went into S4, which survived 2 of 3.
+- **S4's unit 1 is built** (`775890d`): VER-1's distinct-once replay by counts, record only, with no shape fact in any lane view ([91]-[94]).
+- **What remains open:**
+  - VER-2's suite corpus, the off-shape half, waits on a ruling that it extends r1[62] ([86] c, [87] b).
+  - The reward hacking judge's condition: `constant_holds` on scaled copies of the benchmark's own inputs is still benchmark-shaped. Only the suite-corpus transfer is off-shape ([86] b).
+- **Points:** 2.75 halved to **1.375**. Ninth of 13; second on the bench.
+  - The charter gives no points for a credited carry-forward, so none are given here (round-2.md §9, flag 4).
+  - This is the Lead's computation, for the owner to confirm.
