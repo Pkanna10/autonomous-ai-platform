@@ -29,6 +29,7 @@ from anthropic.types.beta import BetaMessage
 
 from autonomous_ai_agents.clients.budget import Budget
 from autonomous_ai_agents.clients.cost import preflight_estimate, response_cost
+from autonomous_ai_agents.clients.structured import Fence
 from autonomous_ai_agents.clients.transport import (
     LLMNoResponseError,
     LLMRequest,
@@ -2673,3 +2674,73 @@ def test_no_lens_sends_s1_and_the_relaxing_lanes_alone() -> None:
     assert [h.title for h in result.hypotheses if not is_proposal(h)] == [
         str(O1["title"]), str(O2["title"]), str(O3["title"]),
     ]  # fmt: skip
+
+
+# --------------------------------------------------------------------------
+# Emergence round 2, S1: IDEAS_VIEW_RECORD (view_sha, served_model)
+# --------------------------------------------------------------------------
+
+
+def _views_of(result: GenerateResult) -> list[Mapping[str, object]]:
+    return [e.data for e in result.events if e.code == idea_pipeline.LANE_VIEW]
+
+
+def test_the_view_record_changes_no_request_and_names_every_lane_requests_view() -> (
+    None
+):
+    """
+    GIVEN the pipeline with three lenses on their own views, run with
+          IDEAS_VIEW_RECORD off and on (each run draws a fresh fence)
+    WHEN both runs read the same scripted replies
+    THEN every request's bytes match once the fence token is masked; the
+         record run adds one ``lane_view`` event per lane request in send
+         order (S1 first), with an 8-hex view hash that is the same on every lane shown
+         the shared block, different on a viewed lane, and the model that
+         served it
+    """
+    off_run, off = _g5_run(_g5_settings("views"))
+    on_run, on = _g5_run(_g5_settings("views", IDEAS_VIEW_RECORD=True))
+
+    def masked(run: _Run, role: Role) -> list[str]:
+        token = re.compile(r"[0-9a-f]{16}")
+        return [token.sub("T", json.dumps(dataclasses.asdict(r), sort_keys=True))
+                for r in run.requests(role)]  # fmt: skip
+
+    for role in ("lane", "leap", "reviewer"):
+        assert masked(on_run, role) == masked(off_run, role)
+    assert _views_of(off) == []
+    views = _views_of(on)
+    sent = [_lane_of(r) for r in on_run.requests("lane")]
+    assert sorted(str(v["lane"]) for v in views) == sorted(
+        [*(x.value for x in sent), "leap"]
+    )
+    assert views[0]["lane"] == Lane.obvious.value
+    assert all(re.fullmatch(r"[0-9a-f]{8}", str(v["view_sha"])) for v in views)
+    assert {v["served_model"] for v in views} == {SONNET, OPUS}
+    shared = {v["view_sha"] for v in views if v["lane"] not in _G5_VIEWS}
+    viewed = {v["view_sha"] for v in views if v["lane"] in _G5_VIEWS}
+    assert len(shared) == 1 and len(viewed) == 3 and not shared & viewed
+    again = _views_of(_g5_run(_g5_settings("views", IDEAS_VIEW_RECORD=True))[1])
+    assert [v["view_sha"] for v in again] == [v["view_sha"] for v in views]
+
+
+def test_a_failed_lane_request_is_recorded_with_no_served_model() -> None:
+    cfg = BASE.model_copy(update={"IDEAS_VIEW_RECORD": True})
+    timeout = LLMNoResponseError("Claude API: no answer in time", timed_out=True)
+    run = _Run(lane=[S1_REPLY, *_lens_replies(eliminate=timeout)], leap=[LEAP],
+               reviewer=[REVIEW], cfg=cfg)  # fmt: skip
+
+    views = {v["lane"]: v for v in _views_of(run())}
+
+    assert len(views) == len(run.requests("lane")) + len(run.requests("leap"))
+    assert views["eliminate"]["served_model"] is None
+    assert views["obvious"]["served_model"] == SONNET
+
+
+def test_the_view_hash_masks_the_fence_token_only() -> None:
+    first, second = Fence.new(), Fence.new()
+    block = "noise floor: 2 %\n<data boundary={}>rows</data boundary={}>"
+    a = idea_pipeline.view_sha(block.format(first.token, first.token), first)
+    b = idea_pipeline.view_sha(block.format(second.token, second.token), second)
+    assert a == b != idea_pipeline.view_sha(block.format("x", "x"), first)
+    assert BASE.IDEAS_VIEW_RECORD is False

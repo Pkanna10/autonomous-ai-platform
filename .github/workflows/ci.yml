@@ -1112,6 +1112,7 @@ jobs:
             export IDEAS_LANE_MODEL=claude-sonnet-5-5 IDEAS_LANE_MODELS='{"eliminate":"claude-haiku-5-5"}'
             export IDEAS_LEAP_MODEL=claude-opus-5-5 IDEAS_REVIEWER_MODEL=claude-opus-5-5
             export IDEAS_LANE_VIEWS="${x2_views}" IDEAS_COUNT_CONTRACT="${x2_count}" SITE_STACKS="${x2_stacks}"
+            export IDEAS_VIEW_RECORD=true  # emergence round 2, S1: every arm's view_sha rows
           elif [ -n "${x2_dispatch}" ]; then
             echo "::error::x2_dispatch is only for the ideas-x2 suite"
             exit 1

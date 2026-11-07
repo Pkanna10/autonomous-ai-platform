@@ -27,6 +27,14 @@ row, an arm or library
 X2 does not run, a run, round or hypothesis recorded twice, rounds or
 hypotheses with no run row, a run with no round or a gap in its rounds, and
 kept counts that disagree between a run, its rounds and its ideas.
+
+``--variance`` (emergence round 2, S1) writes ``variance.md`` instead: each
+file is loaded alone, so every (arm, library) run of every file is a draw;
+each draw is read against the A/A pool (``POOL``) with its own arm left
+out, by rank with the null rate beside it; each arm's signs against each
+library's pool median get the exact stratified null; then each run's
+delivered mass, the n-need of each call and the lane views. O51 and O52, in
+``x2.md``, stay the ruling reading.
 """
 
 from __future__ import annotations
@@ -35,9 +43,11 @@ import argparse
 import hashlib
 import json
 import math
+import statistics
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from itertools import combinations, product
 from pathlib import Path
 from typing import Annotated, Final
 
@@ -111,6 +121,15 @@ class IdeaLine(_Row):
     verdict: str
     realisation: Realised | None = None  # X2-C only (S1)
     combine: Combined | None = None  # SITE_STACKS on or record only (S2)
+    gain_pct: float | None = None
+    floor_pct: float | None = None
+
+
+class LaneView(BaseModel):  # IDEAS_VIEW_RECORD's record of one lane request
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+    lane: str
+    view_sha: Annotated[str, Field(pattern="^[0-9a-f]{8}$")]
+    served_model: str | None
 
 
 class RoundLine(_Row):
@@ -122,6 +141,7 @@ class RoundLine(_Row):
     seeded_cost_usd: Usd
     compounds: Count
     compounds_kept: Count
+    lane_views: Annotated[tuple[LaneView, ...], Field(strict=False)] = ()
 
 
 class RunLine(_Row):
@@ -134,6 +154,7 @@ class RunLine(_Row):
     holds: bool | None
     gain_pct: float | None
     floor_pct: float | None
+    applied: Count | None = None
 
 
 _READ: Final[dict[str, type[_Row]]] = {
@@ -593,20 +614,294 @@ def render(r: Report) -> str:
     ])  # fmt: skip
 
 
+# ---------------------------------------------------------------------------
+# Variance (emergence round 2, S1): every draw against the pool, its arm out
+# ---------------------------------------------------------------------------
+
+POOL: Final = frozenset(a.key for a in EVERY_ARM if a.aa == "full")
+SIGNS_NEED: Final = 6  # an arm call on fewer signs reads "not tested (n)" ([76])
+SIDES: Final = "two-sided"  # the bar's p, pre-registered: 2 x the smaller tail
+RANK_NEED: Final = 39  # the least k at which a rank's 2/(k+1) reaches 0.05
+
+
+@dataclass(frozen=True)
+class Draw:  # one (arm, library) run of one results file
+    source: str
+    run: Run
+
+    @property
+    def arm(self) -> str:
+        return self.run.row.arm
+
+    @property
+    def repo(self) -> str:
+        return self.run.row.repo
+
+    @property
+    def combine(self) -> float:
+        return self.run.delivered
+
+
+STATS: Final[tuple[tuple[str, Callable[[Draw], float]], ...]] = (
+    ("kept", lambda d: float(d.run.row.kept)), ("combine", lambda d: d.combine))  # fmt: skip
+
+
+def draws(paths: Iterable[Path]) -> tuple[Draw, ...]:
+    """Each file loaded alone, its runs checked as ``load`` checks them; the
+    same bytes twice are refused (a draw counted twice)."""
+    out: list[Draw] = []
+    seen: dict[str, str] = {}
+    for p in sorted(paths, key=lambda p: (p.name, str(p))):
+        digest = hashlib.sha256(p.read_bytes()).hexdigest()
+        if (first := seen.setdefault(digest, p.name)) != p.name:
+            raise ValueError(f"{p.name}: the same bytes as {first}")
+        out += [Draw(p.name, x) for x in load([p]).runs.values()]
+    return tuple(out)
+
+
+def pool(found: Iterable[Draw], arm: str, repo: str) -> tuple[Draw, ...]:
+    return tuple(d for d in found if d.repo == repo and d.arm in POOL and d.arm != arm)
+
+
+def _arm_out(d: Draw, against: Sequence[Draw]) -> None:
+    if any(p.arm == d.arm for p in against):
+        raise ValueError(f"{d.arm} {d.repo}: the pool holds the read arm's own run")
+
+
+def rank(value: float, against: Sequence[float]) -> tuple[int, float]:
+    """``value``'s position among ``against`` and itself (1 the lowest),
+    ties read as least extreme, and the null rate of a position as extreme
+    or more under exchangeable draws: 2 min(j, k + 2 - j) / (k + 1)."""
+    k, below = len(against), sum(v < value for v in against)
+    ties = sum(v == value for v in against)
+    j = min(range(below + 1, below + ties + 2), key=lambda j: abs(j - (k + 2) / 2))
+    return j, min(1.0, 2 * min(j, k + 2 - j) / (k + 1))
+
+
+def rank_cells(d: Draw, against: Sequence[Draw]) -> list[object]:
+    _arm_out(d, against)
+    out: list[object] = []
+    for name, stat in STATS:
+        value = stat(d)
+        j, rate = rank(value, [stat(p) for p in against]) if against else (0, 0.0)
+        shown = f"{value:+.1f}" if name == "combine" else int(value)
+        out += [
+            shown,
+            *((f"{j} of {len(against) + 1}", f"{rate:.2f}") if against else ("-", "-")),
+        ]
+    return out
+
+
+def range_reading(d: Draw, against: Sequence[Draw]) -> str:
+    """O51's form with the arm left out: kept against X2-0's mean in the
+    pool, beyond the pool's range floored at 1 ([49]'s replay)."""
+    _arm_out(d, against)
+    base = [p.run.row.kept for p in against if p.arm == BASE]
+    if not base:
+        return "n/a"
+    kept = [p.run.row.kept for p in against]
+    beyond = abs(d.run.row.kept - math.fsum(base) / len(base)) > max(
+        max(kept) - min(kept), 1
+    )
+    return "outside" if beyond else "inside"
+
+
+def lower_median(values: Sequence[float]) -> float:
+    return sorted(values)[(len(values) - 1) // 2]
+
+
+@dataclass(frozen=True)
+class SignCall:
+    up: int
+    down: int
+    ties: int
+    p_above: float  # the null's chance of a sign sum at least the observed
+    p_below: float
+
+    @property
+    def p_two(self) -> float:
+        return min(1.0, 2 * min(self.p_above, self.p_below))
+
+
+def _sum(signs: Iterable[float], median: float) -> int:
+    return sum((v > median) - (v < median) for v in signs)
+
+
+def sign_call(groups: Iterable[tuple[Sequence[float], Sequence[float]]]) -> SignCall:
+    """The arm's signs against each library's (pool, arm) lower pool median.
+    The null deals each library's draws anew to pool and arm (exchangeable
+    under no effect), so runs sharing one median are not counted as
+    independent (judge [86]); libraries are independent: convolved."""
+    up = down = ties = 0
+    null: Counter[int] = Counter({0: 1})
+    for against, arm in groups:
+        median = lower_median(against)
+        up, down = (
+            up + sum(v > median for v in arm),
+            down + sum(v < median for v in arm),
+        )
+        ties += sum(v == median for v in arm)
+        both, one = [*against, *arm], Counter[int]()
+        for picked in combinations(range(len(both)), len(arm)):
+            rest = [v for i, v in enumerate(both) if i not in picked]
+            one[_sum((both[i] for i in picked), lower_median(rest))] += 1
+        both_null: Counter[int] = Counter()
+        for (a, m), (b, n) in product(null.items(), one.items()):
+            both_null[a + b] += m * n
+        null = both_null
+    total, seen = null.total(), up - down
+    return SignCall(up, down, ties, sum(n for s, n in null.items() if s >= seen) / total,
+                    sum(n for s, n in null.items() if s <= seen) / total)  # fmt: skip
+
+
+def sign_cell(c: SignCall) -> str:
+    head, n = f"{c.up} above, {c.down} below, {c.ties} ties", c.up + c.down
+    if n < SIGNS_NEED:
+        return f"{head}; not tested ({n})"
+    return f"{head}; {SIDES} p {c.p_two:.4f} (above {c.p_above:.4f}, below {c.p_below:.4f})"
+
+
+def delivered_sum(run: Run) -> float | None:
+    """The standalone gains of the keeps that reached the tip (S2's record,
+    else every keep where every keep applied), on 2 or more of them."""
+    keeps = [i for i in run.ideas if i.verdict == "keep"]
+    if any(i.combine is not None for i in keeps):
+        keeps = [i for i in keeps if i.combine is not None and i.combine.delivered]
+    elif run.row.applied != run.row.kept:
+        return None
+    return (
+        math.fsum(i.gain_pct or 0.0 for i in keeps)
+        if len(keeps) >= 2 and run.delivered
+        else None
+    )
+
+
+def _mass(d: Draw) -> tuple[list[object], int]:
+    gains = [i for i in d.run.ideas if i.verdict == "keep" and i.gain_pct is not None]
+    top, total = max((i.gain_pct or 0.0 for i in gains), default=0.0), math.fsum(i.gain_pct or 0.0 for i in gains)  # fmt: skip
+    wide = sum(i.floor_pct is not None and (i.gain_pct or 0.0) >= 2 * i.floor_pct for i in gains)  # fmt: skip
+    ratio = delivered_sum(d.run)
+    return [d.source, d.arm, d.repo, d.run.row.kept, f"{d.combine:+.1f}", wide,
+            f"{top / total:.2f}" if total else "-", f"{d.combine - top:+.1f}",
+            "-" if ratio is None else f"{ratio / d.combine:.3f}",
+            f"{d.run.row.cost_usd / d.combine:.3f}" if d.combine > 0 else "n/a"], wide  # fmt: skip
+
+
+def _read_row(d: Draw, found: Sequence[Draw]) -> list[object]:
+    own = pool(found, d.arm, d.repo)
+    return [
+        d.source,
+        d.arm,
+        d.repo,
+        len(own),
+        *rank_cells(d, own),
+        range_reading(d, own),
+    ]
+
+
+def render_variance(found: Sequence[Draw]) -> str:
+    libs = sorted({d.repo for d in found})
+    whole = {n: pool(found, "", n) for n in libs}  # every pool draw of the library
+    ks = {n: len(p) for n, p in whole.items()}
+    pools = [[n, ks[n], ", ".join(str(k) for k in sorted(d.run.row.kept for d in p)),
+              ", ".join(f"{v:+.1f}" for v in sorted(d.combine for d in p))] for n, p in whole.items()]  # fmt: skip
+    reads = [_read_row(d, found) for d in found]
+    calls: list[list[object]] = []
+    bars: list[list[object]] = []
+    for arm in [a for a in ARMS if any(d.arm == a for d in found)]:
+        mine = [(n, [d for d in found if d.arm == arm and d.repo == n]) for n in libs]
+        read = [
+            (n, ds, pool(found, arm, n)) for n, ds in mine if ds and pool(found, arm, n)
+        ]
+        for name, stat in STATS if read else ():
+            c = sign_call(
+                ([stat(p) for p in ps], [stat(d) for d in ds]) for _, ds, ps in read
+            )
+            calls.append([arm, name, ", ".join(n for n, _, _ in read), sign_cell(c)])
+            bars.append([f"{arm} sign test, {name}", f"{SIGNS_NEED} signs", c.up + c.down,
+                         f"read, {SIDES} p {c.p_two:.4f}" if c.up + c.down >= SIGNS_NEED
+                         else f"not tested ({c.up + c.down})"])  # fmt: skip
+    bars += [[f"rank call, {n}", f"k {RANK_NEED}", k, f"not tested (k {k})" if k < RANK_NEED else "read"]
+             for n, k in ks.items()]  # fmt: skip
+    mass, totals = [], []
+    for arm in [a for a in ARMS if any(d.arm == a for d in found)]:
+        rows = [_mass(d) for d in found if d.arm == arm]
+        mass += [r for r, _ in rows]
+        ds = [d for d in found if d.arm == arm]
+        cost, kept, points = (math.fsum(d.run.row.cost_usd for d in ds), sum(d.run.row.kept for d in ds),
+                              math.fsum(d.combine for d in ds))  # fmt: skip
+        totals.append([arm, len(ds), f"{kept / len(ds):.1f}", f"{points / len(ds):+.1f}",
+                       f"{sum(w for _, w in rows) / len(ds):.1f}", per(cost, kept),
+                       f"{cost / points:.3f}" if points > 0 else "n/a"])  # fmt: skip
+    ratios = sorted(
+        s / d.combine for d in found if (s := delivered_sum(d.run)) is not None
+    )
+    views: dict[tuple[str, int, str], list[LaneView]] = defaultdict(list)
+    for d in found:
+        for r in d.run.rounds:
+            for v in r.lane_views:
+                views[d.repo, r.round, v.lane].append(v)
+    seen = [[n, r, lane, len(vs), len({v.view_sha for v in vs}),
+             ", ".join(sorted({v.served_model or "-" for v in vs}))]
+            for (n, r, lane), vs in sorted(views.items())]  # fmt: skip
+    return "\n".join([
+        "# X2 variance: the A/A pool with the read arm left out (emergence round 2, S1)", "",
+        f"- **The pool.** Per library, the runs of the arms whose requests and delivery are "
+        f"{BASE}'s ({', '.join(a for a in ARMS if a in POOL)}), frozen before any run; a run "
+        "is never read against its own arm's runs.",
+        "- **Rank, not range.** Each run prints its position j among the pool's k draws and "
+        "itself, and the null rate of a position as extreme, 2 min(j, k + 2 - j) / (k + 1); "
+        f"a library call needs k {RANK_NEED} for 0.05.",
+        "- **The arm call.** Each run's sign against its library's pool lower median; the "
+        "exact null deals each library's draws anew, so an arm's runs on one library are not "
+        f"counted as independent; fewer than {SIGNS_NEED} signs read not tested (n). The "
+        f"call reads one p, {SIDES} (2 x the smaller tail, at most 1), fixed before any run; "
+        "the two tails print beside it.",
+        "- **Ruling.** O51 as amended and O52 stay the ruling reading (x2.md); this page is "
+        "printed beside them. O51's form, the arm left out: kept against X2-0's mean beyond "
+        "the pool's range floored at 1.", "",
+        "## 1 The pool", "", *_table(("library", "k", "kept", "combine"), pools),
+        "## 2 Each run against the pool, its arm left out", "",
+        *_table(("file", "arm", "library", "k", "kept", "kept rank", "rate", "combine",
+                 "combine rank", "rate", "O51's form (kept)"), reads),
+        "## 3 Arm calls", "", *_table(("arm", "statistic", "libraries", "signs"), calls),
+        "## 4 Delivered mass (measures 3 and 6)", "",
+        *_table(("file", "arm", "library", "kept", "combine", "keeps at 2x floor",
+                 "top keep share", "combine - top keep", "delivered sum / combine",
+                 "USD per delivered point"), mass),
+        *_table(("arm", "runs", "kept per run", "combine per run", "keeps at 2x floor per run",
+                 "USD per kept", "USD per delivered point"), totals),
+        f"{len(ratios)} runs with 2 or more delivered keeps" + (
+            f": median {statistics.median(ratios):.2f}, range {ratios[0]:.2f}-{ratios[-1]:.2f}, "
+            f"{sum(x >= 0.9 for x in ratios)} at 0.9 or more" if ratios else ""), "",
+        "## 5 Bars and their n", "", *_table(("bar", "needs", "has", "status"), bars),
+        "## 6 Lane views", "",
+        *(_table(("library", "round", "lane", "runs", "distinct views", "served models"), seen)
+          if seen else ["No lane view recorded.", ""]),
+    ])  # fmt: skip
+
+
 def main(argv: Sequence[str] | None = None, echo: Callable[[str], None] = print) -> int:
-    """Write ``x2.md``; 2 on a refused or unreadable input (nothing written)."""
+    """Write ``x2.md`` (``--variance``: ``variance.md``); 2 on a refused or
+    unreadable input (nothing written)."""
     parser = argparse.ArgumentParser(prog="ideas_x2_report", description=__doc__)
     parser.add_argument("results", nargs="+", type=Path)
     parser.add_argument("--out", type=Path, default=REPORT_DIR)
+    parser.add_argument("--variance", action="store_true")
     args = parser.parse_args(argv)
+    name = "variance.md" if args.variance else "x2.md"
     try:
-        text = render(load(args.results))
+        text = (
+            render_variance(draws(args.results))
+            if args.variance
+            else render(load(args.results))
+        )
     except (OSError, ValueError) as error:
         echo(f"error: {error}")
         return 2
     args.out.mkdir(parents=True, exist_ok=True)
-    (args.out / "x2.md").write_text(text, encoding="utf-8", newline="\n")
-    echo(f"wrote x2.md to {args.out}")
+    (args.out / name).write_text(text, encoding="utf-8", newline="\n")
+    echo(f"wrote {name} to {args.out}")
     return 0
 
 

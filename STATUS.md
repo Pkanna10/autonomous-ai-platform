@@ -683,6 +683,24 @@ numbers that decide anything are copied into the ledger).
 
 ## Decisions
 
+### 2026-11-07 (emergence round 2, S1: proposed to the owner, not ruled)
+
+- **Proposed: a rank row beside O51 and a stratified sign test beside O52.**
+  `ideas_x2_report --variance` reads every run against its library's A/A pool
+  (X2-0, X2-0', X2-C; frozen before any run, X2-S and X2-V out) with the read
+  arm left out, prints its rank and the null rate 2 min(j, k + 2 - j) / (k + 1),
+  and calls an arm by its signs against each pool's lower median under an exact
+  null that deals each library's draws anew (judge [86]: runs sharing one median
+  are not independent; 7 of 8 is 0.086, not the binomial's 0.035). The call
+  reads one p, fixed before any run: two-sided, 2 x the smaller tail (at most
+  1), with both tails printed beside it; a twin's bar is that p > 0.05 (X2-V's
+  kept on the archives: lower tail 0.046, two-sided 0.093, not significant).
+  Under 6 signs it reads "not tested (n)"; a library call needs k 39.
+  - **Why:** a one-pair band reads a no-effect draw "outside" half the time
+    ([49]); the pool without self-inclusion reads the archives' X2-S runs as O51
+    does, 4 of 5 outside, so the change is the printed rate, not the call.
+  - **Until the owner rules,** O51 as amended and O52 stay the ruling reading.
+
 ### 2026-11-01 (owner: the marker-validation bar, O37; fixed before any marker result)
 
 - **O37. The bar.** A candidate marker passes when its AUC (the chance a kept

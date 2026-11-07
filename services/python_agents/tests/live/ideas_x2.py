@@ -68,6 +68,16 @@ four libraries with same-site conflicts in X2; no request changed and part
 combination holds keep records (``SITE_STACKS`` on or record) writes per
 kept hypothesis ``combine`` (``combine_row``: ids as hypothesis ids) and on
 the run row its ``conflicts``; other runs write neither.
+
+**Variance** (emergence round 2, S1): an arm's ``aa`` says whether its runs
+are A/A pool draws (``full``: X2-0's requests and delivery; frozen before any
+run, X2-S's delivery differs and X2-V's requests). Every arm sets
+``IDEAS_VIEW_RECORD``: each round row adds ``lane_views`` (lane, view hash,
+served model per lane request) and the run row ``minutes_planned`` and
+``seconds_measured``. ``RIDER_SECONDS`` declares each record-only setting's
+CPU (per run, trial and keep; ``RIDER_MEASURED`` the last measured, the
+larger counts), which ``run_minutes`` adds, so ``check_plan`` refuses a
+dispatch past the job's minutes with its riders.
 """
 
 from __future__ import annotations
@@ -75,10 +85,11 @@ from __future__ import annotations
 import functools
 import json
 import math
+import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 from e2e.conftest import Isolation, LaunchLog
 
@@ -109,7 +120,7 @@ from autonomous_ai_agents.optimization.evolve import (
     realisation,
 )
 from autonomous_ai_agents.optimization.idea_dedupe import IdeaKey, recorded_keys
-from autonomous_ai_agents.optimization.idea_pipeline import SEEDED_CALL
+from autonomous_ai_agents.optimization.idea_pipeline import LANE_VIEW, SEEDED_CALL
 from autonomous_ai_agents.optimization.idea_types import LENS_LANES, Lane
 from autonomous_ai_agents.orchestrator.factory import build_context
 from autonomous_ai_agents.orchestrator.main import EngineRunResult
@@ -149,6 +160,7 @@ class X2Arm:
     repos: tuple[str, ...]
     update: Mapping[str, object]  # the settings, every one checked
     lever: str
+    aa: Literal["none", "full"] = "none"  # S1: "full", an A/A pool draw
 
 
 SHARED: Final[Mapping[str, object]] = {
@@ -159,16 +171,16 @@ SHARED: Final[Mapping[str, object]] = {
     "IDEAS_RELAX_LANES": (), "IDEAS_LENSES": LENS_LANES, "IDEAS_LANE_MODEL": SONNET,
     "IDEAS_LANE_MODELS": {Lane.eliminate: ip.HAIKU}, "IDEAS_LEAP_MODEL": OPUS,
     "IDEAS_REVIEWER_MODEL": OPUS, "IDEAS_THINK_LINE_ALL": False,
-    "IDEAS_LANE_VIEWS": {}, "IDEAS_LANE_FRAMEWORKS": False,
+    "IDEAS_LANE_VIEWS": {}, "IDEAS_LANE_FRAMEWORKS": False, "IDEAS_VIEW_RECORD": True,
 }  # fmt: skip
-X2_0: Final = X2Arm("X2-0", ip.E1_REPOS, SHARED, "baseline: the shared setup")
+X2_0: Final = X2Arm("X2-0", ip.E1_REPOS, SHARED, "baseline: the shared setup", "full")
 X2_0_TWIN: Final = X2Arm("X2-0'", isl.SLICE_REPOS, SHARED,
-                         "A/A twin: X2-0 again, independent runs, the band")  # fmt: skip
+                         "A/A twin: X2-0 again, independent runs, the band", "full")  # fmt: skip
 X2_V: Final = X2Arm("X2-V", ip.E1_REPOS, {**SHARED, "IDEAS_LANE_VIEWS": dict(ip.X1_VIEWS)},
                     "views (G2): each lens X1-3's view, no framework")  # fmt: skip
 X2_ARMS: Final = (X2_0, X2_0_TWIN, X2_V)
 X2_C: Final = X2Arm("X2-C", ip.E1_REPOS, {**SHARED, "IDEAS_COUNT_CONTRACT": "record"},
-                    "count record (S1): X2-0 with unit counts and realisation rows")  # fmt: skip
+                    "count record (S1): X2-0 with unit counts and realisation rows", "full")  # fmt: skip
 X2_S: Final = X2Arm("X2-S", ("more_itertools", "tomli", "mistune", "sqlparse"),
                     {**SHARED, "IDEAS_COUNT_CONTRACT": "record", "SITE_STACKS": "on"},
                     "site stacks (S2): X2-0 with the combine record and delivery by gain")  # fmt: skip
@@ -267,14 +279,44 @@ def arm_cap(arm: X2Arm, base: Settings = settings) -> float:
     return run_cap(arm_settings(arm, base))
 
 
+@dataclass(frozen=True)
+class Rider:
+    """A record-only setting's CPU in seconds, per run, trial and keep (S1)."""
+
+    run_s: float = 0.0
+    trial_s: float = 0.0
+    keep_s: float = 0.0
+
+
+RiderKey = tuple[str, str]  # a setting and its value as ``arm_env`` writes it
+RIDER_SECONDS: Mapping[RiderKey, Rider] = {
+    ("IDEAS_VIEW_RECORD", "true"): Rider(),  # one sha256 a lane request
+}  # each rider's own declared figures, added by the unit that builds it
+RIDER_MEASURED: Mapping[RiderKey, Rider] = {}  # from run rows: the larger counts
+
+
+def rider_seconds(cfg: Settings) -> float:
+    """Every rider ``cfg`` turns on, each part at max(declared, measured),
+    every trial counted as a keep (the worst case)."""
+    trials, total = sum(run_trials(cfg)), 0.0
+    for key, declared in RIDER_SECONDS.items():
+        if _env(getattr(cfg, key[0])) == key[1]:
+            seen = RIDER_MEASURED.get(key, declared)
+            total += max(declared.run_s, seen.run_s) + trials * (
+                max(declared.trial_s, seen.trial_s) + max(declared.keep_s, seen.keep_s))  # fmt: skip
+    return total
+
+
 def run_minutes(cfg: Settings) -> int:
     """A clone, each round's trials in loops of 3 at L2b's whole wired OSS
-    run (``ideas_slice.LOOP_MINUTES``, twice its measured 4.2) and a pipeline
-    call a round at its worst (``arm_seconds``, twice E1's slowest request)."""
+    run (``ideas_slice.LOOP_MINUTES``, twice its measured 4.2), a pipeline
+    call a round at its worst (``arm_seconds``, twice E1's slowest request)
+    and the riders' seconds (``rider_seconds``)."""
     call = ip.arm_seconds(ip.ARM_X1_0, cfg)  # X1-0 overrides nothing: cfg's lanes
     loops = sum(math.ceil(t / LOOP_TRIALS) for t in run_trials(cfg))
     return (isl.CLONE_MINUTES + loops * isl.LOOP_MINUTES
-            + cfg.MAX_TRIAL_ROUNDS * math.ceil(call / 60))  # fmt: skip
+            + cfg.MAX_TRIAL_ROUNDS * math.ceil(call / 60)
+            + math.ceil(rider_seconds(cfg) / 60))  # fmt: skip
 
 
 @dataclass(frozen=True)
@@ -418,7 +460,8 @@ class X2Recorder:
 
     def record(self, arm: X2Arm, repo: str, run: LiveRun, commit: str,
                seen: list[EngineRunResult | None], outcome: CorpusOutcome,
-               result: EngineRunResult | None, *, clone: Path | None = None) -> None:  # fmt: skip
+               result: EngineRunResult | None, *, clone: Path | None = None,
+               started: float | None = None) -> None:  # fmt: skip
         seen.append(result)
         st = None if result is None else result.state
         hyps = [] if st is None else [*st["hypotheses"], *st["candidate_pool"]]
@@ -432,6 +475,7 @@ class X2Recorder:
             v.hypothesis_id: v for v in reversed([] if st is None else st["verdicts"])
         }
         keys, cfg = recorded_keys(e.data for e in events), arm_settings(arm, self.base)
+        viewed = cfg.IDEAS_VIEW_RECORD
         head = {"repo": repo, "arm": arm.key}
         realised = {} if st is None or clone is None else _realised(st["trials"], keys, verdicts, clone)  # fmt: skip
         comb = None if st is None else st["combination"]
@@ -464,7 +508,10 @@ class X2Recorder:
                 "seeded_cost_usd": math.fsum(_num(d, "cost_usd") for d in costs),
                 "compounds": sum(d.get("code") == "compound" for d in data),
                 "compounds_kept": sum(rounds.get(h.id) == n and COMPOUND_TAG in h.tags
-                                      for h in kept)})  # fmt: skip
+                                      for h in kept),
+                **({} if not viewed else {"lane_views": [
+                    {k: d.get(k) for k in ("lane", "view_sha", "served_model")}
+                    for d in data if d.get("code") == LANE_VIEW]})})  # fmt: skip
         j = isl._primary(result)
         self.sink.write({**head, "experiment": RUN_EXPERIMENT, "dispatch": self.plan.dispatch,
             "commit": commit, "cap_usd": run.cap_usd, "cost_usd": run.spent_usd,
@@ -479,6 +526,8 @@ class X2Recorder:
             "gain_pct": None if j is None else dx._pct(j.gain),
             "floor_pct": None if j is None else dx._pct(j.noise_floor),
             "delivered": st is not None and st["delivery"] is not None, "guard": guard,
+            **({} if not viewed or started is None else {"minutes_planned": run_minutes(cfg),
+               "seconds_measured": round(time.monotonic() - started, 1)}),
             **({} if not stacked else {"conflicts": [[owner.get(t, t) for t in pair]
                                                      for pair in (() if comb is None else comb.conflicts)]})})  # fmt: skip
 
@@ -518,7 +567,9 @@ def run_one(arm: X2Arm, repo: OssRepo, *, live: StartLive, root: Path,
             isolation: Isolation, recorder: X2Recorder,
             policy: GitPolicy = PRODUCTION) -> None:  # fmt: skip
     """The settings checked, the run capped, a fresh clone at E1's head and
-    its op-count judge checked, then the whole engine run and its records."""
+    its op-count judge checked, then the whole engine run and its records;
+    the measured span starts here, so it holds the clone the plan counts."""
+    started = time.monotonic()
     check_settings(arm, recorder.base)
     cap = arm_cap(arm, recorder.base)
     run = live(cap)
@@ -534,7 +585,8 @@ def run_one(arm: X2Arm, repo: OssRepo, *, live: StartLive, root: Path,
     seen: list[EngineRunResult | None] = []
     counted = arm_settings(arm, recorder.base).IDEAS_COUNT_CONTRACT == "record"
     record = functools.partial(recorder.record, arm, repo.name, run, commit, seen,
-                               clone=loop.user.path if counted else None)  # fmt: skip
+                               clone=loop.user.path if counted else None,
+                               started=started)  # fmt: skip
     run_engine(loop, run, isolation, model=recorder.base.ENGINE_MODEL, record=record)
     run.note(ip._fit(f"X2 {arm.key} {repo.name}: {run.spent_usd:.3f} of {cap:.2f} USD"))
     isl.check_op_column(seen[-1])

@@ -594,6 +594,12 @@ class Settings(BaseSettings):
     today's score order; ``on`` also offers each conflict component's
     max-sum conflict-free subset first, by confirmed gain. ``off`` is
     today's combine byte for byte. Read by ``GitCombiner``."""
+    IDEAS_VIEW_RECORD: bool = False
+    """Emergence round 2, S1: ``True`` adds a ``lane_view`` event per lane
+    request sent (the lane, ``view_sha``: 8 hex of its data block's sha256
+    with the fence token masked, and the model that served it), so twin
+    runs show whether they were shown the same view. No request changes;
+    off keeps every result byte for byte."""
     SCALING_JUDGE: bool = False
     """G6b, shadow mode: every workload with a size setting
     (``Workload.scale``) runs at its 2-3 sizes on both sides, and the scaling

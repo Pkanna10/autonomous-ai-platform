@@ -91,6 +91,7 @@ today's prompt plus code; the bank is for the lenses and the leap).
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 import threading
@@ -221,6 +222,8 @@ from autonomous_ai_agents.research.playbook import (
 )
 
 NO_CODE_CONTEXT: Final = "idea pipeline: no code context"
+LANE_VIEW: Final = "lane_view"
+"""``IDEAS_VIEW_RECORD``'s event: a lane request's view hash and served model."""
 _ROLES: Final[tuple[Role, ...]] = ("lane", "leap", "reviewer")
 _SOFT: Final = (LLMUnavailable, LLMRequestError, UnusableReplyError, BudgetExceeded)
 """What ends one request without ending the pipeline (D48): noted, charged."""
@@ -259,6 +262,7 @@ class _Job:
     child: Budget
     result: LLMResult | None = None
     error: Exception | None = None
+    view: str | None = None  # IDEAS_VIEW_RECORD: the request's ``view_sha``
 
 
 @dataclass(frozen=True)
@@ -352,6 +356,7 @@ class IdeaPipelineGenerator:
         self._frameworks = config.IDEAS_LANE_FRAMEWORKS
         self._seeded = config.IDEAS_ROUND_SEEDS
         self._lessons = config.GENERATOR_LESSONS
+        self._view_record = config.IDEAS_VIEW_RECORD
 
     def generate(
         self,
@@ -770,7 +775,10 @@ class IdeaPipelineGenerator:
             max_tokens=self._cfg.IDEAS_LEAP_MAX_TOKENS if leap
             else self._cfg.IDEAS_LANE_MAX_TOKENS,
         )  # fmt: skip
-        return self._job(lane.value, transport, request)
+        job = self._job(lane.value, transport, request)
+        if self._view_record:
+            job.view = view_sha(prefix, c.fence)
+        return job
 
     def _job(self, label: str, transport: LLMTransport, request: LLMRequest) -> _Job:
         """Count once (free) and price the worst case; the child's cap."""
@@ -826,6 +834,12 @@ class IdeaPipelineGenerator:
         """The lane's validated ideas; a failed or unusable lane gives none."""
         self._stopped(c, job)
         c.per_lane[lane] = 0
+        if job.view is not None:  # IDEAS_VIEW_RECORD (S1, emergence round 2)
+            served = None if job.result is None else job.result.served_model
+            c.events.append(GenerateEvent(
+                code=LANE_VIEW, message=f"lane {lane.value}: view {job.view}",
+                data={"lane": lane.value, "view_sha": job.view, "served_model": served},
+            ))  # fmt: skip
         if job.result is None:
             c.notes.append(f"lane {lane.value}: charged failure, not retried"
                            if isinstance(job.error, BudgetExceeded)
@@ -964,6 +978,13 @@ class IdeaPipelineGenerator:
             risk=idea.risk,
             tags=tuple(tags),
         )  # fmt: skip
+
+
+def view_sha(prefix: str, fence: Fence) -> str:
+    """8 hex of the sha256 of a lane's data block with its per-request fence
+    token masked: two requests shown the same view hash alike (S1)."""
+    masked = prefix.replace(fence.token, "<boundary>")
+    return hashlib.sha256(masked.encode("utf-8")).hexdigest()[:8]
 
 
 def framework_labels(notes: Sequence[str]) -> dict[Lane, str | None]:

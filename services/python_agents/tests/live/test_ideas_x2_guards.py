@@ -148,7 +148,8 @@ def test_the_shared_setup_is_x1_0_with_x2s_changes_alone() -> None:
     ours = x2.arm_settings(x2.X2_0, base).model_dump()
     moved = {k for k in ours if ours[k] != x1[k]}
     assert moved <= {"PORTFOLIO_ROUNDS", "MAX_TRIAL_ROUNDS", "IDEAS_ROUND_SEEDS",
-                     "NEAR_MISS_COMPOUNDS", "OP_COUNT_JUDGE", "IDEAS_LANE_MODELS"}  # fmt: skip
+                     "NEAR_MISS_COMPOUNDS", "OP_COUNT_JUDGE", "IDEAS_LANE_MODELS",
+                     "IDEAS_VIEW_RECORD"}  # fmt: skip
     assert "IDEAS_LANE_MODELS" in moved
     views = x2.arm_settings(x2.X2_V, base).model_dump()
     assert {k for k in views if views[k] != ours[k]} == {"IDEAS_LANE_VIEWS"}
