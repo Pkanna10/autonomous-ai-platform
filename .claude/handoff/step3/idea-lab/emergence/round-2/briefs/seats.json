@@ -1,0 +1,72 @@
+[
+ {
+  "name": "Bounds first",
+  "tag": "BND",
+  "file": "bounds-first",
+  "model": "fable",
+  "after_wave1": false
+ },
+ {
+  "name": "Pre-mortem",
+  "tag": "PRM",
+  "file": "pre-mortem",
+  "model": "fable",
+  "after_wave1": false
+ },
+ {
+  "name": "Expert prior",
+  "tag": "EXP",
+  "file": "expert-prior",
+  "model": null,
+  "after_wave1": false
+ },
+ {
+  "name": "Inversion",
+  "tag": "INV",
+  "file": "inversion",
+  "model": null,
+  "after_wave1": false
+ },
+ {
+  "name": "Analogy transfer",
+  "tag": "ANA",
+  "file": "analogy-transfer",
+  "model": null,
+  "after_wave1": false
+ },
+ {
+  "name": "Scaling",
+  "tag": "SCL",
+  "file": "scaling",
+  "model": null,
+  "after_wave1": false
+ },
+ {
+  "name": "Contrarian",
+  "tag": "CON",
+  "file": "contrarian",
+  "model": "fable",
+  "after_wave1": true
+ },
+ {
+  "name": "Memory & allocation",
+  "tag": "MEM",
+  "file": "memory-allocation",
+  "model": null,
+  "after_wave1": false
+ },
+ {
+  "name": "Verifier-designer",
+  "tag": "VER",
+  "file": "verifier-designer",
+  "model": null,
+  "after_wave1": false
+ },
+ {
+  "name": "Interpreter specialist",
+  "tag": "INT",
+  "file": "interpreter-specialist",
+  "model": null,
+  "after_wave1": false
+ }
+]
