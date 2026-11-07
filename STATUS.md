@@ -842,14 +842,19 @@ blocks it.
     - Bounds first and Pre-mortem tie at the top. Both library files are
       required reading, and both seats take the Fable budget.
     - The points are recomputed after E1 and E2 add any +10s.
-  - **Round 2's seats:** ten, as O55 sets. Corrected by the owner the same day;
-    the first record read as three out and three in, which leaves eight.
-    - Kept: Bounds first, Expert prior, Inversion, Ten-x and Pre-mortem.
+  - **Round 2's seats:** ten, as O55 sets. Amended twice by the owner: first to
+    ten seats the same day, then on 2026-11-07 to follow the points after S1's
+    +10 (O58).
+    - Seated: Bounds first, Pre-mortem, Expert prior, Inversion and Analogy
+      transfer.
     - New: Scaling, Contrarian, Memory & allocation, Verifier-designer and
       Interpreter specialist.
-    - Bench, in order: Contradiction, Analogy transfer, Shape specialisation,
-      then Editor's advocate, Workload designer, Diversity archivist and Budget
-      economist.
+    - Bench, in order: Ten-x, Shape specialisation, Contradiction, then Editor's
+      advocate, Workload designer, Diversity archivist and Budget economist.
+    - Ten-x (2.8) went to the bench and Analogy transfer (3.55) came in.
+  - **The three carry-forward proposals,** S5 included, go into every seat's
+    university pack, so any seat may take them up. The pack is
+    `emergence/round-2/university-pack.md`.
   - **Expert prior's defensive scanner:** not commissioned. It is in scope under
     O28 but is not this lab's priority.
     - It is parked in the seat's library file.
