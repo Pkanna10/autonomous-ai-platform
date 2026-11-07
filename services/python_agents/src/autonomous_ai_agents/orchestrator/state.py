@@ -29,8 +29,10 @@ Step 3 (U2) adds the discovery keys: ``candidate_pool`` (generated ideas not
 yet sliced into a round), ``parked`` (ideas held back, each with its
 ``parked_reason``), ``technique_matches``, ``generator_calls``,
 ``discovery_cost_usd`` (also counted in ``cost_usd``) and
-``discovery_exhausted`` (discovery can no longer be afforded, D7); and the
-review branch's ``review_combination`` and ``review_delivery`` (D10).
+``discovery_exhausted`` (discovery can no longer be afforded, D7); the
+review branch's ``review_combination`` and ``review_delivery`` (D10); and
+D64's own cost line for seeded second generator calls, ``seeded_calls`` and
+``seeded_cost_usd`` (also counted in ``discovery_cost_usd``).
 
 ``AgentState`` is a transitional alias for the placeholder nodes and tests
 that still import the old name; it goes away with the node rewrite.
@@ -135,6 +137,8 @@ class EngineState(TypedDict):
     discovery_exhausted: bool
     review_combination: Combination | None
     review_delivery: Delivery | None
+    seeded_calls: int
+    seeded_cost_usd: float
 
 
 AgentState = EngineState
@@ -206,4 +210,6 @@ def initial_state(
         discovery_exhausted=False,
         review_combination=None,
         review_delivery=None,
+        seeded_calls=0,
+        seeded_cost_usd=0.0,
     )

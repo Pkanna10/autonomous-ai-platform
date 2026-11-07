@@ -21,6 +21,12 @@ typed values, such as a ``PostgresSaver`` snapshot whose ``phase`` comes back
 as a plain ``str`` (Step 4 re-types those through ``load_state``). The
 LangGraph checkpointer keeps its own ``JsonPlusSerializer``; this module is
 for the repository and for re-typing.
+
+Keys added after states were first stored (``ADDED_KEYS``, D64's counters)
+take their initial value when a state has none, both on load (stored data
+saved before them) and on dump (a run paused before them and resumed after,
+whose LangGraph checkpoint has no channel for them); every other missing key
+is refused.
 """
 
 from __future__ import annotations
@@ -33,6 +39,9 @@ from typing import Any, cast, get_type_hints
 from pydantic import TypeAdapter, ValidationError
 
 from autonomous_ai_agents.orchestrator.state import EngineState
+
+ADDED_KEYS: Mapping[str, object] = {"seeded_calls": 0, "seeded_cost_usd": 0.0}
+"""Keys newer than stored states, each with the value an older one loads with."""
 
 
 @functools.cache
@@ -66,10 +75,12 @@ def _validated(adapter: TypeAdapter[Any], key: str, value: object) -> Any:
 def dump_state(state: EngineState) -> dict[str, Any]:
     """Return ``state`` as JSON-safe values, one entry per ``EngineState`` key.
 
+    A missing ``ADDED_KEYS`` key is dumped with its initial value.
+
     Raises ``ValueError`` for a missing or unknown key, a value that does not
     fit its key's type, or a float that is inf or NaN.
     """
-    raw = cast(Mapping[str, Any], state)
+    raw = {**ADDED_KEYS, **cast(Mapping[str, Any], state)}
     adapters = _matching_adapters(raw, "state")
     dumped: dict[str, Any] = {}
     for key, adapter in adapters.items():
@@ -88,6 +99,7 @@ def load_state(data: Mapping[str, Any]) -> EngineState:
     Raises ``ValueError`` for a missing or unknown key, or a value that does
     not fit its key's type; the message names the key.
     """
+    data = {**ADDED_KEYS, **data}
     adapters = _matching_adapters(data, "stored state")
     loaded = {
         key: _validated(adapter, key, data[key]) for key, adapter in adapters.items()

@@ -79,7 +79,17 @@ from .test_corpus_guards import (
 SONNET = "claude-sonnet-5-5"
 REQUIRED = Isolation("required", None)
 STEP3_SUITES = frozenset(  # L0, L1a/b, L2a/b; V9's upstream verify and live
-    {"noise", "corpus", "hard", "oss", "upstream-verify", "upstream"}
+    {
+        "noise",
+        "corpus",
+        "hard",
+        "oss",
+        "upstream-verify",
+        "upstream",
+        "ideas-slice",
+        "ideas-picks",
+        "ideas-x2",  # X2a: normal engine runs (spec-idea-lab 9.3)
+    }
 )
 RULES = {  # PAIRED_TRIALS, CONFIRM_WINNERS, NOISE_CALIBRATION_BLOCKS
     "step3": ("true", "true", "3"),
@@ -302,9 +312,12 @@ def test_every_suite_sets_its_noise_rule_explicitly(
     assert '*)\n    echo "::error::no noise rule' in block
     repo = "tabulate" if suite in {"oss-ab", "evolve-p"} else ""  # one library
     mode = "wired" if suite == "upstream" else "aimed"  # upstream: wired only
+    slices = "tomli" if suite == "ideas-slice" else None  # names its libraries
+    x2 = "X2-0:tomli" if suite == "ideas-x2" else None  # an arm and its libraries
     code, output, _ = _dispatch(
-        tmp_path, suite, "claude-opus-5-5", "150", mode=mode, oss_repo=repo
-    )
+        tmp_path, suite, "claude-opus-5-5", "150", mode=mode, oss_repo=repo,
+        slice_repos=slices, x2_dispatch=x2,
+    )  # fmt: skip
     assert code == 0, output
     found = _rule(tmp_path)
     expected = RULES["step3" if suite in STEP3_SUITES else "step2"]

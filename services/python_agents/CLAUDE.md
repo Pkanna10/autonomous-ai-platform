@@ -236,7 +236,20 @@ class Judge(Protocol):
 keep `EquivalenceJudge` in any judge set, since it is the only judge that sets
 `JudgeResult.output_changed`. They are frozen dataclasses held in the node
 context, never in the state, and they do no I/O: every number they see was
-measured by the runner before they run.
+measured by the runner before they run. **Shadow judges** (`SHADOW_JUDGES`, G6a)
+record and never decide: `default_judges(..., op_count=True)` (setting
+`OP_COUNT_JUDGE`, off by default) adds `OpCountJudge`, which compares one
+counted run per side (Python and C call counts from cProfile, run by
+`execution/_opcount_shim.py` from the engine's own package, outside every
+worktree) and always returns `not_applicable`; `derive_verdict` leaves every
+shadow judge out of the rules and the gain, and the report shows its column only
+when a verdict carries it. `default_judges(..., scaling=True)` (setting
+`SCALING_JUDGE`, off by default, G6b) adds `ScalingJudge`: a workload's `scale`
+(`ScaleSetting`: an environment variable and 2-3 increasing sizes, defined with
+the workload, so no trial can change it) runs at each size on both sides,
+interleaved, and the judge records the least-squares slope of log time against
+log size for base and trial (`GROWTH_TOLERANCE` 0.15). Promotion needs the owner
+and the A/A, controls and gaming checks (idea-lab spec section 2).
 
 `derive_verdict(trial, hypothesis, judge_results, violations)` is pure and
 ordered:
@@ -577,10 +590,16 @@ Step 3:
 - Coverage threshold is 90% (`--cov-fail-under=90`; 100% line and branch today,
   no `pragma: no cover`); `__init__.py` files and the research placeholders are
   omitted, so package inits stay re-export only.
-- `addopts` runs xdist (`-n auto`) and adds `-m "not live"`. A `-m` you pass
-  replaces it, and `-o addopts=""` drops it: always keep `-m "not live"` then.
-  To run serially use `uv run pytest -o addopts="" -m "not live"` rather than
+- `addopts` runs xdist (`-n auto`) and adds `-m "not live and not timed"`. A
+  `-m` you pass replaces it, and `-o addopts=""` drops it: always keep
+  `not live` in it then, and `not timed` in any `-m` that goes with `-n`. To run
+  serially use `uv run pytest -o addopts="" -m "not live"` rather than
   `-p no:xdist`.
+- **Timed guards** (`timed` marker, O49): the discovery corpus's CPU-time guards
+  fail under the parallel pass's own load, so they run once, alone, after it:
+  `uv run pytest -m "timed and not live" -n 0 --cov-append`. CI's python job,
+  `scripts/stage-gate.sh` and `pnpm python:test` run both passes;
+  `tests/live/test_timed_pass_guards.py` keeps them and these docs in step.
 - **Live tests** (`live` marker) call the real API and cost money; CI runs them
   only in the manual `live-smoke` job (environment `live`, `-n 0`). The Stage A
   suite lives in `tests/live` (contract checks, understand on three repo shapes,
@@ -710,7 +729,8 @@ uv run ruff check . && uv run ruff format --check .
 uv run mypy src tests
 TEST_DATABASE_URL=postgresql://dev:devpass@localhost:5432/ai_platform uv run pytest
 uv run pytest tests/e2e --no-cov                # the E2E scenarios only
-uv run pytest -o addopts="" -m "not live" -n 2  # without coverage, keeps live off
+uv run pytest -o addopts="" -m "not live and not timed" -n 2  # no coverage, no live
+uv run pytest -m "timed and not live" -n 0 --cov-append      # the timed pass
 uv run pip-audit && uv run bandit -q -r src -c pyproject.toml
 ```
 

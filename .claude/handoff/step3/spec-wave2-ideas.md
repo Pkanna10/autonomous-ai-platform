@@ -1360,7 +1360,7 @@ same triple twice in a run. Four, as the style:
 | Idea's ceiling below `multiplier × floor`, or no anchor | Dropped at S4a, `idea_dropped` with ceiling and floor (D51) |
 | Fewer than `IDEAS_PORTFOLIO_MIN` non-obvious survivors | All survivors used; noted; obvious ideas fill the rounds |
 | A quota cannot be met | Relaxed in reverse priority, noted |
-| Second generator call in the run | S1 only, previous titles avoided (D48) |
+| Second generator call in the run | S1 only, previous titles avoided (D48); with round seeds on and at least one seed, the full lane pipeline again, lens lanes seeded (G5b) |
 | `IDEA_PIPELINE` on, a pipeline role transport missing | The factory refuses the build, naming the role (§3.4) |
 | A trial edit the engine cannot parse | `unparsable_source` violation naming file, line and message; no `process_spawn` label; fix retry only with N0b (D62) |
 | A trial edit adds a spawn statement, or a use of a spawn-bound name, or a call into a base spawn finding | `process_spawn` as today; a base finding left untouched no longer refuses the edit (D62) |

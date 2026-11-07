@@ -25,7 +25,19 @@ from autonomous_ai_agents.clients.structured import (
     data_line,
     structured_request,
 )
-from autonomous_ai_agents.clients.transport import LLMRequest, LLMResult
+from autonomous_ai_agents.clients.transport import (
+    LLMRequest,
+    LLMResult,
+    LLMTransport,
+    ScriptedTransport,
+)
+from autonomous_ai_agents.common.config import (
+    LANE_ROLE_LANES,
+    Role,
+    Settings,
+    lane_settings,
+    role_settings,
+)
 from autonomous_ai_agents.common.errors import UnusableReplyError
 from autonomous_ai_agents.common.models import (
     ChangeClass,
@@ -45,6 +57,7 @@ from autonomous_ai_agents.optimization.idea_lanes import (
     MAX_TABLE_TITLES,
     grounded,
     lane_request,
+    lane_transports,
     on_the_table,
     read_lane_reply,
     tag_shape,
@@ -56,6 +69,7 @@ from autonomous_ai_agents.optimization.idea_prompts import (
 )
 from autonomous_ai_agents.optimization.idea_types import (
     LENS_LANES,
+    RELAXING_LANES,
     Anchor,
     CodeContext,
     GenerateEvent,
@@ -800,3 +814,107 @@ def test_the_first_occurrence_inside_hot_code_is_the_match() -> None:
         read_deny=(), limits=IdeaReadLimits(), notes=[],
     )  # fmt: skip
     assert grounded("m.py", "total = sum(values) + offset", context) == (6, 6)
+
+
+# --------------------------------------------------------------------------
+# Per-lane transports (G1)
+# --------------------------------------------------------------------------
+
+LAB = Settings(
+    _env_file=None,
+    IDEA_PIPELINE=True,
+    ENGINE_FALLBACKS=False,
+    IDEAS_LANE_MODELS={"eliminate": "claude-sonnet-5", "far": "claude-opus-5-5"},
+)
+
+
+def _role_transports(cfg: Settings) -> dict[Role, LLMTransport]:
+    return {
+        role: ScriptedTransport([], cfg=role_settings(cfg, role))
+        for role in ("lane", "leap", "reviewer")
+    }
+
+
+def test_with_no_lane_models_every_lane_uses_its_roles_transport() -> None:
+    cfg = Settings(_env_file=None, IDEA_PIPELINE=True)
+    roles = _role_transports(cfg)
+
+    found = lane_transports(roles, {}, cfg)
+
+    assert set(found) == {*LANE_ROLE_LANES, *RELAXING_LANES, Lane.leap}
+    assert found[Lane.leap] is roles["leap"]
+    assert all(found[lane] is roles["lane"] for lane in LANE_ROLE_LANES)
+
+
+def test_a_lane_with_its_own_model_runs_on_its_own_transport() -> None:
+    """
+    GIVEN eliminate on Sonnet 5 and far on Opus 5.5, with a transport each
+    WHEN the lanes' transports are resolved
+    THEN those two lanes get theirs (billing their model alone) and every
+         other lane the lane role's
+    """
+    roles = _role_transports(LAB)
+    given = {
+        lane: ScriptedTransport([], cfg=lane_settings(LAB, lane))
+        for lane in (Lane.eliminate, Lane.far)
+    }
+
+    found = lane_transports(roles, given, LAB)
+
+    assert found[Lane.eliminate] is given[Lane.eliminate]
+    assert found[Lane.eliminate].chain == ("claude-sonnet-5",)
+    assert found[Lane.far].chain == ("claude-opus-5-5",)
+    assert found[Lane.obvious] is roles["lane"]
+    assert found[Lane.recombine] is roles["lane"]
+    assert found[Lane.leap] is roles["leap"]
+
+
+def test_a_lane_model_with_no_transport_of_its_own_is_refused() -> None:
+    """The lane role's transport bills another model, so it cannot serve a
+    lane that names its own: refused naming the lane and both chains."""
+    roles = _role_transports(LAB)
+    far = {Lane.far: ScriptedTransport([], cfg=lane_settings(LAB, Lane.far))}
+
+    with pytest.raises(
+        ValueError,
+        match=r"eliminate lane's transport bills \['claude-sonnet-5-5'\], "
+        r"not its chain \['claude-sonnet-5'\]",
+    ):
+        lane_transports(roles, far, LAB)
+
+
+def test_a_lane_transport_on_another_chain_is_refused() -> None:
+    roles = _role_transports(LAB)
+    wrong = ScriptedTransport([], cfg=lane_settings(LAB, Lane.far))
+
+    with pytest.raises(ValueError, match="eliminate lane's transport bills"):
+        lane_transports(roles, {Lane.eliminate: wrong, Lane.far: wrong}, LAB)
+
+
+def test_the_leap_takes_no_per_lane_transport() -> None:
+    cfg = Settings(_env_file=None, IDEA_PIPELINE=True)
+    roles = _role_transports(cfg)
+
+    with pytest.raises(ValueError, match="leap lane runs on the leap transport"):
+        lane_transports(roles, {Lane.leap: roles["leap"]}, cfg)
+
+
+def test_a_prefix_no_other_request_reads_is_never_cached() -> None:
+    """
+    GIVEN a lens whose data block is its own view (G2), read by no other
+        request of the call
+    WHEN its request is built with shared=False
+    THEN the block carries no breakpoint, since nothing would read the write
+        (D59); shared=True, the default, keeps today's breakpoint
+    """
+    prefix = _prefix(Fence(LANE_TOKEN))
+    alone = lane_request(
+        Lane.far, system=IDEAS_SYSTEM_PROMPT, prefix=prefix, instruction="ask",
+        schema=IDEAS_SCHEMA, max_tokens=9, effort=None, shared=False,
+    )  # fmt: skip
+    assert "cache_control" not in json.dumps(alone.messages)
+    shared = lane_request(
+        Lane.far, system=IDEAS_SYSTEM_PROMPT, prefix=prefix, instruction="ask",
+        schema=IDEAS_SCHEMA, max_tokens=9, effort=None,
+    )  # fmt: skip
+    assert json.dumps(shared.messages).count("cache_control") == 1

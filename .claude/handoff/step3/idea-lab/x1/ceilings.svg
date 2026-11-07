@@ -1,0 +1,221 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="240" viewBox="0 0 640 240" font-family="sans-serif" font-size="12">
+<title>Predicted ceiling less the floor, per configuration</title>
+<style>.s{fill:#fcfcfb}.t{fill:#0b0b0b}.m{fill:#52514e}.g{stroke:#d9d8d4}.b{fill:#2a78d6;fill-opacity:.25;stroke:#2a78d6}.k{stroke:#2a78d6;stroke-width:2}.d{fill:#2a78d6}.f{stroke:#52514e;stroke-dasharray:4 3}@media (prefers-color-scheme:dark){.s{fill:#1a1a19}.t{fill:#f0efec}.m{fill:#c3c2b7}.g{stroke:#3a3a37}.b{fill:#3987e5;stroke:#3987e5}.k{stroke:#3987e5}.d{fill:#3987e5}.f{stroke:#c3c2b7}}</style>
+<rect class="s" width="640" height="240"/>
+<line class="g" x1="96.0" x2="96.0" y1="16" y2="216"/>
+<text class="m" x="96.0" y="232" text-anchor="middle">-25 pp</text>
+<line class="f" x1="196.0" x2="196.0" y1="16" y2="216"/>
+<text class="m" x="196.0" y="232" text-anchor="middle">floor</text>
+<line class="g" x1="296.0" x2="296.0" y1="16" y2="216"/>
+<text class="m" x="296.0" y="232" text-anchor="middle">+25 pp</text>
+<line class="g" x1="396.0" x2="396.0" y1="16" y2="216"/>
+<text class="m" x="396.0" y="232" text-anchor="middle">+50 pp</text>
+<line class="g" x1="496.0" x2="496.0" y1="16" y2="216"/>
+<text class="m" x="496.0" y="232" text-anchor="middle">+75 pp</text>
+<line class="g" x1="596.0" x2="596.0" y1="16" y2="216"/>
+<text class="m" x="596.0" y="232" text-anchor="middle">+100 pp</text>
+<text class="t" x="8" y="40">A (0)</text>
+<text class="m" x="96.0" y="40">no ceiling</text>
+<text class="t" x="8" y="72">X1-0 (37)</text>
+<line class="k" x1="201.4" x2="509.8" y1="68" y2="68"/>
+<rect class="b" x="210.9" y="60" height="16" width="175.6" rx="4"/>
+<line class="k" x1="231.9" x2="231.9" y1="60" y2="76"/>
+<circle class="d" cx="201.4" cy="68" r="4"/>
+<circle class="d" cx="201.4" cy="68" r="4"/>
+<circle class="d" cx="204.7" cy="68" r="4"/>
+<circle class="d" cx="207.2" cy="68" r="4"/>
+<circle class="d" cx="207.5" cy="68" r="4"/>
+<circle class="d" cx="209.3" cy="68" r="4"/>
+<circle class="d" cx="210.0" cy="68" r="4"/>
+<circle class="d" cx="210.8" cy="68" r="4"/>
+<circle class="d" cx="210.8" cy="68" r="4"/>
+<circle class="d" cx="210.9" cy="68" r="4"/>
+<circle class="d" cx="213.6" cy="68" r="4"/>
+<circle class="d" cx="217.2" cy="68" r="4"/>
+<circle class="d" cx="220.7" cy="68" r="4"/>
+<circle class="d" cx="220.9" cy="68" r="4"/>
+<circle class="d" cx="228.0" cy="68" r="4"/>
+<circle class="d" cx="228.5" cy="68" r="4"/>
+<circle class="d" cx="229.0" cy="68" r="4"/>
+<circle class="d" cx="229.5" cy="68" r="4"/>
+<circle class="d" cx="231.9" cy="68" r="4"/>
+<circle class="d" cx="246.7" cy="68" r="4"/>
+<circle class="d" cx="273.5" cy="68" r="4"/>
+<circle class="d" cx="274.5" cy="68" r="4"/>
+<circle class="d" cx="287.1" cy="68" r="4"/>
+<circle class="d" cx="291.0" cy="68" r="4"/>
+<circle class="d" cx="293.7" cy="68" r="4"/>
+<circle class="d" cx="332.8" cy="68" r="4"/>
+<circle class="d" cx="386.5" cy="68" r="4"/>
+<circle class="d" cx="386.5" cy="68" r="4"/>
+<circle class="d" cx="390.4" cy="68" r="4"/>
+<circle class="d" cx="390.4" cy="68" r="4"/>
+<circle class="d" cx="390.8" cy="68" r="4"/>
+<circle class="d" cx="436.6" cy="68" r="4"/>
+<circle class="d" cx="436.6" cy="68" r="4"/>
+<circle class="d" cx="440.5" cy="68" r="4"/>
+<circle class="d" cx="459.4" cy="68" r="4"/>
+<circle class="d" cx="490.9" cy="68" r="4"/>
+<circle class="d" cx="509.8" cy="68" r="4"/>
+<text class="t" x="8" y="104">X1-1 (45)</text>
+<line class="k" x1="200.0" x2="564.9" y1="100" y2="100"/>
+<rect class="b" x="217.2" y="92" height="16" width="169.3" rx="4"/>
+<line class="k" x1="265.2" x2="265.2" y1="92" y2="108"/>
+<circle class="d" cx="200.0" cy="100" r="4"/>
+<circle class="d" cx="201.4" cy="100" r="4"/>
+<circle class="d" cx="204.7" cy="100" r="4"/>
+<circle class="d" cx="207.2" cy="100" r="4"/>
+<circle class="d" cx="207.5" cy="100" r="4"/>
+<circle class="d" cx="209.3" cy="100" r="4"/>
+<circle class="d" cx="209.3" cy="100" r="4"/>
+<circle class="d" cx="210.0" cy="100" r="4"/>
+<circle class="d" cx="210.0" cy="100" r="4"/>
+<circle class="d" cx="210.8" cy="100" r="4"/>
+<circle class="d" cx="210.9" cy="100" r="4"/>
+<circle class="d" cx="217.2" cy="100" r="4"/>
+<circle class="d" cx="217.2" cy="100" r="4"/>
+<circle class="d" cx="220.7" cy="100" r="4"/>
+<circle class="d" cx="220.9" cy="100" r="4"/>
+<circle class="d" cx="228.0" cy="100" r="4"/>
+<circle class="d" cx="228.5" cy="100" r="4"/>
+<circle class="d" cx="229.0" cy="100" r="4"/>
+<circle class="d" cx="229.0" cy="100" r="4"/>
+<circle class="d" cx="229.5" cy="100" r="4"/>
+<circle class="d" cx="246.7" cy="100" r="4"/>
+<circle class="d" cx="265.2" cy="100" r="4"/>
+<circle class="d" cx="265.2" cy="100" r="4"/>
+<circle class="d" cx="271.1" cy="100" r="4"/>
+<circle class="d" cx="271.1" cy="100" r="4"/>
+<circle class="d" cx="273.5" cy="100" r="4"/>
+<circle class="d" cx="274.5" cy="100" r="4"/>
+<circle class="d" cx="287.1" cy="100" r="4"/>
+<circle class="d" cx="287.1" cy="100" r="4"/>
+<circle class="d" cx="291.0" cy="100" r="4"/>
+<circle class="d" cx="293.7" cy="100" r="4"/>
+<circle class="d" cx="332.8" cy="100" r="4"/>
+<circle class="d" cx="386.5" cy="100" r="4"/>
+<circle class="d" cx="386.5" cy="100" r="4"/>
+<circle class="d" cx="390.4" cy="100" r="4"/>
+<circle class="d" cx="390.4" cy="100" r="4"/>
+<circle class="d" cx="390.8" cy="100" r="4"/>
+<circle class="d" cx="436.6" cy="100" r="4"/>
+<circle class="d" cx="436.6" cy="100" r="4"/>
+<circle class="d" cx="436.6" cy="100" r="4"/>
+<circle class="d" cx="440.5" cy="100" r="4"/>
+<circle class="d" cx="459.4" cy="100" r="4"/>
+<circle class="d" cx="459.4" cy="100" r="4"/>
+<circle class="d" cx="509.8" cy="100" r="4"/>
+<circle class="d" cx="564.9" cy="100" r="4"/>
+<text class="t" x="8" y="136">X1-2 (40)</text>
+<line class="k" x1="201.4" x2="509.8" y1="132" y2="132"/>
+<rect class="b" x="228.9" y="124" height="16" width="207.7" rx="4"/>
+<line class="k" x1="280.8" x2="280.8" y1="124" y2="140"/>
+<circle class="d" cx="201.4" cy="132" r="4"/>
+<circle class="d" cx="207.2" cy="132" r="4"/>
+<circle class="d" cx="209.3" cy="132" r="4"/>
+<circle class="d" cx="210.0" cy="132" r="4"/>
+<circle class="d" cx="210.8" cy="132" r="4"/>
+<circle class="d" cx="212.3" cy="132" r="4"/>
+<circle class="d" cx="217.2" cy="132" r="4"/>
+<circle class="d" cx="220.7" cy="132" r="4"/>
+<circle class="d" cx="220.9" cy="132" r="4"/>
+<circle class="d" cx="228.5" cy="132" r="4"/>
+<circle class="d" cx="229.0" cy="132" r="4"/>
+<circle class="d" cx="229.5" cy="132" r="4"/>
+<circle class="d" cx="231.9" cy="132" r="4"/>
+<circle class="d" cx="246.7" cy="132" r="4"/>
+<circle class="d" cx="265.2" cy="132" r="4"/>
+<circle class="d" cx="271.1" cy="132" r="4"/>
+<circle class="d" cx="273.5" cy="132" r="4"/>
+<circle class="d" cx="273.5" cy="132" r="4"/>
+<circle class="d" cx="274.5" cy="132" r="4"/>
+<circle class="d" cx="274.5" cy="132" r="4"/>
+<circle class="d" cx="287.1" cy="132" r="4"/>
+<circle class="d" cx="287.1" cy="132" r="4"/>
+<circle class="d" cx="293.7" cy="132" r="4"/>
+<circle class="d" cx="331.8" cy="132" r="4"/>
+<circle class="d" cx="332.8" cy="132" r="4"/>
+<circle class="d" cx="332.8" cy="132" r="4"/>
+<circle class="d" cx="386.5" cy="132" r="4"/>
+<circle class="d" cx="390.4" cy="132" r="4"/>
+<circle class="d" cx="390.8" cy="132" r="4"/>
+<circle class="d" cx="436.6" cy="132" r="4"/>
+<circle class="d" cx="436.6" cy="132" r="4"/>
+<circle class="d" cx="440.5" cy="132" r="4"/>
+<circle class="d" cx="459.4" cy="132" r="4"/>
+<circle class="d" cx="459.4" cy="132" r="4"/>
+<circle class="d" cx="459.4" cy="132" r="4"/>
+<circle class="d" cx="459.4" cy="132" r="4"/>
+<circle class="d" cx="476.7" cy="132" r="4"/>
+<circle class="d" cx="490.9" cy="132" r="4"/>
+<circle class="d" cx="509.8" cy="132" r="4"/>
+<circle class="d" cx="509.8" cy="132" r="4"/>
+<text class="t" x="8" y="168">X1-3 (42)</text>
+<line class="k" x1="201.0" x2="509.8" y1="164" y2="164"/>
+<rect class="b" x="217.2" y="156" height="16" width="105.8" rx="4"/>
+<line class="k" x1="238.1" x2="238.1" y1="156" y2="172"/>
+<circle class="d" cx="201.0" cy="164" r="4"/>
+<circle class="d" cx="201.4" cy="164" r="4"/>
+<circle class="d" cx="207.2" cy="164" r="4"/>
+<circle class="d" cx="209.3" cy="164" r="4"/>
+<circle class="d" cx="209.3" cy="164" r="4"/>
+<circle class="d" cx="209.5" cy="164" r="4"/>
+<circle class="d" cx="210.0" cy="164" r="4"/>
+<circle class="d" cx="210.7" cy="164" r="4"/>
+<circle class="d" cx="210.8" cy="164" r="4"/>
+<circle class="d" cx="210.9" cy="164" r="4"/>
+<circle class="d" cx="217.2" cy="164" r="4"/>
+<circle class="d" cx="217.2" cy="164" r="4"/>
+<circle class="d" cx="219.2" cy="164" r="4"/>
+<circle class="d" cx="220.7" cy="164" r="4"/>
+<circle class="d" cx="220.9" cy="164" r="4"/>
+<circle class="d" cx="228.0" cy="164" r="4"/>
+<circle class="d" cx="228.5" cy="164" r="4"/>
+<circle class="d" cx="229.0" cy="164" r="4"/>
+<circle class="d" cx="229.0" cy="164" r="4"/>
+<circle class="d" cx="229.5" cy="164" r="4"/>
+<circle class="d" cx="229.5" cy="164" r="4"/>
+<circle class="d" cx="246.7" cy="164" r="4"/>
+<circle class="d" cx="271.1" cy="164" r="4"/>
+<circle class="d" cx="273.5" cy="164" r="4"/>
+<circle class="d" cx="273.5" cy="164" r="4"/>
+<circle class="d" cx="273.5" cy="164" r="4"/>
+<circle class="d" cx="274.5" cy="164" r="4"/>
+<circle class="d" cx="274.5" cy="164" r="4"/>
+<circle class="d" cx="287.1" cy="164" r="4"/>
+<circle class="d" cx="293.7" cy="164" r="4"/>
+<circle class="d" cx="293.7" cy="164" r="4"/>
+<circle class="d" cx="332.8" cy="164" r="4"/>
+<circle class="d" cx="374.5" cy="164" r="4"/>
+<circle class="d" cx="386.5" cy="164" r="4"/>
+<circle class="d" cx="390.4" cy="164" r="4"/>
+<circle class="d" cx="390.4" cy="164" r="4"/>
+<circle class="d" cx="416.0" cy="164" r="4"/>
+<circle class="d" cx="440.5" cy="164" r="4"/>
+<circle class="d" cx="459.4" cy="164" r="4"/>
+<circle class="d" cx="459.4" cy="164" r="4"/>
+<circle class="d" cx="490.9" cy="164" r="4"/>
+<circle class="d" cx="509.8" cy="164" r="4"/>
+<text class="t" x="8" y="200">X1-4 (18)</text>
+<line class="k" x1="201.4" x2="509.8" y1="196" y2="196"/>
+<rect class="b" x="217.7" y="188" height="16" width="145.6" rx="4"/>
+<line class="k" x1="251.5" x2="251.5" y1="188" y2="204"/>
+<circle class="d" cx="201.4" cy="196" r="4"/>
+<circle class="d" cx="207.2" cy="196" r="4"/>
+<circle class="d" cx="209.3" cy="196" r="4"/>
+<circle class="d" cx="210.0" cy="196" r="4"/>
+<circle class="d" cx="217.2" cy="196" r="4"/>
+<circle class="d" cx="219.2" cy="196" r="4"/>
+<circle class="d" cx="228.5" cy="196" r="4"/>
+<circle class="d" cx="229.0" cy="196" r="4"/>
+<circle class="d" cx="229.5" cy="196" r="4"/>
+<circle class="d" cx="273.5" cy="196" r="4"/>
+<circle class="d" cx="274.5" cy="196" r="4"/>
+<circle class="d" cx="287.1" cy="196" r="4"/>
+<circle class="d" cx="293.7" cy="196" r="4"/>
+<circle class="d" cx="386.5" cy="196" r="4"/>
+<circle class="d" cx="390.4" cy="196" r="4"/>
+<circle class="d" cx="436.6" cy="196" r="4"/>
+<circle class="d" cx="459.4" cy="196" r="4"/>
+<circle class="d" cx="509.8" cy="196" r="4"/>
+</svg>

@@ -1,0 +1,194 @@
+{
+ "S01": {
+  "arm": "X1-1",
+  "label": "far",
+  "lane": "far",
+  "model": "claude-fable-5",
+  "position": 4,
+  "repo": "mistune"
+ },
+ "S02": {
+  "arm": "X1-1",
+  "label": "eliminate",
+  "lane": "eliminate",
+  "model": "claude-haiku-5-5",
+  "position": 2,
+  "repo": "pyparsing"
+ },
+ "S03": {
+  "arm": "X1-1",
+  "label": "leap",
+  "lane": "leap",
+  "model": "claude-opus-5-5",
+  "position": 2,
+  "repo": "mistune"
+ },
+ "S04": {
+  "arm": "X1-0",
+  "label": "name_the_problem",
+  "lane": "name_the_problem",
+  "model": "claude-sonnet-5-5",
+  "position": 3,
+  "repo": "sqlparse"
+ },
+ "S05": {
+  "arm": "X1-1",
+  "label": "name_the_problem",
+  "lane": "name_the_problem",
+  "model": "claude-sonnet-5",
+  "position": 3,
+  "repo": "mistune"
+ },
+ "S06": {
+  "arm": "X1-2",
+  "label": "lane-8",
+  "lane": "eliminate",
+  "model": "claude-sonnet-5-5",
+  "position": 2,
+  "repo": "pyparsing"
+ },
+ "S07": {
+  "arm": "X1-2",
+  "label": "lane-9",
+  "lane": "name_the_problem",
+  "model": "claude-sonnet-5-5",
+  "position": 3,
+  "repo": "mistune"
+ },
+ "S08": {
+  "arm": "X1-1",
+  "label": "far",
+  "lane": "far",
+  "model": "claude-sonnet-5",
+  "position": 2,
+  "repo": "idna"
+ },
+ "S09": {
+  "arm": "X1-2",
+  "label": "obvious",
+  "lane": "obvious",
+  "model": "claude-sonnet-5-5",
+  "position": 1,
+  "repo": "tomli"
+ },
+ "S10": {
+  "arm": "X1-1",
+  "label": "name_the_problem",
+  "lane": "name_the_problem",
+  "model": "claude-fable-5-1",
+  "position": 4,
+  "repo": "tomli"
+ },
+ "S11": {
+  "arm": "X1-0",
+  "label": "eliminate",
+  "lane": "eliminate",
+  "model": "claude-sonnet-5-5",
+  "position": 2,
+  "repo": "pyparsing"
+ },
+ "S12": {
+  "arm": "X1-1",
+  "label": "name_the_problem",
+  "lane": "name_the_problem",
+  "model": "claude-haiku-5-5",
+  "position": 1,
+  "repo": "sqlparse"
+ },
+ "S13": {
+  "arm": "X1-1",
+  "label": "resolve_tradeoff",
+  "lane": "resolve_tradeoff",
+  "model": "claude-fable-5-1",
+  "position": 1,
+  "repo": "more_itertools"
+ },
+ "S14": {
+  "arm": "X1-3",
+  "label": "eliminate",
+  "lane": "eliminate",
+  "model": "claude-sonnet-5-5",
+  "position": 2,
+  "repo": "sqlparse"
+ },
+ "S15": {
+  "arm": "X1-1",
+  "label": "far",
+  "lane": "far",
+  "model": "claude-sonnet-5-5",
+  "position": 3,
+  "repo": "markdown"
+ },
+ "S16": {
+  "arm": "X1-3",
+  "label": "resolve_tradeoff",
+  "lane": "resolve_tradeoff",
+  "model": "claude-sonnet-5-5",
+  "position": 1,
+  "repo": "sqlparse"
+ },
+ "S17": {
+  "arm": "X1-0",
+  "label": "far",
+  "lane": "far",
+  "model": "claude-sonnet-5-5",
+  "position": 1,
+  "repo": "markdown"
+ },
+ "S18": {
+  "arm": "X1-0",
+  "label": "assume_less",
+  "lane": "assume_less",
+  "model": "claude-sonnet-5-5",
+  "position": 2,
+  "repo": "more_itertools"
+ },
+ "S19": {
+  "arm": "X1-3",
+  "label": "assume_less",
+  "lane": "assume_less",
+  "model": "claude-sonnet-5-5",
+  "position": 1,
+  "repo": "markdown"
+ },
+ "S20": {
+  "arm": "X1-1",
+  "label": "resolve_tradeoff",
+  "lane": "resolve_tradeoff",
+  "model": "claude-fable-5",
+  "position": 3,
+  "repo": "sqlparse"
+ },
+ "S21": {
+  "arm": "X1-2",
+  "label": "leap-2",
+  "lane": "leap",
+  "model": "claude-opus-5-5",
+  "position": 1,
+  "repo": "more_itertools"
+ },
+ "S22": {
+  "arm": "X1-0",
+  "label": "recombine",
+  "lane": "recombine",
+  "model": "claude-sonnet-5-5",
+  "position": 3,
+  "repo": "idna"
+ },
+ "S23": {
+  "arm": "X1-1",
+  "label": "obvious",
+  "lane": "obvious",
+  "model": "claude-sonnet-5-5",
+  "position": 4,
+  "repo": "more_itertools"
+ },
+ "S24": {
+  "arm": "X1-1",
+  "label": "recombine",
+  "lane": "recombine",
+  "model": "claude-fable-5",
+  "position": 3,
+  "repo": "more_itertools"
+ }
+}

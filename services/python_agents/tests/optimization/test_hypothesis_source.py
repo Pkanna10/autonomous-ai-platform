@@ -5,26 +5,33 @@
 the role's effort and token cap come from the settings, the request is billed
 to the ``Budget`` handed in (the node reads spend from its delta, D7), errors
 propagate for the node to classify (D18), and ``lessons`` / ``avoid_titles``
-do not reach the prompt until W1. Every test runs on ``ScriptedTransport``.
+reach the prompt only with ``GENERATOR_LESSONS`` on (G11, W1). Every test
+runs on ``ScriptedTransport``.
 """
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
 import json
+import os
 import secrets
 from collections.abc import Sequence
+from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
 from autonomous_ai_agents.clients.budget import Budget
 from autonomous_ai_agents.clients.cost import response_cost
 from autonomous_ai_agents.clients.transport import ScriptedReply, ScriptedTransport
-from autonomous_ai_agents.common.config import Settings, role_settings
+from autonomous_ai_agents.common.config import Settings, role_settings, settings
 from autonomous_ai_agents.common.errors import BudgetExceeded, UnusableReplyError
 from autonomous_ai_agents.common.models import (
     ChangeClass,
     Direction,
     Hotspot,
+    Hypothesis,
     HypothesisSource,
     Lesson,
     Objective,
@@ -34,6 +41,7 @@ from autonomous_ai_agents.common.models import (
     ProjectUnderstanding,
     Technique,
     TechniqueMatchRecord,
+    Verdict,
     VerdictOutcome,
 )
 from autonomous_ai_agents.optimization.hypothesis_source import (
@@ -44,8 +52,11 @@ from autonomous_ai_agents.optimization.sources import (
     GenerateResult,
     HypothesisGenerator,
     MatchResult,
+    RunVerdicts,
     TechniqueMatcher,
+    Trialled,
 )
+from autonomous_ai_agents.orchestrator.factory import build_context
 from autonomous_ai_agents.research import playbook as playbook_module
 from autonomous_ai_agents.research.playbook import MATCH_MAX_TOKENS, StableTokens
 
@@ -171,6 +182,7 @@ def _generate(
     techniques: Sequence[Technique] = (),
     n: int = 5,
     cfg: Settings = GEN_CFG,
+    verdicts: RunVerdicts | None = None,
 ) -> tuple[GenerateResult, ScriptedTransport, Budget]:
     transport = ScriptedTransport(replies, cfg=cfg)
     spend = Budget(5.0) if budget is None else budget
@@ -185,6 +197,7 @@ def _generate(
         avoid_titles=avoid_titles,
         n=n,
         budget=spend,
+        verdicts=verdicts,
     )
     return result, transport, spend
 
@@ -252,9 +265,29 @@ def test_generate_passes_n_through() -> None:
     assert any("beyond the first 1" in note for note in result.notes)
 
 
-def test_lessons_and_avoid_titles_do_not_reach_the_prompt_until_w1() -> None:
+def test_lessons_and_avoid_titles_do_not_reach_the_prompt_with_the_setting_off() -> (
+    None
+):
     _, plain, _ = _generate([_ideas()])
     _, given, _ = _generate([_ideas()], lessons=[LESSON], avoid_titles=["Use a set"])
+    assert given.requests == plain.requests
+
+
+def test_this_runs_verdicts_never_reach_todays_prompt() -> None:
+    """The round seeds are the idea pipeline's (G5b): today's generator
+    accepts the run's verdicts and sends exactly what it sends without."""
+    _, plain, _ = _generate([_ideas()])
+    hypothesis = Hypothesis(
+        project_id="p1", source=HypothesisSource.novel, title="Use a dict",
+        rationale="r", change_class=ChangeClass.efficiency, expected_gain=0.2,
+        provability=0.8, risk=0.1,
+    )  # fmt: skip
+    verdict = Verdict(
+        trial_id="t1", hypothesis_id=hypothesis.id, outcome=VerdictOutcome.keep,
+        change_class=ChangeClass.efficiency, gain=0.3, summary="kept",
+    )  # fmt: skip
+    seen = RunVerdicts(trialled=(Trialled(hypothesis, verdict, None),), noise_floor=0.1)
+    _, given, _ = _generate([_ideas()], verdicts=seen)
     assert given.requests == plain.requests
 
 
@@ -394,3 +427,112 @@ def test_a_matcher_failure_propagates_after_charging() -> None:
 def test_the_matcher_refuses_a_transport_of_another_role() -> None:
     with pytest.raises(ValueError, match="matcher"):
         ClaudeTechniqueMatcher(ScriptedTransport([], cfg=BASE), config=BASE)
+
+
+# --------------------------------------------------------------------------
+# G11 (W1, D21): lessons and this run's titles in today's prompt
+# --------------------------------------------------------------------------
+
+_W1_AT = datetime(2026, 11, 1, tzinfo=UTC)
+
+
+def _lesson(index: int, text: str, *, weight: float = 1.0,
+            outcome: VerdictOutcome = VerdictOutcome.keep,
+            project_id: str | None = "p1") -> Lesson:  # fmt: skip
+    return Lesson(
+        id=f"lesson-{index:02d}", project_id=project_id, verdict_id=f"v-{index:02d}",
+        hypothesis_id=f"h-{index:02d}", outcome=outcome, gain=0.031, text=text,
+        weight=weight, created_at=_W1_AT,
+    )  # fmt: skip
+
+
+W1_LESSONS = (
+    _lesson(1, "hot_loop -> Use a set for seen values: keep (+31.0%)"),
+    _lesson(2, "general -> Sort before dedupe: reject (-4.0%)",
+            outcome=VerdictOutcome.reject),
+    _lesson(3, "hot_loop -> Memoise the key: keep (+5.0%; combine: not reproduced)",
+            weight=0.25),
+)  # fmt: skip
+W1_AVOID = ("Use a dict as an ordered set", "Hoist the attribute lookup")
+_W1_GOLDEN = "6932e95fff8859e96b08927ec7791d5c2a78ecc3f5f6aaefa5642fb77eaeee68"
+"""sha256 of today's request and result with lessons and ``avoid_titles``
+given, recorded on 2e8ad0d before G11: ``GENERATOR_LESSONS`` off (or
+absent) must reproduce it."""
+
+
+def _w1_fingerprint(result: GenerateResult, transport: ScriptedTransport) -> str:
+    record = {
+        "requests": [dataclasses.asdict(r) for r in transport.requests],
+        "hypotheses": [h.model_dump(mode="json", exclude={"id"})
+                       for h in result.hypotheses],
+        "notes": list(result.notes),
+    }  # fmt: skip
+    text = json.dumps(record, sort_keys=True, default=str)
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def test_lessons_off_todays_request_and_result_are_byte_identical() -> None:
+    """
+    GIVEN lessons and this run's titles, ``GENERATOR_LESSONS`` left at its
+          default (and set off)
+    THEN today's request and result hash to what they did before G11
+    """
+    off = role_settings(BASE, "generator", GENERATOR_LESSONS=False)
+    for cfg in (GEN_CFG, off):
+        result, transport, _ = _generate(
+            [_ideas(_idea("Use a set"))], lessons=W1_LESSONS,
+            avoid_titles=W1_AVOID, techniques=TECHNIQUES, cfg=cfg,
+        )  # fmt: skip
+        assert _w1_fingerprint(result, transport) == _W1_GOLDEN
+
+
+def test_lessons_on_reach_todays_prompt_once_with_the_titles() -> None:
+    """
+    GIVEN ``GENERATOR_LESSONS`` on
+    THEN today's one request carries one fenced lessons block: the three
+         lessons (outcome, weight, text) and the two titles, after the
+         repository block; with no lesson and no title nothing is added
+    """
+    on = role_settings(BASE, "generator", GENERATOR_LESSONS=True)
+    _, transport, _ = _generate([_ideas()], lessons=W1_LESSONS,
+                                avoid_titles=W1_AVOID, cfg=on)  # fmt: skip
+    (request,) = transport.requests
+    content = request.messages[0]["content"]
+    assert isinstance(content, list)
+    text = content[0]["text"]
+    token = "0123456789abcdef"
+    opening, closing = (f"<untrusted_lessons boundary={token}>",
+                        f"</untrusted_lessons boundary={token}>")  # fmt: skip
+    assert text.count(opening) == 1 and text.count(closing) == 1
+    block = text.split(opening, 1)[1].split(closing, 1)[0]
+    assert block.count("lesson: ") == 3 and block.count("tried: ") == 2
+    assert '"weight": 0.25' in block and "combine: not reproduced" in block
+    assert all(title in block for title in W1_AVOID)
+    assert text.index("</untrusted_repo_content") < text.index(opening)
+    _, empty, _ = _generate([_ideas()], cfg=on)
+    _, plain, _ = _generate([_ideas()])
+    assert empty.requests == plain.requests
+
+
+def test_the_factory_built_generator_reads_the_setting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real factory path: ``build_context`` hands today's generator the
+    process settings, so ``GENERATOR_LESSONS`` on reaches its request."""
+    base = Path(os.path.realpath(tmp_path))
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", None)
+    monkeypatch.setattr(settings, "WORKTREE_ROOT", base / "wt-root")
+    monkeypatch.setattr(settings, "GENERATOR_LESSONS", True)
+    (base / "user").mkdir()
+    project = Project(id="p1", name="dedupe", root_path=str(base / "user"))
+    generating = ScriptedTransport([_ideas()], cfg=role_settings(settings, "generator"))
+    ctx = build_context(project, transport=ScriptedTransport([]),
+                        role_transports={"generator": generating})  # fmt: skip
+    assert isinstance(ctx.generator, ClaudeHypothesisGenerator)
+    ctx.generator.generate(
+        project=project, understanding=None, hotspots=HOTSPOTS, objective=OBJECTIVE,
+        techniques=(), lessons=W1_LESSONS, avoid_titles=W1_AVOID, n=5,
+        budget=Budget(5.0),
+    )  # fmt: skip
+    (request,) = generating.requests
+    assert "<untrusted_lessons boundary=" in json.dumps(request.messages)

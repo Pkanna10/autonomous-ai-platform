@@ -89,6 +89,7 @@ from autonomous_ai_agents.optimization.idea_types import (
 from autonomous_ai_agents.optimization.sources import (
     GenerateResult,
     HypothesisGenerator,
+    RunVerdicts,
 )
 from autonomous_ai_agents.orchestrator import factory
 from autonomous_ai_agents.orchestrator.factory import PIPELINE_ROLES, build_context
@@ -271,13 +272,14 @@ class _Spy:
         avoid_titles: Sequence[str], n: int, budget: Budget,
         commit: str | None = None, run_id: str | None = None, call_index: int = 0,
         protected: Sequence[str] = (), read_deny: Sequence[str] = (),
+        workloads: Sequence[Workload] = (), verdicts: RunVerdicts | None = None,
     ) -> GenerateResult:  # fmt: skip
         result = self.real.generate(
             project=project, understanding=understanding, hotspots=hotspots,
             objective=objective, techniques=techniques, lessons=lessons,
             avoid_titles=avoid_titles, n=n, budget=budget, commit=commit,
             run_id=run_id, call_index=call_index, protected=protected,
-            read_deny=read_deny,
+            read_deny=read_deny, workloads=workloads, verdicts=verdicts,
         )  # fmt: skip
         self.results.append(result)
         return result

@@ -12,12 +12,21 @@ one pipeline call reports besides its hypotheses (``GenerateEvent``,
 None of them enters the checkpointed state: they cross one generator call,
 and only the ``Hypothesis`` built from a candidate (with its ``tags``, D57)
 travels on. So they are not in ``ENGINE_SERDE_ALLOWLIST``.
+
+The quarantine (G3): a rule-relaxing lane (``RELAXING_LANES``) lifts one
+frozen rule (``RelaxedRule``), so its ideas are proposals. An
+``IdeaCandidate``'s ``proposal`` is its lane's rule, tied to the lane by the
+validator and kept by every copy (``model_copy`` validates again); on a
+``Hypothesis`` a ``proposal:<rule>`` tag or a relaxing lane's ``lane:`` tag
+quarantines it (``is_proposal``), so losing one of the two is not enough.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Annotated, Final, Self
 
 from pydantic import Field, field_validator, model_validator
@@ -26,12 +35,14 @@ from autonomous_ai_agents.common.models import (
     ChangeClass,
     EngineModel,
     EventLevel,
+    Hypothesis,
     ScalarDict,
 )
 
 
 class Lane(StrEnum):
-    """Where an idea came from: S1, one of six lenses, or the leap (D45-D47)."""
+    """Where an idea came from: S1, one of six lenses, the leap (D45-D47) or a
+    rule-relaxing lane (G3, ``RELAXING_LANES``)."""
 
     obvious = "obvious"
     eliminate = "eliminate"
@@ -41,6 +52,56 @@ class Lane(StrEnum):
     resolve_tradeoff = "resolve_tradeoff"
     far = "far"
     leap = "leap"
+    relax_dependency = "relax_dependency"
+    relax_output_order = "relax_output_order"
+    relax_precompute = "relax_precompute"
+    relax_api = "relax_api"
+
+
+class RelaxedRule(StrEnum):
+    """The frozen rule a rule-relaxing lane lifts (G3); its ideas are proposals."""
+
+    new_dependency = "new_dependency"
+    output_order = "output_order"
+    install_precompute = "install_precompute"
+    api_change = "api_change"
+
+
+RELAXING_LANES: Final[Mapping[Lane, RelaxedRule]] = MappingProxyType({
+    Lane.relax_dependency: RelaxedRule.new_dependency,
+    Lane.relax_output_order: RelaxedRule.output_order,
+    Lane.relax_precompute: RelaxedRule.install_precompute,
+    Lane.relax_api: RelaxedRule.api_change,
+})  # fmt: skip
+"""The rule-relaxing lanes and the rule each lifts (G3): never lenses, off
+unless ``IDEAS_RELAX_LANES`` names them."""
+PROPOSAL_TAG: Final = "proposal"
+"""The ``Hypothesis.tags`` key of a quarantined idea: ``proposal:<rule>``."""
+_RELAXING_LANE_TAGS: Final = {f"lane:{lane.value}": rule
+                              for lane, rule in RELAXING_LANES.items()}  # fmt: skip
+
+
+def proposal_tag(rule: RelaxedRule) -> str:
+    return f"{PROPOSAL_TAG}:{rule.value}"
+
+
+def relaxed_rules(hypothesis: Hypothesis) -> tuple[str, ...]:
+    """The rules a hypothesis's tags say it relaxes, in tag order: each
+    ``proposal:`` value (any value: fail closed) and each relaxing lane's
+    rule. Non-empty means quarantined (G3)."""
+    found: list[str] = []
+    for tag in hypothesis.tags:
+        key, _, value = tag.partition(":")
+        rule = value if key == PROPOSAL_TAG else _RELAXING_LANE_TAGS.get(tag)
+        if rule is not None and rule not in found:
+            found.append(rule)
+    return tuple(found)
+
+
+def is_proposal(hypothesis: Hypothesis) -> bool:
+    """Whether ``hypothesis`` is a quarantined proposal (G3): it then runs
+    only in the proposals path, never trialled, delivered or counted."""
+    return bool(relaxed_rules(hypothesis))
 
 
 LENS_LANES: Final[tuple[Lane, ...]] = (
@@ -244,6 +305,29 @@ class IdeaCandidate(EngineModel):
     ceiling: _Unit | None = None
     review: ReviewVerdict | None = None
     plan: str | None = None
+    proposal: RelaxedRule | None = None
+    """The rule a rule-relaxing lane's idea relaxes (G3), set by the lane at
+    birth and tied to it here; never read from a reply. Not ``None``: a
+    quarantined proposal."""
+
+    @model_validator(mode="after")
+    def _proposal_is_the_lanes(self) -> Self:
+        expected = RELAXING_LANES.get(self.lane)
+        if self.proposal is not expected:
+            raise ValueError(
+                f"proposal must be {None if expected is None else expected.value!r}"
+                f" for the {self.lane.value} lane, not "
+                f"{None if self.proposal is None else self.proposal.value!r}"
+            )
+        return self
+
+    def model_copy(
+        self, *, update: Mapping[str, object] | None = None, deep: bool = False
+    ) -> Self:
+        """A copy validated again, so no copy can clear, change or orphan
+        ``proposal`` (pydantic's own ``model_copy`` skips validation)."""
+        copied = super().model_copy(update=update, deep=deep)
+        return self.model_validate(dict(copied))
 
 
 _EVENT_CODE: Final = re.compile(r"[a-z][a-z_]{0,39}")

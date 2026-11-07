@@ -13,10 +13,12 @@ Every request is billed to the ``Budget`` handed in; the result carries no
 cost, so the node reads spend from the budget's delta (D7). ``BudgetExceeded``
 (before sending), ``LLMConfigError``, ``LLMRequestError``, ``LLMUnavailable``
 and ``UnusableReplyError`` (after charging) propagate: which of them are soft
-is the node's decision (D18, spec 4.1). ``lessons`` and ``avoid_titles`` are
-accepted and ignored until W1 (D21), and so are the run's facts the idea
-pipeline reads (``commit`` and the rest, D44): the request is unchanged. The hypothesis text stays untrusted: the
-editor fences it for every source (D11).
+is the node's decision (D18, spec 4.1). ``lessons`` and ``avoid_titles``
+reach the prompt only with ``GENERATOR_LESSONS`` on (G11, W1, D21: one
+fenced block, ``generate.lessons_block``); off, they are ignored, as are the
+run's facts the idea pipeline reads (``commit`` and the rest, D44), and the
+request is unchanged. The hypothesis text stays untrusted: the editor fences
+it for every source (D11).
 """
 
 from __future__ import annotations
@@ -42,9 +44,14 @@ from autonomous_ai_agents.common.models import (
     ProjectUnderstanding,
     Technique,
     TechniqueMatchRecord,
+    Workload,
 )
 from autonomous_ai_agents.optimization.generate import generate_hypotheses
-from autonomous_ai_agents.optimization.sources import GenerateResult, MatchResult
+from autonomous_ai_agents.optimization.sources import (
+    GenerateResult,
+    MatchResult,
+    RunVerdicts,
+)
 from autonomous_ai_agents.research.playbook import MATCH_MAX_TOKENS, match_techniques
 
 
@@ -76,6 +83,7 @@ class ClaudeHypothesisGenerator:
     ) -> None:
         self._effort = _checked(transport, config, "generator", config.GENERATOR_EFFORT)
         self._transport, self._config, self._sleep = transport, config, sleep
+        self._lessons = config.GENERATOR_LESSONS
 
     def generate(
         self,
@@ -85,8 +93,8 @@ class ClaudeHypothesisGenerator:
         hotspots: Sequence[Hotspot],
         objective: Objective,
         techniques: Sequence[Technique],
-        lessons: Sequence[Lesson],  # noqa: ARG002 - W1 (D21)
-        avoid_titles: Sequence[str],  # noqa: ARG002 - W1 (D21)
+        lessons: Sequence[Lesson],
+        avoid_titles: Sequence[str],
         n: int,
         budget: Budget,
         commit: str | None = None,  # noqa: ARG002 - the idea pipeline's (D44)
@@ -94,6 +102,8 @@ class ClaudeHypothesisGenerator:
         call_index: int = 0,  # noqa: ARG002
         protected: Sequence[str] = (),  # noqa: ARG002
         read_deny: Sequence[str] = (),  # noqa: ARG002
+        workloads: Sequence[Workload] = (),  # noqa: ARG002 - the pipeline's (G2)
+        verdicts: RunVerdicts | None = None,  # noqa: ARG002 - the pipeline's (G5b)
     ) -> GenerateResult:
         notes: list[str] = []
         hypotheses = generate_hypotheses(
@@ -104,6 +114,8 @@ class ClaudeHypothesisGenerator:
             hotspots=hotspots,
             objective=objective,
             techniques=techniques,
+            lessons=lessons if self._lessons else (),
+            avoid_titles=avoid_titles if self._lessons else (),
             n=n,
             effort=self._effort,
             max_tokens=self._config.GENERATOR_MAX_TOKENS,

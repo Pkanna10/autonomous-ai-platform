@@ -11,6 +11,8 @@ trial's git diff (file modes, compiled or binary files, git metadata,
 unrecorded writes, shadowed modules, process spawning); a trial that breaks
 any is never run. ``check_quality_references`` (Step 3, D37) refuses one
 whose added lines name a frozen quality file: a tripwire, not closure.
+``proposal_conflict`` (G3) says why a trial of a quarantined proposal never
+stands: its tag and a claim of equivalent output are contradictory.
 """
 
 from __future__ import annotations
@@ -32,7 +34,11 @@ from autonomous_ai_agents.common.models import (
     METRIC_CPU_TIME_S,
     METRIC_PEAK_RSS_BYTES,
     MIN_RUNS,
+    ChangeClass,
     Direction,
+    Hypothesis,
+    JudgeOutcome,
+    JudgeResult,
     Measurement,
     NoiseCheck,
     RunStats,
@@ -48,6 +54,7 @@ from autonomous_ai_agents.common.paths import (
 from autonomous_ai_agents.common.paths import PathTraversalError as PathTraversalError
 from autonomous_ai_agents.common.paths import normalize_path as normalize_path
 from autonomous_ai_agents.execution.protocols import Change
+from autonomous_ai_agents.optimization.idea_types import relaxed_rules
 
 DEFAULT_PROTECTED_PATTERNS: tuple[str, ...] = (
     # Tests and benchmarks: a trial may not change what judges it.
@@ -1205,3 +1212,38 @@ def _references(
 def _dunder(name: str) -> bool:
     """A dunder method runs through its class or a protocol, not by its name."""
     return name.startswith("__") and name.endswith("__")
+
+
+# ---------------------------------------------------------------------------
+# The proposal quarantine (G3)
+# ---------------------------------------------------------------------------
+
+EQUIVALENCE_JUDGE = "equivalence"
+"""``EquivalenceJudge.name``: its pass on an unchanged output is the claim."""
+
+
+def proposal_conflict(
+    hypothesis: Hypothesis, results: Sequence[JudgeResult]
+) -> str | None:
+    """Why a trial of a quarantined proposal (G3) can never stand, or
+    ``None`` for an untagged hypothesis. A proposal relaxes a frozen rule, so
+    a claim of equivalent output (an ``efficiency`` class, or the
+    equivalence judge passing on an unchanged output) contradicts its own
+    tag; any other tagged trial is quarantined all the same."""
+    rules = relaxed_rules(hypothesis)
+    if not rules:
+        return None
+    named = f"proposal (relaxes {', '.join(rules)})"
+    same = any(
+        r.judge == EQUIVALENCE_JUDGE
+        and r.outcome is JudgeOutcome.passed
+        and r.output_changed is not True
+        for r in results
+    )
+    if same or hypothesis.change_class is ChangeClass.efficiency:
+        claim = "the equivalence judge passed" if same else "an efficiency class"
+        return (
+            f"{named} claims output equivalence ({claim}): the tag and an "
+            "equivalence claim are contradictory, so it is never kept (G3)"
+        )
+    return f"{named} is quarantined: never judged, kept or delivered (G3)"

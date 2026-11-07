@@ -16,11 +16,19 @@ Outcome semantics shared by every judge:
 
 :func:`derive_verdict` then folds the judge results and the anti-cheating
 violations into one :class:`Verdict`, in a fixed order.
+
+Shadow judges (``SHADOW_JUDGES``, spec section 2) record, never decide,
+until the owner promotes them: :class:`OpCountJudge` (G6a) records the
+operation counts of one counted run per side, :class:`ScalingJudge` (G6b)
+how run time grows with input size on each side. ``derive_verdict`` leaves
+their results out of every rule and of the gain, and keeps them on the
+verdict for the report's column.
 """
 
 from __future__ import annotations
 
 import math
+import statistics
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
@@ -53,9 +61,17 @@ from autonomous_ai_agents.common.models import (
     Violation,
     ViolationRule,
 )
+from autonomous_ai_agents.execution.measure import (
+    C_CALLS_KEY,
+    METRIC_OP_CALLS,
+    METRIC_SCALE_WALL_S,
+    PYTHON_CALLS_KEY,
+    SCALE_SIZE_KEY,
+)
 from autonomous_ai_agents.optimization.anticheat import (
     compare_fingerprints,
     exceeds_noise,
+    proposal_conflict,
     relative_gain,
 )
 
@@ -707,22 +723,228 @@ class TestSuiteJudge:
         )
 
 
+# ---------------------------------------------------------------------------
+# Shadow judges: they record, never decide (spec section 2)
+# ---------------------------------------------------------------------------
+
+
+OP_COUNT_JUDGE = "op_count"
+SCALING_JUDGE = "scaling"
+SHADOW_JUDGES: frozenset[str] = frozenset({OP_COUNT_JUDGE, SCALING_JUDGE})
+"""Judge names whose results ``derive_verdict`` never reads (record only)."""
+_SHADOW = "shadow, records only"
+GROWTH_TOLERANCE = 0.15
+"""Growth rates closer than this are the same growth (``ScalingJudge``):
+a 5 % wobble of each size's median over the narrowest span (4x, two sizes)
+moves a rate by at most about 0.07, and an algorithmic change (n^2 to
+n log n or n) by 0.8 or more."""
+
+
+def _split_of(row: Measurement, key: str) -> int | None:
+    value = row.hardware.get(key)
+    return value if type(value) is int else None
+
+
+def _sum_split(rows: Sequence[Measurement], key: str) -> int | None:
+    found = [_split_of(row, key) for row in rows]
+    return None if None in found else sum(v for v in found if v is not None)
+
+
+@dataclass(frozen=True)
+class OpCountJudge:
+    """Records the base's and the trial's ``op_calls`` rows (G6a).
+
+    Summed over the workloads counted on both sides: both totals (as
+    ``baseline`` and ``trial``), the Python and C split, and the relative
+    change ``(trial - base) / base`` (negative: fewer calls; ``None`` over a
+    zero base) in ``details``. The outcome is always ``not_applicable`` and
+    ``gain`` ``None``: a second signal only, since moving work into C
+    builtins can cut counted calls without cutting time, so it never
+    overrides the timing judge (and ``derive_verdict`` ignores it anyway).
+    """
+
+    @property
+    def name(self) -> str:
+        """Judge name as it appears in results."""
+        return OP_COUNT_JUDGE
+
+    def applies_to(self, objective: Objective) -> bool:
+        """It records whatever the objective is."""
+        return True
+
+    def evaluate(self, baseline: Baseline, trial: Trial) -> JudgeResult:
+        """Pair the ``op_calls`` rows per workload and record the sums."""
+        pairs = _pair(baseline.measurements, trial.measurements, METRIC_OP_CALLS)
+        both = [(e, a) for _, e, a in pairs if a is not None]
+        uncounted = len(pairs) - len(both)
+        if not both:
+            return JudgeResult(
+                judge=self.name,
+                outcome=JudgeOutcome.not_applicable,
+                reason=f"{_SHADOW}: no operation counts on both sides",
+                details={"shadow": True, "workloads": 0, "uncounted": uncounted},
+            )
+        before = [e for e, _ in both]
+        after = [a for _, a in both]
+        base = sum(row.stats.mean for row in before)
+        total = sum(row.stats.mean for row in after)
+        change = (total - base) / base if base > 0 else None
+        said = "no relative change" if change is None else f"{change:+.1%}"
+        missing = f"; {uncounted} not counted on both sides" if uncounted else ""
+        return JudgeResult(
+            judge=self.name,
+            outcome=JudgeOutcome.not_applicable,
+            metric=METRIC_OP_CALLS,
+            baseline=RunStats.from_samples((base,), unit="calls"),
+            trial=RunStats.from_samples((total,), unit="calls"),
+            reason=(
+                f"{_SHADOW}: {total:.0f} calls against the base's {base:.0f}"
+                f" ({said}) over {len(both)} workload(s){missing}"
+            ),
+            details={
+                "shadow": True,
+                "workloads": len(both),
+                "uncounted": uncounted,
+                "change": change,
+                "base_calls": round(base),
+                "trial_calls": round(total),
+                "base_python_calls": _sum_split(before, PYTHON_CALLS_KEY),
+                "base_c_calls": _sum_split(before, C_CALLS_KEY),
+                "trial_python_calls": _sum_split(after, PYTHON_CALLS_KEY),
+                "trial_c_calls": _sum_split(after, C_CALLS_KEY),
+            },
+        )
+
+
+def growth_rate(points: Sequence[tuple[int, float]]) -> float:
+    """The least-squares slope of log(time) against log(size) over
+    ``points`` (two or more distinct positive sizes, positive times): 1 for
+    time growing linearly with size, 2 quadratically."""
+    xs = [math.log(size) for size, _ in points]
+    ys = [math.log(seconds) for _, seconds in points]
+    mx, my = sum(xs) / len(xs), sum(ys) / len(ys)
+    spread = sum((x - mx) ** 2 for x in xs)
+    return sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=True)) / spread
+
+
+def _tidy(value: float) -> float:
+    """Rounded to 6 places (float noise is no growth), never ``-0.0``."""
+    return round(value, 6) + 0.0
+
+
+def _medians(rows: Sequence[Measurement]) -> dict[str, dict[int, float]]:
+    """Per workload, each size's median scaling time: the first row per
+    (workload, size), only a positive int size and a positive median."""
+    found: dict[str, dict[int, float]] = {}
+    for row in rows:
+        size = row.hardware.get(SCALE_SIZE_KEY)
+        if row.metric != METRIC_SCALE_WALL_S or type(size) is not int or size < 1:
+            continue
+        sizes = found.setdefault(row.workload_id, {})
+        if size not in sizes and (median := statistics.median(row.samples)) > 0:
+            sizes[size] = median
+    return found
+
+
+@dataclass(frozen=True)
+class ScalingJudge:
+    """Records how run time grows with input size on both sides (G6b).
+
+    Per workload scaled on both sides (``scale_wall_time_s`` rows), the
+    growth rate of each side (``growth_rate`` over the medians of the sizes
+    both ran, two at least); recorded: the mean rates (``baseline`` and
+    ``trial`` hold the per-workload rates, unit ``rate``), their difference
+    ``change`` (negative: slower growth), the ``largest_change`` of one
+    workload, and ``same_growth`` (every change within
+    ``GROWTH_TOLERANCE``). A real algorithmic change alters the rate, a
+    constant-factor speed-up does not. The outcome is always
+    ``not_applicable`` and ``gain`` ``None`` (``derive_verdict`` ignores it
+    anyway).
+    """
+
+    @property
+    def name(self) -> str:
+        """Judge name as it appears in results."""
+        return SCALING_JUDGE
+
+    def applies_to(self, objective: Objective) -> bool:
+        """It records whatever the objective is."""
+        return True
+
+    def evaluate(self, baseline: Baseline, trial: Trial) -> JudgeResult:
+        """Fit both sides' growth per workload and record the rates."""
+        after = _medians(trial.measurements)
+        rates: list[tuple[float, float]] = []
+        before = _medians(baseline.measurements)
+        for workload_id, base in before.items():
+            mine = after.get(workload_id, {})
+            shared = sorted(set(base) & set(mine))
+            if len(shared) >= 2:
+                rates.append((
+                    growth_rate([(size, base[size]) for size in shared]),
+                    growth_rate([(size, mine[size]) for size in shared]),
+                ))  # fmt: skip
+        unscaled = len(before) - len(rates)
+        if not rates:
+            return JudgeResult(
+                judge=self.name,
+                outcome=JudgeOutcome.not_applicable,
+                reason=f"{_SHADOW}: no scaling runs on both sides",
+                details={"shadow": True, "workloads": 0, "unscaled": unscaled},
+            )
+        changes = [_tidy(t - b) for b, t in rates]
+        base_rate = _tidy(statistics.fmean(b for b, _ in rates))
+        trial_rate = _tidy(statistics.fmean(t for _, t in rates))
+        change = _tidy(trial_rate - base_rate)
+        missing = f"; {unscaled} not scaled on both sides" if unscaled else ""
+        return JudgeResult(
+            judge=self.name,
+            outcome=JudgeOutcome.not_applicable,
+            metric=METRIC_SCALE_WALL_S,
+            baseline=RunStats.from_samples([b for b, _ in rates], unit="rate"),
+            trial=RunStats.from_samples([t for _, t in rates], unit="rate"),
+            reason=(
+                f"{_SHADOW}: growth rate {trial_rate:.2f} against the base's"
+                f" {base_rate:.2f} ({change:+.2f}) over {len(rates)} workload(s){missing}"
+            ),
+            details={
+                "shadow": True,
+                "workloads": len(rates),
+                "unscaled": unscaled,
+                "base_rate": base_rate,
+                "trial_rate": trial_rate,
+                "change": change,
+                "largest_change": max(changes, key=abs),
+                "tolerance": GROWTH_TOLERANCE,
+                "same_growth": all(abs(c) <= GROWTH_TOLERANCE for c in changes),
+            },
+        )
+
+
 def default_judges(
-    noise_multiplier: float = 2.0, *, quality: QualityCheck | None = None
+    noise_multiplier: float = 2.0,
+    *,
+    quality: QualityCheck | None = None,
+    op_count: bool = False,
+    scaling: bool = False,
 ) -> tuple[Judge, ...]:
-    """The frozen judge set in evaluation order (``quality``: the confirmed check).
+    """The frozen judge set in evaluation order (``quality``: the confirmed
+    check; ``op_count`` and ``scaling``: the shadow :class:`OpCountJudge`
+    and :class:`ScalingJudge` last, in that order).
 
     Keep ``EquivalenceJudge`` in any judge set: it is the only judge that sets
     ``output_changed``, which rule 6 of :func:`derive_verdict` relies on to
     send a changed output to review instead of keeping it.
     """
-    return (
+    judges: tuple[Judge, ...] = (
         SpeedJudge(noise_multiplier=noise_multiplier),
         MemoryJudge(noise_multiplier=noise_multiplier),
         EquivalenceJudge(),
         GuardrailMetricJudge(quality=quality),
         TestSuiteJudge(),
     )
+    shadow = (OpCountJudge(),) * op_count + (ScalingJudge(),) * scaling
+    return (*judges, *shadow)
 
 
 # ---------------------------------------------------------------------------
@@ -763,6 +985,9 @@ def derive_verdict(
 ) -> Verdict:
     """Fold judge results and violations into a verdict, in a fixed order.
 
+    0. a quarantined proposal (G3, ``anticheat.proposal_conflict``) ->
+       reject, whatever the judges say: its tag and a claim of equivalent
+       output are contradictory, so no tagged trial is ever kept or reviewed;
     1. any violation -> reject;
     2. trial failed or rejected -> reject;
     3. any judge failed -> reject;
@@ -777,11 +1002,20 @@ def derive_verdict(
     Rule 6 relies on :class:`EquivalenceJudge` being among the judges that
     produced ``judge_results``: it is the only judge that sets
     ``output_changed``, so without it a changed output is never seen here.
+
+    Results of ``SHADOW_JUDGES`` take part in no rule and in no gain,
+    whatever they say: they are kept on the verdict, in order, and nothing
+    more.
     """
     results = tuple(judge_results)
+    deciding = tuple(r for r in results if r.judge not in SHADOW_JUDGES)
     found = tuple(violations)
     change_class = hypothesis.change_class
-    outcome, summary = _decide(trial, change_class, results, found, primary_metric)
+    quarantined = proposal_conflict(hypothesis, deciding)
+    if quarantined is not None:  # rule 0 (G3): before every other rule
+        outcome, summary = VerdictOutcome.reject, f"reject: {quarantined}"
+    else:
+        outcome, summary = _decide(trial, change_class, deciding, found, primary_metric)
     return Verdict(
         trial_id=trial.id,
         hypothesis_id=hypothesis.id,
@@ -789,7 +1023,7 @@ def derive_verdict(
         change_class=change_class,
         judge_results=results,
         violations=found,
-        gain=_select_gain(results, primary_metric),
+        gain=_select_gain(deciding, primary_metric),
         summary=summary,
     )
 

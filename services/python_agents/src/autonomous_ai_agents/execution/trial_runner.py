@@ -80,6 +80,36 @@ note that names counts, never the bytes. The baseline freezes the files
 that carries the labels column (``label_leaks``; the check is sound only
 without one). A trial freezes against ``Baseline.quality_files`` once per run
 (a resume), and its editor's brief always protects and read-denies the files.
+
+Counted runs (G6a, ``count_ops``; off by default, the factory's setting):
+after a phase's measurements and its suite, every workload gets one counted
+run per side (``measure.count_workload``): a paired trial on its twin (an
+``op_calls`` row in ``base_measurements``) and on itself, an unpaired trial
+on itself, the baseline on the base. A counted run that cannot count is a
+note, never a failed trial or an ``EngineError``: the operation-count judge
+only records.
+
+Replay (G5b, ``GitTrialRunner.replay``): a near-miss compound's commit is
+built by cherry-picking its measured parents' commits onto the base with the
+combiner's git (``GitWorkspace.merge``: ``merge-tree --write-tree``, objects
+only, the engine config with no hooks and no prompt; each parent a measured
+trial with no violation whose commit is one child of the base and carries
+its own ``Engine-Trial`` trailer), never by the editor: no request, no
+tokens. A conflict, an unfit parent or a git error there raises
+``evolve.ReplayRefusedError`` before any worktree or ref exists. Otherwise the
+merged tree is checked out in the trial's own worktree and runs as an edited
+trial does from capture on: its writes are what git checked out (so
+``unrecorded_write`` has nothing to catch), the write limits hold for the
+two together, every anti-cheat rule runs on its own diff against the base,
+the engine commit is one child of the base and the measurements are its own.
+No fix retry: there is no editor to ask.
+
+Scaling runs (G6b, ``scaling``; off by default, the factory's setting): after
+the counted runs, every workload with a ``Workload.scale`` setting runs at
+its sizes (``measure.measure_scaling``): a paired trial interleaved with its
+twin (``scale_wall_time_s`` rows in ``base_measurements``), an unpaired trial
+on itself, the baseline on the base. A scaling run that fails is a note,
+never a failed trial or an ``EngineError``: the scaling judge only records.
 """
 
 from __future__ import annotations
@@ -156,8 +186,10 @@ from autonomous_ai_agents.execution.measure import (
     Phase,
     RunOnce,
     baseline_test_count,
+    count_workload,
     make_phase,
     measure_abab,
+    measure_scaling,
     measure_workload,
     python_module,
     run_tests,
@@ -197,6 +229,7 @@ from autonomous_ai_agents.optimization.anticheat import (
     check_quality_references,
     is_utf8,
 )
+from autonomous_ai_agents.optimization.evolve import ReplayRefusedError
 
 TRIAL_NAMESPACE = uuid.UUID("3f0c6a52-7d1e-5b9a-8c4f-2e6d9b1a7c30")
 """uuid5 namespace of trial ids: ``uuid5(TRIAL_NAMESPACE, "<branch>@<round>")``."""
@@ -516,8 +549,11 @@ class _PhaseOwner:
         on_note: Callable[[str], None] | None = None,
         scorer: RunnerScorer | None = None,
         scorer_notes: NoteTap | None = None,
+        count_ops: bool = False,
+        scaling: bool = False,
     ) -> None:
         self._project = project
+        self._count_ops, self._scaling = count_ops, scaling
         self._quality, self._scorer_notes = QualityHooks(scorer), scorer_notes
         self._git = GitWorkspace(Path(project.root_path)) if git is None else git
         self._phase = functools.partial(
@@ -591,7 +627,56 @@ class _PhaseOwner:
             self._note(prefix, failure.notes)
             raise
         self._note(prefix, suite.notes)
-        return tuple(base), (*rows, *suite.measurements)
+        counted_base, counted = self._count(phase, twin, workloads, prefix, trial_id)
+        scaled_base, scaled = self._scale(phase, twin, workloads, prefix, trial_id)
+        return (*base, *counted_base, *scaled_base), (
+            *rows, *suite.measurements, *counted, *scaled,
+        )  # fmt: skip
+
+    def _count(
+        self,
+        phase: Phase,
+        twin: Phase | None,
+        workloads: Sequence[Workload],
+        prefix: str,
+        trial_id: str | None,
+    ) -> tuple[tuple[Measurement, ...], tuple[Measurement, ...]]:
+        """With ``count_ops``, one counted run per workload on the twin (A)
+        and on ``phase``: (the twin's rows, ``phase``'s rows); notes emitted."""
+        if not self._count_ops:
+            return (), ()
+        base: list[Measurement] = []
+        rows: list[Measurement] = []
+        for workload in workloads:
+            if twin is not None:
+                a = count_workload(twin, workload, side=" A")
+                base.extend(a.rows)
+                self._note(prefix, a.notes)
+            side = "" if twin is None else " B"
+            b = count_workload(phase, workload, trial_id=trial_id, side=side)
+            rows.extend(b.rows)
+            self._note(prefix, b.notes)
+        return tuple(base), tuple(rows)
+
+    def _scale(
+        self,
+        phase: Phase,
+        twin: Phase | None,
+        workloads: Sequence[Workload],
+        prefix: str,
+        trial_id: str | None,
+    ) -> tuple[tuple[Measurement, ...], tuple[Measurement, ...]]:
+        """With ``scaling``, the scaling runs of every workload that has a
+        size setting, interleaved with the twin (A): (the twin's rows,
+        ``phase``'s rows); notes emitted."""
+        base: list[Measurement] = []
+        rows: list[Measurement] = []
+        for workload in workloads if self._scaling else ():
+            scaled = measure_scaling(phase, workload, twin=twin, trial_id=trial_id)
+            base.extend(scaled.a)
+            rows.extend(scaled.b)
+            self._note(prefix, scaled.notes)
+        return tuple(base), tuple(rows)
 
     def _checked_out(self, ref: str) -> bool:
         return ref.casefold() in {
@@ -622,7 +707,9 @@ class _PhaseOwner:
 
 class GitBaselineRunner(_PhaseOwner):
     """The real ``BaselineRunner``: every workload at ``commit``, then the suite
-    once (its ``tests_passed`` rows record the passing count trials must reach).
+    once (its ``tests_passed`` rows record the passing count trials must reach),
+    then with ``count_ops`` one counted run per workload (G6a), then with
+    ``scaling`` the scaling runs (G6b).
     A ``RunFailure`` is an ``EngineError`` once F1 held. Notes go to
     ``on_note`` prefixed ``baseline:``; with a ``scorer`` (module docstring),
     ``scorer_notes``, the scorer's ``NoteTap``, adds its run notes once."""
@@ -757,7 +844,8 @@ class GitTrialRunner(_PhaseOwner):
     ``fix_retries`` (0-1, default 0: off) and ``retry_floor_usd`` bound the fix
     retry (module docstring). ``paired`` (default off: Step 2; the factory
     passes ``PAIRED_TRIALS``) measures every attempt against a twin of the
-    base (module docstring). Notes (``RunSample``, ``RunFailure``,
+    base (module docstring); ``count_ops`` adds the counted runs (G6a),
+    ``scaling`` the scaling runs (G6b). Notes (``RunSample``, ``RunFailure``,
     ``Measured``) go to ``on_note``
     prefixed ``trial for hypothesis <id>:``. ``prefix`` is the engine branch
     prefix (default the setting's; the factory passes the context's): the
@@ -783,6 +871,8 @@ class GitTrialRunner(_PhaseOwner):
         retry_floor_usd: float = 0.0,
         paired: bool = False,
         scorer: RunnerScorer | None = None,
+        count_ops: bool = False,
+        scaling: bool = False,
     ) -> None:
         if not 0 <= fix_retries <= FIX_RETRIES_MAX:
             raise ValueError(
@@ -797,6 +887,7 @@ class GitTrialRunner(_PhaseOwner):
         super().__init__(
             project, git=git, network=network, fs=fs, platform=platform,
             base_env=base_env, run=run, on_note=on_note, scorer=scorer,
+            count_ops=count_ops, scaling=scaling,
         )  # fmt: skip
         self._prefix = settings.TRIAL_BRANCH_PREFIX if prefix is None else prefix
         problem = branch_prefix_problem(self._prefix)
@@ -815,6 +906,45 @@ class GitTrialRunner(_PhaseOwner):
         branch: str,
         budget_usd: float,
         brief: TrialBrief,
+    ) -> Trial:
+        return self._execute(
+            hypothesis, workloads, baseline, round=round, branch=branch,
+            budget_usd=budget_usd, brief=brief, parents=None,
+        )  # fmt: skip
+
+    def replay(
+        self,
+        hypothesis: Hypothesis,
+        parents: Sequence[Trial],
+        workloads: Sequence[Workload],
+        baseline: Baseline,
+        *,
+        round: int,
+        branch: str,
+        budget_usd: float,
+        brief: TrialBrief,
+    ) -> Trial:
+        """``hypothesis``'s trial built by replaying ``parents`` (module
+        docstring): ``ReplayRefusedError`` when they cannot be cherry-picked, with
+        nothing left behind; otherwise a trial as ``run`` returns one."""
+        if len(parents) < 2:
+            raise ValueError(f"a replay needs at least two parents, got {len(parents)}")
+        return self._execute(
+            hypothesis, workloads, baseline, round=round, branch=branch,
+            budget_usd=budget_usd, brief=brief, parents=tuple(parents),
+        )  # fmt: skip
+
+    def _execute(
+        self,
+        hypothesis: Hypothesis,
+        workloads: Sequence[Workload],
+        baseline: Baseline,
+        *,
+        round: int,
+        branch: str,
+        budget_usd: float,
+        brief: TrialBrief,
+        parents: tuple[Trial, ...] | None,
     ) -> Trial:
         if not math.isfinite(budget_usd) or budget_usd < 0:
             raise ValueError(
@@ -846,12 +976,15 @@ class GitTrialRunner(_PhaseOwner):
                 f"{own_ref} exists at {prior}, which is not this trial's commit"
                 f" (no '{TRAILER}: {draft.id}' trailer); delete it to run the trial"
             )
+        start, attempt = baseline.commit, self._attempt
+        if parents is not None:  # objects only: a refusal leaves nothing behind
+            start, attempt = self._replayed(baseline.commit, parents), self._replay
         progress = _Progress(Budget(budget_usd))
         twin = (_twin_dirs(dirs),) if self._paired else ()
         try:
             with owned_phases(self._git, self._what, dirs, *twin):
-                handle = self._git.add_worktree(dirs.worktree, baseline.commit)
-                trial = self._attempt(
+                handle = self._git.add_worktree(dirs.worktree, start)
+                trial = attempt(
                     handle, dirs, draft, hypothesis, workloads, baseline, brief,
                     prior, progress,
                 )  # fmt: skip
@@ -921,6 +1054,25 @@ class GitTrialRunner(_PhaseOwner):
         """Steps 2 to 6, then at most one fix retry; every outcome but an
         exception is a Trial (draft: failed). ``progress`` records the spend and
         the own ref's move as they happen."""
+        job = self._job(handle, dirs, trial, hypothesis, workloads, baseline, brief, prior)  # fmt: skip
+        task = EditTask(hypothesis, job.brief, secrets.token_hex(8))
+        first = self._try(job, trial, task, progress, earlier=None)
+        if first.crash is None:
+            return self._reparse(job, trial, first, progress)
+        return self._retry(job, trial, first, first.crash, progress)
+
+    def _job(
+        self,
+        handle: WorktreeHandle,
+        dirs: PhaseDirs,
+        trial: Trial,
+        hypothesis: Hypothesis,
+        workloads: Sequence[Workload],
+        baseline: Baseline,
+        brief: TrialBrief,
+        prior: str | None,
+    ) -> _Job:
+        """The trial's fixed inputs: its scope, protected and read-denied paths."""
         base = str(baseline.commit)
         tracked = self._git.ls_tree(base)
         scope = run_scope(self._project, workloads, tracked, worktree=handle.path)
@@ -928,16 +1080,96 @@ class GitTrialRunner(_PhaseOwner):
         protected = tuple(dict.fromkeys((*brief.protected, *scope.protected, *frozen)))
         read_deny = tuple(dict.fromkeys((*brief.read_deny, *frozen)))
         patterns = tuple(glob.escape(p) if p in frozen else p for p in protected)
-        job = _Job(
+        return _Job(
             handle, dirs, hypothesis, tuple(workloads), baseline, base, tracked,
             scope, replace(brief, protected=protected, read_deny=read_deny), prior,
             f"refs/heads/{trial.branch}", _twin_dirs(dirs), patterns,
         )  # fmt: skip
-        task = EditTask(hypothesis, job.brief, secrets.token_hex(8))
-        first = self._try(job, trial, task, progress, earlier=None)
-        if first.crash is None:
-            return self._reparse(job, trial, first, progress)
-        return self._retry(job, trial, first, first.crash, progress)
+
+    def _replayed(self, base: str, parents: Sequence[Trial]) -> str:
+        """A commit (no ref) on ``base`` holding every parent's change, merged
+        as the combiner merges; ``ReplayRefusedError`` for an unfit parent, a
+        conflict or a git error."""
+        for parent in parents:
+            problem = self._unfit(base, parent)
+            if problem is not None:
+                raise ReplayRefusedError(f"parent {parent.id[:64]!r}: {problem}")
+        ids = ", ".join(parent.id for parent in parents)
+        acc = str(parents[0].commit)
+        try:
+            for parent in parents[1:]:
+                merged = self._git.merge(acc, str(parent.commit))
+                if merged.tree is None:
+                    raise ReplayRefusedError("conflict", merged.conflicts)
+                message = f"aip: replay trials {ids}\n"
+                acc = self._git.commit_tree(merged.tree, base, message, base=base)
+        except GitError as error:
+            raise ReplayRefusedError(f"git: {error}") from error
+        return acc
+
+    def _unfit(self, base: str, parent: Trial) -> str | None:
+        """Why ``parent`` is no measured child of ``base`` this runner made."""
+        if parent.status is not TrialStatus.measured or parent.violations:
+            return f"is {parent.status} with {len(parent.violations)} violation(s)"
+        if parent.commit is None:
+            return "has no commit"
+        try:
+            commit = _require_oid(parent.commit)
+            fit = (
+                self._git.resolve_commit(commit) == commit
+                and self._git.resolve_commit(commit + "^") == base
+                and self._ours(commit, parent.id)
+            )
+            if fit and not self._merge_commit(commit):
+                return None
+        except (GitError, ValueError):
+            pass
+        return f"commit {parent.commit[:64]!r} is not its own child of the base"
+
+    def _merge_commit(self, commit: str) -> bool:
+        """Whether ``commit`` has a second parent (it would bring in more)."""
+        try:
+            self._git.resolve_commit(commit + "^2")
+        except GitError:
+            return False
+        return True
+
+    def _replay(
+        self,
+        handle: WorktreeHandle,
+        dirs: PhaseDirs,
+        trial: Trial,
+        hypothesis: Hypothesis,
+        workloads: Sequence[Workload],
+        baseline: Baseline,
+        brief: TrialBrief,
+        prior: str | None,
+        progress: _Progress,
+    ) -> Trial:
+        """The replayed tree from capture on, as an edited trial: no editor,
+        no retry, nothing spent; the commit's parent is the base."""
+        job = self._job(handle, dirs, trial, hypothesis, workloads, baseline, brief, prior)  # fmt: skip
+        try:
+            written = self._replayed_writes(job)
+        except GitError as error:
+            return _failed(trial, f"the replay could not be captured: {error}")
+        over = _over_limits(written)
+        if over is not None:
+            return _failed(trial, over)
+        result = EditResult(written)
+        return self._capture(job, trial, result, progress, parent=job.base).trial
+
+    def _replayed_writes(self, job: _Job) -> dict[str, int]:
+        """What the replay wrote: each changed path's staged size (0 deleted,
+        or not a regular file). A measured parent's paths are ones its editor
+        recorded, so ``EditResult`` accepts them; any other is a ``ValueError``
+        that ends the run (fail closed)."""
+        written: dict[str, int] = {}
+        for change in self._git.changes(job.handle, job.base):
+            regular = change.status != "D" and change.new_mode in _REGULAR
+            blob = self._git.staged_blob(job.handle, change.path) if regular else b""
+            written[change.path] = len(blob)
+        return written
 
     def _try(
         self,
@@ -970,6 +1202,21 @@ class GitTrialRunner(_PhaseOwner):
         over = None if earlier is None else _over_limits(result.written)
         if over is not None:
             return _Tried(_failed(trial, over), result)
+        parent = None if earlier is None else job.base
+        return self._capture(job, trial, result, progress, parent=parent)
+
+    def _capture(
+        self,
+        job: _Job,
+        trial: Trial,
+        result: EditResult,
+        progress: _Progress,
+        *,
+        parent: str | None,
+    ) -> _Tried:
+        """Capture, check, commit onto ``parent`` (``None``: the worktree's
+        HEAD), measure: an edited attempt's steps after the edit, and a
+        replay's (D15: a retry's parent is the base)."""
         try:
             self._git.stage_all(job.handle)
             changes = self._git.changes(job.handle, job.base)
@@ -1004,7 +1251,6 @@ class GitTrialRunner(_PhaseOwner):
             reason = f"the change breaks {len(violations)} anti-cheat rule(s): {text}"
             return _Tried(_failed(trial, reason, violations=violations), result)
         message = _message(job.hypothesis, trial.id)
-        parent = None if earlier is None else job.base
         commit = self._git.commit(job.handle, message, base=job.base, parent=parent)
         self._git.clean(job.handle)
         self._point(job, commit, progress)

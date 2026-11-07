@@ -102,8 +102,8 @@ def test_generate_passes_the_runs_facts(
           preflight's extra protected files and (or not) a quality check
     WHEN hypotheses calls the generator
     THEN it receives the commit, the run id, ``call_index=1``, the context's
-         patterns followed by ``extra_protected``, and the frozen paths as
-         ``read_deny`` (none without a quality check)
+         patterns followed by ``extra_protected``, the frozen paths as
+         ``read_deny`` (none without a quality check) and the run's workloads
     """
     state["generator_calls"] = 1
     generator = _Generator(GenerateResult())
@@ -121,6 +121,8 @@ def test_generate_passes_the_runs_facts(
     )
     expected = () if quality is None else ("data/labels.txt", "data/gold.txt")
     assert tuple(call["read_deny"]) == expected
+    assert list(call["workloads"]) == list(state["workloads"])
+    assert call["workloads"]
 
 
 def test_a_first_call_has_index_zero_and_a_missing_commit_is_passed_as_none(

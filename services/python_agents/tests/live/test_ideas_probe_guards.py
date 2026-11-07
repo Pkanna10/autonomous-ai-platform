@@ -26,6 +26,7 @@ import itertools
 import json
 import os
 import re
+import secrets
 import subprocess
 from collections import Counter
 from collections.abc import Mapping, Sequence
@@ -36,30 +37,54 @@ import httpx2
 import pytest
 
 from autonomous_ai_agents.clients.structured import Fence
-from autonomous_ai_agents.common.config import Role, Settings, role_chain, settings
+from autonomous_ai_agents.clients.transport import AnthropicTransport
+from autonomous_ai_agents.common.config import (
+    IDEA_VIEWS,
+    Role,
+    Settings,
+    role_chain,
+    settings,
+)
 from autonomous_ai_agents.common.errors import LLMRequestError
 from autonomous_ai_agents.common.models import (
+    ChangeClass,
     Direction,
     Hotspot,
+    Hypothesis,
+    HypothesisSource,
     Objective,
     ObjectiveKind,
     Project,
+    Workload,
 )
 from autonomous_ai_agents.execution.git import GitError
+from autonomous_ai_agents.optimization import idea_pipeline
+from autonomous_ai_agents.optimization.idea_context import (
+    IdeaReadLimits,
+    ViewSource,
+    build_view,
+)
+from autonomous_ai_agents.optimization.idea_pipeline import framework_labels
+from autonomous_ai_agents.optimization.idea_prompts import THINK_LINE
 from autonomous_ai_agents.optimization.idea_review import (
     REVIEW_SYSTEM_PROMPT,
     review_request,
 )
 from autonomous_ai_agents.optimization.idea_types import (
     LENS_LANES,
+    RELAXING_LANES,
+    Lane,
     Mechanism,
     MorphCell,
+    RelaxedRule,
 )
+from autonomous_ai_agents.optimization.sources import GenerateResult
 from autonomous_ai_agents.orchestrator.factory import repo_reader
 
+from . import conftest, oss
 from . import discovery_ab as ab
 from . import ideas_probe as ip
-from . import oss
+from . import ideas_views as iv
 from . import test_discovery_guards as dg
 from . import test_oss_guards as og
 from .conftest import TESTS_DIR, LiveRun, StartLive
@@ -223,29 +248,113 @@ def test_knobs_parse_strictly_before_any_spend(env: dict[str, str], match: str) 
 
 
 def test_a_plan_past_the_jobs_minutes_is_refused_before_any_spend() -> None:
-    """D55's stages run in order, about ``STAGE_MINUTES`` each (kept until
-    E1's recorded seconds re-pin it: E0b timed only count mode's Sonnet
-    sends), phase 1 ``PHASE_ONE_MINUTES`` (E0b: a count-mode library about
-    47 s): E1 56 minutes a library (phase 1, A, four pipeline calls of S1,
-    two lens rounds on four workers and the reviewer, the auditor), so four
-    a 240-minute dispatch (224), five refused (280); E0b's ten at 8, E1b's
-    four at 25 on recorded facts."""
-    assert ip.JOB_MINUTES == 240 and ip.STAGE_MINUTES == 3
+    """Re-pinned from E1's recorded seconds (Vd): each stage takes twice its
+    slowest request's E1 maximum, a parallel stage the slowest of each round
+    of ``IDEAS_LANE_WORKERS``; phase 1 ``PHASE_ONE_MINUTES``. E1 41 minutes
+    a library (phase 1 2, then A 23.5 s, B 360.4, C 421.5, D 841.5, E 464.9,
+    the auditor 217.2: 38.8 minutes, rounded up), so five fit a 240-minute
+    dispatch (205), six are refused (246); E0b's ten at 4, E1b's four at 16
+    on recorded facts."""
+    assert ip.ProbePlan(ip.E1_ARMS, _repos(("tomli",))).library_minutes() == 41
+    assert ip.JOB_MINUTES == 240 and ip.TIME_MARGIN == 2
     assert ip.PHASE_ONE_MINUTES == 2
-    assert [ip.arm_stages(a) for a in ip.E1_ARMS] == [1, 4, 4, 4, 4]
-    assert ip.arm_stages(ip.ARM_COUNT) == ip.COUNT_SENT == 2
-    assert ip.ProbePlan(ip.E1_ARMS, _repos(("tomli",))).library_minutes() == 56
-    assert ip.probe_plan({ip.REPOS_ENV: E1_DISPATCH}).minutes() == 4 * 56 == 224
-    assert ip.probe_plan({ip.ARMS_ENV: "count"}).minutes() == 10 * 8
+    seconds = [ip.arm_seconds(a) for a in ip.E1_ARMS]
+    assert seconds == pytest.approx([23.544, 360.362, 421.46, 841.504, 464.876])
+    assert ip.arm_seconds(ip.ARM_COUNT) == pytest.approx(ip.COUNT_SENT * 47.732)
+    assert ip.AUDIT_SECONDS == pytest.approx(217.226)
+    assert ip.ProbePlan(ip.E1_ARMS, _repos(("tomli",))).library_minutes() == 41
+    assert ip.probe_plan({ip.REPOS_ENV: E1_DISPATCH}).minutes() == 4 * 41 == 164
+    assert ip.probe_plan({ip.ARMS_ENV: "count"}).minutes() == 10 * 4
     e1b = ip.ProbePlan((ip.ARM_C_LOW, ip.ARM_C_HIGH), _repos(ip.E1B_REPOS), Path("f"))
-    assert e1b.library_minutes() == 25 and e1b.minutes() == 100
-    five = ",".join(ip.E1_REPOS[:5])
-    for env in ({}, {ip.REPOS_ENV: five}):
+    assert e1b.library_minutes() == 16 and e1b.minutes() == 64
+    six = ",".join(ip.E1_REPOS[:6])
+    for env in ({}, {ip.REPOS_ENV: six}):
         with pytest.raises(ValueError, match="past the 240-minute job"):
             ip.probe_plan(env)
-    assert ip.ProbePlan(ip.E1_ARMS, _repos(ip.E1_REPOS[:5])).minutes() == 280
-    assert ip.ProbePlan(ip.E1_ARMS, _repos(ip.E1_REPOS[:7])).minutes() == 392
-    assert ip.probe_plan({ip.REPOS_ENV: "idna"}).minutes() == 56
+    assert ip.ProbePlan(ip.E1_ARMS, _repos(ip.E1_REPOS[:5])).minutes() == 205
+    assert ip.ProbePlan(ip.E1_ARMS, _repos(ip.E1_REPOS[:6])).minutes() == 246
+    assert ip.probe_plan({ip.REPOS_ENV: "idna"}).minutes() == 41
+
+
+E1_RESULTS = TESTS_DIR.parents[2] / ".claude/handoff/step3/idea-lab/e1"
+
+
+def test_the_seconds_are_e1s_recorded_maxima_per_role_and_model() -> None:
+    """Every measured entry is E1's slowest sent request of that role on that
+    model (both results files); an unmeasured lane model reads as the
+    nearest measured request, and any other is refused."""
+    found: dict[tuple[str, str], float] = {}
+    arms = {a.key: a for a in ip.E1_ARMS}
+    for path in sorted(E1_RESULTS.glob("live-results-*.jsonl")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            record = json.loads(line)
+            if record["experiment"] != ip.REPLY_EXPERIMENT or not record["sent"]:
+                continue
+            role = record["role"]
+            if role == "auditor":
+                model = OPUS
+            else:
+                cfg = ip.arm_config(arms[record["arm"]], _project())
+                model = role_chain(cfg, role)[0]
+            key = (role, model)
+            found[key] = max(found.get(key, 0.0), record["seconds"])
+    assert found == ip.E1_SECONDS
+    assert ip.request_seconds("lane", ip.SONNET_5) == 2 * found[("lane", SONNET)]
+    assert ip.request_seconds("lane", OPUS) == 2 * found[("leap", OPUS)]
+    for fable in (FABLE, ip.FABLE_5):
+        assert ip.request_seconds("lane", fable) == 2 * found[("leap", FABLE)]
+    with pytest.raises(ValueError, match="no E1 seconds"):
+        ip.request_seconds("leap", ip.FABLE_5)
+
+
+X1_RUN1 = TESTS_DIR.parents[2] / ".claude/handoff/step3/idea-lab/x1"
+
+
+def test_the_rates_are_x1_run_1s_slowest_reply_per_model() -> None:
+    """O42's re-pin: per model, the slowest output tokens a second over every
+    sent reply of run 1 (41679255224) of at least 1,000 output tokens, any
+    role on that model: a square lens on its row's model, any other request
+    on its arm's role model, the auditor on Opus 5.5. Opus 5.5's is X1-3's
+    leap (effort high), slower than any of its X1-1 lens lanes."""
+    path = X1_RUN1 / "ideas-probe-x1-run1-41679255224.jsonl"
+    records = [json.loads(line) for line in path.read_text("utf-8").splitlines()]
+    rows = {(r["repo"], r["arm"]): r for r in records
+            if r["experiment"] == ip.ROW_EXPERIMENT}  # fmt: skip
+    arms = {a.key: a for a in ip._KNOWN_ARMS}
+    rates: dict[str, float] = {}
+    slowest: dict[str, tuple[str, str]] = {}
+    for record in records:
+        if record["experiment"] != ip.REPLY_EXPERIMENT or not record["sent"]:
+            continue
+        role, out = record["role"], record["usage"][1]
+        if role == "auditor":
+            model = OPUS
+        else:
+            row = rows[(record["repo"], record["arm"])]
+            cfg = ip.arm_config(arms[record["arm"]], _project())
+            square = row["lane_models"] if role == "lane" else {}
+            model = square.get(record["label"], role_chain(cfg, role)[0])
+            assert model in row["models"], record
+        rate = round(out / record["seconds"], 3)
+        if out >= 1_000 and rate < rates.get(model, float("inf")):
+            rates[model] = rate
+            slowest[model] = (record["arm"], role)
+    assert rates == ip.X1_RUN1_TOKENS_PER_S == RUN_1_RATES
+    assert slowest[OPUS] == ("X1-3", "leap")  # 3,567 tokens in 49.875 s
+
+
+def test_sequential_lanes_count_one_stage_a_lane() -> None:
+    """G4: S1, six lenses and the leap one at a time, then the reviewer."""
+    seq = (("IDEAS_SEQUENTIAL_LANES", True),)
+    sequential = ip.IdeaArm("C-seq", True, seq, e1=False)  # no auditor stage
+    lane, leap, review = 47.732, 195.296, 130.7
+    assert ip.arm_seconds(sequential) == pytest.approx(7 * lane + leap + review)
+    no_leap = ip.IdeaArm(
+        "C-seq0", True, (("IDEAS_SEQUENTIAL_LANES", True), ("IDEAS_LEAP_N", 0))
+    )
+    assert ip.arm_seconds(no_leap) == pytest.approx(7 * lane + review)
+    plan = ip.ProbePlan((sequential,), _repos(("tomli",)), Path("f"))
+    assert plan.library_minutes() == ip.CLONE_MINUTES + 12 == 13  # 11.002 up
 
 
 def test_recorded_facts_resolve_against_the_service_directory(tmp_path: Path) -> None:
@@ -1126,7 +1235,7 @@ def _dispatch(
         "#!/bin/sh\n"
         f'printf "%s\\n" "$*" "${{LIVE_IDEAS_ARMS-unset}}" '
         f'"${{LIVE_IDEAS_FACTS-unset}}" "$LIVE_SUITE_CAP_USD" "${{PAIRED_TRIALS-unset}}"'
-        f' "${{LIVE_IDEAS_REPOS-unset}}" > "{called}"\n',
+        f' "${{LIVE_IDEAS_REPOS-unset}}" "${{LIVE_IDEAS_VIEWS-unset}}" > "{called}"\n',
         encoding="utf-8",
     )
     fake.chmod(0o755)
@@ -1168,6 +1277,19 @@ def _dispatch(
         ("count", "tomli,idna,mistune", "3", "count", "unset"),
         ("C-low,C-high", "", "20", "C-low,C-high", ip.FACTS_FIXTURE),
         ("C-low,C-high", "tomli,mistune", "10", "C-low,C-high", ip.FACTS_FIXTURE),
+        ("X1", "more_itertools,pyparsing,tomli", "51", "X1", ip.FACTS_FIXTURE),
+        ("X1", "mistune,sqlparse,markdown", "51", "X1", ip.FACTS_FIXTURE),
+        ("X1", "tomli", "17", "X1", ip.FACTS_FIXTURE),
+        ("X1", "", "51", "X1", ip.FACTS_FIXTURE),
+        ("X1-1", "", "33", "X1-1", ip.FACTS_FIXTURE),  # O42: run 1's four
+        (
+            "X1-1",
+            "more_itertools,pyparsing,tomli,sortedcontainers",
+            "33",
+            "X1-1",
+            ip.FACTS_FIXTURE,
+        ),
+        ("X1-1", "tomli", "9", "X1-1", ip.FACTS_FIXTURE),
     ],
 )
 def test_the_ideas_inputs_set_the_arms_libraries_their_need_and_the_facts(
@@ -1180,19 +1302,23 @@ def test_the_ideas_inputs_set_the_arms_libraries_their_need_and_the_facts(
 ) -> None:
     code, output, calls = _dispatch(tmp_path / "ok", arms, need, repos=repos)
     assert code == 0, output
-    argv, got_arms, got_facts, cap, paired, got_repos = calls
+    argv, got_arms, got_facts, cap, paired, got_repos, got_views = calls
     assert (
         argv
         == "run pytest tests/live/test_ideas_probe_live.py -m live --no-cov -n 0 -rA"
     )
     assert (got_arms, got_facts, cap, paired) == (exported, facts, need, "false")
     assert got_repos == (repos or "unset")
+    x1 = exported in (ip.X1_KEY, ip.X1_RERUN_KEY)
+    assert got_views == (ip.VIEWS_FIXTURE if x1 else "unset")
     # the shell's need is the module's own, rounded up
     env = {ip.ARMS_ENV: exported, **({ip.REPOS_ENV: repos} if repos else {})}
     plan = ip.ProbePlan(
         ip.probe_arms(env), ip.probe_repos(env, ip.probe_arms(env)),
         Path(facts) if facts != "unset" else None,
     )  # fmt: skip
+    if exported == ip.X1_KEY and not repos:  # the shell's need is three's
+        plan = replace_repos(plan, ip.E1_REPOS[:3])
     assert ip.probe_need(plan) <= int(need) < ip.probe_need(plan) + 1
     below = f"{int(need) - 1}.99"
     code, output, calls = _dispatch(tmp_path / "below", arms, below, repos=repos)
@@ -1202,10 +1328,10 @@ def test_the_ideas_inputs_set_the_arms_libraries_their_need_and_the_facts(
 def test_the_ideas_inputs_are_strict_and_for_the_probe_only(tmp_path: Path) -> None:
     block = _ci_block("      ideas_arms:", "\n\n")
     assert "type: choice" in block and "default: 'A,B,C,D,E'" in block
-    assert "options: ['A,B,C,D,E', count, 'C-low,C-high']" in block
+    assert "options: ['A,B,C,D,E', count, 'C-low,C-high', X1, X1-1]" in block
     repos = _ci_block("      ideas_repos:", "\n\n")
     assert "type: string" in repos and "default: ''" in repos
-    for index, bad in enumerate(("", "A", "count;id", "C-low")):
+    for index, bad in enumerate(("", "A", "count;id", "C-low", "x1", "X1-0")):
         code, output, calls = _dispatch(tmp_path / f"bad-{index}", bad, "88", repos="x")
         assert (code, calls) == (1, []) and "unknown ideas_arms" in output, bad
     for index, bad in enumerate(("Tomli", "tomli,", "a;id", "tomli idna", ",")):
@@ -1220,6 +1346,11 @@ def test_the_ideas_inputs_are_strict_and_for_the_probe_only(tmp_path: Path) -> N
         assert code == 0 and calls[1] == "A,B,C,D,E" and calls[5] == "unset", output
         with pytest.raises(ValueError, match="past the 240-minute job"):
             ip.probe_plan({ip.ARMS_ENV: calls[1]})
+    code, output, calls = _dispatch(tmp_path / "x1", "X1", "56", repos="")
+    assert code == 0 and calls[1] == "X1" and calls[5] == "unset", output
+    env = {ip.ARMS_ENV: calls[1], ip.FACTS_ENV: calls[2], ip.VIEWS_ENV: calls[2]}
+    with pytest.raises(ValueError, match="past the 240-minute job"):  # all eight
+        ip.probe_plan(env)
     code, output, calls = _dispatch(tmp_path / "other", "count", "12", "stage-a")
     assert (code, calls) == (1, []) and "ideas_arms is only for" in output
     code, output, calls = _dispatch(tmp_path / "o2", None, "12", "stage-a", "tomli")
@@ -1235,8 +1366,23 @@ def test_the_suite_row_timeout_noise_rule_and_stage_a_ignore() -> None:
     cap_help = _ci_block("      suite_cap_usd:", "\n\n")
     assert (
         "ideas-probe 46 (E1, four libraries of ideas_repos, one 12; "
-        "ideas_arms count 9, C-low,C-high 20)" in cap_help
+        "ideas_arms count 9, C-low,C-high 20; X1 51 for three libraries of "
+        "ideas_repos, under the 80 USD fuse, one 17; X1-1 33 for the four of "
+        "run 1, one 9)" in cap_help
     )
+    assert ip.X1_LIBRARY_CENTS == 1695 and "cents=1695" in _run_script()
+    assert ip.X1_RERUN_LIBRARY_CENTS == 820 and "cents=820" in _run_script()
+    arms_help = _ci_block("      ideas_arms:", "\n\n")
+    assert "need 16.95 a library, 51 for three" in arms_help
+    assert (
+        "X1-1: the O42 re-run, arm A and X1-1 (its lanes at 32,000 output "
+        "tokens) with the auditor on the same facts and views, the four "
+        "libraries of run 1 unless ideas_repos names others, need 8.20 a "
+        "library, 33 for four" in arms_help
+    )
+    repos_help = _ci_block("      ideas_repos:", "\n\n")
+    assert "16.95 (X1) or 8.20 (X1-1), rounded up" in repos_help
+    assert "X1 at most three" in repos_help
     block = _ci_block("  live-smoke:", "    defaults:")
     assert f"inputs.suite == 'ideas-probe' && {ip.JOB_MINUTES} ||" in block
     assert EXPERIMENT_MINUTES["ideas-probe"] == ip.JOB_MINUTES
@@ -1246,3 +1392,991 @@ def test_the_suite_row_timeout_noise_rule_and_stage_a_ignore() -> None:
     step2 = [line for line in noise.splitlines() if "noise_rule=step2" in line]
     assert any(re.search(r"\bideas-probe\b", line) for line in step2)
     assert "--ignore=tests/live/test_ideas_probe_live.py" in script
+
+
+# ---------------------------------------------------------------------------
+# G3: quarantined proposals are reported, never scored (spec X1-4, O32)
+# ---------------------------------------------------------------------------
+
+
+def _returned(title: str, *tags: str, rationale: str = "r") -> Hypothesis:
+    return Hypothesis(
+        project_id="p1", hotspot_ids=("h-slow_sum",), source=HypothesisSource.novel,
+        title=title, rationale=rationale, change_class=ChangeClass.efficiency,
+        expected_gain=0.1, provability=0.5, risk=0.1, tags=tags,
+    )  # fmt: skip
+
+
+_IDEA = _returned("a far idea", "lane:far")
+_LONG = "What the relaxed rule changes: " + "a new wheel. " * 90  # > 1 chunk
+_PROPOSAL = _returned(
+    "add a dependency", "lane:relax_dependency", "proposal:new_dependency",
+    rationale=_LONG,
+)  # fmt: skip
+_BARE_LANE = _returned("relax the api", "lane:relax_api")  # no proposal tag
+_ALL = (_IDEA, _PROPOSAL, _BARE_LANE)
+
+
+def _shown(title: str, lane: str) -> ip.ShownIdea:
+    return ip.ShownIdea(
+        id=f"{lane}-01", lane=lane, title=title, change_class="efficiency",
+        anchor=f"{PATH}:slow_sum", change_summary="s", precondition="p",
+        equivalence_summary="e", depends_on_path=PATH, depends_on_quote="q",
+    )  # fmt: skip
+
+
+def _proposal_run(arm: ip.IdeaArm = ip.ARM_C, *, shown: bool = False) -> ip.ArmRun:
+    exchanges: tuple[ip.Exchange, ...] = ()
+    if shown:
+        ideas = [ip.candidate(_shown(_IDEA.title, "far"), "far-01"),
+                 ip.candidate(_shown(_PROPOSAL.title, "relax_dependency"), "rx-01")]  # fmt: skip
+        request = review_request(
+            ideas, prefix="data", fence=Fence("aa" * 8), reviewer_fence=Fence("bb" * 8),
+            max_ideas=16, max_tokens=12_000, effort=None, notes=[],
+        )[0]  # fmt: skip
+        exchanges = (ip.Exchange("reviewer", "reviewer", 0, request),)
+    return ip.ArmRun(arm, GenerateResult(hypotheses=_ALL), None, 0.0, (), (), exchanges)
+
+
+def test_a_pooled_relaxing_lane_idea_becomes_a_valid_candidate() -> None:
+    for lane, rule in (("relax_dependency", RelaxedRule.new_dependency),
+                       ("relax_api", RelaxedRule.api_change)):  # fmt: skip
+        built = ip.candidate(_shown("t", lane), "i01")
+        assert (built.lane, built.proposal) == (Lane(lane), rule)
+    assert ip.candidate(_shown("t", "far"), "i01").proposal is None
+
+
+def test_proposals_are_never_pooled_for_the_auditor(dry: Path) -> None:
+    for shown in (False, True):
+        pooled = ip.pool([_proposal_run(shown=shown)], _facts())
+        assert [p.idea.title for p in pooled] == [_IDEA.title], shown
+        assert [ip.tier(p) for p in pooled] == [0]
+        wire = dg.Wire(_Answers(remove=False))
+        audit = ip.run_audit(pooled, wire.run(), _facts(), base=_base(), reader=_reader)
+        assert (audit.error, audit.verdicts) == (None, ("feasible",))
+        (body,) = wire.bodies
+        assert _IDEA.title in _text(body)
+        assert _PROPOSAL.title not in _text(body) and "relax_" not in _text(body)
+    assert ip.scored_hypotheses(_proposal_run().result) == (_IDEA,)
+    assert ip.proposals_of(_proposal_run().result) == (_PROPOSAL, _BARE_LANE)
+    assert ip.scored_hypotheses(None) == () == ip.proposals_of(None)
+
+
+def test_proposals_count_toward_no_score_and_are_recorded_apart(
+    tmp_path: Path,
+) -> None:
+    runs = [_proposal_run(ip.ARM_B), _proposal_run(ip.ARM_C, shown=True)]
+    pooled = ip.pool(runs, _facts())
+    assert len(pooled) == 2  # one idea an arm, no proposal
+    audit = ip.audit_of(_audit_reply([FEASIBLE, FEASIBLE]), len(pooled))
+    scored = ip.scores(runs, pooled, audit)
+    for arm in ("B", "C"):
+        assert scored[arm].non_obvious == 1
+        assert _counts(scored, arm) == (1, 1, 1)
+    results = tmp_path / "r.jsonl"
+    sink = ResultsSink({"LIVE_RESULTS_PATH": str(results)})
+    recorder = ip.ProbeRecorder(
+        ip.ProbePlan((ip.ARM_B, ip.ARM_C), _repos(("tomli",))), sink
+    )
+    run = dg.Wire(_Answers()).run()
+    recorder.record("tomli", runs, pooled, audit, run)
+    assert [(r.ideas, r.proposals, r.non_obvious) for r in recorder.rows] == [
+        (1, 2, 1), (1, 2, 1),
+    ]  # fmt: skip
+    lines = [json.loads(x) for x in results.read_text("utf-8").splitlines()]
+    rows = [x for x in lines if x["experiment"] == ip.ROW_EXPERIMENT]
+    assert [(r["ideas"], r["proposals"]) for r in rows] == [(1, 2), (1, 2)]
+    kept = [x for x in lines if x["experiment"] == ip.PROPOSAL_EXPERIMENT]
+    assert [(k["arm"], k["title"], k["relaxes"]) for k in kept] == [
+        (arm, title, rules)
+        for arm in ("B", "C")
+        for title, rules in ((_PROPOSAL.title, ["new_dependency"]),
+                             (_BARE_LANE.title, ["api_change"]))
+    ]  # fmt: skip
+    assert all(k["lane"].startswith("relax_") for k in kept)
+    assert ["".join(k["rationale"]) for k in kept[:2]] == [_LONG, "r"]  # whole
+    audits = [x for x in lines if x["experiment"] == ip.AUDIT_EXPERIMENT]
+    assert {a["title"] for a in audits} == {_IDEA.title}
+    assert "B 1 idea(s), 2 proposal(s), good 1" in run.notes[-1]
+    echoed: list[str] = []
+    recorder.finish(echoed.append)
+    header = next(line for line in echoed if line.startswith("| repo"))
+    assert "| own removed (agreed) | proposals | USD |" in header
+    assert any(line.startswith("| tomli | B | 1 | 1 | 1 |") and "| 2 |" in line
+               for line in echoed)  # fmt: skip
+
+
+def test_an_arm_with_no_proposal_keeps_its_note_and_counts_none() -> None:
+    plain = dataclasses.replace(
+        _proposal_run(), result=GenerateResult(hypotheses=(_IDEA,))
+    )
+    recorder = ip.ProbeRecorder(ip.ProbePlan((ip.ARM_C,), _repos(("tomli",))),
+                                ResultsSink({}))  # fmt: skip
+    run = dg.Wire(_Answers()).run()
+    recorder.record("tomli", [plain], [], None, run)
+    assert (recorder.rows[0].ideas, recorder.rows[0].proposals) == (1, 0)
+    assert "proposal" not in run.notes[-1]
+
+
+def test_a_relaxing_arms_proposal_is_reported_never_pooled_or_scored(
+    dry: Path, tmp_path: Path
+) -> None:
+    """End to end on the pipeline (G3's patch): an arm with a relaxing lane
+    on returns its proposal last; the probe labels its request, records it
+    apart and scores, pools and audits only the rest."""
+    base = _base().model_copy(update={"IDEAS_RELAX_LANES": (Lane.relax_dependency,)})
+    wire = dg.Wire(_Answers(), usages=[CACHED] * 14)
+    found = ip.run_arm(ip.ARM_C, wire.run(), _facts(), base=base, reader=_reader)
+    assert found.error is None and found.result is not None
+    assert [e.label for e in found.exchanges][-3:] == [
+        "relax_dependency", "leap", "reviewer",
+    ]  # fmt: skip
+    (proposal,) = ip.proposals_of(found.result)
+    assert found.result.hypotheses[-1] == proposal
+    assert "proposal:new_dependency" in proposal.tags
+    scored = ip.scored_hypotheses(found.result)
+    assert len(scored) == len(found.result.hypotheses) - 1
+    pooled = ip.pool([found], _facts())
+    assert proposal.title not in {p.idea.title for p in pooled}
+    assert all(p.idea.lane not in {"relax_dependency"} for p in pooled)
+    audit = ip.run_audit(
+        pooled, dg.Wire(_Answers(remove=False)).run(), _facts(), base=base,
+        reader=_reader,
+    )  # fmt: skip
+    assert audit.error is None
+    score = ip.scores([found], pooled, audit)["C"]
+    assert score.non_obvious == sum(
+        not h.tags[0].startswith("lane:obvious") for h in scored
+    )
+    results = tmp_path / "r.jsonl"
+    sink = ResultsSink({"LIVE_RESULTS_PATH": str(results)})
+    recorder = ip.ProbeRecorder(ip.ProbePlan((ip.ARM_C,), _repos(("tomli",))), sink)
+    recorder.record("tomli", [found], pooled, audit, dg.Wire(_Answers()).run())
+    (row,) = recorder.rows
+    assert (row.ideas, row.proposals) == (len(scored), 1)
+    lines = [json.loads(x) for x in results.read_text("utf-8").splitlines()]
+    (kept,) = [x for x in lines if x["experiment"] == ip.PROPOSAL_EXPERIMENT]
+    assert (kept["title"], kept["relaxes"]) == (proposal.title, ["new_dependency"])
+
+
+def test_a_rows_frameworks_name_only_the_lanes_it_sent(
+    dry: Path, tmp_path: Path
+) -> None:
+    """G5: the pipeline labels every S2 lane's assigned framework, sent or
+    not; the row keeps only the sent lanes', so count mode (S1 and the first
+    lens sent) never reports the unsent relaxing lane's framework."""
+    base = _base().model_copy(update={
+        "IDEAS_LANE_FRAMEWORKS": True,
+        "IDEAS_RELAX_LANES": (Lane.relax_dependency,),
+    })  # fmt: skip
+    wire = dg.Wire(_Answers(), usages=[CACHED] * 14)
+    run = wire.run()
+    found = ip.run_arm(ip.ARM_COUNT, run, _facts(), base=base, reader=_reader)
+    assert found.error is None and found.result is not None
+    assigned = framework_labels(found.result.notes)
+    assert assigned[Lane.relax_dependency] == "rule new_dependency"
+    sink = ResultsSink({"LIVE_RESULTS_PATH": str(tmp_path / "r.jsonl")})
+    recorder = ip.ProbeRecorder(ip.ProbePlan((ip.ARM_COUNT,), _repos(("tomli",))), sink)
+    recorder.record("tomli", [found], [], None, run)
+    (row,) = recorder.rows
+    assert row.sent == ("obvious", LENS_LANES[0].value)
+    assert row.frameworks == {LENS_LANES[0].value: None}
+
+
+def test_a_sequential_rows_frameworks_keep_every_lane_it_sent(dry: Path) -> None:
+    """G5 with G4's sequential lanes: a re-priced lane is sent under a fresh
+    tap label (``lane-N``), so the row reads which lanes were answered from
+    the pipeline's own stop reasons, keyed by lane in every mode."""
+    base = _base().model_copy(update={
+        "IDEAS_LANE_FRAMEWORKS": True, "IDEAS_SEQUENTIAL_LANES": True,
+        "IDEAS_RELAX_LANES": (Lane.relax_dependency,),
+    })  # fmt: skip
+    wire = dg.Wire(_Answers(), usages=[CACHED] * 20)
+    found = ip.run_arm(ip.ARM_C, wire.run(), _facts(), base=base, reader=_reader)
+    assert found.error is None and found.result is not None
+    frameworks = ip.sent_frameworks(found)
+    assert frameworks["relax_dependency"] == "rule new_dependency"
+    assert set(frameworks) == {*(lane.value for lane in LENS_LANES), "leap",
+                               "relax_dependency"}  # fmt: skip
+
+
+# ---------------------------------------------------------------------------
+# Vd: X1's configurations on E1's facts and Va's views (spec-idea-lab 6.2)
+# ---------------------------------------------------------------------------
+
+X1_FUSE = 80.0  # spec-idea-lab 6.4: each dispatch's worst case stays under it
+X1_DISPATCHES = (
+    "more_itertools,pyparsing,tomli,sortedcontainers",
+    "mistune,sqlparse,markdown,idna",
+)
+X1_LIBRARY_CAP = 16.95  # 0.27 + 2.475 + 7.216 + 2.539 + 2.675 + 1.075 + 0.69 up
+X1_1_CAP = 7.21575  # O42: X1-1's S1 and six lenses at 32,000 output tokens
+RERUN_LIBRARY_CAP = 8.20  # O42's re-run: 0.27 (A) + 7.216 (X1-1) + 0.69 up
+RUN_1 = ("more_itertools", "pyparsing", "tomli", "sortedcontainers")
+# Run 1 (41679255224): the slowest output rate per model (tokens/s, any
+# sent reply of at least 1,000 output tokens; Opus 5.5's is X1-3's leap)
+RUN_1_RATES = {
+    SONNET: 99.595, "claude-sonnet-5": 84.399, HAIKU: 181.057, OPUS: 71.519,
+    "claude-fable-5": 69.293, FABLE: 67.327,
+}  # fmt: skip
+SQUARE_MODELS = {
+    "claude-sonnet-5", HAIKU, OPUS, "claude-fable-5", FABLE, SONNET,
+}  # fmt: skip
+
+
+def _c_dump(project: Project | None = None) -> dict[str, object]:
+    return ip.arm_config(ip.ARM_C, project or _project()).model_dump()
+
+
+def _changed(arm: ip.IdeaArm, project: Project | None = None) -> dict[str, object]:
+    """What the arm's settings change against arm C's (X1-0's baseline)."""
+    mine = ip.arm_config(arm, project or _project()).model_dump()
+    base = _c_dump(project)
+    return {k: v for k, v in mine.items() if v != base[k]}
+
+
+def test_each_x1_configuration_changes_exactly_its_own_lever() -> None:
+    """X1-0 is arm C; X1-1 the per-lens models (and the retention flag its
+    Fable lanes need); X1-2 sequential lanes with the dedupe; X1-3 a
+    different view per lens with frameworks on; X1-4 the four rule-relaxing
+    lanes alone beside S1 (O38: no lens, no leap, no reviewer). X1-1 also
+    gives every lane the think line (O38), so it differs from X1-0 by the
+    models alone. Every other setting is arm C's, so one lever moves a
+    config."""
+    tomli = _project()  # row 2 of the square
+    assert _changed(ip.ARM_X1_0) == {}
+    assert ip.ARM_X1_0.update == ip.ARM_C.update == ()
+    assert _changed(ip.ARM_X1_1) == {
+        "IDEAS_LANE_MODELS": {lane: m for lane, m in ip.square_models(2).items()},
+        "ALLOW_RETENTION_MODELS": True, "IDEAS_THINK_LINE_ALL": True,
+        "IDEAS_LANE_MAX_TOKENS": 32_000, "LLM_TIMEOUT_S": 951.0,  # O42
+    }  # fmt: skip
+    assert ip.arm_config(ip.ARM_X1_0, tomli).IDEAS_THINK_LINE_ALL is False
+    assert ip.arm_config(ip.ARM_X1_1, tomli).IDEAS_LANE_MODELS == ip.square_models(2)
+    assert _changed(ip.ARM_X1_2) == {
+        "IDEAS_SEQUENTIAL_LANES": True, "IDEAS_MECHANISM_DEDUPE": True,
+    }  # fmt: skip
+    assert _changed(ip.ARM_X1_3) == {
+        "IDEAS_LANE_VIEWS": dict(ip.X1_VIEWS), "IDEAS_LANE_FRAMEWORKS": True,
+    }  # fmt: skip
+    assert set(ip.X1_VIEWS) == set(LENS_LANES)
+    assert sorted(ip.X1_VIEWS.values()) == sorted(IDEA_VIEWS)  # one view each
+    assert _changed(ip.ARM_X1_4) == {
+        "IDEAS_RELAX_LANES": tuple(RELAXING_LANES), "IDEAS_LENSES": (),
+        "IDEAS_LEAP_N": 0, "IDEAS_REVIEW": False,
+    }  # fmt: skip
+    assert len(RELAXING_LANES) == 4
+    assert ip.X1_ARMS == (ip.ARM_A, *ip.X1_CONFIGS)
+    assert [a.key for a in ip.X1_CONFIGS] == ["X1-0", "X1-1", "X1-2", "X1-3", "X1-4"]
+    assert [a.e1 for a in ip.X1_ARMS] == [True, True, True, True, True, False]
+    assert "two factors" in ip.ARM_X1_3.lever and "split in X2" in ip.ARM_X1_3.lever
+    assert "never scored" in ip.ARM_X1_4.lever and "S1" in ip.ARM_X1_4.lever
+    assert "think line" in ip.ARM_X1_1.lever
+    assert "lane output cap 32,000 (O42)" in ip.ARM_X1_1.lever  # rows tell runs
+    for arm in ip.X1_ARMS:
+        cfg = ip.arm_config(arm, tomli)
+        assert cfg.IDEA_PIPELINE is arm.pipeline and arm.lever, arm.key
+
+
+def test_the_latin_square_meets_every_model_with_every_lens_once() -> None:
+    """X1-1 (spec 6.2): a 6x6 Latin square, rows 1-6 on the first six of the
+    8 development libraries, then rows 1-2 again."""
+    rows = [ip.square_models(r) for r in range(6)]
+    pairs = Counter((lane, model) for row in rows for lane, model in row.items())
+    assert set(pairs.values()) == {1} and len(pairs) == 36
+    assert {m for _, m in pairs} == SQUARE_MODELS
+    for row in rows:
+        assert list(row) == list(LENS_LANES) and set(row.values()) == SQUARE_MODELS
+    for lane in LENS_LANES:  # each column too
+        assert {row[lane] for row in rows} == SQUARE_MODELS
+    assert [ip.square_row(name) for name in ip.E1_REPOS] == [0, 1, 2, 3, 4, 5, 0, 1]
+    with pytest.raises(ValueError, match="not one of the 8 development"):
+        ip.square_row("requests")
+    with pytest.raises(ValueError, match="not one of the 8 development"):
+        ip.arm_config(ip.ARM_X1_1, _project("blockhash"))
+    for name in ip.E1_REPOS:  # every model is priced and takes medium
+        cfg = ip.arm_config(ip.ARM_X1_1, _project(name))
+        assert cfg.IDEAS_LANE_MODELS == ip.square_models(ip.square_row(name))
+        assert cfg.IDEAS_LANE_EFFORT == "medium" and cfg.ALLOW_RETENTION_MODELS
+        assert set(cfg.IDEAS_LANE_MODELS.values()) <= set(cfg.MODEL_PRICING)
+
+
+def test_x1_caps_are_each_configurations_worst_case_and_a_dispatch_fits() -> None:
+    """D55's bounds per request: X1-1 each lens on its model; X1-2 each S2
+    lane with the 48-line mechanisms block; X1-3 each viewed lane and the
+    reviewer (the views' extra code) on wider bounds; X1-4 S1 and its four
+    lanes alone (O38).
+    A library's cap is equal on every row of the square; four libraries a
+    dispatch stay under the 80 USD fuse."""
+    lane = ip.request_usd(ip.LANE_PROMPT_BOUND, 12_000, SONNET)
+    leap = ip.request_usd(ip.LANE_PROMPT_BOUND, 12_000, OPUS)
+    review = ip.request_usd(ip.REVIEW_PROMPT_BOUND, 16_000, OPUS)
+    assert ip.arm_usd(ip.ARM_X1_0) == ip.arm_usd(ip.ARM_C) == pytest.approx(2.475)
+    # O42: X1-1's S1 and lenses at 32,000 output tokens, its leap and
+    # reviewer at their own caps (12,000, 16,000) as X1-0's
+    s1 = ip.request_usd(ip.LANE_PROMPT_BOUND, 32_000, SONNET)
+    lenses = [ip.request_usd(ip.LANE_PROMPT_BOUND, 32_000, m) for m in SQUARE_MODELS]
+    for name in ip.E1_REPOS:
+        assert ip.arm_usd(ip.ARM_X1_1, repo=name) == pytest.approx(
+            s1 + sum(lenses) + leap + review
+        )
+    assert ip.arm_usd(ip.ARM_X1_1) == pytest.approx(X1_1_CAP)
+    assert X1_1_CAP == pytest.approx(4.20575 + 2 * 1.0 + 3 * 0.2 + 0.4 + 0.01)
+    taken = ip.LANE_PROMPT_BOUND + ip.TAKEN_PROMPT_EXTRA
+    assert ip.arm_usd(ip.ARM_X1_2) == pytest.approx(
+        lane + 6 * ip.request_usd(taken, 12_000, SONNET)
+        + ip.request_usd(taken, 12_000, OPUS) + review
+    )  # fmt: skip
+    assert ip.arm_usd(ip.ARM_X1_3) == pytest.approx(
+        lane + 6 * ip.request_usd(ip.VIEW_PROMPT_BOUND, 12_000, SONNET) + leap
+        + ip.request_usd(ip.VIEW_REVIEW_PROMPT_BOUND, 16_000, OPUS)
+    )  # fmt: skip
+    assert ip.arm_usd(ip.ARM_X1_4) == pytest.approx(5 * lane) == pytest.approx(1.075)
+    assert ip.TAKEN_PROMPT_EXTRA >= 48 * 60  # MAX_TAKEN_LINES lines
+    facts = Path(ip.SERVICE_DIR / ip.FACTS_FIXTURE)
+    for dispatch in X1_DISPATCHES:  # four would be 67.80, under the fuse
+        plan = ip.ProbePlan(ip.X1_ARMS, _repos(dispatch.split(",")), facts, facts)
+        assert [plan.library_cap(r.name) for r in plan.repos] == [X1_LIBRARY_CAP] * 4
+        assert ip.probe_need(plan) == pytest.approx(4 * X1_LIBRARY_CAP)
+        assert ip.probe_need(plan) <= ip.X1_FUSE_USD == X1_FUSE
+    assert ip.X1_LIBRARY_CENTS == round(X1_LIBRARY_CAP * 100) == 1695
+    rerun = ip.ProbePlan(ip.X1_RERUN_ARMS, _repos(RUN_1), facts, facts)
+    assert [rerun.library_cap(n) for n in RUN_1] == [RERUN_LIBRARY_CAP] * 4
+    assert ip.probe_need(rerun) == pytest.approx(32.80) and rerun.audit
+    assert ip.X1_RERUN_LIBRARY_CENTS == 820
+    for arm in (a for a in ip._KNOWN_ARMS if a is not ip.ARM_X1_1):  # unchanged
+        cfg = ip.arm_config(arm, _project())
+        assert (cfg.IDEAS_LANE_MAX_TOKENS, cfg.LLM_TIMEOUT_S) == (12_000, 300.0)
+
+
+def test_the_rule_relaxing_lanes_count_in_a_pipeline_calls_cap() -> None:
+    """G3's lanes are sent like any lens (X1-4), so the cap holds them."""
+    base = settings.model_copy(update={"IDEAS_RELAX_LANES": tuple(RELAXING_LANES)})
+    cfg = ip.arm_config(ip.ARM_C, _project(), base)
+    lane = ip.request_usd(ip.LANE_PROMPT_BOUND, 12_000, SONNET)
+    assert ip.pipeline_usd(cfg) == pytest.approx(2.475 + 4 * lane)
+
+
+def test_x1_minutes_fit_the_job_three_libraries_a_dispatch() -> None:
+    """E1's seconds (Vd) for every lane at 12,000 tokens (run 1 measured them
+    well inside: 54 minutes for four libraries); O42: a lane past that cap
+    may write all of it, twice its model's slowest run-1 rate over 32,000
+    tokens (Fable 5.1 951 s, Fable 5 924 s, Opus 5.5 895 s, Sonnet 5 758 s,
+    Sonnet 5.5 643 s, Haiku 5.5 353 s). X1-1's rounds of four are then
+    each a Fable's, so an X1 library takes 74-76 minutes: three a dispatch
+    fit the 240-minute job, four do not; X1-1's re-run (arm A, X1-1, the
+    auditor) fits four. X1-4 is S1 and one round of its four lanes (O38)."""
+    facts = ip.SERVICE_DIR / ip.FACTS_FIXTURE
+    assert ip.X1_RUN1_TOKENS_PER_S == RUN_1_RATES and ip.E1_LANE_MAX_TOKENS == 12_000
+    for model, rate in RUN_1_RATES.items():
+        assert ip.cap_seconds(32_000, model) == pytest.approx(2 * 32_000 / rate)
+        assert ip.cap_seconds(12_000, model) == 0.0  # E1's seconds hold
+    with pytest.raises(ValueError, match="no run-1 rate for a lane on claude-x"):
+        ip.cap_seconds(32_000, "claude-x")
+    lane = {m: 2 * 32_000 / r for m, r in RUN_1_RATES.items()}
+    assert ip.X1_1_TIMEOUT_S == 951 >= max(lane.values())  # no lane times out
+    assert ip.arm_seconds(ip.ARM_X1_1, repo="more_itertools") == pytest.approx(
+        lane[SONNET] + lane["claude-fable-5"] + lane[FABLE] + 130.7
+    )  # S1; Fable 5 in round 1, Fable 5.1 in round 2; the reviewer
+    assert ip.arm_seconds(ip.ARM_X1_0) == pytest.approx(  # unchanged
+        47.732 + 47.732 + 195.296 + 130.7
+    )
+    assert ip.arm_seconds(ip.ARM_X1_4) == pytest.approx(47.732 + 47.732)
+    plan = ip.ProbePlan(ip.X1_ARMS, _repos(ip.E1_REPOS), facts, facts)
+    minutes = {name: plan.library_minutes(name) for name in ip.E1_REPOS}
+    assert minutes == {
+        "more_itertools": 76, "pyparsing": 74, "tomli": 74, "sortedcontainers": 76,
+        "mistune": 76, "sqlparse": 76, "markdown": 76, "idna": 74,
+    }  # fmt: skip
+    for dispatch in X1_DISPATCHES:
+        names = dispatch.split(",")
+        env = {ip.ARMS_ENV: "X1", ip.FACTS_ENV: str(facts), ip.VIEWS_ENV: str(facts)}
+        with pytest.raises(ValueError, match="past the 240-minute job"):
+            ip.probe_plan({**env, ip.REPOS_ENV: dispatch})
+        found = ip.probe_plan({**env, ip.REPOS_ENV: ",".join(names[:3])})
+        assert found.arms == ip.X1_ARMS
+        assert found.minutes() == sum(minutes[n] for n in names[:3]) <= 240
+        assert ip.probe_need(found) == pytest.approx(3 * X1_LIBRARY_CAP)  # 50.85
+    rerun = ip.probe_plan({ip.ARMS_ENV: "X1-1", ip.FACTS_ENV: str(facts),
+                           ip.VIEWS_ENV: str(facts)})  # fmt: skip
+    assert rerun.minutes() == 50 + 47 + 47 + 49 <= ip.JOB_MINUTES == 240
+    five = {ip.FACTS_ENV: str(facts), ip.VIEWS_ENV: str(facts),
+            ip.REPOS_ENV: ",".join(ip.E1_REPOS[:5])}  # fmt: skip
+    with pytest.raises(  # X1-4 fits five in minutes: the explicit cap
+        ValueError, match="X1 runs at most 4 libraries a dispatch .ci.yml., not 5"
+    ):
+        ip.probe_plan({ip.ARMS_ENV: "X1-4", **five})
+    for arms in ("X1-1", "A,X1-1"):  # the re-run's fifth passes the job first
+        with pytest.raises(ValueError, match="about 243 minutes, past the 240"):
+            ip.probe_plan({ip.ARMS_ENV: arms, **five})
+    assert ip.X1_LIBRARIES_A_DISPATCH == 4
+    for repos in ({}, {ip.REPOS_ENV: ",".join(ip.E1_REPOS[:6])}):  # 8, 6: refused
+        with pytest.raises(ValueError, match="past the 240-minute job"):
+            ip.probe_plan({ip.ARMS_ENV: "X1", ip.FACTS_ENV: str(facts),
+                           ip.VIEWS_ENV: str(facts), **repos})  # fmt: skip
+
+
+def test_the_x1_1_rerun_plans_arm_a_and_x1_1_on_run_1s_libraries() -> None:
+    """O42: ``X1-1`` re-runs X1-1 alone beside arm A (today's generator, about
+    0.026 a library) and the auditor, so share-new against today's generator
+    is measured in the re-run's own audit pool; on run 1's four libraries
+    unless named, on E1's facts and Va's views, refused without them."""
+    facts = str(ip.SERVICE_DIR / ip.FACTS_FIXTURE)
+    env = {ip.ARMS_ENV: ip.X1_RERUN_KEY, ip.FACTS_ENV: facts, ip.VIEWS_ENV: facts}
+    assert ip.X1_RERUN_KEY == "X1-1" and ip.X1_RERUN_REPOS == RUN_1
+    assert ip.probe_arms(env) == ip.X1_RERUN_ARMS == (ip.ARM_A, ip.ARM_X1_1)
+    plan = ip.probe_plan(env)
+    assert plan.arms == ip.X1_RERUN_ARMS and plan.audit
+    assert {r.name for r in plan.repos} == set(RUN_1) and len(plan.repos) == 4
+    assert plan.facts is not None and plan.views is not None
+    one = ip.probe_plan({**env, ip.REPOS_ENV: "tomli"})
+    assert [r.name for r in one.repos] == ["tomli"]
+    assert ip.probe_need(one) == pytest.approx(RERUN_LIBRARY_CAP)
+    with pytest.raises(ValueError, match=f"X1 reads E1's facts: set {ip.FACTS_ENV}"):
+        ip.probe_plan({ip.ARMS_ENV: "X1-1"})
+    with pytest.raises(ValueError, match=f"X1 reads Va's views: set {ip.VIEWS_ENV}"):
+        ip.probe_plan({ip.ARMS_ENV: "X1-1", ip.FACTS_ENV: facts})
+    assert ip.probe_repos({ip.ARMS_ENV: "X1"}, ip.X1_ARMS) == _repos(ip.E1_REPOS)
+
+
+def test_x1_needs_e1s_facts_and_vas_views_before_any_spend(tmp_path: Path) -> None:
+    four = {ip.ARMS_ENV: "X1", ip.REPOS_ENV: X1_DISPATCHES[0]}
+    facts = str(ip.SERVICE_DIR / ip.FACTS_FIXTURE)
+    with pytest.raises(ValueError, match=f"X1 reads E1's facts: set {ip.FACTS_ENV}"):
+        ip.probe_plan(four)
+    with pytest.raises(ValueError, match=f"X1 reads Va's views: set {ip.VIEWS_ENV}"):
+        ip.probe_plan({**four, ip.FACTS_ENV: facts})
+    with pytest.raises(ValueError, match="no recorded views at"):
+        ip.probe_plan({**four, ip.FACTS_ENV: facts, ip.VIEWS_ENV: "none.jsonl"})
+    for arms in ("X1-3", "A,X1-0"):  # one X1 configuration alone, too
+        with pytest.raises(ValueError, match="X1 reads"):
+            ip.probe_plan({ip.ARMS_ENV: arms, ip.REPOS_ENV: "tomli"})
+    with pytest.raises(ValueError, match="distinct entries"):
+        ip.probe_plan({ip.ARMS_ENV: "X1,A"})
+    over = dataclasses.replace(
+        ip.ARM_X1_1, update=(("IDEAS_LANE_MAX_TOKENS", 128_000),)
+    )
+    plan = ip.ProbePlan((ip.ARM_A, over), _repos(X1_DISPATCHES[0].split(",")))
+    assert ip.probe_need(plan) > X1_FUSE
+    with pytest.raises(ValueError, match="past the 80 USD fuse"):
+        ip.check_fuse(plan)
+    ip.check_fuse(ip.ProbePlan(ip.E1_ARMS, _repos(ip.E1_REPOS)))  # E1: no fuse
+
+
+# ---- the views: recorded rows, the seam, the pre-spend check --------------
+
+
+def _workload(body: ip.FactsBody) -> Workload:
+    return iv.recorded_workload(LIB, body)
+
+
+def _views_file(
+    path: Path,
+    body: ip.FactsBody,
+    reader: Any,
+    *,
+    limits: IdeaReadLimits | None = None,
+    protected: tuple[str, ...] | None = None,
+) -> Path:
+    """Va's rows for ``body``, built by ``build_view`` with ``reader`` (as
+    the views pass builds them at the recorded commit)."""
+    limits = limits or IdeaReadLimits.from_settings(settings)
+    source = ViewSource(
+        reader, body.commit, body.hotspots, Fence.new(),
+        body.protected if protected is None else protected, (), limits,
+        (_workload(body),),
+    )  # fmt: skip
+    digest = iv.source_digest(source)
+    sink = ResultsSink({"LIVE_RESULTS_PATH": str(path)})
+    for name in IDEA_VIEWS:
+        notes: list[str] = []
+        view = build_view(name, source, notes)
+        sink.write(iv.ViewRow(body.project.name, iv.ViewBody(
+            view=name, commit=body.commit, run_id=body.run_id, source_sha256=digest,
+            limits=limits, commits=0, context=None if view is None else view.context,
+            facts=() if view is None else ('recorded: "Va"', *view.facts),
+            notes=tuple(notes),
+        )).record())  # fmt: skip
+    return path
+
+
+def _x1_plan(views: Path | None) -> ip.ProbePlan:
+    return ip.ProbePlan(ip.X1_ARMS, _repos(("tomli",)), Path("recorded"), views)
+
+
+def test_a_missing_or_mismatched_views_file_refuses_before_any_spend(
+    tmp_path: Path,
+) -> None:
+    body = ip.FactsBody.of(_facts())
+    good = _views_file(tmp_path / "good.jsonl", body, _Reader())
+    recorder = ip.ProbeRecorder(_x1_plan(good), ResultsSink({}), {LIB.name: body})
+    assert set(recorder.views) == {LIB.name}
+    wrong = {
+        "limits": _views_file(tmp_path / "limits.jsonl", body, _Reader(),
+                              limits=IdeaReadLimits(hot_functions=2)),
+        "source": _views_file(tmp_path / "source.jsonl", body, _Reader(),
+                              protected=("tests/",)),
+    }  # fmt: skip
+    for what, path in wrong.items():
+        with pytest.raises(ValueError, match="not the source this run builds"):
+            ip.ProbeRecorder(_x1_plan(path), ResultsSink({}), {LIB.name: body})
+        assert what
+    other = body.model_copy(update={"run_id": "run-2"})
+    with pytest.raises(ValueError, match="not the recorded facts'"):
+        ip.ProbeRecorder(_x1_plan(good), ResultsSink({}), {LIB.name: other})
+    empty = tmp_path / "empty.jsonl"
+    empty.write_text("", encoding="utf-8")
+    with pytest.raises(ValueError, match=f"{ip.VIEWS_ENV}: no recorded views for"):
+        ip.ProbeRecorder(_x1_plan(empty), ResultsSink({}), {LIB.name: body})
+    with pytest.raises(ValueError, match="views are never built live"):
+        ip.ProbeRecorder(_x1_plan(None), ResultsSink({}), {LIB.name: body})
+    plain = ip.ProbeRecorder(ip.ProbePlan((ip.ARM_C,), _repos(("tomli",))),
+                             ResultsSink({}))  # fmt: skip
+    assert plain.views == {}
+
+
+def test_x1_3_sees_the_recorded_views_through_the_seam_never_built_live(
+    dry: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    body = ip.FactsBody.of(_facts())
+    path = _views_file(tmp_path / "views.jsonl", body, _Reader())
+    recorded = iv.load_views(path, {LIB.name: body})[LIB.name]
+
+    def never(*_args: object) -> None:
+        raise AssertionError("a view was built live")
+
+    monkeypatch.setattr(idea_pipeline, "build_view", never)
+    wire = dg.Wire(_Answers(), usages=[CACHED] * 12)
+    found = ip.run_arm(ip.ARM_X1_3, wire.run(), _facts(), base=_base(),
+                       reader=_reader, views=recorded.build,
+                       workloads=(_workload(body),))  # fmt: skip
+    assert found.error is None and found.result is not None
+    built = {n for n, b in recorded.bodies.items() if b.context is not None}
+    assert built  # the fake repository gives some views, not all
+    texts = {_lens(b): _text(b) for b in wire.bodies}
+    for lane, view in ip.X1_VIEWS.items():
+        assert ('recorded: "Va"' in texts[lane.value]) is (view in built), lane
+    frameworks = ip.sent_frameworks(found)
+    assert {k: v for k, v in frameworks.items() if v} == {
+        lane.value: f"view {view}" for lane, view in ip.X1_VIEWS.items()
+        if view in built
+    }  # fmt: skip
+    with pytest.raises(ValueError, match="views are never built live"):
+        ip.run_arm(ip.ARM_X1_3, dg.Wire(_Answers()).run(), _facts(), base=_base(),
+                   reader=_reader)  # fmt: skip
+
+
+_LENS_TAG = re.compile(r'<lens name=\\?"([a-z_]+)\\?"')
+
+
+def _lens(body: Json) -> str:
+    """The lane a request body is for (S1 has no lens; the reviewer's)."""
+    if "reviews" in dg._schema_keys(body):
+        return "reviewer"
+    content = body["messages"][0]["content"]
+    found = _LENS_TAG.search(content[-1]["text"])
+    return "obvious" if found is None else found.group(1)
+
+
+def test_x1_1_sends_each_lens_on_its_square_model(dry: Path) -> None:
+    wire = dg.Wire(_Answers(), usages=[CACHED] * 12)
+    found = ip.run_arm(ip.ARM_X1_1, wire.run(), _facts(), base=_base(), reader=_reader)
+    assert found.error is None and found.result is not None
+    models = {_lens(b): b["model"] for b in wire.bodies}
+    row = ip.square_models(ip.square_row(LIB.name))
+    assert models == {
+        "obvious": SONNET, **{lane.value: m for lane, m in row.items()},
+        "leap": OPUS, "reviewer": OPUS,
+    }  # fmt: skip
+    efforts = {_lens(b): b["output_config"]["effort"] for b in wire.bodies}
+    assert {efforts[lane.value] for lane in LENS_LANES} == {"medium"}
+    assert set(found.billable) == SQUARE_MODELS | {OPUS}
+    assert {e.label: e.model for e in found.exchanges if e.role == "lane"} == {
+        "obvious": SONNET, **{lane.value: m for lane, m in row.items()},
+    }  # fmt: skip
+
+
+class _CutFable(dg.Wire):
+    """``dg.Wire``, but a Fable lane stops at its cap: ``max_tokens``, the
+    whole cap written, the reply cut mid-JSON (run 1's three truncations)."""
+
+    def __call__(self, request: httpx2.Request) -> httpx2.Response:
+        response = super().__call__(request)
+        message = response.json()
+        if message.get("model") not in (FABLE, "claude-fable-5"):
+            return response
+        cap = json.loads(request.read())["max_tokens"]
+        text = message["content"][0]["text"]
+        message.update(stop_reason="max_tokens",
+                       usage={**message["usage"], "output_tokens": cap},
+                       content=[{"type": "text", "text": text[: len(text) // 2]}])  # fmt: skip
+        return httpx2.Response(200, json=message, request=request)
+
+
+def test_x1_1s_lane_cap_reaches_s1_and_every_lens_request_on_the_wire(
+    dry: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """O42: ``IDEAS_LANE_MAX_TOKENS`` is the max tokens of S1 and every lens
+    request (``idea_pipeline._lane_job``), through the real SDK client (no
+    streaming refusal: its timeout is explicit); the leap and the reviewer
+    keep their own caps; every transport of the arm has the 951 s timeout."""
+    timeouts: list[float] = []
+
+    class _Seen(AnthropicTransport):
+        def __init__(self, cfg: Settings, **kw: Any) -> None:
+            timeouts.append(cfg.LLM_TIMEOUT_S)
+            super().__init__(cfg, **kw)
+
+    monkeypatch.setattr(conftest, "AnthropicTransport", _Seen)
+    wire = dg.Wire(_Answers(), usages=[CACHED] * 12)
+    found = ip.run_arm(ip.ARM_X1_1, wire.run(), _facts(), base=_base(), reader=_reader)
+    assert found.error is None and found.result is not None
+    caps = {_lens(b): b["max_tokens"] for b in wire.bodies}
+    lanes = ("obvious", *(lane.value for lane in LENS_LANES))
+    assert caps == {**dict.fromkeys(lanes, 32_000), "leap": 12_000, "reviewer": 16_000}
+    assert len(timeouts) == 3 + 6 and set(timeouts) == {951.0}  # roles, lenses
+    assert all(e.request.max_tokens == 32_000 for e in found.exchanges
+               if e.role == "lane")  # fmt: skip
+    timeouts.clear()
+    c_wire = dg.Wire(_Answers(), usages=[CACHED] * 12)
+    ip.run_arm(ip.ARM_X1_0, c_wire.run(), _facts(), base=_base(), reader=_reader)
+    assert {b["max_tokens"] for b in c_wire.bodies} == {12_000, 16_000}
+    assert set(timeouts) == {300.0}  # X1-0: the defaults
+
+
+def test_every_x1_1_request_names_its_951_s_timeout_on_the_request_itself(
+    dry: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """O42, owner 2026-11-04: the SDK refuses an unstreamed request whose
+    max_tokens implies more than ten minutes unless the request names its
+    own timeout. Every request X1-1 builds (S1 and the lenses at 32,000, the
+    leap, the reviewer) passes ``timeout`` to ``messages.create`` with a
+    951 s read, and the wire carries it."""
+    sent: list[tuple[int, float]] = []
+    reads: list[float] = []
+
+    class _Seen(AnthropicTransport):
+        def __init__(self, cfg: Settings, **kw: Any) -> None:
+            super().__init__(cfg, **kw)
+            create = self._client.beta.messages.create
+
+            def recorded(**kwargs: Any) -> Any:
+                sent.append((kwargs["max_tokens"], kwargs["timeout"].read))
+                return create(**kwargs)
+
+            monkeypatch.setattr(self._client.beta.messages, "create", recorded)
+
+    class _Timed(dg.Wire):
+        def __call__(self, request: httpx2.Request) -> httpx2.Response:
+            if not request.url.path.endswith("/count_tokens"):  # its own 30 s
+                reads.append(request.extensions["timeout"]["read"])
+            return super().__call__(request)
+
+    monkeypatch.setattr(conftest, "AnthropicTransport", _Seen)
+    wire = _Timed(_Answers(), usages=[CACHED] * 12)
+    found = ip.run_arm(ip.ARM_X1_1, wire.run(), _facts(), base=_base(), reader=_reader)
+    assert found.error is None and found.result is not None
+    assert len(sent) == len(wire.bodies) == 1 + 6 + 2  # S1, lenses, leap, reviewer
+    assert sorted(cap for cap, _ in sent).count(32_000) == 7
+    assert {read for _, read in sent} == {951.0} == set(reads)
+
+
+def test_a_lane_stopped_at_max_tokens_is_recorded_so_and_never_retried(
+    dry: Path, tmp_path: Path
+) -> None:
+    """O42 condition 2: a request stopping at 32,000 is a finding about its
+    model. The Fable lanes' replies stop at ``max_tokens``: each was sent
+    once (no retry, no second request), its exchange, row and reply record
+    keep ``max_tokens`` and the whole cap's output tokens, the lane yields
+    no idea (a note says why) and the arm still returns the others."""
+    wire = _CutFable(_Answers(), usages=[CACHED] * 12)
+    found = ip.run_arm(ip.ARM_X1_1, wire.run(), _facts(), base=_base(), reader=_reader)
+    assert found.error is None and found.result is not None
+    row = ip.square_models(ip.square_row(LIB.name))
+    cut = {lane.value for lane, m in row.items() if m in (FABLE, "claude-fable-5")}
+    assert len(cut) == 2 and len(wire.bodies) == 1 + 6 + 2  # each sent once
+    assert sorted(b["model"] for b in wire.bodies if _lens(b) in cut) == sorted(
+        (FABLE, "claude-fable-5")
+    )
+    for e in found.exchanges:
+        stopped = e.label in cut
+        assert e.sent and (e.stop_reason == "max_tokens") is stopped, e.label
+        assert (e.usage[1] == 32_000) is stopped, e.label
+    notes = " ".join(found.result.notes)
+    for label in cut:
+        assert f"lane {label} failed (UnusableReplyError)" in notes
+        assert "'max_tokens' before a complete answer" in notes
+    results = tmp_path / "r.jsonl"
+    recorder = ip.ProbeRecorder(ip.ProbePlan((ip.ARM_X1_1,), _repos(("tomli",))),
+                                ResultsSink({"LIVE_RESULTS_PATH": str(results)}))  # fmt: skip
+    recorder.record(LIB.name, [found], [], None, wire.run(), read=_read)
+    (probe,) = recorder.rows
+    assert {k for k, v in probe.stops.items() if v == "max_tokens"} == cut
+    assert "lane output cap 32,000 (O42)" in probe.lever  # the re-run's rows say so
+    lines = [json.loads(x) for x in results.read_text("utf-8").splitlines()]
+    replies = {x["label"]: x for x in lines if x["experiment"] == ip.REPLY_EXPERIMENT}
+    assert {k for k, x in replies.items() if x["stop_reason"] == "max_tokens"} == cut
+    assert all(replies[k]["usage"][1] == 32_000 for k in cut)
+
+
+_FENCED = re.compile(r"<([a-z_]+) boundary=(\w+)>\n.*?\n</\1 boundary=\2>", re.S)
+_SAMPLING = ("thinking", "temperature", "top_p", "top_k")
+
+
+def _x1_1_bodies(arm: ip.IdeaArm, monkeypatch: pytest.MonkeyPatch) -> list[Json]:
+    """X1-1's requests on tomli's row, every fence token the same per run."""
+    tokens = itertools.cycle(
+        ("1a1a1a1a1a1a1a1a", "2b2b2b2b2b2b2b2b", "3c3c3c3c3c3c3c3c")
+    )
+    monkeypatch.setattr(secrets, "token_hex", lambda _n: next(tokens))
+    wire = dg.Wire(_Answers(), usages=[CACHED] * 12)
+    found = ip.run_arm(arm, wire.run(), _facts(), base=_base(), reader=_reader)
+    assert found.error is None and found.result is not None
+    return wire.bodies
+
+
+def _ask(body: Json) -> str:
+    text = body["messages"][0]["content"][-1]["text"]
+    assert isinstance(text, str)
+    return text
+
+
+def test_x1_1s_think_line_is_well_formed_on_every_models_request(
+    dry: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    GIVEN X1-1 (O38: the think line on every lane) and the same arm with it
+          off, on one row of the square: S1 on Sonnet 5.5, the six lenses on
+          Sonnet 5, Haiku 5.5, Opus 5.5, Fable 5, Fable 5.1 and Sonnet 5.5
+    WHEN their requests are built (dg.Wire, no spend)
+    THEN each idea lane's last text block holds THINK_LINE exactly once, at
+         the end of the ask, outside every fence, and the whole request
+         holds it once; every other field (model, max tokens, effort, the
+         schema, the system prompt, no thinking or sampling field: Fable's
+         thinking is always on, Haiku and Opus take the line as plain
+         instruction) is what the pipeline sends that model with it off;
+         the Opus leap and the reviewer are X1-0's, byte for byte
+    """
+    on = {_lens(b): b for b in _x1_1_bodies(ip.ARM_X1_1, monkeypatch)}
+    plain = dataclasses.replace(ip.ARM_X1_1, update=tuple(
+        kv for kv in ip.ARM_X1_1.update if kv[0] != "IDEAS_THINK_LINE_ALL"
+    ))  # fmt: skip
+    off = {_lens(b): b for b in _x1_1_bodies(plain, monkeypatch)}
+    assert ip.arm_config(plain, _project()).IDEAS_THINK_LINE_ALL is False
+    lanes = ("obvious", *(lane.value for lane in LENS_LANES))
+    assert set(on) == set(off) == {*lanes, "leap", "reviewer"}
+    assert {on[lane]["model"] for lane in lanes[1:]} == SQUARE_MODELS
+    for lane in lanes:
+        body, before = on[lane], off[lane]
+        ask = _ask(body)
+        assert ask.count(THINK_LINE) == 1 and ask.endswith(f" {THINK_LINE}")
+        assert json.dumps(body).count(THINK_LINE) == 1, lane
+        spans = [m.span() for m in _FENCED.finditer(ask)]
+        assert spans, lane  # <already_on_the_table> at least
+        at = ask.index(THINK_LINE)
+        assert all(not start <= at < end for start, end in spans), lane
+        assert at > max(end for _, end in spans), lane
+        sonnet_5_5 = body["model"] == SONNET
+        assert (THINK_LINE in _ask(before)) is sonnet_5_5, lane
+        bare = ask.removesuffix(f" {THINK_LINE}")
+        assert _ask(before) == (ask if sonnet_5_5 else bare), lane
+        rest = {k: v for k, v in body.items() if k != "messages"}
+        assert rest == {k: v for k, v in before.items() if k != "messages"}, lane
+        assert not set(_SAMPLING) & set(body), lane
+        assert (
+            body["messages"][0]["content"][:-1]
+            == (before["messages"][0]["content"][:-1])
+        ), lane
+    for role in ("leap", "reviewer"):
+        assert on[role] == off[role] and THINK_LINE not in json.dumps(on[role])
+
+
+def test_x1_4_sends_s1_and_its_four_relaxing_lanes_alone(dry: Path) -> None:
+    """O38: X1-4 is S1 and the four rule-relaxing lanes (X1-0 is the
+    baseline): no lens, no leap, no reviewer request."""
+    wire = dg.Wire(_Answers(), usages=[CACHED] * 5)
+    found = ip.run_arm(ip.ARM_X1_4, wire.run(), _facts(), base=_base(), reader=_reader)
+    assert found.error is None and found.result is not None
+    sent = [_lens(b) for b in wire.bodies]
+    assert sent[0] == "obvious" and len(sent) == 5
+    assert set(sent[1:]) == {lane.value for lane in RELAXING_LANES}
+    assert {b["model"] for b in wire.bodies} == {SONNET}
+    assert {e.label for e in found.exchanges} == {"obvious", *set(sent[1:])}
+
+
+def test_x1_4_proposals_are_reported_never_pooled_or_scored(
+    dry: Path, tmp_path: Path
+) -> None:
+    wire = dg.Wire(_Answers(), usages=[CACHED] * 16)
+    relaxed = ip.run_arm(ip.ARM_X1_4, wire.run(), _facts(), base=_base(),
+                         reader=_reader)  # fmt: skip
+    base = ip.run_arm(ip.ARM_X1_0, dg.Wire(_Answers(), usages=[CACHED] * 12).run(),
+                      _facts(), base=_base(), reader=_reader)  # fmt: skip
+    kept = ip.proposals_of(relaxed.result)
+    assert {ip._lane(h) for h in kept} == {lane.value for lane in RELAXING_LANES}
+    pooled = ip.pool([base, relaxed], _facts())
+    assert pooled and {p.arm for p in pooled} == {"X1-0"}  # X1-4: never pooled
+    audit = ip.audit_of(_audit_reply([FEASIBLE] * len(pooled)), len(pooled))
+    scored = ip.scores([base, relaxed], pooled, audit)
+    assert scored["X1-4"].good is scored["X1-4"].good_corrected is None
+    assert scored["X1-0"].good is not None
+    results = tmp_path / "r.jsonl"
+    recorder = ip.ProbeRecorder(
+        ip.ProbePlan((ip.ARM_X1_0, ip.ARM_X1_4), _repos(("tomli",))),
+        ResultsSink({"LIVE_RESULTS_PATH": str(results)}),
+    )
+    recorder.record(LIB.name, [base, relaxed], pooled, audit, wire.run(),
+                    read=_read)  # fmt: skip
+    rows = {r.arm: r for r in recorder.rows}
+    assert rows["X1-4"].proposals == 4 and rows["X1-4"].good is None
+    lines = [json.loads(x) for x in results.read_text("utf-8").splitlines()]
+    proposals = [x for x in lines if x["experiment"] == ip.PROPOSAL_EXPERIMENT]
+    assert sorted(r for x in proposals for r in x["relaxes"]) == sorted(
+        rule.value for rule in RELAXING_LANES.values()
+    )
+    audits = [x for x in lines if x["experiment"] == ip.AUDIT_EXPERIMENT]
+    assert {a["arm"] for a in audits} == {"X1-0"}
+    ideas = [x for x in lines if x["experiment"] == ip.IDEA_EXPERIMENT]
+    flagged = [(x["lane"], x["relaxes"]) for x in ideas if x["proposal"]]
+    assert sorted(flagged) == sorted(
+        (lane.value, rule.value) for lane, rule in RELAXING_LANES.items()
+    )
+    assert all(x["arm"] == "X1-4" for x in ideas if x["proposal"])
+
+
+def _read(path: str) -> str | None:
+    return SOURCE if path == PATH else None
+
+
+def test_the_records_carry_every_idea_with_its_mechanism_target_and_model(
+    dry: Path, tmp_path: Path
+) -> None:
+    """Every lane reply's every idea (S1, the lenses, the leap; returned or
+    not) and every returned idea of today's generator, one ``ideas-idea``
+    row each: title, mechanism, cells, target lines (the quote's first
+    match in the file at the commit), lane, model, proposal flag."""
+    arms = [ip.run_arm(arm, dg.Wire(_Answers(), usages=[CACHED] * 12).run(),
+                       _facts(), base=_base(), reader=_reader)
+            for arm in (ip.ARM_A, ip.ARM_X1_1)]  # fmt: skip
+    results = tmp_path / "r.jsonl"
+    recorder = ip.ProbeRecorder(
+        ip.ProbePlan((ip.ARM_A, ip.ARM_X1_1), _repos(("tomli",))),
+        ResultsSink({"LIVE_RESULTS_PATH": str(results)}),
+    )
+    recorder.record(LIB.name, arms, [], None, dg.Wire(_Answers()).run(), read=_read)
+    lines = [json.loads(x) for x in results.read_text("utf-8").splitlines()]
+    ideas = [x for x in lines if x["experiment"] == ip.IDEA_EXPERIMENT]
+    today = [x for x in ideas if x["arm"] == "A"]
+    assert [(x["title"], x["lane"], x["model"], x["returned"]) for x in today] == [
+        ("Today 0", "today", SONNET, True), ("Today 1", "today", SONNET, True),
+    ]  # fmt: skip
+    assert all(x["mechanism"] is None and x["target"] is None for x in today)
+    assert {x["label"] for x in today} == {"generator"}
+    assert [x["change"] for x in today] == ["Sum with the builtin."] * 2
+    mine = [x for x in ideas if x["arm"] == "X1-1"]
+    sent = [e for e in arms[1].exchanges if e.role in ("lane", "leap") and e.sent]
+    assert len(mine) == len(sent) == 1 + 6 + 1  # one idea a lane reply
+    assert {x["label"] for x in mine} == {e.label for e in sent}
+    row = ip.square_models(ip.square_row(LIB.name))
+    models = {"obvious": SONNET, "leap": OPUS, **{k.value: v for k, v in row.items()}}
+    assert {x["lane"]: x["model"] for x in mine} == models
+    returned = {h.title for h in arms[1].result.hypotheses}  # type: ignore[union-attr]
+    assert {x["title"] for x in mine if x["returned"]} == returned
+    assert any(not x["returned"] for x in mine)  # the full list, not the result
+    for x in mine:
+        k = int(x["title"].split()[1].rstrip(":"))
+        idea = _lane_idea(k)
+        symbol = list(QUOTES)[k % 2]
+        line = SOURCE.splitlines().index(f"        {QUOTES[symbol]}") + 1
+        assert (x["mechanism"], x["cells"], x["path"]) == (
+            idea["mechanism"], idea["morph_cells"], PATH,
+        )  # fmt: skip
+        assert x["target"] == {"first": line, "last": line}
+        assert x["proposal"] is False and x["relaxes"] is None
+        assert x["change"] == idea["change_summary"]
+    rows = {r.arm: r for r in recorder.rows}
+    assert rows["X1-1"].lane_models == {k.value: v for k, v in row.items()}
+    assert rows["X1-1"].lever == ip.ARM_X1_1.lever and rows["A"].lane_models == {}
+    assert rows["X1-1"].cost_usd == arms[1].cost_usd > 0  # cost per configuration
+
+
+def test_a_sequential_idea_joins_its_reply_by_label(dry: Path, tmp_path: Path) -> None:
+    """X1-2's re-priced lanes are sent under a generic ``lane-N`` label, so
+    each idea row carries its exchange's label: (repo, arm, label) names
+    exactly one sent ``ideas-reply`` row, whose text holds the idea."""
+    wire = dg.Wire(_Answers(), usages=[CACHED] * 20)
+    found = ip.run_arm(ip.ARM_X1_2, wire.run(), _facts(), base=_base(), reader=_reader)
+    assert found.error is None
+    labels = [e.label for e in found.exchanges if e.sent]
+    assert any(x.startswith("lane-") for x in labels)  # a re-priced lane
+    results = tmp_path / "r.jsonl"
+    recorder = ip.ProbeRecorder(ip.ProbePlan((ip.ARM_X1_2,), _repos(("tomli",))),
+                                ResultsSink({"LIVE_RESULTS_PATH": str(results)}))  # fmt: skip
+    recorder.record(LIB.name, [found], [], None, dg.Wire(_Answers()).run(), read=_read)
+    lines = [json.loads(x) for x in results.read_text("utf-8").splitlines()]
+    ideas = [x for x in lines if x["experiment"] == ip.IDEA_EXPERIMENT]
+    replies = [x for x in lines if x["experiment"] == ip.REPLY_EXPERIMENT and x["sent"]]
+    assert ideas and len({x["label"] for x in replies}) == len(replies)
+    assert all({"label", "change"} <= x.keys() for x in ideas)
+    by_label = {x["label"]: "".join(x["chunks"]) for x in replies}
+    for x in ideas:
+        text = by_label[x["label"]]
+        assert x["title"] in text and x["change"] in text
+    assert {x["lane"] for x in ideas} == {"obvious", "leap",
+                                          *(lane.value for lane in LENS_LANES)}  # fmt: skip
+
+
+def test_an_unreadable_reply_or_an_unknown_file_records_no_target() -> None:
+    reply = json.dumps({"hypotheses": [{**_lane_idea(0), "depends_on_path": "../x"},
+                                       {**_lane_idea(1), "depends_on_path": "a.py"},
+                                       {**_lane_idea(2), "depends_on_quote": "zz"}]})  # fmt: skip
+    targets = [t for _, t in ip.reply_ideas(reply, _read)]
+    assert targets == [None, None, None]
+    assert ip.reply_ideas("not json", _read) == []
+    assert ip.reply_ideas(json.dumps({"hypotheses": [{"title": "t"}]}), _read) == []
+    assert ip.read_text_of(_Reader(), SHA)("missing/file.py") is None
+    assert ip.read_text_of(_Reader(), SHA)(PATH) == SOURCE
+    assert ip.read_text_of(_Reader(), "e" * 40)(PATH) is None  # GitError
+    assert ip.read_text_of(_Unreadable(), SHA)(PATH) is None  # a tracked blob too
+    plain = dataclasses.replace(_proposal_run(shown=True).exchanges[0].request,
+                                messages=({"role": "user", "content": "hi"},))  # fmt: skip
+    assert ip.request_lane(plain) is Lane.obvious
+
+
+class _Unreadable(_Reader):
+    def read_blob(self, commit: str, path: str, *, limit: int | None = None) -> bytes:
+        raise GitError("bad object")
+
+
+def test_one_x1_library_on_recorded_facts_and_views_records_every_row(
+    upstream: og.Upstream, tmp_path: Path, dry: Path
+) -> None:
+    url, commit = upstream({PATH: SOURCE, "LICENSE": "Permission is hereby granted\n"})
+    repo = og._local_repo(url, commit, LIB)
+    (tmp_path / "rec").mkdir()
+    head = oss.prepare_repo(repo, tmp_path / "rec" / "user", policy=og.LOCAL).base
+    facts = _facts(repo.project(tmp_path / "rec" / "user"))
+    body = ip.FactsBody.of(facts).model_copy(update={"commit": head})
+    views = _views_file(tmp_path / "views.jsonl", body,
+                        repo_reader(facts.facts.project))  # fmt: skip
+    results = tmp_path / "results.jsonl"
+    arms = (ip.ARM_A, ip.ARM_X1_0, ip.ARM_X1_3)
+    plan = ip.ProbePlan(arms, (repo,), Path("recorded"), views)
+    recorder = ip.ProbeRecorder(plan, ResultsSink({"LIVE_RESULTS_PATH": str(results)}),
+                                {repo.name: body})  # fmt: skip
+    runs, start = _starter(dg.Wire(_Answers(), usages=[CACHED] * 40))
+    ip.run_library(
+        repo, live=start, root=tmp_path / "live", isolation=dg.REQUIRED,
+        recorder=recorder, policy=og.LOCAL, base=_base(), reader=repo_reader,
+    )  # fmt: skip
+    (run,) = runs
+    assert run.cap_usd == plan.library_cap(repo.name)
+    lines = [json.loads(x) for x in results.read_text("utf-8").splitlines()]
+    kinds = Counter(x["experiment"] for x in lines)
+    assert kinds[ip.ROW_EXPERIMENT] == 3 and kinds[ip.AUDIT_EXPERIMENT] > 0
+    ideas = [x for x in lines if x["experiment"] == ip.IDEA_EXPERIMENT]
+    assert {x["arm"] for x in ideas} == {"A", "X1-0", "X1-3"}
+    assert all(x["target"] is not None for x in ideas if x["arm"] != "A")
+    rows = {x["arm"]: x for x in lines if x["experiment"] == ip.ROW_EXPERIMENT}
+    assert rows["X1-3"]["views"] == {k.value: v for k, v in ip.X1_VIEWS.items()}
+    assert rows["X1-0"]["views"] == {} and rows["X1-3"]["lever"]

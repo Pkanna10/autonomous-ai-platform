@@ -1,0 +1,85 @@
+{
+ "correctness_flags": {
+  "S04": "frozenset must enumerate all concrete subtypes",
+  "S05": "needs lazy invalidation of per-key stacks",
+  "S07": "regex termination set may omit control chars",
+  "S14": "cache needs a bound and invalidation on lexer reconfig",
+  "S16": "may change grouping recursion order",
+  "S21": "changes float rounding order (not bitwise equivalent)"
+ },
+ "implement_first": [
+  "S20",
+  "S13",
+  "S09"
+ ],
+ "mark": {
+  "S01": "skip",
+  "S02": "maybe",
+  "S03": "maybe",
+  "S04": "would try",
+  "S05": "maybe",
+  "S06": "skip",
+  "S07": "would try",
+  "S08": "maybe",
+  "S09": "would try",
+  "S10": "maybe",
+  "S11": "skip",
+  "S12": "would try",
+  "S13": "would try",
+  "S14": "maybe",
+  "S15": "skip",
+  "S16": "maybe",
+  "S17": "skip",
+  "S18": "skip",
+  "S19": "skip",
+  "S20": "would try",
+  "S21": "maybe",
+  "S22": "skip",
+  "S23": "would try",
+  "S24": "skip"
+ },
+ "novelty": {
+  "counts": {
+   "considered": 10,
+   "insightful": 2,
+   "obvious": 12
+  },
+  "insightful": [
+   "S13",
+   "S20"
+  ]
+ },
+ "reader": "a separate session that saw only owner-sample.md (no key, report or repository); an Opus-family model, the leap lane's family",
+ "set_level": "a mix weighted toward mechanical micro-tweaks; half are local-binding, hoisting or caching changes, several on cold paths; strong clustering on the same lines (S06=S11, S08/S22, S09/S10, S02/S06/S11 within two lines, S13/S21/S24 all windowed-stats recipes), so fewer than 24 distinct opportunities",
+ "size": {
+  "S01": "micro",
+  "S02": "moderate",
+  "S03": "moderate",
+  "S04": "moderate",
+  "S05": "large",
+  "S06": "micro",
+  "S07": "moderate",
+  "S08": "large",
+  "S09": "moderate",
+  "S10": "micro",
+  "S11": "micro",
+  "S12": "moderate",
+  "S13": "large",
+  "S14": "micro",
+  "S15": "micro",
+  "S16": "micro",
+  "S17": "micro",
+  "S18": "micro",
+  "S19": "micro",
+  "S20": "large",
+  "S21": "large",
+  "S22": "micro",
+  "S23": "moderate",
+  "S24": "micro"
+ },
+ "weakest": {
+  "S01": "join already materialises the generator; description and target file disagree",
+  "S11": "duplicate of S06; title and body disagree",
+  "S22": "dict memo of a C bisect, unbounded, dominated by S08 on the same line"
+ }
+}

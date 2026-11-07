@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator
+from typing import TypedDict, Unpack
 
 import pytest
 
+from autonomous_ai_agents.common.config import IDEA_VIEWS, IdeaView
 from autonomous_ai_agents.optimization import idea_prompts
 from autonomous_ai_agents.optimization.generate import (
     GENERATE_SCHEMA,
@@ -33,16 +35,22 @@ from autonomous_ai_agents.optimization.idea_prompts import (
     MAX_QUOTE_LINES,
     MIN_QUOTE_CHARS,
     OBVIOUS_ASK,
+    RELAX_FRAMEWORKS,
+    RELAX_TEXT,
     THINK_LINE,
+    VIEW_FRAMEWORKS,
+    VIEW_HEADINGS,
     Example,
     example_rotation,
     examples_block,
+    lane_framework,
     lane_instruction,
     leap_lens,
     with_think,
 )
 from autonomous_ai_agents.optimization.idea_types import (
     LENS_LANES,
+    RELAXING_LANES,
     Lane,
     Mechanism,
     MorphCell,
@@ -259,6 +267,43 @@ def test_the_think_line_closes_the_ask_only_on_sonnet_5_5(
     assert THINK_LINE == "Think the problem through before you answer."
 
 
+@pytest.mark.parametrize(
+    "model",
+    [SONNET, "claude-sonnet-5", OPUS, "claude-haiku-5-5", "claude-fable-5",
+     "claude-fable-5-1"],
+)  # fmt: skip
+def test_think_closes_every_idea_lanes_ask_on_any_model_but_the_leaps(
+    model: str,
+) -> None:
+    """
+    GIVEN ``think`` (O38, ``IDEAS_THINK_LINE_ALL``)
+    WHEN S1, a lens or a rule-relaxing lane's instruction is written for
+         any of X1-1's six models
+    THEN its ask ends with the think line exactly once; the leap keeps D58
+         (the line on Sonnet 5.5 only, so X1-1's Opus leap is X1-0's); with
+         ``think`` off every lane is as it was
+    """
+    for lane in (Lane.obvious, *LENS_LANES, *RELAXING_LANES, Lane.leap):
+
+        def written(*, think: bool | None, lane: Lane = lane) -> str:
+            if think is None:  # the default
+                return lane_instruction(
+                    lane, table=TABLE, examples=(), n=4, floor=0.05, model=model
+                )
+            return lane_instruction(
+                lane, table=TABLE, examples=(), n=4, floor=0.05, model=model,
+                think=think,
+            )  # fmt: skip
+
+        on, off = written(think=True), written(think=None)
+        assert written(think=False) == off
+        bare = off.removesuffix(f" {THINK_LINE}")
+        if lane is Lane.leap:
+            assert on == off == f"{bare}{f' {THINK_LINE}' * (model == SONNET)}"
+            continue
+        assert on == f"{bare} {THINK_LINE}" and on.count(THINK_LINE) == 1, lane
+
+
 def test_the_obvious_lane_has_no_lens_and_asks_for_n_best_first() -> None:
     picks = EXAMPLE_BANK[:3]
     text = lane_instruction(
@@ -410,3 +455,123 @@ def test_an_exhausted_bank_gives_fewer_examples_not_repeats(
     assert idea_prompts.example_rotation("s", ALL_LANES) == {
         lane: () for lane in ALL_LANES
     }
+
+
+# --------------------------------------------------------------------------
+# G5a: a framework per view and per relaxed rule
+# --------------------------------------------------------------------------
+
+_SENTENCE_END = re.compile(r"[.!?](?:\s|$)")
+_FROZEN_WORDS = re.compile(
+    r"\b(tests?|benchmarks?|manifests?|lockfiles?|CI|process(?:es)?|threads?)\b",
+    re.IGNORECASE,
+)
+_OUTPUT_CHANGE = re.compile(
+    r"(output|result)s? (?:may|can|could|might) (?:change|differ)"
+    r"|chang\w* (?:the|its) (?:output|result)|reorder",
+    re.IGNORECASE,
+)
+_RULE_WORDS: dict[str, re.Pattern[str]] = {
+    "new_dependency": re.compile(
+        r"\b(packages?|dependenc(?:y|ies)|librar(?:y|ies)|extensions?|third.party)\b",
+        re.IGNORECASE),
+    "output_order": re.compile(r"\border(?:ed|ing|s)?\b", re.IGNORECASE),
+    "install_precompute": re.compile(r"\b(install\w*|build time|build-time)\b",
+                                     re.IGNORECASE),
+    "api_change": re.compile(r"\b(signatures?|public|callers?|API)\b", re.IGNORECASE),
+}  # fmt: skip
+
+
+def _view_frameworks() -> dict[IdeaView, str]:
+    return dict(VIEW_FRAMEWORKS)
+
+
+def _relax_frameworks() -> dict[Lane, str]:
+    return dict(RELAX_FRAMEWORKS)
+
+
+def test_every_view_and_every_relaxing_lane_has_a_framework() -> None:
+    """
+    GIVEN the views G2 defines and the rule-relaxing lanes G3 defines
+    THEN each has a framework of one to three sentences, so a view or a
+         relaxing lane added without one fails here
+    """
+    views, relax = _view_frameworks(), _relax_frameworks()
+    assert set(views) == set(IDEA_VIEWS) == set(VIEW_HEADINGS)
+    assert set(relax) == set(RELAX_TEXT) == set(RELAXING_LANES)
+    for text in (*views.values(), *relax.values()):
+        assert text.strip() == text and text
+        assert 1 <= len(_SENTENCE_END.findall(text)) <= 3, text
+        assert "<" not in text and ">" not in text  # never closes an element
+
+
+@pytest.mark.parametrize("view", IDEA_VIEWS)
+def test_a_views_framework_never_invites_a_frozen_change(view: IdeaView) -> None:
+    """A lens lane works under every frozen rule: its framework names no
+    frozen file, no process or thread, no rule-relaxing move, and never an
+    output that may change."""
+    text = _view_frameworks()[view]
+    assert not _FROZEN_WORDS.search(text), text
+    assert not _OUTPUT_CHANGE.search(text), text
+    for rule in ("new_dependency", "install_precompute"):
+        assert not _RULE_WORDS[rule].search(text), (rule, text)
+    assert not re.search(r"\bsignatures?\b|\bAPI\b", text), text
+
+
+@pytest.mark.parametrize("lane", list(RELAXING_LANES))
+def test_a_relaxing_lanes_framework_speaks_only_of_its_own_rule(lane: Lane) -> None:
+    own = RELAXING_LANES[lane].value
+    text = _relax_frameworks()[lane]
+    assert _RULE_WORDS[own].search(text), (own, text)
+    for rule, words in _RULE_WORDS.items():
+        if rule != own:
+            assert not words.search(text), (rule, text)
+    assert not _FROZEN_WORDS.search(text), text
+
+
+def test_lane_framework_is_none_for_s1_the_leap_and_an_unviewed_lens() -> None:
+    assert lane_framework(Lane.obvious, None) is None
+    assert lane_framework(Lane.leap, None) is None
+    for lane in LENS_LANES:
+        assert lane_framework(lane, None) is None
+    block = lane_framework(Lane.eliminate, "callers")
+    assert block == (f'<framework view="callers">\nHow to think: '
+                     f"{_view_frameworks()['callers']}\n</framework>")  # fmt: skip
+    relax = lane_framework(Lane.relax_api, None)
+    assert relax == (f'<framework rule="api_change">\nHow to think: '
+                     f"{_relax_frameworks()[Lane.relax_api]}\n</framework>")  # fmt: skip
+
+
+def test_a_lane_framework_refuses_a_view_on_a_lane_that_never_has_one() -> None:
+    for lane in (Lane.obvious, Lane.leap, Lane.relax_api):
+        with pytest.raises(ValueError, match="view"):
+            lane_framework(lane, "callers")
+
+
+def test_a_framework_sits_after_the_lens_and_before_the_examples() -> None:
+    """
+    GIVEN a lens lane with a framework block
+    THEN the instruction is today's with the block inserted once, after the
+         lens and before the examples and the ask; no framework is today's
+         instruction byte for byte
+    """
+    examples = EXAMPLE_BANK[:2]
+
+    class _Framework(TypedDict, total=False):
+        framework: str | None
+
+    def far(**framework: Unpack[_Framework]) -> str:
+        return lane_instruction(Lane.far, table=TABLE, examples=examples, n=4,
+                                floor=0.04, model=SONNET, **framework)  # fmt: skip
+
+    today = far()
+    none = far(framework=None)
+    assert none == today
+    block = lane_framework(Lane.far, "history")
+    assert block is not None
+    framed = far(framework=block)
+    lens, rest = LENS_TEXT[Lane.far], examples_block(examples)
+    assert framed == today.replace(f"{lens}\n{rest}", f"{lens}\n{block}\n{rest}")
+    assert framed.count(block) == 1
+    assert framed.index(lens) < framed.index(block) < framed.index(rest)
+    assert framed.index(block) > framed.index(TABLE) + len(TABLE)  # outside the fence

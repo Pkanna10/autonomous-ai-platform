@@ -16,7 +16,8 @@
 #   3. Quality (typecheck, lint, tests, coverage) - must pass
 #
 # The Python checks match the CI "python" job: the dev and database extras,
-# mypy on src and tests, pytest with -m "not live", the Postgres tests when a
+# mypy on src and tests, pytest with -m "not live" in two passes (the timed
+# guards alone after the parallel pass, O49), the Postgres tests when a
 # database answers (TEST_DATABASE_URL, else the docker-compose.dev.yml one),
 # and the profiler shim tests on every python3.8-3.12 found (uv-managed ones
 # included). Missing pieces are warnings here: the tests they need skip, so
@@ -158,7 +159,9 @@ run_check "engine sandbox (unshare + Landlock / sandbox-exec)" warn sandbox_avai
 run_check "ruff check" must bash -c "cd '$PY_DIR' && uv run ruff check ."
 run_check "ruff format" must bash -c "cd '$PY_DIR' && uv run ruff format --check ."
 run_check "mypy" must bash -c "cd '$PY_DIR' && uv run mypy src tests"
-run_check "pytest -m 'not live' (coverage >= 90%)" must bash -c "cd '$PY_DIR' && uv run pytest -m 'not live'"
+run_check "pytest -m 'not live and not timed' (parallel pass)" must bash -c "cd '$PY_DIR' && uv run pytest -m 'not live and not timed'"
+# The CPU-time guards alone, after the parallel pass (O49); coverage appends.
+run_check "pytest -m 'timed and not live' alone (combined coverage >= 90%)" must bash -c "cd '$PY_DIR' && uv run pytest -m 'timed and not live' -n 0 --cov-append"
 
 # ---------------------------------------------------------------------------
 echo ""

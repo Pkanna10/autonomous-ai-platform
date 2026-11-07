@@ -1077,6 +1077,14 @@ SUITES = (
     "watch",
     "watch-cleanup",
     "ideas-probe",  # V7: E0b, E1, E1b, idea-only
+    "ideas-views",  # Va: the views pass, no request
+    "ideas-marker",  # Vb: the marker validation (O36.1, O37)
+    "ideas-validate",  # Vc: the smoke requests and the dedupe labels
+    "ideas-slice",  # Ve: X1's execution slice
+    "ideas-pool",  # V-O40: the pooled ranking on the four outside the slice
+    "ideas-reaudit",  # V-reaudit: the pooled re-audit of the X1-1 re-run (O44)
+    "ideas-picks",  # V-picks (O48): the blind reader's would-try ideas, trialled
+    "ideas-x2",  # X2a: evolution on the levers X1 kept (O48)
 )
 DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_sweep_live.py",
@@ -1090,6 +1098,14 @@ DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_upstream_verify_live.py",  # V9c: the upstream corpus
     "tests/live/test_upstream_live.py",
     "tests/live/test_ideas_probe_live.py",  # V7: the ideas probe
+    "tests/live/test_ideas_views_live.py",  # Va: the views pass
+    "tests/live/test_ideas_marker_live.py",  # Vb: the marker validation
+    "tests/live/test_ideas_validate_live.py",  # Vc: smoke and dedupe labels
+    "tests/live/test_ideas_slice_live.py",  # Ve: the execution slice
+    "tests/live/test_ideas_pool_live.py",  # V-O40: the pooled ranking
+    "tests/live/test_ideas_reaudit_live.py",  # V-reaudit: the pooled re-audit
+    "tests/live/test_ideas_picks_live.py",  # V-picks: the reader dispatch
+    "tests/live/test_ideas_x2_live.py",  # X2a: the X2 engine runs
 )
 EXPERIMENT_MINUTES = {
     # the sweeps on 37 repositories (v1 + hard + v2), from the Window 0 jobs on
@@ -1116,6 +1132,14 @@ EXPERIMENT_MINUTES = {
     "research-agent": 45,  # research_agent.JOB_MINUTES: 11 runs
     "watch": 90,  # watch_managed.JOB_MINUTES: one watched hosted run
     "ideas-probe": 240,  # ideas_probe.JOB_MINUTES: E1 four libraries a dispatch
+    "ideas-views": 30,  # ideas_views.VIEWS_JOB_MINUTES: 8 libraries, no request
+    "ideas-marker": 240,  # ideas_marker.JOB_MINUTES: 17 clones, 96 requests
+    "ideas-validate": 60,  # ideas_validate.JOB_MINUTES: 19 requests
+    "ideas-slice": 150,  # ideas_slice.JOB_MINUTES: two libraries, 8 loops
+    "ideas-pool": 60,  # ideas_pool.JOB_MINUTES: four clones, 88 set requests
+    "ideas-reaudit": 30,  # ideas_reaudit.JOB_MINUTES: four clones, 4 requests
+    "ideas-picks": 45,  # ideas_picks.JOB_MINUTES: four engine loops, 7 trials
+    "ideas-x2": 360,  # ideas_x2.JOB_MINUTES: 4 whole engine runs at 89
 }  # batch wait; 5 papers; 18 web runs
 SWEEP_FABLE_ENV = {  # Fable 5.1 beside the one arm whose run phase 1 shares
     "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
@@ -1129,8 +1153,33 @@ AB_V2_P_ENV = {"LIVE_AB_SET": "v2-p"}
 AB_V2_ENV = {"LIVE_AB_SET": "v2", "LIVE_AB_ARMS": "A,B"}  # L5b, ab_arms A,B
 AB_V2_BLIND_ENV = {"LIVE_AB_SET": "v2", "LIVE_AB_ARMS": "A", "LIVE_AB_REPS": "1"}
 OSS_AB_DISPATCH_REPO = "tabulate"  # oss-ab runs one library a dispatch
-# E1: four a dispatch (4 x 56 of ideas_probe.JOB_MINUTES' 240)
+MARKER_CAP = {"LIVE_SUITE_CAP_USD": "24"}  # the marker plan refuses a cap below
+# E1: four a dispatch (4 x 41 of ideas_probe.JOB_MINUTES' 240)
 IDEAS_E1_DISPATCH = {"LIVE_IDEAS_REPOS": "pyparsing,tomli,mistune,idna"}
+# Ve: two libraries a dispatch; the slice plan refuses a cap below its need
+SLICE_DISPATCH = {"LIVE_SLICE_REPOS": "sqlparse,pyparsing", "LIVE_SUITE_CAP_USD": "75"}
+SLICE_IDEAS = (
+    "tests/fixtures/ideas_slice/x1-1.jsonl,tests/fixtures/ideas_slice/x1-2.jsonl"
+)
+SLICE_MARKER = "tests/fixtures/ideas_slice/marker.jsonl"
+POOL_CAP = {"LIVE_SUITE_CAP_USD": "22"}  # V-O40: the pool plan refuses a cap below
+REAUDIT_RUN1 = (  # V-reaudit: X1 run 1's archived results, from the service dir
+    "../../.claude/handoff/step3/idea-lab/x1/ideas-probe-x1-run1-41679255224.jsonl"
+)
+REAUDIT_RERUN = "tests/fixtures/ideas_reaudit/x1-1-rerun.jsonl"  # the Lead's
+X2_PLAN = (  # X2a: ideas_x2.dispatches, five dispatches of four runs
+    "X2-0:more_itertools,pyparsing,tomli,sortedcontainers",
+    "X2-0:mistune,sqlparse,markdown,idna",
+    "X2-0':sqlparse,pyparsing,tomli,sortedcontainers",
+    "X2-V:more_itertools,pyparsing,tomli,sortedcontainers",
+    "X2-V:mistune,sqlparse,markdown,idna",
+)
+# X2a: one arm on four libraries, the dearest (X2-V); the plan refuses a cap
+# below its need
+X2_DISPATCH = {
+    "LIVE_X2_DISPATCH": "X2-V:more_itertools,pyparsing,tomli,sortedcontainers",
+    "LIVE_SUITE_CAP_USD": "38",
+}
 SWEEP_RECORD_ENV = {  # one arm, recorded for hand labels and offline replay
     "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
     "LIVE_SWEEP_RECORD": "1",
@@ -1803,6 +1852,14 @@ def _suite_needs() -> dict[str, float]:
     upstream = importlib.import_module(f"{__package__}.upstream")
     upstream_verify = importlib.import_module(f"{__package__}.upstream_verify")
     ideas = importlib.import_module(f"{__package__}.ideas_probe")
+    views = importlib.import_module(f"{__package__}.ideas_views")
+    marker = importlib.import_module(f"{__package__}.ideas_marker")
+    validate = importlib.import_module(f"{__package__}.ideas_validate")
+    slice_ = importlib.import_module(f"{__package__}.ideas_slice")
+    pool = importlib.import_module(f"{__package__}.ideas_pool")
+    reaudit = importlib.import_module(f"{__package__}.ideas_reaudit")
+    picks = importlib.import_module(f"{__package__}.ideas_picks")
+    x2 = importlib.import_module(f"{__package__}.ideas_x2")
     one_library = {oss_ab.REPOS_ENV: OSS_AB_DISPATCH_REPO}
     return {
         "noise": noise.noise_need(noise.noise_plan({})),
@@ -1826,6 +1883,16 @@ def _suite_needs() -> dict[str, float]:
         "watch": watch.watch_need(),
         "watch-cleanup": watch.cleanup_need(),
         "ideas-probe": ideas.probe_need(ideas.probe_plan(IDEAS_E1_DISPATCH)),
+        "ideas-views": views.views_need(),
+        "ideas-marker": marker.marker_need(marker.marker_plan(MARKER_CAP)),
+        "ideas-validate": validate.validate_need(validate.validate_plan({})),
+        "ideas-slice": slice_.slice_need(slice_.slice_plan(SLICE_DISPATCH)),
+        "ideas-pool": pool.pool_need(pool.pool_plan(POOL_CAP)),
+        "ideas-reaudit": reaudit.reaudit_need(  # its files are read in its fixture
+            reaudit.ReauditPlan(reaudit.REAUDIT_LIBRARIES, Path(), Path())
+        ),
+        "ideas-x2": x2.x2_need(x2.x2_plan(X2_DISPATCH)),
+        "ideas-picks": picks.picks_need(picks.picks_plan({})),  # committed files
         "sweep": sweep.sweep_need(sweep.sweep_plan({})),
         "sweep-fable": sweep.sweep_need(sweep.sweep_plan(SWEEP_FABLE_ENV)),
         "sweep-record": sweep.sweep_need(sweep.sweep_plan(SWEEP_RECORD_ENV)),
@@ -1911,6 +1978,8 @@ def _dispatch(
     editor_model: str = "default",
     upstream_batch: str = "1",
     ab_arms: str | None = None,
+    slice_repos: str | None = None,
+    x2_dispatch: str | None = None,
 ) -> tuple[int, str, str]:
     """The run step under bash -e with a fake ``uv`` that records its call
     (and, in ``rule.txt``, the noise rule, the editor and the noise path; in
@@ -1931,7 +2000,15 @@ def _dispatch(
         f'> "{tmp_path / "rule.txt"}"\n'
         f'printf "%s" "${{LIVE_UPSTREAM_BATCH-unset}}" > "{tmp_path / "batch.txt"}"\n'
         f'printf "%s " "${{LIVE_AB_SET-unset}}" "${{LIVE_AB_ARMS-unset}}" '
-        f'"${{LIVE_AB_REPS-unset}}" > "{tmp_path / "ab.txt"}"\n',
+        f'"${{LIVE_AB_REPS-unset}}" > "{tmp_path / "ab.txt"}"\n'
+        f'printf "%s " "${{LIVE_SLICE_REPOS-unset}}" "${{OP_COUNT_JUDGE-unset}}" '
+        f'"${{LIVE_SLICE_IDEAS-unset}}" "${{LIVE_SLICE_MARKER-unset}}" '
+        f'> "{tmp_path / "slice.txt"}"\n'
+        f'printf "%s " "${{LIVE_POOL_IDEAS-unset}}" "${{LIVE_POOL_MARKER-unset}}" '
+        f'> "{tmp_path / "pool.txt"}"\n'
+        f'printf "%s " "${{LIVE_REAUDIT_RUN1-unset}}" "${{LIVE_REAUDIT_RERUN-unset}}" '
+        f'> "{tmp_path / "reaudit.txt"}"\n'
+        f'env > "{tmp_path / "env.txt"}"\n',
         encoding="utf-8",
     )
     fake.chmod(0o755)
@@ -1952,6 +2029,10 @@ def _dispatch(
     }
     if ab_arms is not None:
         env["INPUT_AB_ARMS"] = ab_arms
+    if slice_repos is not None:
+        env["INPUT_SLICE_REPOS"] = slice_repos
+    if x2_dispatch is not None:
+        env["INPUT_X2_DISPATCH"] = x2_dispatch
     proc = subprocess.run(
         ["bash", "-e", str(script)],
         env=env,
@@ -1990,6 +2071,198 @@ def test_the_run_step_refuses_a_cap_below_the_suite_need(
     assert code == 1 and calls == "", output
     assert f"::error::suite_cap_usd {cap} is below" in output
     assert not (tmp_path / "results.jsonl").exists()
+
+
+@pytest.mark.parametrize(
+    ("repos", "need"), [("sqlparse,pyparsing", "75"), ("tomli", "38")]
+)
+def test_the_slice_exports_its_libraries_inputs_and_the_op_count_judge(
+    repos: str, need: str, tmp_path: Path
+) -> None:
+    """Ve: slice_repos, the committed X1 and marker results, OP_COUNT_JUDGE
+    on (spec 6.5), the Step 3 noise rule, the need the libraries' count x
+    37.45 (O41's pooled tournament included), rounded up to the dollar."""
+    for name in ("ok", "below"):
+        (tmp_path / name).mkdir()
+    code, output, calls = _dispatch(
+        tmp_path / "ok", "ideas-slice", "claude-opus-5-5", need, slice_repos=repos
+    )
+    assert code == 0, output
+    argv = "run pytest tests/live/test_ideas_slice_live.py -m live --no-cov -n 0 -rA"
+    assert calls.splitlines()[0] == argv
+    slice_env = (tmp_path / "ok" / "slice.txt").read_text(encoding="utf-8").split()
+    assert slice_env == [repos, "true", SLICE_IDEAS, SLICE_MARKER]
+    rule = (tmp_path / "ok" / "rule.txt").read_text(encoding="utf-8").split()
+    assert rule[:3] == ["true", "true", "3"]  # step3: normal engine trials
+    below = f"{int(need) - 1}.99"
+    code, output, calls = _dispatch(
+        tmp_path / "below", "ideas-slice", "claude-opus-5-5", below, slice_repos=repos
+    )
+    assert (code, calls) == (1, "") and f"suite_cap_usd {below} is below" in output
+
+
+def test_the_pool_suite_exports_the_x1_and_marker_results_alone(
+    tmp_path: Path,
+) -> None:
+    """V-O40: the pooled ranking on the four libraries outside the slice reads
+    the slice's committed X1 and marker results, under the Step 2 noise rule
+    (no engine trial), no slice input and no op-count judge, need 22."""
+    for name in ("ok", "below"):
+        (tmp_path / name).mkdir()
+    code, output, calls = _dispatch(
+        tmp_path / "ok", "ideas-pool", "claude-opus-5-5", "22"
+    )
+    assert code == 0, output
+    argv = "run pytest tests/live/test_ideas_pool_live.py -m live --no-cov -n 0 -rA"
+    assert calls.splitlines()[0] == argv
+    pool_env = (tmp_path / "ok" / "pool.txt").read_text(encoding="utf-8").split()
+    assert pool_env == [SLICE_IDEAS, SLICE_MARKER]
+    slice_env = (tmp_path / "ok" / "slice.txt").read_text(encoding="utf-8").split()
+    assert slice_env == ["unset"] * 4
+    rule = (tmp_path / "ok" / "rule.txt").read_text(encoding="utf-8").split()
+    assert rule[:3] == ["false", "false", "0"]  # step2: no engine trial
+    code, output, calls = _dispatch(tmp_path / "below", "ideas-pool", "claude-opus-5-5",
+                                    "21.99")  # fmt: skip
+    assert (code, calls) == (1, "") and "suite_cap_usd 21.99 is below" in output
+    other = _run_script()
+    assert other.count("LIVE_POOL_IDEAS=") == 1  # exported for ideas-pool alone
+
+
+def test_the_reaudit_suite_exports_its_two_results_files_alone(
+    tmp_path: Path,
+) -> None:
+    """V-reaudit (O44): X1 run 1's archived results and the re-run's fixture,
+    fixed paths that resolve from the service directory, under the Step 2
+    noise rule (no engine trial), no slice input, need 3 (4 x 0.70)."""
+    for name in ("ok", "below"):
+        (tmp_path / name).mkdir()
+    code, output, calls = _dispatch(
+        tmp_path / "ok", "ideas-reaudit", "claude-opus-5-5", "3"
+    )
+    assert code == 0, output
+    argv = "run pytest tests/live/test_ideas_reaudit_live.py -m live --no-cov -n 0 -rA"
+    assert calls.splitlines()[0] == argv
+    found = (tmp_path / "ok" / "reaudit.txt").read_text(encoding="utf-8").split()
+    assert found == [REAUDIT_RUN1, REAUDIT_RERUN]
+    service = TESTS_DIR.parent
+    assert (service / REAUDIT_RUN1).resolve().is_file()  # committed (41679255224)
+    slice_env = (tmp_path / "ok" / "slice.txt").read_text(encoding="utf-8").split()
+    assert slice_env == ["unset"] * 4
+    rule = (tmp_path / "ok" / "rule.txt").read_text(encoding="utf-8").split()
+    assert rule[:3] == ["false", "false", "0"]  # step2: no engine trial
+    code, output, calls = _dispatch(
+        tmp_path / "below", "ideas-reaudit", "claude-opus-5-5", "2.99"
+    )
+    assert (code, calls) == (1, "") and "suite_cap_usd 2.99 is below" in output
+    assert _run_script().count("LIVE_REAUDIT_RUN1=") == 1  # for ideas-reaudit alone
+
+
+def test_the_picks_suite_exports_the_op_count_judge_alone(tmp_path: Path) -> None:
+    """V-picks (O48): its inputs are committed files the module fixture
+    resolves, so no input but the op-count judge on (spec 6.5) and the Step 3
+    noise rule (normal engine trials); need 8 (7.55, the owner's cap 8)."""
+    for name in ("ok", "below"):
+        (tmp_path / name).mkdir()
+    code, output, calls = _dispatch(
+        tmp_path / "ok", "ideas-picks", "claude-opus-5-5", "8"
+    )
+    assert code == 0, output
+    argv = "run pytest tests/live/test_ideas_picks_live.py -m live --no-cov -n 0 -rA"
+    assert calls.splitlines()[0] == argv
+    slice_env = (tmp_path / "ok" / "slice.txt").read_text(encoding="utf-8").split()
+    assert slice_env == ["unset", "true", "unset", "unset"]
+    rule = (tmp_path / "ok" / "rule.txt").read_text(encoding="utf-8").split()
+    assert rule[:3] == ["true", "true", "3"]  # step3: normal engine trials
+    code, output, calls = _dispatch(
+        tmp_path / "below", "ideas-picks", "claude-opus-5-5", "7.99"
+    )
+    assert (code, calls) == (1, "") and "suite_cap_usd 7.99 is below" in output
+    (tmp_path / "other").mkdir()
+    code, output, calls = _dispatch(tmp_path / "other", "ideas-pool", "claude-opus-5-5",
+                                    "22")  # fmt: skip
+    slice_env = (tmp_path / "other" / "slice.txt").read_text(encoding="utf-8").split()
+    assert code == 0 and slice_env[1] == "unset", output  # the picks' alone
+
+
+@pytest.mark.parametrize("dispatch", [*X2_PLAN, "X2-V:tomli", "X2-0':idna,tomli"])
+def test_the_x2_suite_exports_its_arms_settings_exactly(
+    dispatch: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """X2a: x2_dispatch names the arm and its libraries; the run step exports
+    the arm's env mapping (``ideas_x2.arm_env``) value for value, which
+    builds exactly the arm's ``Settings`` (what ``oss.start_oss_loop``'s
+    process-wide settings read), with the Step 3 noise rule and the need the
+    libraries x the arm's cap, rounded up to the dollar (a library off the
+    arm's, X2-0' on idna, is ``ideas_x2.x2_plan``'s to refuse)."""
+    x2 = importlib.import_module(f"{__package__}.ideas_x2")
+    arm = next(a for a in x2.X2_ARMS if dispatch.startswith(f"{a.key}:"))
+    count = dispatch.count(",") + 1
+    need = str(math.ceil(count * x2.arm_cap(arm)))
+    if dispatch in X2_PLAN:
+        plan = x2.x2_plan({x2.DISPATCH_ENV: dispatch, "LIVE_SUITE_CAP_USD": need})
+        assert math.ceil(x2.x2_need(plan)) == int(need) == 38
+    for name in ("ok", "below"):
+        (tmp_path / name).mkdir()
+    code, output, calls = _dispatch(tmp_path / "ok", "ideas-x2", "claude-opus-5-5",
+                                    need, x2_dispatch=dispatch)  # fmt: skip
+    assert code == 0, output
+    argv = "run pytest tests/live/test_ideas_x2_live.py -m live --no-cov -n 0 -rA"
+    assert calls.splitlines()[0] == argv
+    lines = (tmp_path / "ok" / "env.txt").read_text(encoding="utf-8").splitlines()
+    exported = dict(line.split("=", 1) for line in lines if "=" in line)
+    wanted = x2.arm_env(arm)
+    assert {key: exported.get(key) for key in wanted} == wanted
+    assert exported[x2.DISPATCH_ENV] == dispatch
+    rule = (tmp_path / "ok" / "rule.txt").read_text(encoding="utf-8").split()
+    assert rule[:3] == ["true", "true", "3"]  # step3: normal engine runs
+    plain = Settings(_env_file=None)
+    for key in wanted:
+        monkeypatch.setenv(key, exported[key])
+    built = Settings(_env_file=None)
+    assert built.model_dump() == x2.arm_settings(arm, plain).model_dump()
+    x2.check_settings(arm, built)
+    below = f"{int(need) - 1}.99"
+    code, output, calls = _dispatch(tmp_path / "below", "ideas-x2", "claude-opus-5-5",
+                                    below, x2_dispatch=dispatch)  # fmt: skip
+    assert (code, calls) == (1, "") and f"suite_cap_usd {below} is below" in output
+
+
+def test_the_x2_plan_is_the_x2_dispatch_inputs_description() -> None:
+    x2 = importlib.import_module(f"{__package__}.ideas_x2")
+    assert x2.dispatches() == X2_PLAN
+    text = _ci_block("      x2_dispatch:", "\n\n")
+    for dispatch in X2_PLAN:
+        arm, _, repos = dispatch.partition(":")
+        assert repos in text and arm in text, dispatch
+
+
+def test_x2_dispatch_is_required_strict_and_for_ideas_x2_only(tmp_path: Path) -> None:
+    bad = (None, "", "X2-F:tomli", "X2-0", "X2-0:", "x2-0:tomli", "X2-0:Tomli",
+           "X2-0;id:tomli", "X2-0:tomli;id", "X2-0:tomli,", "X2-0:a,b,c,d,e,f,g,h,i",
+           "X2-0':$(id)")  # fmt: skip
+    for index, value in enumerate(bad):
+        (tmp_path / f"bad-{index}").mkdir()
+        code, output, calls = _dispatch(tmp_path / f"bad-{index}", "ideas-x2",
+                                        "claude-opus-5-5", "78", x2_dispatch=value)  # fmt: skip
+        assert (code, calls) == (1, "") and "needs x2_dispatch" in output, value
+    (tmp_path / "other").mkdir()
+    code, output, calls = _dispatch(tmp_path / "other", "stage-a", "claude-opus-5-5",
+                                    "12", x2_dispatch="X2-0:tomli")  # fmt: skip
+    assert (code, calls) == (1, "") and "x2_dispatch is only for" in output
+
+
+def test_slice_repos_is_required_strict_and_for_the_slice_only(
+    tmp_path: Path,
+) -> None:
+    for index, bad in enumerate((None, "", "Tomli", "a,b,c", "tomli;id", ",")):
+        (tmp_path / f"bad-{index}").mkdir()
+        code, output, calls = _dispatch(tmp_path / f"bad-{index}", "ideas-slice",
+                                        "claude-opus-5-5", "64", slice_repos=bad)  # fmt: skip
+        assert (code, calls) == (1, "") and "needs slice_repos" in output, bad
+    (tmp_path / "other").mkdir()
+    code, output, calls = _dispatch(tmp_path / "other", "stage-a", "claude-opus-5-5",
+                                    "12", slice_repos="tomli")  # fmt: skip
+    assert (code, calls) == (1, "") and "slice_repos is only for" in output
 
 
 def test_every_suite_choice_fits_under_the_cap_ceiling(tmp_path: Path) -> None:
@@ -2293,7 +2566,8 @@ def test_the_ab_arms_input_is_a_strict_choice_reaching_the_run_via_env() -> None
     assert "INPUT_AB_ARMS: ${{ inputs.ab_arms }}" in step
     inputs = _ci_block("    inputs:\n", "\n\n")
     names = re.findall(r"^      (\w+):$", inputs, re.MULTILINE)
-    assert names[-1] == "ab_arms" and len(names) == len(set(names)) == 13 <= 25
+    assert names[-3:] == ["ab_arms", "slice_repos", "x2_dispatch"]  # Ve's, X2a's
+    assert len(names) == len(set(names)) == 15 <= 25
 
 
 @pytest.mark.parametrize(

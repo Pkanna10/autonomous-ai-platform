@@ -28,6 +28,7 @@ from autonomous_ai_agents.common.models import (
     VerdictOutcome,
 )
 from autonomous_ai_agents.optimization.idea_context import amdahl_ceiling
+from autonomous_ai_agents.optimization.idea_dedupe import MechanismKey, Target
 from autonomous_ai_agents.optimization.idea_portfolio import (
     deterministic_filter,
     lesson_titles,
@@ -757,3 +758,63 @@ def test_a_repeated_title_and_a_novel_idea_are_filtered_before_the_interleave() 
 def test_the_portfolio_refuses_impossible_bounds(minimum: int, maximum: int) -> None:
     with pytest.raises(ValueError, match="minimum"):
         _pick([], minimum=minimum, maximum=maximum)
+
+
+# --------------------------------------------------------------------------
+# The mechanism dedupe (G4): the same lines by the same transformation
+# --------------------------------------------------------------------------
+
+
+def _mkey(
+    first: int, last: int, cell: MorphCell = MorphCell.work_eliminate
+) -> MechanismKey:
+    return MechanismKey(
+        target=Target(path="pkg/core.py", first=first, last=last),
+        mechanism=Mechanism.remove_work,
+        cell=cell,
+    )
+
+
+def test_a_mechanism_twin_is_dropped_whatever_its_title() -> None:
+    notes: list[str] = []
+    merged: list[tuple[IdeaCandidate, IdeaCandidate]] = []
+    obvious = [_idea("O1", Lane.obvious, anchor=None, title="Hoist the loop")]
+    news = [
+        _distinct("N1", Lane.eliminate, 1, title="Skip the loop"),  # twin of O1
+        _distinct("N2", Lane.assume_less, 2),
+        _distinct("N3", Lane.recombine, 3),  # twin of N2
+        _distinct("N4", Lane.far, 4),  # no key: never merged
+        _distinct("N5", Lane.leap, 5),
+    ]
+    keys = {"O1": _mkey(3, 4), "N1": _mkey(4, 6), "N2": _mkey(10, 10),
+            "N3": _mkey(10, 12), "N5": _mkey(20, 20, MorphCell.work_reuse)}  # fmt: skip
+    picked = portfolio(obvious, news, rotation=ORDER, minimum=3, maximum=5,
+                       notes=notes, mechanisms=keys, merged=merged)  # fmt: skip
+    assert [i.id for i in picked] == ["O1", "N2", "N4", "N5"]
+    assert [(a.id, b.id) for a, b in merged] == [("N1", "O1"), ("N3", "N2")]
+    assert notes[:2] == [
+        "portfolio: dropped idea 'Skip the loop' (eliminate): the same "
+        "mechanism as 'Hoist the loop' (mechanism dedupe)",
+        "portfolio: dropped idea 'Idea N3' (recombine): the same mechanism as "
+        "'Idea N2' (mechanism dedupe)",
+    ]
+
+
+def test_an_obvious_twin_and_a_novel_twin_are_dropped_before_parking() -> None:
+    notes: list[str] = []
+    obvious = [
+        _idea("O1", Lane.obvious, anchor=None),
+        _idea("O2", Lane.obvious, anchor=None),  # twin of O1
+    ]
+    news = [_distinct("N1", Lane.far, 1, change_class=ChangeClass.novel)]
+    keys = {"O1": _mkey(3, 3), "O2": _mkey(3, 3), "N1": _mkey(2, 3)}
+    picked = portfolio(obvious, news, rotation=ORDER, minimum=3, maximum=5,
+                       notes=notes, mechanisms=keys)  # fmt: skip
+    assert [i.id for i in picked] == ["O1"]
+    assert not any("placed after the portfolio" in note for note in notes)
+
+
+def test_without_mechanisms_twins_stay() -> None:
+    obvious = [_idea("O1", Lane.obvious, anchor=None)]
+    news = [_distinct("N1", Lane.eliminate, 1), _distinct("N2", Lane.far, 2)]
+    assert _pick(news, obvious=obvious) == ("O1", "N1", "N2")

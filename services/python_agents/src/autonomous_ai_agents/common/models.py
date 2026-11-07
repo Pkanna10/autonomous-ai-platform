@@ -27,7 +27,14 @@ from pathlib import PurePath, PurePosixPath
 from types import MappingProxyType
 from typing import Final, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
 
 from autonomous_ai_agents.common.paths import literal_project_file, normalize_path
 
@@ -514,6 +521,52 @@ class Project(EngineModel):
             return os.path.normpath(value)
 
 
+SCALE_MIN_SPAN = 4
+"""The largest scaling size is at least this times the smallest (G6b): a
+fit over a narrower range reads noise as growth."""
+SCALE_SIZE_MAX = 10**12
+_SCALE_ENGINE_VARS = frozenset({"PATH", "HOME", "TMPDIR"})
+_SCALE_LOADER_PREFIXES = ("PYTHON", "LD_", "DYLD_")
+
+
+class ScaleSetting(EngineModel):
+    """How the scaling judge (G6b, shadow) runs one workload at 2-3 sizes.
+
+    The caller (or the idea lab's setter) puts it on the ``Workload``, which
+    lives in the run's state, never in a repository file, so no trial can
+    define or change it. Each scaling run sets ``env_var`` to one of
+    ``sizes`` (2-3 strictly increasing integers from 1 to ``SCALE_SIZE_MAX``,
+    the largest at least ``SCALE_MIN_SPAN`` times the smallest); the
+    benchmark reads its input size from it. ``runs`` timed runs per size and
+    side. ``env_var`` is an upper-case name that is none of the engine's
+    run variables and no interpreter or loader variable.
+    """
+
+    env_var: str = Field(pattern=r"^[A-Z][A-Z0-9_]{0,63}$")
+    sizes: tuple[StrictInt, ...] = Field(min_length=2, max_length=3)
+    runs: int = Field(default=3, ge=1, le=9)
+
+    @field_validator("env_var")
+    @classmethod
+    def _not_the_engines(cls, value: str) -> str:
+        if value in _SCALE_ENGINE_VARS or value.startswith(_SCALE_LOADER_PREFIXES):
+            raise ValueError(f"{value} is set by the engine or read by the interpreter")
+        return value
+
+    @field_validator("sizes")
+    @classmethod
+    def _increasing_over_a_span(cls, value: tuple[int, ...]) -> tuple[int, ...]:
+        if not all(1 <= size <= SCALE_SIZE_MAX for size in value):
+            raise ValueError(f"every size must be from 1 to {SCALE_SIZE_MAX}")
+        if any(b <= a for a, b in zip(value, value[1:], strict=False)):
+            raise ValueError("the sizes must be strictly increasing")
+        if value[-1] < SCALE_MIN_SPAN * value[0]:
+            raise ValueError(
+                f"the largest size must be at least {SCALE_MIN_SPAN}x the smallest"
+            )
+        return value
+
+
 class Workload(EngineModel):
     """Something the engine can run and time: an argv command, never a shell string.
 
@@ -534,6 +587,8 @@ class Workload(EngineModel):
     runs: int = Field(default=MIN_RUNS, ge=MIN_RUNS)
     output_tolerance: OutputTolerance | None = None
     """``None`` compares outputs byte for byte (Step 2); see ``OutputTolerance``."""
+    scale: ScaleSetting | None = None
+    """The scaling judge's sizes (G6b); ``None``: the workload is never scaled."""
     created_at: datetime = Field(default_factory=utc_now)
 
     @field_validator("working_dir")
@@ -1129,6 +1184,7 @@ ENGINE_MODEL_CLASSES: tuple[type[EngineModel], ...] = (
     QualityProposal,
     FrozenFile,
     NoiseCalibration,
+    ScaleSetting,
 )
 """Every model that may appear in checkpointed state (checkpointer allowlist)."""
 

@@ -1512,3 +1512,35 @@ def test_migration_006_allows_every_verdict_outcome_and_no_other(
         pytest.raises(psycopg.errors.CheckViolation, match="chk_lesson_outcome"),
     ):
         conn.execute("INSERT INTO lessons (outcome, text) VALUES ('merged', 'x')")
+
+
+@pytest.mark.postgres
+def test_a_workloads_size_setting_round_trips_through_the_run_row(
+    postgres_repository: PostgresRepository, postgres_dsn: str
+) -> None:
+    """
+    GIVEN a run whose workload carries the scaling judge's size setting (G6b)
+    WHEN the run is saved and read back
+    THEN the workload, its setting included, comes back equal: the state's
+        JSONB holds the workloads (no workloads row is written, so the
+        setting needs no column and no migration)
+    """
+    from autonomous_ai_agents.common.models import ScaleSetting
+
+    state = _state("run-scaled")
+    setting = ScaleSetting(env_var="BENCH_N", sizes=(1000, 4000, 16000), runs=2)
+    [workload] = state["workloads"]
+    state["workloads"] = [workload.model_copy(update={"scale": setting})]
+
+    postgres_repository.save_run(state)
+    stored = postgres_repository.get_run("run-scaled")
+
+    assert stored is not None and stored == state
+    assert stored["workloads"][0].scale == setting
+    ((scale,),) = _rows(
+        postgres_dsn,
+        "SELECT state->'workloads'->0->'scale' FROM task_executions"
+        " WHERE thread_id = 'run-scaled'",
+    )
+    assert scale == {"env_var": "BENCH_N", "sizes": [1000, 4000, 16000], "runs": 2}
+    assert _rows(postgres_dsn, "SELECT count(*) FROM workloads") == [(0,)]

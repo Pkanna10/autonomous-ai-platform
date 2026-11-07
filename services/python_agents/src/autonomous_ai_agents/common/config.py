@@ -23,7 +23,11 @@ from autonomous_ai_agents.common.models import (
     ModelPrice,
 )
 from autonomous_ai_agents.common.refnames import branch_prefix_problem
-from autonomous_ai_agents.optimization.idea_types import LENS_LANES, Lane
+from autonomous_ai_agents.optimization.idea_types import (
+    LENS_LANES,
+    RELAXING_LANES,
+    Lane,
+)
 
 IsolationMode = Literal["required", "best_effort", "off"]
 """``required`` fails closed; ``best_effort`` records what was applied; ``off``."""
@@ -34,6 +38,13 @@ Effort = Literal["low", "medium", "high", "xhigh", "max"]
 Retrieval = Literal["blind", "matched"]
 """How research picks techniques for the generator (D1): ``blind`` shows the
 context's techniques as they are; ``matched`` asks the matcher first."""
+
+IdeaView = Literal[
+    "callers", "data_structures", "input_shape", "whole_module", "next_hotspots",
+    "history",
+]  # fmt: skip
+"""A lens lane's slice of the profiled repository (G2, ``idea_context``)."""
+IDEA_VIEWS: Final[tuple[IdeaView, ...]] = get_args(IdeaView)
 
 Role = Literal["engine", "editor", "generator", "matcher", "lane", "leap", "reviewer"]
 """A Claude role with its own model chain (``role_chain``); ``lane``, ``leap``
@@ -94,7 +105,15 @@ _MIB = 1024 * _KIB
 # prompt (every input token, cache reads and writes included) is over 100,000
 # tokens pays $0.50 / $2.50, 5-minute writes $0.625 and hits $0.05 on all of
 # its tokens; ``clients/cost.py`` applies it per attempt. Every other model
-# bills one price across its whole context window.
+# bills one price across its whole context window. The idea lab's rows (G1)
+# from the pricing page, read 2026-11-02 (platform.claude.com/docs/en/
+# about-claude/pricing, "Model pricing"): Sonnet 5 $2/$10 (footnote 3: the
+# launch price is now the standard one), 5-minute writes $2.50, hits $0.20;
+# Fable 5 $10/$50, writes $12.50, hits $1 (the standard 0.1x, not Fable
+# 5.1's 0.025x); Haiku 4.5 $1/$5, writes $1.25, hits $0.10 (1-hour writes
+# $2, not stored: only 5-minute breakpoints are sent). None of the three has
+# a long-context tier. Haiku 4.5 is priced only: its request shape is
+# deferred (O31, ``DEFERRED_SHAPE_MODELS``).
 _DEFAULT_PRICING: dict[str, ModelPrice] = {
     "claude-opus-5-5": ModelPrice(
         input=4.0, output=20.0, cache_write=5.0, cache_read=0.20
@@ -110,6 +129,15 @@ _DEFAULT_PRICING: dict[str, ModelPrice] = {
     ),
     "claude-fable-5-1": ModelPrice(
         input=10.0, output=50.0, cache_write=12.5, cache_read=0.25
+    ),
+    "claude-sonnet-5": ModelPrice(
+        input=2.0, output=10.0, cache_write=2.5, cache_read=0.20
+    ),
+    "claude-fable-5": ModelPrice(
+        input=10.0, output=50.0, cache_write=12.5, cache_read=1.00
+    ),
+    "claude-haiku-4-5": ModelPrice(
+        input=1.0, output=5.0, cache_write=1.25, cache_read=0.10
     ),
     "claude-haiku-5-5": ModelPrice(
         input=0.10,
@@ -144,6 +172,16 @@ RETENTION_REQUIRED_MODELS: Final = frozenset(
 """Models whose use requires 30-day data retention (D63; the advisor-tool docs
 name all four): refused in every role that sends repository text unless
 ``ALLOW_RETENTION_MODELS`` is set."""
+DEFERRED_SHAPE_MODELS: Final = frozenset({"claude-haiku-4-5"})
+"""Priced models whose request shape is not built (O31): Haiku 4.5 takes no
+effort and wants ``thinking: {type: "enabled", budget_tokens: N}``. Refused
+wherever a model is named, so its price row admits it nowhere."""
+_DEFERRED: Final = (
+    "its request shape (no effort; thinking with budget_tokens) is deferred "
+    "(O31): it has a price row for cost tables only"
+)
+LANE_ROLE_LANES: Final[tuple[Lane, ...]] = (Lane.obvious, *LENS_LANES)
+"""The lanes the ``lane`` role serves, each of which may name its own model."""
 
 
 class Settings(BaseSettings):
@@ -271,9 +309,37 @@ class Settings(BaseSettings):
     """Rounds before a keep ends exploration (D54); 0 keeps today's router."""
     IDEAS_LANE_MODEL: str = "claude-sonnet-5-5"
     IDEAS_LANE_EFFORT: Effort | None = "medium"
+    IDEAS_LANE_MODELS: dict[Lane, str] = Field(default_factory=dict)
+    """Per-lane models (G1): a lane of ``LANE_ROLE_LANES`` named here runs on
+    its model alone, every other one on ``IDEAS_LANE_MODEL``; empty keeps one
+    lane model. Each needs a price and an effort row, checked with the
+    pipeline off too; the leap's model is ``IDEAS_LEAP_MODEL``."""
+    IDEAS_LANE_VIEWS: dict[Lane, IdeaView] = Field(default_factory=dict)
+    """Per-lane views (G2): a lens named here sees its view of the repository
+    (``idea_context.build_view``) instead of the shared hot-code block; S1,
+    the leap and the reviewer always see the shared block. Empty keeps one
+    block for every lane. Checked with the pipeline off too."""
+    IDEAS_LANE_FRAMEWORKS: bool = False
+    """Per-lane frameworks (G5, ``idea_prompts.lane_framework``): a lens that
+    sees its view (``IDEAS_LANE_VIEWS``) is told how to think with it, and a
+    rule-relaxing lane how to use its lifted rule, in the lane's own
+    instruction after the cached data block. S1, the leap, the reviewer and a
+    lens on the shared block never get one; off keeps every request as it is."""
+    IDEAS_THINK_LINE_ALL: bool = False
+    """D58's think line (``idea_prompts.THINK_LINE``) closes the ask of S1,
+    every lens and every rule-relaxing lane whatever its model (O38, X1-1),
+    not only on Sonnet 5.5. The leap keeps D58 (its Opus 5.5 ask has no line
+    in X1-0, so X1-1's leap matches it) and the reviewer is no idea lane;
+    off keeps every request as it is."""
     IDEAS_LANE_MAX_TOKENS: int = Field(default=12000, ge=1)
     IDEAS_LANE_N: int = Field(default=6, ge=1, le=10)
     IDEAS_LENSES: tuple[Lane, ...] = LENS_LANES
+    """The lens lanes (D46); empty only beside ``IDEAS_RELAX_LANES`` (O38's
+    X1-4: S1 and the rule-relaxing lanes alone)."""
+    IDEAS_RELAX_LANES: tuple[Lane, ...] = ()
+    """Rule-relaxing lanes (G3), off when empty: each lifts one frozen rule,
+    runs on the lane role and writes quarantined proposals only (tagged at
+    birth, parked for a human, never trialled, delivered or counted)."""
     IDEAS_LANE_WORKERS: int = Field(default=4, ge=1, le=8)
     IDEAS_LEAP_MODEL: str = "claude-opus-5-5"
     IDEAS_LEAP_EFFORT: Effort | None = "high"
@@ -300,6 +366,37 @@ class Settings(BaseSettings):
     """An idea's ceiling must reach this times the floor (D51)."""
     IDEAS_PORTFOLIO_MIN: int = Field(default=3, ge=1, le=10)
     IDEAS_PORTFOLIO_MAX: int = Field(default=5, ge=1, le=10)
+    IDEAS_SEQUENTIAL_LANES: bool = False
+    """Send S2's lanes one after another in the run's rotation, each shown the
+    mechanisms (never the titles) of the ideas S1 and the earlier lanes wrote
+    (G4, ``idea_dedupe.taken_block``); off keeps today's parallel lanes."""
+    IDEAS_MECHANISM_DEDUPE: bool = False
+    """Drop, in the portfolio, an idea whose mechanism key (``idea_dedupe``:
+    overlapping target lines, same mechanism and primary cell) matches an
+    earlier one's (G4). Unvalidated until the dedupe passes its bar."""
+    NEAR_MISS_COMPOUNDS: bool = False
+    """Replay two near misses as one compound trial (G5b, ``evolve``): both
+    inconclusive at least half their noise floor in the right direction, on
+    disjoint files, efficiency, neither a proposal; at most one a round,
+    cherry-picked onto the base (no editor, no tokens) and judged from
+    scratch. Off: no compound, no extra routing."""
+    IDEAS_ROUND_SEEDS: bool = False
+    """Round seeds (G5b): from the second hypotheses round on, each lens lane
+    is shown the verdicts of the ideas this run already trialled (mechanism
+    key, plain title, outcome, primary gain over the noise floor; keeps
+    first) in G4's one mechanisms block, and a second generator call with a
+    seed to show runs its lanes again. S1, the leap, the reviewer and the
+    rule-relaxing lanes never see a seed, nor is a proposal one; off keeps
+    every request as it is."""
+    GENERATOR_LESSONS: bool = False
+    """Lessons in the prompts (G11, W1, D21): the project's last 20 lessons
+    (each its outcome, weight and text; the text carries timing gains only)
+    reach today's generator, with this run's titles, and the idea pipeline's
+    S1, lens and rule-relaxing lanes, as one fenced untrusted block; a line
+    holding a boundary token is withheld. In the pipeline the block ends the
+    shared, cached data block (every lane the same bytes; the titles stay in
+    ``<already_on_the_table>``); the leap and the reviewer never see it.
+    Off keeps every request as it is."""
     ALLOW_RETENTION_MODELS: bool = False
     """Admit ``RETENTION_REQUIRED_MODELS`` in repository-text roles (D63).
     Set only by the live harness, for fixture and pinned-OSS repositories."""
@@ -309,18 +406,75 @@ class Settings(BaseSettings):
     def _lenses_are_distinct_lens_lanes(
         cls, value: tuple[Lane, ...]
     ) -> tuple[Lane, ...]:
-        """A non-empty subset of the six lenses, each once (D46)."""
-        if (
-            not value
-            or len(set(value)) != len(value)
-            or not set(value) <= set(LENS_LANES)
-        ):
+        """A subset of the six lenses, each once (D46); empty is checked
+        against ``IDEAS_RELAX_LANES`` below."""
+        if len(set(value)) != len(value) or not set(value) <= set(LENS_LANES):
             names = ", ".join(lane.value for lane in LENS_LANES)
             raise ValueError(
                 f"IDEAS_LENSES must name each lens at most once, from {names}; "
                 f"got {[lane.value for lane in value]}"
             )
         return value
+
+    @field_validator("IDEAS_RELAX_LANES")
+    @classmethod
+    def _relax_lanes_are_distinct_relaxing_lanes(
+        cls, value: tuple[Lane, ...]
+    ) -> tuple[Lane, ...]:
+        """Each rule-relaxing lane at most once, nothing else (G3)."""
+        if len(set(value)) != len(value) or not set(value) <= set(RELAXING_LANES):
+            names = ", ".join(lane.value for lane in RELAXING_LANES)
+            raise ValueError(
+                f"IDEAS_RELAX_LANES must name each rule-relaxing lane at most "
+                f"once, from {names}; got {[lane.value for lane in value]}"
+            )
+        return value
+
+    @field_validator("IDEAS_LANE_MODELS", mode="before")
+    @classmethod
+    def _lane_models_name_lane_role_lanes(cls, value: object) -> object:
+        """A clear refusal for a key that is not a lane the lane role serves."""
+        if isinstance(value, Mapping):
+            names = [lane.value for lane in LANE_ROLE_LANES]
+            for key in value:
+                if key == Lane.leap:
+                    raise ValueError("IDEAS_LANE_MODELS names 'leap': the leap "
+                                     "lane's model is IDEAS_LEAP_MODEL")  # fmt: skip
+                if key not in names:
+                    raise ValueError(f"IDEAS_LANE_MODELS names {key!r}, which is "
+                                     f"not a lane; name any of {', '.join(names)}")  # fmt: skip
+        return value
+
+    @field_validator("IDEAS_LANE_VIEWS", mode="before")
+    @classmethod
+    def _lane_views_name_lenses(cls, value: object) -> object:
+        """A clear refusal for a key that is not a lens (G2)."""
+        if isinstance(value, Mapping):
+            names = [lane.value for lane in LENS_LANES]
+            for key in value:
+                if key in (Lane.obvious, Lane.leap):
+                    raise ValueError(f"IDEAS_LANE_VIEWS names {key!r}: S1 and the "
+                                     "leap always see the shared data block")  # fmt: skip
+                if key not in names:
+                    raise ValueError(f"IDEAS_LANE_VIEWS names {key!r}, which is not "
+                                     f"a lens; name any of {', '.join(names)}")  # fmt: skip
+        return value
+
+    @model_validator(mode="after")
+    def _no_lens_only_beside_relaxing_lanes(self) -> Self:
+        if not self.IDEAS_LENSES and not self.IDEAS_RELAX_LANES:
+            raise ValueError("IDEAS_LENSES may be empty only beside IDEAS_RELAX_LANES "
+                             "(S1 and the rule-relaxing lanes alone, O38)")  # fmt: skip
+        return self
+
+    @model_validator(mode="after")
+    def _lane_views_name_running_lenses(self) -> Self:
+        for lane, view in self.IDEAS_LANE_VIEWS.items():
+            if lane not in self.IDEAS_LENSES:
+                raise ValueError(f"IDEAS_LANE_VIEWS[{lane.value}] {view!r}: the "
+                                 f"{lane.value} lane is not in IDEAS_LENSES, so it "
+                                 "never runs")  # fmt: skip
+        return self
 
     @model_validator(mode="after")
     def _idea_bounds_are_consistent(self) -> Self:
@@ -419,6 +573,17 @@ class Settings(BaseSettings):
     """Measure each trial alternately against its own base worktree (D41 a)."""
     CONFIRM_WINNERS: bool = True
     """Re-test every would-be keep or review before it stands (D41 b)."""
+    OP_COUNT_JUDGE: bool = False
+    """G6a, shadow mode: one counted run per workload and side (cProfile's
+    call counts) and the operation-count judge, a report column that never
+    decides a verdict. Off by default: each counted run costs about 1.5-3x
+    one workload run."""
+    SCALING_JUDGE: bool = False
+    """G6b, shadow mode: every workload with a size setting
+    (``Workload.scale``) runs at its 2-3 sizes on both sides, and the scaling
+    judge records how run time grows with size, a report column that never
+    decides a verdict. Off by default: it adds sizes x runs launches per
+    workload and side."""
     NOISE_CALIBRATION_BLOCKS: int = Field(
         default=3, ge=0, le=NOISE_CALIBRATION_BLOCKS_MAX
     )
@@ -515,6 +680,34 @@ class Settings(BaseSettings):
         return value
 
     @model_validator(mode="after")
+    def _every_named_model_has_a_built_shape(self) -> Self:
+        """No model whose request shape is deferred (O31) anywhere; and each
+        lane model runs, is priced and takes effort (G1), pipeline on or off."""
+        named: list[tuple[str, str | None]] = [
+            (key, getattr(self, key))
+            for key in ("ENGINE_MODEL", "EDITOR_MODEL", "GENERATOR_MODEL",
+                        "MATCHER_MODEL", "IDEAS_LANE_MODEL", "IDEAS_LEAP_MODEL",
+                        "IDEAS_REVIEWER_MODEL", "TRIAGE_MODEL")
+        ]  # fmt: skip
+        named += [("ENGINE_FALLBACK_MODELS", m) for m in self.ENGINE_FALLBACK_MODELS]
+        for key, model in named:
+            if model in DEFERRED_SHAPE_MODELS:
+                raise ValueError(f"{key} {model!r}: {_DEFERRED}")
+        for lane, model in self.IDEAS_LANE_MODELS.items():
+            where = f"IDEAS_LANE_MODELS[{lane.value}] {model!r}"
+            if lane is not Lane.obvious and lane not in self.IDEAS_LENSES:
+                raise ValueError(f"{where}: the {lane.value} lane is not in "
+                                 "IDEAS_LENSES, so it never runs")  # fmt: skip
+            if model in DEFERRED_SHAPE_MODELS:
+                raise ValueError(f"{where}: {_DEFERRED}")
+            if model not in self.MODEL_PRICING:
+                raise ValueError(f"{where}: MODEL_PRICING has no price for it")
+            if model not in EFFORT_LEVELS:
+                raise ValueError(f"{where}: the effort docs list no effort levels "
+                                 "for it, and every lane model must take effort")  # fmt: skip
+        return self
+
+    @model_validator(mode="after")
     def _every_billed_model_is_priced(self) -> Self:
         """Every model a request may bill needs a price, or no estimate is a bound.
 
@@ -541,7 +734,8 @@ class Settings(BaseSettings):
 
         Each chain is ``role_chain``'s: understanding uses the engine's (the
         engine model, plus the fallbacks when they are sent; a fallback re-runs
-        the same body, effort included), every other key its own role's.
+        the same body, effort included), every other key its own role's; the
+        lane effort every lane model's (``lane_models``).
         """
         keys: tuple[tuple[str, Role], ...] = (
             ("UNDERSTAND_EFFORT", "engine"),
@@ -554,7 +748,7 @@ class Settings(BaseSettings):
         )
         for key, role in keys:
             level: Effort | None = getattr(self, key)
-            serving = role_chain(self, role)
+            serving = lane_models(self) if role == "lane" else role_chain(self, role)
             for model in dict.fromkeys(serving) if level is not None else ():
                 accepted = EFFORT_LEVELS.get(model)
                 if accepted is None:
@@ -581,6 +775,8 @@ class Settings(BaseSettings):
             (role, role_chain(self, role)) for role in _ROLES
         ]
         chains.append(("engine fallback", self.ENGINE_FALLBACK_MODELS))
+        chains += [(f"{lane.value} lane", (model,))
+                   for lane, model in self.IDEAS_LANE_MODELS.items()]  # fmt: skip
         for role, models in chains:
             for model in models:
                 if model in RETENTION_REQUIRED_MODELS:
@@ -655,6 +851,34 @@ def role_chain(cfg: Settings, role: Role) -> tuple[str, ...]:
     if cfg.ENGINE_FALLBACKS:
         return (cfg.ENGINE_MODEL, *cfg.ENGINE_FALLBACK_MODELS)
     return (cfg.ENGINE_MODEL,)
+
+
+def lane_chain(cfg: Settings, lane: Lane) -> tuple[str, ...]:
+    """Every model one request of ``lane`` may bill (G1): the leap's role
+    chain; any other lane its ``IDEAS_LANE_MODELS`` model, else the lane
+    role's chain."""
+    if lane is Lane.leap:
+        return role_chain(cfg, "leap")
+    model = cfg.IDEAS_LANE_MODELS.get(lane)
+    return role_chain(cfg, "lane") if model is None else (model,)
+
+
+def lane_models(cfg: Settings) -> tuple[str, ...]:
+    """Every model a ``lane`` role request may bill: the lane model, then each
+    per-lane model, once each."""
+    return tuple(
+        dict.fromkeys((*role_chain(cfg, "lane"), *cfg.IDEAS_LANE_MODELS.values()))
+    )
+
+
+def lane_settings(base: Settings, lane: Lane) -> Settings:
+    """``role_settings`` for one lane: a validated copy whose engine chain is
+    ``lane_chain(base, lane)``, so a transport built from it serves that
+    lane. With no per-lane model it is the lane role's (or the leap's) copy."""
+    if lane is Lane.leap:
+        return role_settings(base, "leap")
+    model = lane_chain(base, lane)[0]
+    return role_settings(base.model_copy(update={"IDEAS_LANE_MODEL": model}), "lane")
 
 
 def role_settings(base: Settings, role: Role, **update: object) -> Settings:

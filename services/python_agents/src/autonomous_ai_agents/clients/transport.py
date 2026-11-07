@@ -192,11 +192,15 @@ class AnthropicTransport(_ChainPricing):
             raise LLMConfigError("ANTHROPIC_API_KEY is not set (.env or environment)")
         if _PLACEHOLDER_KEY in secret.get_secret_value():
             raise LLMConfigError("ANTHROPIC_API_KEY holds the .env.example placeholder")
+        # Named on every request too: the SDK refuses an unstreamed request
+        # whose max_tokens implies more than ten minutes unless the request
+        # itself carries a timeout (X1-1's 32,000-token lanes, O42).
+        self._timeout = _timeout(cfg.LLM_TIMEOUT_S, cfg.LLM_TIMEOUT_S)
         self._client = anthropic.Anthropic(
             api_key=secret.get_secret_value(),
             base_url=cfg.ENGINE_API_BASE_URL,
             max_retries=0,
-            timeout=_timeout(cfg.LLM_TIMEOUT_S, cfg.LLM_TIMEOUT_S),
+            timeout=self._timeout,
             http_client=anthropic.DefaultHttpxClient(
                 transport=http_transport, follow_redirects=False
             ),
@@ -249,6 +253,7 @@ class AnthropicTransport(_ChainPricing):
                 cache_control=_ephemeral() if request.cache else omit,
                 fallbacks=fallbacks or omit,
                 betas=[FALLBACK_BETA] if fallbacks else omit,
+                timeout=self._timeout,
             )
         except anthropic.APIError as exc:
             failure = _map_sdk_error(exc)

@@ -50,7 +50,7 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Literal, Protocol, runtime_checkable
+from typing import Literal, Protocol, cast, runtime_checkable
 
 from langgraph.types import interrupt
 from pydantic import ValidationError
@@ -104,6 +104,7 @@ from autonomous_ai_agents.common.models import (
     Hypothesis,
     HypothesisStatus,
     JudgeOutcome,
+    JudgeResult,
     Lesson,
     Measurement,
     NoiseCalibration,
@@ -145,13 +146,31 @@ from autonomous_ai_agents.execution.protocols import (
     UnderstandResult,
 )
 from autonomous_ai_agents.execution.runner import BaselineRunner, TrialRunner
-from autonomous_ai_agents.learning.lessons import lessons_from_verdicts
+from autonomous_ai_agents.learning.lessons import combine_marks, lessons_from_verdicts
 from autonomous_ai_agents.optimization.anticheat import (
     DEFAULT_PROTECTED_PATTERNS,
     check_diff_all,
     check_run_count,
 )
+from autonomous_ai_agents.optimization.evolve import (
+    CompoundPair,
+    CompoundParents,
+    ReplayRefusedError,
+    compound_hypothesis,
+    compound_parents,
+    find_pair,
+    primary_gain_floor,
+    used_pairs,
+)
+from autonomous_ai_agents.optimization.idea_dedupe import recorded_keys
+from autonomous_ai_agents.optimization.idea_pipeline import (
+    SEEDED_CALL,
+    seeded_failure,
+)
+from autonomous_ai_agents.optimization.idea_types import is_proposal, relaxed_rules
 from autonomous_ai_agents.optimization.judges import (
+    OP_COUNT_JUDGE,
+    SCALING_JUDGE,
     Judge,
     derive_verdict,
     drop_text,
@@ -161,7 +180,9 @@ from autonomous_ai_agents.optimization.judges import (
 from autonomous_ai_agents.optimization.ranking import rank_generated, rank_hypotheses
 from autonomous_ai_agents.optimization.sources import (
     HypothesisGenerator,
+    RunVerdicts,
     TechniqueMatcher,
+    Trialled,
 )
 from autonomous_ai_agents.orchestrator.combine_node import (
     CombineOutcome,
@@ -215,6 +236,25 @@ class NoiseCalibrator(Protocol):
         commit: str,
         blocks: int,
     ) -> NoiseCalibration: ...
+
+
+@runtime_checkable
+class ReplayRunner(Protocol):
+    """A runner that also builds a trial by replaying measured trials (G5b,
+    ``GitTrialRunner.replay``): ``evolve.ReplayRefusedError`` when it cannot."""
+
+    def replay(
+        self,
+        hypothesis: Hypothesis,
+        parents: Sequence[Trial],
+        workloads: Sequence[Workload],
+        baseline: Baseline,
+        *,
+        round: int,
+        branch: str,
+        budget_usd: float,
+        brief: TrialBrief,
+    ) -> Trial: ...
 
 
 @runtime_checkable
@@ -288,6 +328,10 @@ class NodeContext:
     Step 3 Wave 2 (D54): ``portfolio_rounds`` (0-3, ``PORTFOLIO_ROUNDS``) is
     how many rounds a keep waits before it ends exploration; 0 is Step 2's.
 
+    G5b: ``near_miss_compounds`` (``NEAR_MISS_COMPOUNDS``, off) replays a
+    pair of near misses as a compound trial (``evolve``); it needs a
+    ``ReplayRunner``.
+
     Construction refuses duplicate or refname-unsafe candidate ids (each id
     names a trial branch), knobs below 1, a negative or non-finite
     ``min_trial_budget_usd`` and discovery or retry knobs outside their
@@ -331,6 +375,7 @@ class NodeContext:
     calibration_blocks: int = 0
     confirm_winners: bool = False
     portfolio_rounds: int = 0
+    near_miss_compounds: bool = False
 
     def __post_init__(self) -> None:
         counts = Counter(candidate.id for candidate in self.candidates)
@@ -360,6 +405,11 @@ class NodeContext:
             )
         self._check_discovery_knobs()
         self._check_noise_knobs()
+        if self.near_miss_compounds and not isinstance(self.runner, ReplayRunner):
+            raise ValueError(
+                "near_miss_compounds needs a runner that can replay trials"
+                f" (GitTrialRunner), got {type(self.runner).__name__}"
+            )
 
     def _check_discovery_knobs(self) -> None:
         """The ranges of the matching settings (``common/config.py``)."""
@@ -874,14 +924,89 @@ _SOFT_DISCOVERY = (LLMUnavailable, LLMRequestError, UnusableReplyError)
 def _untried(
     ctx: NodeContext, state: EngineState
 ) -> tuple[list[Hypothesis], list[Hypothesis]]:
-    """Caller candidates and pooled ideas no trial ran and no round holds."""
+    """Caller candidates and pooled ideas no trial ran and no round holds;
+    never a quarantined proposal (G3), which only the proposals path holds."""
     seen = {trial.hypothesis_id for trial in state["trials"]} | {
         hypothesis.id for hypothesis in state["hypotheses"]
     }
     return (
-        [h for h in ctx.candidates if h.id not in seen],
-        [h for h in state["candidate_pool"] if h.id not in seen],
-    )
+        [h for h in ctx.candidates if h.id not in seen and not is_proposal(h)],
+        [h for h in state["candidate_pool"]
+         if h.id not in seen and not is_proposal(h)],
+    )  # fmt: skip
+
+
+def proposal_reason(hypothesis: Hypothesis) -> str:
+    """The ``parked_reason`` of a quarantined proposal (G3)."""
+    rules = ", ".join(relaxed_rules(hypothesis))
+    return f"proposal (G3): relaxes {rules}; never trialled or delivered"
+
+
+def _quarantine(ctx: NodeContext, state: EngineState) -> list[Hypothesis]:
+    """The proposals path's intake (G3): every tagged caller candidate or
+    pooled idea not parked yet, parked as a proposal for a human."""
+    parked = {h.id for h in state["parked"]}
+    found: list[Hypothesis] = []
+    for hypothesis in (*ctx.candidates, *state["candidate_pool"]):
+        if is_proposal(hypothesis) and hypothesis.id not in parked:
+            parked.add(hypothesis.id)
+            reason = {"parked_reason": proposal_reason(hypothesis)}
+            found.append(hypothesis.model_copy(update=reason))
+    return found
+
+
+def _next_compound(ctx: NodeContext, state: EngineState) -> CompoundPair | None:
+    """The near-miss pair this run has not compounded yet (G5b), or ``None``
+    with compounds off."""
+    if not ctx.near_miss_compounds:
+        return None
+    primary = primary_metric(_require_baseline(state).objectives)
+    known = (*state["hypotheses"], *state["parked"])
+    return find_pair(
+        state["verdicts"], state["trials"], state["hypotheses"], primary=primary,
+        parked=frozenset(h.id for h in state["parked"]), used=used_pairs(known),
+    )  # fmt: skip
+
+
+def _compound_note(
+    state: EngineState, round_number: int, pair: CompoundPair
+) -> EngineEvent:
+    a, b = pair.first, pair.second
+    return _note(
+        state, RunPhase.hypotheses, "compound",
+        f"round {round_number}: a compound of {shown(a.hypothesis.title)} and"
+        f" {shown(b.hypothesis.title)} (gain/floor {a.ratio:.2f} + {b.ratio:.2f})"
+        " replays their measured commits",
+        data={"round": round_number, "parents": f"{a.trial.id},{b.trial.id}",
+              "ratio": pair.ratio},
+    )  # fmt: skip
+
+
+def _replay(
+    ctx: NodeContext,
+    state: EngineState,
+    hypothesis: Hypothesis,
+    parents: CompoundParents,
+    measured: Baseline,
+    *,
+    branch: str,
+    budget_usd: float,
+    brief: TrialBrief,
+) -> Trial:
+    """The compound's trial, replayed from its parents' measured trials;
+    ``ReplayRefusedError`` when compounds are off or a parent is unknown."""
+    runner = ctx.runner
+    if not ctx.near_miss_compounds or not isinstance(runner, ReplayRunner):
+        raise ReplayRefusedError("near-miss compounds are off")
+    by_id = {trial.id: trial for trial in state["trials"]}
+    for trial_id in (parents.first, parents.second):
+        if trial_id not in by_id:
+            raise ReplayRefusedError(f"parent trial {trial_id!r} is not in this run")
+    return runner.replay(
+        hypothesis, (by_id[parents.first], by_id[parents.second]),
+        state["workloads"], measured, round=state["round"], branch=branch,
+        budget_usd=budget_usd, brief=brief,
+    )  # fmt: skip
 
 
 def _discovery_cap(ctx: NodeContext, state: EngineState) -> float:
@@ -927,6 +1052,8 @@ class _Generated:
     hypotheses: list[Hypothesis]
     delta: NodeDelta
     events: list[EngineEvent]
+    parked: tuple[Hypothesis, ...] = ()
+    """The ideas this turn parked (also in ``delta["parked"]``)."""
 
 
 def _discovery_spend(state: EngineState, budget: Budget, *, called: bool) -> NodeDelta:
@@ -939,6 +1066,31 @@ def _discovery_spend(state: EngineState, budget: Budget, *, called: bool) -> Nod
         "discovery_cost_usd": state["discovery_cost_usd"] + spent,
         "generator_calls": state["generator_calls"] + int(called),
     }
+
+
+def _seeded_totals(state: EngineState) -> tuple[int, float]:
+    """D64's counters; a checkpoint written before them reads zeros."""
+    return state.get("seeded_calls", 0), state.get("seeded_cost_usd", 0.0)
+
+
+def _seeded_line(
+    state: EngineState, spend: NodeDelta, seeded: bool
+) -> tuple[NodeDelta, list[EngineEvent]]:
+    """D64's own cost line: a seeded second call's whole spend (what
+    ``_discovery_spend`` added to discovery) on the seeded counters, and an
+    event with the call's USD and the run's seeded totals."""
+    if not seeded:
+        return spend, []
+    discovery = cast(float, spend["discovery_cost_usd"])
+    usd = discovery - state["discovery_cost_usd"]
+    calls, total = _seeded_totals(state)
+    calls, total = calls + 1, total + usd
+    message = (f"seeded second generator call (D64): {usd:.6f} USD; {calls} call(s)"
+               f", {total:.6f} USD of {discovery:.6f} USD discovery")  # fmt: skip
+    data: ScalarDict = {"cost_usd": usd, "seeded_calls": calls,
+                        "seeded_cost_usd": total, "discovery_cost_usd": discovery}  # fmt: skip
+    event = _note(state, RunPhase.hypotheses, "seeded_call_cost", message, data=data)
+    return {**spend, "seeded_calls": calls, "seeded_cost_usd": total}, [event]
 
 
 def _sift(
@@ -961,6 +1113,10 @@ def _sift(
             notes.append(f"dropped hypothesis {named}: its id is unusable or taken")
         elif key in titles:
             notes.append(f"dropped repeated hypothesis {named}")
+        elif is_proposal(hypothesis):  # the proposals path only (G3)
+            reason = {"parked_reason": proposal_reason(hypothesis)}
+            parked.append(hypothesis.model_copy(update=reason))
+            notes.append(f"parked proposal {named} for a human")
         elif hypothesis.change_class not in ctx.generated_classes:
             reason = {"parked_reason": "needs approval"}
             parked.append(hypothesis.model_copy(update=reason))
@@ -970,6 +1126,35 @@ def _sift(
         used.add(hypothesis.id)
         titles.add(key)
     return kept, parked, notes
+
+
+def _run_verdicts(state: EngineState) -> RunVerdicts | None:
+    """This run's verdicts so far, each with its hypothesis and the mechanism
+    key the idea pipeline recorded for it (its ``KEY_EVENT`` events), and the
+    run's noise floor (the worst workload's smallest provable gain), for the
+    round seeds (G5b); ``None`` before the first verdict (round 1)."""
+    if not state["verdicts"]:
+        return None
+    hypotheses = {h.id: h for h in state["hypotheses"]}
+    keys = recorded_keys(event.data for event in state["events"])
+    measured = state["baseline"]
+    floor = (
+        None
+        if measured is None
+        else _worst_floor(_noise(measured.measurements, measured.objectives))
+    )
+    primary = None if measured is None else primary_metric(measured.objectives)
+    trialled = tuple(
+        Trialled(
+            hypotheses[v.hypothesis_id],
+            v,
+            keys.get(v.hypothesis_id),
+            *primary_gain_floor(v.judge_results, primary),
+        )  # fmt: skip
+        for v in state["verdicts"]
+        if v.hypothesis_id in hypotheses
+    )
+    return RunVerdicts(trialled, floor)
 
 
 def _generate(
@@ -1008,22 +1193,36 @@ def _generate(
             call_index=state["generator_calls"],
             protected=(*ctx.protected_patterns, *state["extra_protected"]),
             read_deny=() if ctx.quality is None else ctx.quality.frozen_paths,
+            workloads=state["workloads"],
+            verdicts=_run_verdicts(state),
         )
     except BudgetExceeded as exc:  # the reserve or the share refused it (D7)
-        spend = _discovery_spend(state, budget, called=budget.spent_usd > cost)
+        called = budget.spent_usd > cost
+        spend, line = _seeded_line(
+            state, _discovery_spend(state, budget, called=called),
+            called and seeded_failure(exc),
+        )  # fmt: skip
         event = _note(state, phase, unaffordable, str(exc)[:300], level=warn)
-        return _Generated([], {**spend, "discovery_exhausted": True}, [event])
+        return _Generated([], {**spend, "discovery_exhausted": True}, [event, *line])
     except _SOFT_DISCOVERY as exc:
         message = f"{type(exc).__name__}: {str(exc)[:300]}"
         event = _note(state, phase, "generate_failed", message, level=warn)
-        return _Generated([], _discovery_spend(state, budget, called=True), [event])
+        spend, line = _seeded_line(state, _discovery_spend(state, budget, called=True),
+                                   seeded_failure(exc))  # fmt: skip
+        return _Generated([], spend, [event, *line])
     except Exception as exc:  # LLMConfigError or a bug: the run ends, charged
-        keep_progress(exc, _discovery_spend(state, budget, called=True))
+        spend = _discovery_spend(state, budget, called=True)
+        keep_progress(exc, _seeded_line(state, spend, seeded_failure(exc))[0])
         raise
     kept, parked, notes = _sift(ctx, state, result.hypotheses)
-    delta = _discovery_spend(state, budget, called=True)
+    seeded = any(found.code == SEEDED_CALL for found in result.events)
+    delta, line = _seeded_line(
+        state, _discovery_spend(state, budget, called=True), seeded
+    )
     delta["parked"] = [*state["parked"], *parked]
-    counts: ScalarDict = {"kept": len(kept), "parked": len(parked)}
+    proposals = sum(1 for h in parked if is_proposal(h))
+    counts: ScalarDict = {"kept": len(kept), "parked": len(parked),
+                          "proposals": proposals}  # fmt: skip
     summary = f"{len(kept)} hypothesis(es) kept, {len(parked)} parked"
     events = [_note(state, phase, "generated", summary, data=counts)]
     for found in result.events:  # the pipeline's own codes and levels (D65)
@@ -1031,9 +1230,10 @@ def _generate(
         events.append(
             _note(state, phase, found.code, found.message, level=level, data=data)
         )
+    events += line
     for note in (*result.notes, *notes):
         events.append(_note(state, phase, "generate_note", note))
-    return _Generated(kept, delta, events)
+    return _Generated(kept, delta, events, tuple(parked))
 
 
 _SOFT_MATCH = (BudgetExceeded, LLMConfigError, *_SOFT_DISCOVERY)
@@ -1845,6 +2045,7 @@ def _run_conditions(
         )
     )
     lines += [*_step3_conditions(state), *_output_conditions(state, quality)]
+    lines += _seeded_conditions(state)
     lines.append(f"- Peak RSS: {_RSS_DEFINITION}")
     refs = list(
         dict.fromkeys(
@@ -2082,9 +2283,23 @@ def _delivery_sets(
     return run, review
 
 
+def _proposal_ids(state: EngineState) -> set[str]:
+    """The ids of every quarantined proposal (G3) in the state."""
+    return {h.id for h in (*state["hypotheses"], *state["parked"]) if is_proposal(h)}
+
+
+def _deliverable(state: EngineState) -> list[Verdict]:
+    """The decided verdicts, less any of a quarantined proposal (G3): the
+    verdict rules already reject those; this keeps them out of the
+    combines, the branches and the lessons whatever a verdict says."""
+    held = _proposal_ids(state)
+    decided = decided_verdicts(state["verdicts"], state["approval"])
+    return [v for v in decided if v.hypothesis_id not in held]
+
+
 def _review_verdicts(state: EngineState) -> list[Verdict]:
     """The review set (:func:`_delivery_sets`), in order."""
-    return _delivery_sets(decided_verdicts(state["verdicts"], state["approval"]))[1]
+    return _delivery_sets(_deliverable(state))[1]
 
 
 def _delivered_review(state: EngineState) -> list[Verdict]:
@@ -2170,11 +2385,26 @@ def _retry_section(state: EngineState) -> list[str]:
     return ["**Retry notes**", "", *lines, ""] if lines else []
 
 
+def _proposals_section(state: EngineState) -> list[str]:
+    """The proposals path's report (G3): each quarantined idea for a human,
+    with the rules it relaxes and its lane; never trialled or delivered."""
+    lines: list[str] = []
+    for h in state["parked"]:
+        if is_proposal(h):
+            lanes = [t.partition(":")[2] for t in h.tags if t.startswith("lane:")]
+            where = _cell(f"relaxes {', '.join(relaxed_rules(h))}"
+                          + "".join(f"; lane {lane}" for lane in lanes))  # fmt: skip
+            lines.append(f"- {_cell(h.title)} ({where}): {_cell(h.rationale)}")
+    heading = "**Proposals for a human (rule-relaxing; never trialled or delivered)**"
+    return [heading, "", *lines, ""] if lines else []
+
+
 def _ideas_section(state: EngineState) -> list[str]:
     """Parked ideas and understand's quality proposal (never active, D40)."""
     lines = [
         f"- {_cell(h.title)}: {_cell(h.parked_reason or 'parked')}"
         for h in state["parked"]
+        if not is_proposal(h)
     ]
     understanding = state["understanding"]
     proposal = None if understanding is None else understanding.quality_proposal
@@ -2209,6 +2439,16 @@ def _step3_conditions(state: EngineState) -> list[str]:
     return lines
 
 
+def _seeded_conditions(state: EngineState) -> list[str]:
+    """D64's report line, only once a seeded second call was made."""
+    calls, usd = _seeded_totals(state)
+    if calls == 0:
+        return []
+    discovery = state["discovery_cost_usd"]
+    return [f"- Seeded second generator calls (D64): {calls}, {usd:.4f} USD of "
+            f"{discovery:.4f} USD discovery"]  # fmt: skip
+
+
 def _combination_line(state: EngineState, prefix: str) -> list[str]:
     """D42: the run branch's re-tested gain is its own line."""
     combination, baseline = state["combination"], state["baseline"]
@@ -2241,6 +2481,36 @@ def _head(state: EngineState, title: str, now: datetime) -> list[str]:
     return [title, "", baseline_line, _total_time(state, now), ""]
 
 
+def op_count_cell(results: Sequence[JudgeResult]) -> str:
+    """The report's shadow cell (G6a): the operation-count judge's totals and
+    change, "base → trial calls (+x.x%)", or "not counted"."""
+    found = next((r for r in results if r.judge == OP_COUNT_JUDGE), None)
+    if found is None or found.baseline is None or found.trial is None:
+        return "not counted"
+    base, after = found.baseline.mean, found.trial.mean
+    cell = f"{base:.0f} → {after:.0f} calls"
+    return cell if base <= 0 else f"{cell} ({after / base - 1:+.1%})"
+
+
+def scaling_cell(results: Sequence[JudgeResult]) -> str:
+    """The report's shadow cell (G6b): the scaling judge's growth rates and
+    their change, "n^base → n^trial (+x.xx)", or "not scaled"."""
+    found = next((r for r in results if r.judge == SCALING_JUDGE), None)
+    details = {} if found is None else found.details
+    base, after = details.get("base_rate"), details.get("trial_rate")
+    change = details.get("change")
+    if not (isinstance(base, float) and isinstance(after, float) and isinstance(change, float)):  # fmt: skip
+        return "not scaled"
+    return f"n^{base:.2f} → n^{after:.2f} ({change:+.2f})"
+
+
+_SHADOW_COLUMNS: tuple[tuple[str, str, Callable[[Sequence[JudgeResult]], str]], ...] = (
+    (OP_COUNT_JUDGE, "Op calls (shadow)", op_count_cell),
+    (SCALING_JUDGE, "Growth (shadow)", scaling_cell),
+)
+"""The shadow judges' report columns, in order: (judge, heading, cell)."""
+
+
 def _report(
     state: EngineState,
     prefix: str,
@@ -2251,25 +2521,31 @@ def _report(
 ) -> str:
     """The markdown report: title, baseline, total time, one row per verdict,
     kept with each gain (D42), the review branch, retry notes, parked ideas,
-    conditions."""
+    the proposals for a human (G3), conditions. A verdict carrying a shadow
+    judge's result adds its column, "Op calls (shadow)" (G6a) then "Growth
+    (shadow)" (G6b): a column, never a decision."""
     project = state["project"]
     hypotheses = _by_id(state["hypotheses"])
     decided = decided_verdicts(state["verdicts"], state["approval"])
     decided_by_id = {verdict.id: verdict for verdict in decided}
+    ran = {r.judge for v in decided for r in v.judge_results}
+    shadow = [column for column in _SHADOW_COLUMNS if column[0] in ran]
     lines = [
         *_head(
             state,
             f"# Engine run {state['run_id'][:8]}: {_cell(project.name)}",
             now or utc_now(),
         ),
-        "| Hypothesis | Outcome | Gain | Summary |",
-        "| --- | --- | --- | --- |",
+        "| Hypothesis | Outcome | Gain | Summary |"
+        + "".join(f" {heading} |" for _, heading, _ in shadow),
+        "| --- | --- | --- | --- |" + " --- |" * len(shadow),
     ]
     for verdict in decided:
         gain = "n/a" if verdict.gain is None else f"{verdict.gain:+.1%}"
+        extra = "".join(f" {_cell(cell(verdict.judge_results))} |" for *_, cell in shadow)  # fmt: skip
         lines.append(
             f"| {_cell(_title_for(hypotheses, verdict))} | {verdict.outcome.value} "
-            f"| {gain} | {_cell(verdict.summary)} |"
+            f"| {gain} | {_cell(verdict.summary)} |{extra}"
         )
     kept_verdicts = [
         decided_by_id[verdict_id]
@@ -2284,6 +2560,7 @@ def _report(
     lines += [*_combination_line(state, prefix), ""]
     lines += _review_section(state, prefix, quality)
     lines += [*_retry_section(state), *_ideas_section(state)]
+    lines += _proposals_section(state)
     lines += [*_run_conditions(state, prefix, confirm=confirm, quality=quality), ""]
     return "\n".join(lines)
 
@@ -2719,6 +2996,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             pool = turn.hypotheses
         # The pool keeps the model's order and is re-ranked every round with
         # the current lessons, as caller candidates are (D8).
+        quarantined = _quarantine(ctx, state)
         generated = rank_generated(pool, lessons)
         ordered = [*rank_hypotheses(candidates, lessons), *generated]
         limit = ctx.max_hypotheses_per_round
@@ -2728,6 +3006,9 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
         ]
         sliced = {h.id for h in ranked}
         rest = [h for h in pool if h.id not in sliced]  # callers stay in ctx
+        pair = _next_compound(ctx, state)  # G5b: ahead of the round's ideas
+        compound = [] if pair is None else [compound_hypothesis(pair)]
+        noted = [] if pair is None else [_compound_note(state, round_number, pair)]
         event = _announce(
             state,
             RunPhase.hypotheses,
@@ -2742,11 +3023,13 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             **turn.delta,
             "phase": RunPhase.hypotheses,
             "round": round_number,
-            "hypotheses": [*state["hypotheses"], *ranked],
-            "events": [*turn.events, event],
+            "hypotheses": [*state["hypotheses"], *compound, *ranked],
+            "events": [*turn.events, *noted, event],
         }
         if state["candidate_pool"] or rest:
             delta["candidate_pool"] = rest
+        if quarantined:
+            delta["parked"] = [*state["parked"], *turn.parked, *quarantined]
         return delta
 
     def run_one(
@@ -2761,23 +3044,27 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
         attempts than allowed included (charged at most ``remaining``)."""
         branch = f"{ctx.branch_prefix}trial-{state['run_id']}-{hypothesis.id}"
         assert_safe_branch(branch, state["project"], ctx.branch_prefix)
-        trial = ctx.runner.run(
-            hypothesis,
-            state["workloads"],
-            measured,
-            round=state["round"],
-            branch=branch,
-            budget_usd=remaining,
-            brief=TrialBrief(
-                understanding=state["understanding"],
-                hotspots=_brief_hotspots(hypothesis, state["hotspots"]),
-                protected=(*ctx.protected_patterns, *state["extra_protected"]),
-                read_deny=() if ctx.quality is None else ctx.quality.frozen_paths,
-                fix_retries_left=fix_retries_left,
-            ),
+        parents = compound_parents(hypothesis)  # G5b: replayed, never edited
+        retries = fix_retries_left if parents is None else 0
+        brief = TrialBrief(
+            understanding=state["understanding"],
+            hotspots=_brief_hotspots(hypothesis, state["hotspots"]),
+            protected=(*ctx.protected_patterns, *state["extra_protected"]),
+            read_deny=() if ctx.quality is None else ctx.quality.frozen_paths,
+            fix_retries_left=retries,
         )
+        if parents is None:
+            trial = ctx.runner.run(
+                hypothesis, state["workloads"], measured, round=state["round"],
+                branch=branch, budget_usd=remaining, brief=brief,
+            )  # fmt: skip
+        else:
+            trial = _replay(
+                ctx, state, hypothesis, parents, measured, branch=branch,
+                budget_usd=remaining, brief=brief,
+            )  # fmt: skip
         problems = _runner_trial_problems(
-            trial, hypothesis, state["round"], remaining, fix_retries_left
+            trial, hypothesis, state["round"], remaining, retries
         )
         if problems:
             error = EngineError(
@@ -2799,9 +3086,21 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
         proposed = [
             h for h in state["hypotheses"] if h.status is HypothesisStatus.proposed
         ]
+        warned: list[EngineEvent] = []
+        held = [h for h in proposed if is_proposal(h)]  # never trialled (G3)
+        if held:
+            proposed = [h for h in proposed if not is_proposal(h)]
+            named = ", ".join(shown(h.title) for h in held)
+            warned.append(_note(
+                state, RunPhase.trials, "proposal_quarantined",
+                f"skipped {len(held)} quarantined proposal(s): {named}",
+                level=EventLevel.warning, data={"skipped": len(held)},
+            ))  # fmt: skip
         new_trials: list[Trial] = []
         stopped: list[EngineEvent] = []
-        records, warned = _recorded_fix_retries(ctx, state)
+        records, retry_warnings = _recorded_fix_retries(ctx, state)
+        warned += retry_warnings
+        refused: dict[str, HypothesisStatus] = {}
         for index, hypothesis in enumerate(proposed):
             remaining = state["max_cost_usd"] - cost_usd
             if remaining <= 0 or remaining < ctx.min_trial_budget_usd:
@@ -2826,6 +3125,14 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                 left = max(0, ctx.fix_retries_per_run - spent)
             try:
                 trial = run_one(state, hypothesis, measured, remaining, left)
+            except ReplayRefusedError as exc:  # no compound: a note (G5b)
+                refused[hypothesis.id] = HypothesisStatus.rejected
+                warned.append(_note(
+                    state, RunPhase.trials, "compound_refused",
+                    f"no compound for {shown(hypothesis.title)}: {exc}",
+                    level=EventLevel.warning, data={"reason": exc.reason[:200]},
+                ))  # fmt: skip
+                continue
             except TrialUnaffordable as exc:  # its first request alone passes the cap
                 stopped.append(
                     _budget_exhausted(
@@ -2863,6 +3170,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
                 raise
             new_trials.append(trial)
         ran = {trial.hypothesis_id: HypothesisStatus.trialled for trial in new_trials}
+        ran |= refused
         failed = sum(1 for t in new_trials if t.status is TrialStatus.failed)
         event = _announce(
             state,
@@ -3062,9 +3370,7 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
     def combine(state: EngineState) -> NodeDelta:
         # An approved novel change whose output changed is in the review set,
         # never the run set (D35, _delivery_sets), with or without a combiner.
-        kept, review = _delivery_sets(
-            decided_verdicts(state["verdicts"], state["approval"])
-        )
+        kept, review = _delivery_sets(_deliverable(state))
         combiner = ctx.combiner
         if combiner is None:
             data: ScalarDict = {"kept": len(kept)}
@@ -3284,13 +3590,17 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
 
     def learn(state: EngineState) -> NodeDelta:
         known = _by_id(state["hypotheses"])
-        decided = decided_verdicts(state["verdicts"], state["approval"])
+        decided = _deliverable(state)  # no lesson from a proposal (G3)
         context = tuple(sorted({tag for hs in state["hotspots"] for tag in hs.tags}))
+        # A keep weighs what the run set's combine did with it (W2, D13).
+        offered = _delivery_sets(decided)[0]
+        marks = combine_marks(offered, state["combination"], state["kept_verdict_ids"])
         lessons = lessons_from_verdicts(
             [_two_look_gain(v) for v in decided],
             known,
             project_id=state["project"].id,
             context=context,
+            marks=marks,
         )
         for lesson in lessons:
             ctx.repository.save_lesson(lesson)
@@ -3350,13 +3660,19 @@ def make_router(ctx: NodeContext) -> RouterFn:
             return "approval_gate"
         if state["budget_exhausted"]:
             return "combine"
-        kept = any(v.outcome is VerdictOutcome.keep for v in state["verdicts"])
+        held = _proposal_ids(state)  # a proposal's keep is never one (G3)
+        kept = any(
+            v.outcome is VerdictOutcome.keep and v.hypothesis_id not in held
+            for v in state["verdicts"]
+        )
         if kept and state["round"] >= ctx.portfolio_rounds:  # D54: after the rounds
             return "combine"
         if state["round"] >= state["max_rounds"]:
             return "combine"
         candidates, pool = _untried(ctx, state)  # a review verdict never routes
         if candidates or pool or _live_generator(ctx, state, priced=True) is not None:
+            return "hypotheses"
+        if _next_compound(ctx, state) is not None:  # G5b: a near-miss pair waits
             return "hypotheses"
         return "combine"
 
