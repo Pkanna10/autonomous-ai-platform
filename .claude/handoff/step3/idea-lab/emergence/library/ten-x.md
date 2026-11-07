@@ -24,3 +24,5 @@ No seat owned these. See `round-0.md`; they are part of round 2's Contrarian pac
 - **Points:** 0.8 (S2) + 2.0 from critiques (EXP-2's withdrawal, EXP-3's merge) = **2.8**. The Lead carries S5, rebuilt on S2, into round 2.
 
 - **After E1 and E2 (O58):** no change: none of this seat's proposals had a live pass. Total **2.8**.
+
+- **Round 2 (O57 as amended):** benched, first in line. S5, the stacked step, is a carry-forward in every seat's university pack (`round-2/university-pack.md`), so any seat may take it up.

@@ -21,3 +21,5 @@ No seat owned these. See `round-0.md`; they are part of round 2's Contrarian pac
 - **Points:** 0.5 (S1) + 0.8 (S2) + 1.0 from critiques (SHP-2's merge) = **2.3**. Round 2: bottom three, rotates against the bench.
 
 - **After E1 and E2 (O58):** +1.25 from S1's live pass, its +10 split over 8 merged proposals. Total **3.55**.
+
+- **Round 2 (O57 as amended):** seated, after S1's +10 lifted the seat to 3.55, above Ten-x's 2.8.
