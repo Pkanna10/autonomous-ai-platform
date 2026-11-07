@@ -46,6 +46,10 @@ hands back one line.
    critiques the seats one and three places after it in `seats.json`.
 7. **Debate round 2:** all ten, `briefs/revise_<seat>.md`.
 8. **Phases 3-6:** run `tail.js` as one Workflow.
+   - The Workflow tool loads scripts only from directories the session can
+     read: copy `tail.js` byte for byte into the scratch directory, check it
+     with `cmp`, and pass that copy as `scriptPath`. Round 2 ran this way as
+     `wf_2f6da9da-bfb`.
    - Synthesis is on Sonnet.
    - Judges are on Opus and Fable.
    - Builders are on Opus and reviewers on Fable.
