@@ -18,3 +18,5 @@ No seat owned these. See `round-0.md`; they are part of round 2's Contrarian pac
   - [69]: 24-26 of 31 twins are hoists or caches; identical op counts are not duplicates (tomli 2,457,871).
   - [82]: a twin does not inherit its proposal's ceiling; its sign depends on the interpreter.
 - **Points:** 1.6 (S2) + 1.0 from critiques (ANA-3's split) = **2.6**. Round 2: bottom three, rotates against the bench.
+
+- **After E1 and E2 (O58):** no change: none of this seat's proposals had a live pass. Total **2.6**.

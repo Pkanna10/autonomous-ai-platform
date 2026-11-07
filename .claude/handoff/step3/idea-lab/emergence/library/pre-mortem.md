@@ -19,3 +19,5 @@ No seat owned these. See `round-0.md`; they are part of round 2's Contrarian pac
   - [80]: the lane declares `adds`; an integer count cannot price guarded forms.
 - **Judges:** S1 survived 3 of 3.
 - **Points:** 1.0 (S1) + 4.0 from critiques (INV-2's withdrawal, BND-1's, INV-1's and INV-3's merges) = **5.0**, tied first.
+
+- **After E1 and E2 (O58):** +2.5 from S1's live pass, its +10 split over 8 merged proposals. Total **7.5**.

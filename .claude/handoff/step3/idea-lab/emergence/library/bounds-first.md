@@ -20,3 +20,5 @@ No seat owned these. See `round-0.md`; they are part of round 2's Contrarian pac
 - **Self-corrections:** re-measured on 3.11 [89], van Herk is 72 % slower where 3.13 had it 34 % faster. Every timing must name its interpreter.
 - **Judges:** S1 survived 3 of 3 ([112] 7, [114] 6, [113] 6).
 - **Points:** 1.0 from S1 + 4.0 from critiques (EXP-2's withdrawal, EXP-3's, TRZ-3's and TRZ-2's merges) = **5.0**, tied first.
+
+- **After E1 and E2 (O58):** +2.5 from S1's live pass, its +10 split over 8 merged proposals. Total **7.5**.

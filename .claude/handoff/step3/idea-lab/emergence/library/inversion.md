@@ -19,3 +19,5 @@ No seat owned these. See `round-0.md`; they are part of round 2's Contrarian pac
   - [83]: the profile shim excludes C frames; part 3 stacks duplicates before any duplicate signal exists.
 - **Judges:** S2 survived 3 of 3.
 - **Points:** 0.5 (S1) + 0.8 (S2) + 3.0 from critiques (SHP-2's, TRZ-3's and TRZ-2's merges) = **4.3**.
+
+- **After E1 and E2 (O58):** +1.25 from S1's live pass, its +10 split over 8 merged proposals. Total **5.55**.

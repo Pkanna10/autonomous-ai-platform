@@ -446,13 +446,32 @@ With one pair this is "consistent with" at most, and the two halves point opposi
   - The uncounted trials kept at 64 % (7 of 11). Keeps cluster where S1's counts cannot see, which is probably C-level or module-level work. That is a gap in the shim.
 - **Measure 8, path dependence:** X2-S's sqlparse twin gap is 9.6 points on combine and 8 on kept.
 
-**Points (O57's recompute):**
+**Points, recomputed under O58:**
 
-- No proposal earns +10. Its live run had to beat its pre-registered bar, and the arm's no-harm bar failed.
-- S1's own record and premise bars passed, and S1 is behaviour-neutral by construction. Whether that earns S1's merged proposals the +10 is the owner's call.
-- Unless the owner rules otherwise, the points stand as in §9.
+- **S1 earns the +10** (owner): its bars were pre-registered, judged before the run, and passed live. It is split over S1's 8 merged proposals, 1.25 each.
+- **New totals:** Bounds first 7.5, Pre-mortem 7.5, Expert prior 5.75, Inversion 5.55, Analogy transfer 3.55, Ten-x 2.8, Shape specialisation 2.75, Contradiction 2.6.
+- **The bottom three by points** are now Contradiction, Shape specialisation and Ten-x. O57's round-2 seats keep Ten-x and bench Analogy transfer, so the seats are the owner's to confirm.
+- **From round 2 (O55 amended):** a record-only live pass earns +5, a gain-bearing one +10.
+
+**The no-harm failures, explained:**
+
+- Three of the four come from fewer keeps, which happen before the combine:
+  - tomli kept 4 against 6;
+  - more_itertools 0 against 2;
+  - sqlparse's E2 run 3 against 9.
+- So they say nothing about S2's delivery order, which was not tested by them.
+- Only E1's sqlparse ran with more keeps (11 against 9) and still combined lower, and it sits inside its twin gap.
+
+**The noise check (O58):** S1's record mode does not change trial timing as far as the floors show.
+
+- X2-S's median floor equals X2-0's (2.00 %) on tomli, mistune and sqlparse.
+- On more_itertools it is lower: 2.00 against 3.09.
+- The ranges overlap.
+- The floor is clamped at 2.0 %, so only a rise above it could show.
+
+**Carried to round 2's Interpreter specialist:** uncountable trials kept at 64 % (7 of 11), against 33 % for countable fired trials (12 of 36). The count shim misses where keeps happen.
 
 **The Lead's recommendation:**
 
-- Keep `SITE_STACKS` at `record`, not `on`, until a matched X2-0 and X2-S pair on the same libraries separates S2's delivery from ideation variance.
+- `SITE_STACKS` stays at `record`, by the owner's decision (O58). The 21.08 USD balance is kept for round 2, whose plans use several runs on fewer libraries to handle variance.
 - Keep `IDEAS_COUNT_CONTRACT=record`. It is free and it made measure 5 readable.

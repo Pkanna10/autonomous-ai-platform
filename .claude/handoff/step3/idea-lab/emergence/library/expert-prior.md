@@ -30,3 +30,5 @@ No seat owned these. See `round-0.md`; they are part of round 2's Contrarian pac
     - that no idea, trial or upstream contact follows from a flag, and a human owns disclosure.
   - **Revisit:** after K2.
   - **Not to be proposed again** before then.
+
+- **After E1 and E2 (O58):** +1.25 from S1's live pass, its +10 split over 8 merged proposals. Total **5.75**.
