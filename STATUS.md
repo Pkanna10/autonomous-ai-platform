@@ -806,6 +806,30 @@ blocks it.
     - its own knowledge of public upstream fixes.
   - **Why:** V9 is O19's held-out exam and the charter's K4 rung, and a prior
     built from its keys would contaminate both.
+- **O58. Emergence round 1's live read, S1's +10 and O55 amended (owner,
+  2026-11-07).**
+  - **S1 earns the +10 under O55 as written.** Its bars were pre-registered,
+    judged before the run, and passed live: a record on 73 of 73 trials, and
+    fired ideas keeping at 33 % against 0 % for not_fired. The +10 is split over
+    S1's 8 merged proposals, 1.25 each.
+  - **O55 amended, from round 2:** a record-only proposal's live pass earns +5;
+    a gain-bearing proposal's earns +10.
+  - **`SITE_STACKS`:** stays at `record`, not `on`.
+  - **The 21.08 USD balance:** kept for round 2's dispatch plans; no matched
+    X2-0 / X2-S pair now. Round 2's plans must handle variance, with several
+    runs on fewer libraries.
+  - **Before round 2, the noise check:** compare X2-S's noise floors with X2-0's
+    per library, to confirm S1's record mode does not change trial timing.
+    - Done the same day: X2-S's median floor equals X2-0's (2.00 %) on tomli,
+      mistune and sqlparse, and is lower on more_itertools (2.00 against 3.09).
+    - The floor is clamped at 2.0 %, so only a rise above it would show.
+  - **The report notes:** three of the four no-harm failures are explained by
+    fewer keeps, which come before the combine, so S2's delivery order was not
+    tested.
+  - **Carried to round 2's Interpreter specialist:** uncountable trials kept at
+    64 % (7 of 11), against 33 % for countable fired trials.
+  - **Why:** a record-only pass shows the instrument works, not that the engine
+    got faster, so from round 2 it earns half of a gain.
 - **O57. Emergence round 1's dispatches, points and round-2 seats (owner,
   2026-11-06).**
   - **E1 and E2:** approved.

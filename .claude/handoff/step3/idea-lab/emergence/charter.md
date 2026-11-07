@@ -113,7 +113,7 @@ Points come from verified outcomes only.
 | --- | ---: |
 | Survives the judges | +1 |
 | Built, reviewed and gated | +3 |
-| A live run beats its pre-registered bar against the twin's band | +10 |
+| A live run beats its pre-registered bar against the twin's band | +10 (from round 2: +5 for a record-only proposal, +10 for a gain-bearing one; O58) |
 | A critic's critique led to a withdrawal, or to a merge the judges kept | +2 |
 | A fabricated number, or a touch of the FIXED list | −3 |
 
