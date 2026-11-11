@@ -41,7 +41,8 @@ of a call before each stage: inside D55's discovery share; and the whole run
 (the understand request at its worst, each round a call at X1's dearest and
 its trials at the slice's dearest loop, the dearest seeded stage at its
 worst) with one trial's reserve: X2-0 9.35, X2-V 9.45 (6.50 and 6.70 at 3 a
-round; the spec proposed 6). Minutes: a clone, each round's trials in loops
+round; the spec proposed 6); with more rounds, the last seeded call after
+every earlier one. Minutes: a clone, each round's trials in loops
 of 3 at ``ideas_slice.LOOP_MINUTES`` and two calls at their worst, 89 (44).
 A dispatch's need, the sum of its caps, stays under the 80 USD fuse, its
 minutes under the job's, and the suite cap at least the need, before spend.
@@ -89,12 +90,23 @@ larger counts), which ``run_minutes`` adds, so ``check_plan`` refuses a
 dispatch past the job's minutes with its riders.
 
 **Shadow** (emergence round 2, S4): X2-SV is X2-C with
-``SHADOW_VERIFY=record`` on sqlparse, tomli and mistune, off the plan (a pool
-draw: the trial runner reads the setting, no request); it is dispatchable,
+``SHADOW_VERIFY=record`` on sqlparse, tomli and mistune, off the plan (the
+trial runner reads the setting, no request; no A/A draw until its timing is
+shown equal, the owner's ruling of 2026-11-11); it is dispatchable,
 in ``EVERY_ARM`` with its ci.yml case. Its hypothesis rows
 add ``shadow_verify``, the first measured trial's reading
 (``shadow_verify.shadow_reading``, its twin against itself), and its run row
 ``shadow_aa``, the twins that differ from the first (the A/A, 0).
+
+**Depth** (Window 2): X2-D is X2-0 with three rounds (``PORTFOLIO_ROUNDS``
+and ``MAX_TRIAL_ROUNDS`` 3) and a third generator call
+(``GENERATOR_MAX_CALLS`` 3, the default 2: without it the router reaches
+round 3 only for a waiting near-miss compound, round 2 leaving the pool
+empty), nothing else, on sqlparse, tomli, mistune and markdown, off the
+plan and no A/A draw (a third round changes what is trialled and
+delivered); dispatchable, in ``EVERY_ARM`` with its ci.yml case. Its cap
+and minutes are the derivation above with a third round, its call charged:
+12.90 USD and 133 minutes, two runs a dispatch.
 """
 
 from __future__ import annotations
@@ -208,8 +220,13 @@ X2_S: Final = X2Arm("X2-S", ("more_itertools", "tomli", "mistune", "sqlparse"),
                     "site stacks (S2): X2-0 with the combine record and delivery by gain")  # fmt: skip
 X2_SV: Final = X2Arm("X2-SV", ("sqlparse", "tomli", "mistune"),
                      {**X2_C.update, "SHADOW_VERIFY": "record"},
-                     "shadow record (S4): X2-C with capture rows and shadow readings", "full")  # fmt: skip
-EVERY_ARM: Final = (*X2_ARMS, X2_S, X2_C, X2_SV)  # the plan's arms, then those off it
+                     "shadow record (S4): X2-C with capture rows and shadow readings")  # fmt: skip
+X2_D: Final = X2Arm("X2-D", ("sqlparse", "tomli", "mistune", "markdown"),
+                    {**SHARED, "PORTFOLIO_ROUNDS": 3, "MAX_TRIAL_ROUNDS": 3,
+                     "GENERATOR_MAX_CALLS": 3},
+                    "depth (Window 2): X2-0 with a third round")  # fmt: skip
+# the plan's arms, then those off it (X2-D first, so the older tails stand)
+EVERY_ARM: Final = (*X2_ARMS, X2_D, X2_S, X2_C, X2_SV)
 LIBRARIES: Final = {r.name: r for r in dx.OSS_SELECTABLE if r.name in ip.E1_REPOS}
 Run = tuple[X2Arm, OssRepo]
 ALL_RUNS: Final[tuple[Run, ...]] = tuple(
@@ -290,10 +307,28 @@ def run_trials(cfg: Settings) -> tuple[int, ...]:
     return tuple(t + (c if n else 0) for n in range(cfg.MAX_TRIAL_ROUNDS))
 
 
+# X2-D's third round, derived as X2-0's two (run_cap, run_minutes, which
+# charge a call a round, MAX_TRIAL_ROUNDS, and X2-D's GENERATOR_MAX_CALLS 3
+# makes it real): one more
+# pipeline call at X1_CALL_USD and 11 trials at X1_LOOP_USD / 3, 3.56 USD, so
+# 9.33 + 3.56 = 12.89, 12.90 rounded up (9.35 for two); one more call at 8
+# minutes and 4 loops at 9, 89 + 44 = 133 minutes. The share term holds the
+# last seeded call after every earlier call (8.77 for three: it never binds).
+# Cross-check on the X2 archives (d1, d2, d4, d5, d7: the 12 X2-0 and X2-0'
+# runs; test_ideas_x2_depth recomputes it): a round measured at most 1.66 USD
+# (sqlparse round 1: a first call 0.84, discovery 1.548 less the seeded
+# 0.706, and 9 trials at 0.090), round 2 1.41 (markdown: seeded 0.70, 7
+# trials at 0.100), against the 3.56 a round charged; the dearest call 0.84
+# (first) and 0.71 (seeded) against 0.91; the dearest trial 0.100 against
+# 0.240; the dearest run 2.99 USD of 9.35. Minutes (STATUS's dispatch rows,
+# job wall time): 36, 38 and 62 for three runs (d1, d2, d4; 33, 36 and 43
+# trials), 20 for one (d5, 17), 26 for two (d7, 26): at most 21 a run and
+# 1.44 a trial, against 89 for at most 21 trials (4.2 a trial).
 def run_cap(cfg: Settings) -> float:
     s1, s2, review = seeded_stages(cfg)
     stage = max(s1, X1_S1_USD + s2, X1_S1_S2_USD + review)
-    share = (X1_CALL_USD + stage) / cfg.IDEAS_DISCOVERY_MAX_SHARE
+    earlier = (cfg.MAX_TRIAL_ROUNDS - 1) * X1_CALL_USD  # before the last seeded call
+    share = (earlier + stage) / cfg.IDEAS_DISCOVERY_MAX_SHARE
     trials = X1_LOOP_USD / LOOP_TRIALS * sum(run_trials(cfg))
     total = (settings_trial_budget(cfg) + dx.OSS_PHASE_ONE_WORST_USD
              + cfg.MAX_TRIAL_ROUNDS * X1_CALL_USD + trials + stage)  # fmt: skip
@@ -379,7 +414,7 @@ def x2_plan(environ: Mapping[str, str]) -> X2Plan:
     key, _, names = raw.partition(":")
     arm, wanted = next((a for a in EVERY_ARM if a.key == key), None), names.split(",")
     if arm is None or len(set(wanted)) < len(wanted) or not {*wanted} <= {*arm.repos}:
-        raise ValueError(f"{DISPATCH_ENV}: an arm ({', '.join(a.key for a in X2_ARMS)}),"
+        raise ValueError(f"{DISPATCH_ENV}: an arm ({', '.join(a.key for a in EVERY_ARM)}),"
                          f" ':' and its libraries, comma-separated; got {raw!r}")  # fmt: skip
     plan = X2Plan(raw, tuple((arm, LIBRARIES[n]) for n in arm.repos if n in wanted))
     check_plan(plan, suite_cap(environ))

@@ -2193,6 +2193,8 @@ def test_the_picks_suite_exports_the_op_count_judge_alone(tmp_path: Path) -> Non
         "X2-C:sqlparse",
         "X2-S:sqlparse,tomli",
         "X2-SV:sqlparse",
+        "X2-D:sqlparse",
+        "X2-D:tomli,markdown",
     ],
 )
 def test_the_x2_suite_exports_its_arms_settings_exactly(
@@ -2223,6 +2225,12 @@ def test_the_x2_suite_exports_its_arms_settings_exactly(
     wanted = x2.arm_env(arm)
     assert {key: exported.get(key) for key in wanted} == wanted
     assert exported[x2.DISPATCH_ENV] == dispatch
+    calls = x2.arm_settings(arm, Settings(_env_file=None)).GENERATOR_MAX_CALLS
+    assert (
+        exported["GENERATOR_MAX_CALLS"]
+        == str(calls)
+        == ("3" if arm is x2.X2_D else "2")
+    )
     rule = (tmp_path / "ok" / "rule.txt").read_text(encoding="utf-8").split()
     assert rule[:3] == ["true", "true", "3"]  # step3: normal engine runs
     plain = Settings(_env_file=None)

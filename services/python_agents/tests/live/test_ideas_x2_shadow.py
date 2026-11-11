@@ -3,8 +3,9 @@ round 2): the X2-SV arm, its declared rider seconds and its row fields.
 
 Not ``live``: these spend nothing. X2-SV is X2-C's settings plus
 ``SHADOW_VERIFY=record``, read by the trial runner only (no request, prompt
-or verdict changes), so it is a pool draw like X2-0; it is off the dispatch
-plan (``dispatches``) until the Lead and the owner put it there. Its
+or verdict changes), but it is no A/A pool draw until its timing is shown
+equal (owner ruling 2026-11-11: its capture launches add CPU to every
+trial); it is off the dispatch plan (``dispatches``) until the Lead and the owner put it there. Its
 hypothesis rows carry the first measured trial's shadow reading
 (``shadow_verify.shadow_reading`` over its twin's and its own
 ``shadow_calls`` rows) and its run row the base A/A count over every
@@ -47,7 +48,7 @@ def test_x2_sv_is_x2_c_with_the_shadow_record_off_the_plan() -> None:
         "mistune",
     )
     assert dict(x2.X2_SV.update) == {**x2.X2_C.update, "SHADOW_VERIFY": "record"}
-    assert x2.X2_SV.aa == "full" and x2.X2_SV not in x2.X2_ARMS
+    assert x2.X2_SV.aa == "none" and x2.X2_SV not in x2.X2_ARMS  # owner, 2026-11-11
     assert x2.EVERY_ARM[-1] is x2.X2_SV  # listed last, off the plan
     assert x2.arm_cap(x2.X2_SV) == x2.arm_cap(x2.X2_0)
     assert x2.arm_env(x2.X2_SV)["SHADOW_VERIFY"] == "record"

@@ -35,6 +35,14 @@ out, by rank with the null rate beside it; each arm's signs against each
 library's pool median get the exact stratified null; then each run's
 delivered mass, the n-need of each call and the lane views. O51 and O52, in
 ``x2.md``, stay the ruling reading.
+
+``--rounds`` (Window 2, X2-D) writes ``rounds.md`` instead, each file
+loaded alone as for ``--variance``: per run and per arm, each round's keeps
+(round 1, 2 and 3, or as many as a run recorded) as fresh ideas and
+near-miss compounds, their standalone points (vs base, not additive) and,
+where per-keep combine records exist, the keeps delivered, beside the
+delivered combine. It is not a contribution: a third round's delivered
+gain is read only from X2-D's combine against the pool (``--variance``).
 """
 
 from __future__ import annotations
@@ -66,7 +74,7 @@ from .ideas_probe import E1_REPOS, SERVICE_DIR
 from .ideas_x2 import EVERY_ARM, IDEA_EXPERIMENT, ROUND_EXPERIMENT, RUN_EXPERIMENT
 
 REPORT_DIR: Final = SERVICE_DIR.parents[1] / ".claude/handoff/step3/idea-lab/x2"
-ARMS: Final = tuple(a.key for a in EVERY_ARM)  # X2-0, X2-0', X2-V, X2-C
+ARMS: Final = tuple(a.key for a in EVERY_ARM)  # the plan's, then those off it
 BASE, TWIN = ARMS[0], ARMS[1]
 BAND_GAIN: Final = 4.0  # O51, a library without a twin: points of combine gain
 BAND_KEPT: Final = 1.0  # O51, a library without a twin: on the kept count
@@ -881,21 +889,142 @@ def render_variance(found: Sequence[Draw]) -> str:
     ])  # fmt: skip
 
 
+# ---------------------------------------------------------------------------
+# Keeps by round (Window 2, X2-D): where each run's keeps came from
+# ---------------------------------------------------------------------------
+
+ROUNDS_SHOWN: Final = 3  # X2-D's rounds; a run recording more widens the page
+
+
+@dataclass(frozen=True)
+class RoundGain:  # one recorded round of one run
+    round: int
+    ideas: int  # fresh ideas kept
+    compounds: int  # near-miss compounds kept (the round row's compounds_kept)
+    idea_points: float  # standalone gains, vs base, not additive
+    compound_points: float
+    delivered: int | None  # keeps reaching the tip (S2's records), None without
+
+    @property
+    def kept(self) -> int:
+        return self.ideas + self.compounds
+
+
+def round_gains(at: str, run: Run) -> tuple[RoundGain, ...]:
+    """Each recorded round's keeps, fresh ideas and compounds apart, with
+    their standalone gains (a keep with no gain counts 0) under the round
+    that first trialled them; refused when the round row's compounds kept
+    and the hypothesis rows' compound flags disagree."""
+    recorded = any(i.combine is not None for i in run.ideas)
+    out = []
+    for d in run.rounds:
+        keeps = [i for i in run.ideas if i.round == d.round and i.verdict == "keep"]
+        joined = [i for i in keeps if i.compound]
+        if len(joined) != d.compounds_kept:
+            raise ValueError(f"{at}: round {d.round} records {d.compounds_kept} "
+                             f"compounds kept, its ideas {len(joined)}")  # fmt: skip
+        out.append(RoundGain(
+            d.round, d.kept - d.compounds_kept, d.compounds_kept,
+            math.fsum(i.gain_pct or 0.0 for i in keeps if not i.compound),
+            math.fsum(i.gain_pct or 0.0 for i in joined),
+            sum(i.combine is not None and i.combine.delivered for i in keeps) if recorded else None,
+        ))  # fmt: skip
+    return tuple(out)
+
+
+def _of(gains: Sequence[RoundGain]) -> str:  # delivered of kept, over recorded runs
+    got = [g for g in gains if g.delivered is not None]
+    return (
+        f"{sum(g.delivered or 0 for g in got)} of {sum(g.kept for g in got)}"
+        if got
+        else "-"
+    )
+
+
+def render_rounds(found: Sequence[Draw]) -> str:
+    gains = [
+        {g.round: g for g in round_gains(f"{d.arm} {d.repo}", d.run)} for d in found
+    ]
+    depth = max(ROUNDS_SHOWN, *(len(gs) for gs in gains))
+    numbers = range(1, depth + 1)
+    runs: list[list[object]] = []
+    for d, gs in zip(found, gains, strict=True):
+        total = math.fsum(g.idea_points + g.compound_points for g in gs.values())
+        runs.append([d.source, d.arm, d.repo, len(gs),
+                     *(v for n in numbers for v in (
+                         (f"{gs[n].ideas} + {gs[n].compounds}", f"{gs[n].idea_points:+.1f}",
+                          f"{gs[n].compound_points:+.1f}", _of([gs[n]]))
+                         if n in gs else ("-",) * 4)),
+                     f"{total:+.1f}", f"{d.combine:+.1f}"])  # fmt: skip
+    arms: list[list[object]] = []
+    for arm in [a for a in ARMS if any(d.arm == a for d in found)]:
+        mine = [(d, gs) for d, gs in zip(found, gains, strict=True) if d.arm == arm]
+        total = math.fsum(g.idea_points + g.compound_points for _, gs in mine for g in gs.values())  # fmt: skip
+        cells: list[object] = []
+        for n in numbers:
+            got = [gs[n] for _, gs in mine if n in gs]
+            k = len(got)
+            cells += [k, *((f"{sum(g.ideas for g in got) / k:.1f} + {sum(g.compounds for g in got) / k:.1f}",
+                            f"{math.fsum(g.idea_points for g in got) / k:+.1f}",
+                            f"{math.fsum(g.compound_points for g in got) / k:+.1f}", _of(got))
+                           if got else ("-",) * 4)]  # fmt: skip
+        arms.append([arm, len(mine), *cells, f"{total / len(mine):+.1f}",
+                     f"{math.fsum(d.combine for d, _ in mine) / len(mine):+.1f}"])  # fmt: skip
+    points = "standalone points, {} (vs base, not additive)"
+    per_run = [f"round {n} {c}" for n in numbers for c in (
+        "kept, ideas + compounds", points.format("ideas"), points.format("compounds"),
+        "delivered")]  # fmt: skip
+    per_arm = [f"round {n} {c}" for n in numbers for c in (
+        "runs", "kept per run, ideas + compounds", points.format("ideas") + " per run",
+        points.format("compounds") + " per run", "delivered")]  # fmt: skip
+    return "\n".join([
+        "# X2 keeps by round: where each run's keeps came from (Window 2, X2-D)", "",
+        "- **Not a contribution.** Each round's standalone points are its keeps' own "
+        "gains against the base (each hypothesis row's gain), summed under the round "
+        "that first trialled them; standalone gains overlap and a compound holds its "
+        "parents' sites, so the points are neither additive nor a round's share of the "
+        "delivered gain.",
+        "- **The third round's delivered gain.** What a third round adds to delivered "
+        "gain is read only from X2-D's delivered combine against the pool on the "
+        "variance page (``--variance``; O59 section 5's primary measure). This page "
+        "says where the keeps came from, nothing more.",
+        "- **Fresh ideas + near-miss compounds.** Each round's keeps and points are split "
+        "into fresh ideas and near-miss compounds (the round row's compounds kept, the "
+        "hypothesis rows' compound flag), so a round that kept only a compound reads "
+        "0 + 1.",
+        "- **Delivered.** Where the rows carry per-keep combine records (S2), the round's "
+        "keeps that reached the tip, of its keeps; else -. The run's delivered combine "
+        "(0 when it did not hold) is printed beside.",
+        "- **Runs.** As the variance page, each file alone: every (arm, library) run of "
+        "every file is one run; a round it did not reach reads -, and an arm's per-run "
+        "figures for a round are over the runs that reached it.", "",
+        "## 1 Each run", "",
+        *_table(("file", "arm", "library", "rounds", *per_run,
+                 points.format("every keep"), "delivered combine"), runs),
+        "## 2 Each arm", "",
+        *_table(("arm", "runs", *per_arm, points.format("every keep") + " per run",
+                 "delivered combine per run"), arms),
+    ])  # fmt: skip
+
+
 def main(argv: Sequence[str] | None = None, echo: Callable[[str], None] = print) -> int:
-    """Write ``x2.md`` (``--variance``: ``variance.md``); 2 on a refused or
-    unreadable input (nothing written)."""
+    """Write ``x2.md`` (``--variance``: ``variance.md``; ``--rounds``:
+    ``rounds.md``); 2 on a refused or unreadable input (nothing written)."""
     parser = argparse.ArgumentParser(prog="ideas_x2_report", description=__doc__)
     parser.add_argument("results", nargs="+", type=Path)
     parser.add_argument("--out", type=Path, default=REPORT_DIR)
-    parser.add_argument("--variance", action="store_true")
+    page = parser.add_mutually_exclusive_group()
+    page.add_argument("--variance", action="store_true")
+    page.add_argument("--rounds", action="store_true")
     args = parser.parse_args(argv)
-    name = "variance.md" if args.variance else "x2.md"
+    name = "variance.md" if args.variance else "rounds.md" if args.rounds else "x2.md"
     try:
-        text = (
-            render_variance(draws(args.results))
-            if args.variance
-            else render(load(args.results))
-        )
+        if args.variance:
+            text = render_variance(draws(args.results))
+        elif args.rounds:
+            text = render_rounds(draws(args.results))
+        else:
+            text = render(load(args.results))
     except (OSError, ValueError) as error:
         echo(f"error: {error}")
         return 2

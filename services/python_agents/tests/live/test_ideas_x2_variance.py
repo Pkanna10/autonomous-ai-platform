@@ -49,12 +49,14 @@ VIEW = ("IDEAS_VIEW_RECORD", "true")
 
 def test_only_arms_with_x2_0s_requests_and_delivery_are_pool_draws() -> None:
     """Frozen before any run (judge [86]): X2-S's ``SITE_STACKS=on`` changes
-    delivery and O52 called its kept count, so it never joins the pool."""
+    delivery and O52 called its kept count, so it never joins the pool;
+    X2-D's third round changes what is trialled; X2-SV stays out until its
+    timing is shown equal (owner ruling 2026-11-11)."""
     assert {a.key: a.aa for a in x2.EVERY_ARM} == {
-        "X2-0": "full", "X2-0'": "full", "X2-V": "none", "X2-S": "none", "X2-C": "full",
-        "X2-SV": "full",
+        "X2-0": "full", "X2-0'": "full", "X2-V": "none", "X2-D": "none", "X2-S": "none",
+        "X2-C": "full", "X2-SV": "none",
     }  # fmt: skip
-    assert xr.POOL == frozenset({"X2-0", "X2-0'", "X2-C", "X2-SV"})
+    assert xr.POOL == frozenset({"X2-0", "X2-0'", "X2-C"})
 
 
 def test_every_arm_records_its_views_and_the_engine_default_is_off() -> None:
