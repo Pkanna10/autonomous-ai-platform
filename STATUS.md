@@ -77,8 +77,17 @@ history at `5ce95a4` (`git show 5ce95a4:.claude/handoff/step2/spec.md`).
 - **Wave 2 is approved** (O6: hard corpus v2, the `ledgerclose` rebuild, the A/B
   instrument, grader labels, L3-L5). **Wave 3 is held** until Wave 1's live runs
   report (O6); each of its units has its own gate (spec section 7).
-- **Credit:** Window 1's $200 expires 2026-11-25; plan to have it used by
-  2026-11-23 (the owner's buffer).
+- **Credit:**
+  - **Window 1:** $200, expires 2026-11-25; plan to have it used by 2026-11-23
+    (the owner's buffer). 21.08 USD is left after emergence round 1's E1 and E2.
+  - **Window 2** (owner, 2026-11-07): a second API key with $200 of fresh
+    credit, going into the GitHub `live` environment secret.
+    - Expiry: not yet given by the owner.
+    - 120 USD is emergence round 2's live ceiling, under the variance rule.
+    - 80 USD is reserved for the ladder (K2's setter or K3).
+    - Before any plan is costed against it, the ideas-validate smoke requests
+      (Sonnet 5, Fable 5) must confirm the organisation serves both models and
+      allows retention.
 - **Environment:** the database tests need Postgres 16 with pgvector and a role
   that may create databases (`TEST_DATABASE_URL`; the Docker Compose database
   works). The profiler and retry-template tests also run `python3.8` to
