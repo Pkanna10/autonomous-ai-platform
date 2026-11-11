@@ -28,7 +28,9 @@ non-zero with one ``::error::`` line: a dispatch that runs nothing is red.
 
 At the end of the session the ledger is written as a markdown cost table to
 ``$GITHUB_STEP_SUMMARY`` when it is set (printed otherwise): Stage B of the
-STATUS live API plan calibrates the worst-case estimate from it.
+STATUS live API plan calibrates the worst-case estimate from it. Every row
+carries the window of the key it spent (``W1`` or ``W2``, from
+``LIVE_KEY_SLOT``, which the run step exports from its ``key_slot`` input).
 
 The whole-loop tests run Claude-written code, so they need the sandbox:
 ``live_isolation`` is ``required`` or fails, never ``best_effort``. The
@@ -126,6 +128,10 @@ from e2e.conftest import (  # noqa: E402
 LIVE_SUITE_CAP_USD: Final = 12.0
 SUITE_CAP_ENV: Final = "LIVE_SUITE_CAP_USD"
 KEY_ENV: Final = "ANTHROPIC_API_KEY"
+KEY_SLOT_ENV: Final = "LIVE_KEY_SLOT"
+"""Which ``live`` secret the run step exported as the key (U-key): slot 1
+``ANTHROPIC_API_KEY`` (Window 1), slot 2 ``ANTHROPIC_API_KEY_2`` (Window 2)."""
+KEY_WINDOWS: Final = {"1": "W1", "2": "W2"}
 HOST_KEY: Final = os.environ.get(KEY_ENV)
 """The key the process started with, read before any fixture: the suite's
 autouse ``reset_environment`` replaces it with a placeholder for every test,
@@ -520,6 +526,21 @@ class CostRow:
     estimate_usd: float
     cap_usd: float
     notes: tuple[str, ...]
+    window: str = "W1"  # the key's window (U-key): W1 or W2
+
+
+def key_window(environ: Mapping[str, str]) -> str:
+    """The window of the key this session spends, from ``LIVE_KEY_SLOT``:
+    ``W1`` for slot 1, ``W2`` for slot 2. Only an absent variable (a local
+    run, an older caller) reads as slot 1; any other value, empty included,
+    is refused, so a row can never carry the wrong window."""
+    raw = environ.get(KEY_SLOT_ENV)
+    if raw is None:
+        return KEY_WINDOWS["1"]
+    window = KEY_WINDOWS.get(raw)
+    if window is None:
+        raise ValueError(f"{KEY_SLOT_ENV} must be 1 or 2, got {_cell(raw)!r}")
+    return window
 
 
 def suite_cap(environ: Mapping[str, str]) -> float:
@@ -542,10 +563,12 @@ def suite_cap(environ: Mapping[str, str]) -> float:
 class SuiteLedger:
     """What the session's live tests spent, against one suite cap."""
 
-    def __init__(self, cap_usd: float) -> None:
+    def __init__(self, cap_usd: float, *, window: str = "W1") -> None:
         if not math.isfinite(cap_usd) or cap_usd <= 0:
             raise ValueError(f"the suite cap must be finite and > 0, got {cap_usd}")
-        self.cap_usd = cap_usd
+        if window not in KEY_WINDOWS.values():
+            raise ValueError(f"the ledger window must be W1 or W2, got {window!r}")
+        self.cap_usd, self.window = cap_usd, window
         self.rows: list[CostRow] = []
         self._open: dict[str, float] = {}
 
@@ -588,6 +611,7 @@ class SuiteLedger:
             estimate_usd=run.estimate_usd,
             cap_usd=run.cap_usd,
             notes=tuple(run.notes),
+            window=self.window,
         )
         self.rows.append(row)
         return row
@@ -618,9 +642,9 @@ def render_cost_table(ledger: SuiteLedger) -> str:
     lines = [
         "## Live API suite cost",
         "",
-        "| test | model | input | output | cache read | cache write "
+        "| test | window | model | input | output | cache read | cache write "
         "| cost USD | worst-case estimate USD | actual / estimate |",
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     totals = [0, 0, 0, 0]
     for row in ledger.rows:
@@ -633,7 +657,7 @@ def render_cost_table(ledger: SuiteLedger) -> str:
         totals = [total + count for total, count in zip(totals, counts, strict=True)]
         models = ", ".join(m if _MODEL.fullmatch(m) else "unknown" for m in row.models)
         lines.append(
-            f"| {_cell(row.test)} | {models or '-'} | "
+            f"| {_cell(row.test)} | {_cell(row.window)} | {models or '-'} | "
             + " | ".join(str(count) for count in counts)
             + f" | {row.cost_usd:.4f} | {row.estimate_usd:.4f} | "
             f"{_ratio(row.cost_usd, row.estimate_usd)} |"
@@ -641,7 +665,7 @@ def render_cost_table(ledger: SuiteLedger) -> str:
     spent = ledger.spent_usd
     estimate = math.fsum(row.estimate_usd for row in ledger.rows)
     lines.append(
-        "| **suite total** |  | "
+        f"| **suite total** | {ledger.window} |  | "
         + " | ".join(str(total) for total in totals)
         + f" | {spent:.4f} | {estimate:.4f} | {_ratio(spent, estimate)} |"
     )
@@ -698,9 +722,14 @@ def xdist_refusal(environ: Mapping[str, str]) -> str | None:
 LEDGER_KEY: Final = pytest.StashKey[SuiteLedger]()
 
 
+def ledger_from_env(environ: Mapping[str, str]) -> SuiteLedger:
+    """The session's ledger: ``LIVE_SUITE_CAP_USD`` and the key's window."""
+    return SuiteLedger(suite_cap(environ), window=key_window(environ))
+
+
 @pytest.fixture(scope="session")
 def suite_ledger(pytestconfig: pytest.Config) -> SuiteLedger:
-    ledger = SuiteLedger(suite_cap(os.environ))
+    ledger = ledger_from_env(os.environ)
     pytestconfig.stash[LEDGER_KEY] = ledger
     return ledger
 

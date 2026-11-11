@@ -2596,7 +2596,7 @@ def test_the_ab_arms_input_is_a_strict_choice_reaching_the_run_via_env() -> None
     inputs = _ci_block("    inputs:\n", "\n\n")
     names = re.findall(r"^      (\w+):$", inputs, re.MULTILINE)
     assert names[-3:] == ["ab_arms", "slice_repos", "x2_dispatch"]  # Ve's, X2a's
-    assert len(names) == len(set(names)) == 15 <= 25
+    assert len(names) == len(set(names)) == 16 <= 25  # U-key: key_slot
 
 
 @pytest.mark.parametrize(

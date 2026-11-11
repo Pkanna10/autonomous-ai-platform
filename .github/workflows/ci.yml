@@ -82,6 +82,11 @@ on:
         description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75 (corpus_select controls 15), hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 112, sweep-fable 41, sweep-record 24, ab 140, ab-v2-p 59, ab-v2 68 (L5b; ab_arms A, L5a, 17), escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, evolve-p 56, heal-hard 8, build 27, grader 2, upstream-verify 0 (no request, but the cap must be above 0), upstream 50, agent-probes 1, heal-agent 8, research-agent 8, watch 2, watch-cleanup 2, ideas-probe 46 (E1, four libraries of ideas_repos, one 12; ideas_arms count 9, C-low,C-high 20; X1 51 for three libraries of ideas_repos, under the 80 USD fuse, one 17; X1-1 33 for the four of run 1, one 9), ideas-views 0 (no request, but the cap must be above 0), ideas-marker 24 (Vb: 48 rank sets x Opus 5.5 and Opus 5), ideas-validate 8 (Vc: the Sonnet 5 and Fable 5 smoke requests, 17 Opus 5 label requests), ideas-slice 75 (Ve: two libraries of slice_repos x (4 configurations x 3 trials x 2.50 + the markers 2.00 + the pooled tournament 5.45), one 38; under the 80 USD fuse), ideas-pool 22 (V-O40: the pooled tournament on more_itertools, mistune, markdown and idna, 4 x 5.45), ideas-reaudit 3 (V-reaudit: the pooled re-audit of the X1-1 re-run, 4 libraries x one Opus 5.5 auditor request at its 0.70 cap; run 1 measured 1.445 for four), ideas-picks 8 (V-picks, O48: the seven would-try ideas of the blind reader, one engine loop per library, each loop at its measured spend plus the reservation of its dearest request: sqlparse 1.60, more_itertools 2.15, mistune 2.15, tomli 1.65; need 7.55 under the owner cap of 8), ideas-x2 38 (X2a: x2_dispatch one arm on four libraries, 4 runs x ideas_x2.run_cap, 9.35 for X2-0 and its twin, 9.45 for X2-V, each run capped by the engine reservation rules at X1 measured rates with round 1 trialling the whole idea result; one run 10; under the 80 USD fuse)'
         type: string
         default: '12'
+      key_slot:
+        description: "The API key this dispatch spends, a secret of environment 'live': 1 (ANTHROPIC_API_KEY, Window 1) or 2 (ANTHROPIC_API_KEY_2, Window 2); exported as LIVE_KEY_SLOT, and every cost-table row carries its window (W1 or W2)"
+        type: choice
+        options: ['1', '2']
+        default: '1'
       oss_repo:
         description: 'oss-ab and evolve-p only, and required there: the one OSS library this dispatch runs (oss-ab: LIVE_OSS_AB_REPOS, from the first or second set, e.g. tabulate or toml; evolve-p: LIVE_EVOLVE_REPOS, from the first set, e.g. sqlparse, tomli or pyparsing)'
         type: string
@@ -626,9 +631,11 @@ jobs:
   # Live Claude smoke test: costs money, so it runs only when started by hand
   # (Actions > CI > Run workflow), never on push or pull_request. The key is
   # passed to the test step only and never echoed (GitHub masks it as well).
-  # Environment 'live' holds ANTHROPIC_API_KEY as an environment secret (not a
-  # repository secret). The owner removed its required reviewers on 2026-10-24
-  # (STATUS.md), so each run's hard cost cap is what bounds the spend.
+  # Environment 'live' holds two keys as environment secrets (not repository
+  # secrets): ANTHROPIC_API_KEY (key_slot 1, Window 1) and ANTHROPIC_API_KEY_2
+  # (key_slot 2, Window 2); the run step reads only the slot's. The owner
+  # removed its required reviewers on 2026-10-24 (STATUS.md), so each run's
+  # hard cost cap is what bounds the spend.
   live-smoke:
     name: Live Claude API suite (manual)
     runs-on: ubuntu-22.04
@@ -786,7 +793,10 @@ jobs:
       # goes to LIVE_RESULTS_PATH.
       - name: Run live tests
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # The slot's secret only (U-key): an index, not '||', so an empty
+          # ANTHROPIC_API_KEY_2 is refused below instead of falling back to key 1.
+          ANTHROPIC_API_KEY: ${{ secrets[inputs.key_slot == '2' && 'ANTHROPIC_API_KEY_2' || 'ANTHROPIC_API_KEY'] }}
+          INPUT_KEY_SLOT: ${{ inputs.key_slot }}
           INPUT_SUITE: ${{ inputs.suite }}
           INPUT_MODE: ${{ inputs.mode }}
           INPUT_ENGINE_MODEL: ${{ inputs.engine_model }}
@@ -804,10 +814,26 @@ jobs:
           INPUT_X2_DISPATCH: ${{ inputs.x2_dispatch }}
           LIVE_RESULTS_PATH: ${{ runner.temp }}/live-results.jsonl
         run: |
+          # The key slot (U-key): 1 is ANTHROPIC_API_KEY (Window 1), 2 is
+          # ANTHROPIC_API_KEY_2 (Window 2). In Actions the step's env always
+          # sets INPUT_KEY_SLOT, so the default of 1 applies only outside
+          # Actions (the guard harness); a real empty or other value is
+          # refused. The slot reaches the tests as LIVE_KEY_SLOT, which
+          # labels every cost-table row W1 or W2.
+          key_slot="${INPUT_KEY_SLOT-1}"
+          case "${key_slot}" in
+            1) key_secret=ANTHROPIC_API_KEY ;;
+            2) key_secret=ANTHROPIC_API_KEY_2 ;;
+            *)
+              echo "::error::unknown key_slot input (1 or 2)"
+              exit 1
+              ;;
+          esac
           if [ -z "${ANTHROPIC_API_KEY}" ]; then
-            echo "::error::the ANTHROPIC_API_KEY secret of environment 'live' is not set"
+            echo "::error::key_slot ${key_slot}: the ${key_secret} secret of environment 'live' is not set"
             exit 1
           fi
+          export LIVE_KEY_SLOT="${key_slot}"
           corpus=(--ignore=tests/live/test_corpus_live.py --ignore=tests/live/test_attack_corpus_live.py --ignore=tests/live/test_hard_corpus_live.py --ignore=tests/live/test_oss_live.py --ignore=tests/live/experiments --ignore=tests/live/test_sweep_live.py --ignore=tests/live/test_ab_live.py --ignore=tests/live/test_escalation_live.py --ignore=tests/live/test_noise_live.py --ignore=tests/live/test_oss_ab_live.py --ignore=tests/live/test_evolution_live.py --ignore=tests/live/test_build_live.py --ignore=tests/live/test_grader_agreement_live.py --ignore=tests/live/test_upstream_verify_live.py --ignore=tests/live/test_upstream_live.py --ignore=tests/live/test_ideas_probe_live.py --ignore=tests/live/test_ideas_views_live.py --ignore=tests/live/test_ideas_marker_live.py --ignore=tests/live/test_ideas_validate_live.py --ignore=tests/live/test_ideas_slice_live.py --ignore=tests/live/test_ideas_pool_live.py --ignore=tests/live/test_ideas_reaudit_live.py --ignore=tests/live/test_ideas_picks_live.py --ignore=tests/live/test_ideas_x2_live.py)
           # need: the sum of the caps the suite's live tests ask the ledger for
           # (Stage A 8.55, corpus 15 x 5, attack 3 x 4, hard 10 x 5, oss at most
@@ -1274,11 +1300,12 @@ jobs:
 
       # One JSON line per corpus run (CorpusOutcome), kept for the STATUS
       # ledger and the stage M comparison across runs.
+      # The artifact names the window whose key paid (U-key): W1 or W2.
       - name: Upload live corpus results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: live-results-${{ github.run_id }}-${{ github.run_attempt }}
+          name: live-results-${{ inputs.key_slot == '2' && 'W2' || 'W1' }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/live-results.jsonl
           if-no-files-found: ignore
           retention-days: 30

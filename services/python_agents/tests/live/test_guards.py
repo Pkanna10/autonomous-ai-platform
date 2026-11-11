@@ -47,6 +47,7 @@ from autonomous_ai_agents.common.errors import (
 
 from .conftest import (
     KEY_ENV,
+    KEY_SLOT_ENV,
     LIVE_SUITE_CAP_USD,
     SKIP_NO_KEY,
     SKIP_NOT_SELECTED,
@@ -60,6 +61,8 @@ from .conftest import (
     SuiteLedger,
     added_lines,
     check_answered,
+    key_window,
+    ledger_from_env,
     live_selected,
     live_skip_reason,
     must_refuse,
@@ -354,16 +357,60 @@ def test_render_cost_table_lists_each_test_and_the_suite_total() -> None:
     lines = text.splitlines()
     assert lines[0].startswith("## Live API suite cost")
     header = (
-        "| test | model | input | output | cache read | cache write "
+        "| test | window | model | input | output | cache read | cache write "
         "| cost USD | worst-case estimate USD | actual / estimate |"
     )
     assert header in lines
-    assert f"| a | {ENGINE} | 10 | 20 | 30 | 40 | 0.5000 | 1.0000 | 0.50 |" in lines
-    assert f"| b | {ENGINE} | 10 | 20 | 30 | 40 | 0.2500 | 0.0000 | n/a |" in lines
-    assert "| **suite total** |  | 20 | 40 | 60 | 80 | 0.7500 | 1.0000 | 0.75 |" in (
-        lines
+    assert (
+        f"| a | W1 | {ENGINE} | 10 | 20 | 30 | 40 | 0.5000 | 1.0000 | 0.50 |" in lines
     )
+    assert f"| b | W1 | {ENGINE} | 10 | 20 | 30 | 40 | 0.2500 | 0.0000 | n/a |" in lines
+    total = "| **suite total** | W1 |  | 20 | 40 | 60 | 80 | 0.7500 | 1.0000 | 0.75 |"
+    assert total in lines
     assert "Suite cap 12.00 USD; spent 0.7500 USD (6.2% of the cap)." in lines
+
+
+@pytest.mark.parametrize(
+    ("environ", "window"),
+    [({}, "W1"), ({KEY_SLOT_ENV: "1"}, "W1"), ({KEY_SLOT_ENV: "2"}, "W2")],
+)
+def test_the_key_window_is_the_slot_and_w1_only_when_the_slot_is_absent(
+    environ: Mapping[str, str], window: str
+) -> None:
+    """U-key: ``LIVE_KEY_SLOT`` 1 is Window 1's key, 2 Window 2's; a run
+    without the variable (a local run, an older caller) is slot 1."""
+    assert KEY_SLOT_ENV == "LIVE_KEY_SLOT"
+    assert key_window(environ) == window
+    ledger = ledger_from_env({**environ, "LIVE_SUITE_CAP_USD": "3"})
+    assert (ledger.cap_usd, ledger.window) == (3.0, window)
+
+
+@pytest.mark.parametrize("raw", ["", " ", "0", "3", "01", " 2", "2\n", "W2", "$(id)"])
+def test_the_key_window_refuses_any_other_slot(raw: str) -> None:
+    """Present but not exactly 1 or 2 (empty included) is refused before any
+    test is admitted: a mislabelled window would misattribute the spend."""
+    with pytest.raises(ValueError, match="LIVE_KEY_SLOT must be 1 or 2"):
+        key_window({KEY_SLOT_ENV: raw})
+    with pytest.raises(ValueError, match="LIVE_KEY_SLOT must be 1 or 2"):
+        ledger_from_env({KEY_SLOT_ENV: raw})
+
+
+def test_every_ledger_row_carries_the_ledger_window() -> None:
+    ledger = SuiteLedger(5.0, window="W2")
+    run = LiveRun("w2", 1.0)
+    ledger.admit(run)
+    run.records.append(RequestRecord(ENGINE, 1, 2, 0, 0, 0.125, 0.5, "end_turn"))
+    row = ledger.close(run)
+    assert row.window == "W2" and ledger.rows == [row]
+    assert SuiteLedger(5.0).window == "W1" and _row().window == "W1"
+    lines = render_cost_table(ledger).splitlines()
+    assert f"| w2 | W2 | {ENGINE} | 1 | 2 | 0 | 0 | 0.1250 | 0.5000 | 0.25 |" in lines
+    assert (
+        "| **suite total** | W2 |  | 1 | 2 | 0 | 0 | 0.1250 | 0.5000 | 0.25 |" in lines
+    )
+    for bad in ("W3", "w2", "", "W1 "):
+        with pytest.raises(ValueError, match="window must be W1 or W2"):
+            SuiteLedger(5.0, window=bad)
 
 
 def test_render_cost_table_sanitises_cells_and_notes() -> None:
@@ -375,7 +422,7 @@ def test_render_cost_table_sanitises_cells_and_notes() -> None:
     )
     ledger.rows.append(row)
     text = render_cost_table(ledger)
-    assert f"| odd\\|name x | unknown, {ENGINE} |" in text
+    assert f"| odd\\|name x | W1 | unknown, {ENGINE} |" in text
     assert "- odd\\|name x: line one line \\| two" in text
     assert "\nx |" not in text
 
