@@ -24,6 +24,7 @@ from autonomous_ai_agents.common.models import (
     ModelPrice,
 )
 from autonomous_ai_agents.common.refnames import branch_prefix_problem
+from autonomous_ai_agents.optimization.idea_frameworks import DEAL_RUNS, check_library
 from autonomous_ai_agents.optimization.idea_types import (
     LENS_LANES,
     RELAXING_LANES,
@@ -204,6 +205,10 @@ FABLE_LEAP_EFFORT: Final[Effort] = "high"
 """A Fable leap's effort, always sent (the effort page: start Fable at high)."""
 FABLE_LEAP_MAX_TOKENS: Final = 32_000
 """A Fable leap's output cap: O42's 32,000, the cap X1-1's lanes ran at."""
+PORTFOLIO_LEAP_MAX_TOKENS: Final = 32_000
+"""The portfolio leap's output cap (U-portfolio, ``IDEAS_LEAP_PORTFOLIO``):
+a diagnosis, three procedures' step products and up to three ideas, on any
+leap model, so X2-F against X2-P differs only in the model."""
 FABLE_LEAP_TIMEOUT_S: Final = 951.0
 """A Fable leap's least request timeout: X1-1's (``tests/live/ideas_probe.py``
 ``X1_1_TIMEOUT_S``, pinned equal by a test), on the leap's settings copy
@@ -384,6 +389,20 @@ class Settings(BaseSettings):
     IDEAS_LEAP_MAX_TOKENS: int = Field(default=12000, ge=1)
     IDEAS_LEAP_N: int = Field(default=3, ge=0, le=5)
     """Ideas from the leap lane; 0 skips the lane (D47)."""
+    IDEAS_LEAP_PORTFOLIO: bool = False
+    """U-portfolio: the leap lane sends the portfolio leap
+    (``idea_portfolio_leap``) instead of today's leap prompt: a diagnosis,
+    then three procedures of ``idea_frameworks`` dealt by (library, run,
+    round), each followed step by step to at most one idea. Its model, effort
+    and caps stay the leap's. On, the pipeline refuses to build without
+    ``IDEAS_LEAP_DEAL_LIBRARY`` and ``IDEAS_LEAP_DEAL_RUN`` (fail closed);
+    off keeps every request as it is."""
+    IDEAS_LEAP_DEAL_LIBRARY: str | None = None
+    """The deal's library: a library of ``idea_frameworks.DEAL_LIBRARIES``
+    (the X2 live test sets it per case)."""
+    IDEAS_LEAP_DEAL_RUN: int | None = Field(default=None, ge=1, le=DEAL_RUNS)
+    """The deal's run, the X2 replicate (1 to ``idea_frameworks.DEAL_RUNS``,
+    3; ci.yml's ``x2_replicate``)."""
     IDEAS_REVIEWER_MODEL: str = "claude-opus-5-5"
     IDEAS_REVIEWER_EFFORT: Effort | None = "high"
     IDEAS_REVIEWER_MAX_TOKENS: int = Field(default=16000, ge=1)
@@ -497,6 +516,12 @@ class Settings(BaseSettings):
                     raise ValueError(f"IDEAS_LANE_VIEWS names {key!r}, which is not "
                                      f"a lens; name any of {', '.join(names)}")  # fmt: skip
         return value
+
+    @field_validator("IDEAS_LEAP_DEAL_LIBRARY")
+    @classmethod
+    def _deal_library_is_the_designs(cls, value: str | None) -> str | None:
+        """A plain library name of the deal's design (U-portfolio)."""
+        return None if value is None else check_library(value)
 
     @model_validator(mode="after")
     def _no_lens_only_beside_relaxing_lanes(self) -> Self:
@@ -937,10 +962,18 @@ def leap_shape(cfg: Settings) -> LeapShape:
     settings copy, the validators and every static cap read it): a Fable
     leap's fixed shape (effort ``high`` sent, 32,000 output tokens, X1-1's
     timeout or the run's, the longer); any other leap's ``IDEAS_LEAP_EFFORT``
-    and ``IDEAS_LEAP_MAX_TOKENS`` on the run's timeout."""
+    and ``IDEAS_LEAP_MAX_TOKENS`` on the run's timeout. With the portfolio
+    leap on (U-portfolio) the output cap is ``PORTFOLIO_LEAP_MAX_TOKENS`` and
+    the timeout the Fable leap's (``FABLE_LEAP_TIMEOUT_S``, never lowering a
+    longer ``LLM_TIMEOUT_S``) whatever the model, so X2-P and X2-F differ
+    only in the model; the effort stays the model's."""
+    long = max(cfg.LLM_TIMEOUT_S, FABLE_LEAP_TIMEOUT_S)
+    if cfg.IDEAS_LEAP_PORTFOLIO:
+        effort = (FABLE_LEAP_EFFORT if cfg.IDEAS_LEAP_MODEL in FABLE_LEAP_MODELS
+                  else cfg.IDEAS_LEAP_EFFORT)  # fmt: skip
+        return LeapShape(effort, PORTFOLIO_LEAP_MAX_TOKENS, long)
     if cfg.IDEAS_LEAP_MODEL in FABLE_LEAP_MODELS:
-        timeout = max(cfg.LLM_TIMEOUT_S, FABLE_LEAP_TIMEOUT_S)
-        return LeapShape(FABLE_LEAP_EFFORT, FABLE_LEAP_MAX_TOKENS, timeout)
+        return LeapShape(FABLE_LEAP_EFFORT, FABLE_LEAP_MAX_TOKENS, long)
     return LeapShape(cfg.IDEAS_LEAP_EFFORT, cfg.IDEAS_LEAP_MAX_TOKENS, None)
 
 

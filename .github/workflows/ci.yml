@@ -130,7 +130,11 @@ on:
         type: string
         default: ''
       x2_dispatch:
-        description: "ideas-x2 only, and required there: LIVE_X2_DISPATCH, one arm and its libraries as ARM:lib,lib (X2-0, its A/A twin X2-0' on sqlparse, pyparsing, tomli and sortedcontainers only, X2-V, X2-C, X2-0 with IDEAS_COUNT_CONTRACT=record, emergence round 1 S1, off the plan, X2-S, X2-C with SITE_STACKS=on on more_itertools, tomli, mistune and sqlparse, emergence round 1 S2, off the plan, X2-SV, X2-C with SHADOW_VERIFY=record on sqlparse, tomli and mistune, emergence round 2 S4, off the plan, or X2-D, X2-0 with three rounds and three generator calls on sqlparse, tomli, mistune and markdown, Window 2, off the plan, 12.90 and 133 minutes a run, two a dispatch), the arm's settings exported from ideas_x2.arm_env; the plan (ideas_x2.dispatches) is five dispatches of four: X2-0:more_itertools,pyparsing,tomli,sortedcontainers then X2-0:mistune,sqlparse,markdown,idna, X2-0':sqlparse,pyparsing,tomli,sortedcontainers, and X2-V on the same two fours; the need is the libraries x 9.35 (X2-V 9.45), rounded up: 38 for four"
+        description: "ideas-x2 only, and required there: LIVE_X2_DISPATCH, one arm and its libraries as ARM:lib,lib (X2-0, its A/A twin X2-0' on sqlparse, pyparsing, tomli and sortedcontainers only, X2-V, X2-C, X2-0 with IDEAS_COUNT_CONTRACT=record, emergence round 1 S1, off the plan, X2-S, X2-C with SITE_STACKS=on on more_itertools, tomli, mistune and sqlparse, emergence round 1 S2, off the plan, X2-SV, X2-C with SHADOW_VERIFY=record on sqlparse, tomli and mistune, emergence round 2 S4, off the plan, or X2-D, X2-0 with three rounds and three generator calls on sqlparse, tomli, mistune and markdown, Window 2, off the plan, 12.90 and 133 minutes a run, two a dispatch, X2-P, X2-0 with the portfolio leap (U-portfolio) on sqlparse, tomli, mistune and markdown, off the plan, 10.55 and 113 minutes a run, or X2-F, X2-P with the leap on Fable 5.2, off the plan, 21.10 and 113 minutes a run, two a dispatch each and x2_replicate required), the arm's settings exported from ideas_x2.arm_env; the plan (ideas_x2.dispatches) is five dispatches of four: X2-0:more_itertools,pyparsing,tomli,sortedcontainers then X2-0:mistune,sqlparse,markdown,idna, X2-0':sqlparse,pyparsing,tomli,sortedcontainers, and X2-V on the same two fours; the need is the libraries x 9.35 (X2-V 9.45), rounded up: 38 for four"
+        type: string
+        default: ''
+      x2_replicate:
+        description: 'ideas-x2 only, and required for X2-P and X2-F (the portfolio leap, U-portfolio): IDEAS_LEAP_DEAL_RUN, the replicate 1, 2 or 3, which the deal rotation reads (idea_frameworks.deal: library, run, round); every other arm ignores it'
         type: string
         default: ''
 
@@ -815,6 +819,7 @@ jobs:
           INPUT_AB_ARMS: ${{ inputs.ab_arms }}
           INPUT_SLICE_REPOS: ${{ inputs.slice_repos }}
           INPUT_X2_DISPATCH: ${{ inputs.x2_dispatch }}
+          INPUT_X2_REPLICATE: ${{ inputs.x2_replicate }}
           LIVE_RESULTS_PATH: ${{ runner.temp }}/live-results.jsonl
         run: |
           # The key slot (U-key): 1 is ANTHROPIC_API_KEY (Window 1), 2 is
@@ -1120,24 +1125,33 @@ jobs:
             x2_shadow=off
             x2_rounds=2
             x2_gen_calls=2
+            x2_portfolio=false
+            x2_leap=claude-opus-5-5
             case "${x2_dispatch%%:*}" in
               X2-0 | "X2-0'") ;;
               X2-C) x2_count=record ;;
               X2-S) x2_count=record x2_stacks=on ;;
               X2-SV) x2_count=record x2_shadow=record ;;
               X2-D) x2_rounds=3 x2_gen_calls=3 x2_cents=1290 ;;
+              X2-P) x2_portfolio=true x2_cents=1055 ;;  # U-portfolio: the portfolio leap on Opus 5.5
+              X2-F) x2_portfolio=true x2_leap=claude-fable-5-2 x2_cents=2110 ;;  # the same on Fable 5.2
               X2-V)
                 x2_cents=945
                 x2_views='{"eliminate":"callers","assume_less":"input_shape","name_the_problem":"data_structures","recombine":"whole_module","resolve_tradeoff":"next_hotspots","far":"history"}'
                 ;;
               *)
-                echo "::error::ideas-x2 needs x2_dispatch, an arm (X2-0, X2-0', X2-V, X2-C, X2-S, X2-SV or X2-D), ':' and its libraries"
+                echo "::error::ideas-x2 needs x2_dispatch, an arm (X2-0, X2-0', X2-V, X2-C, X2-S, X2-SV, X2-D, X2-P or X2-F), ':' and its libraries"
                 exit 1
                 ;;
             esac
             x2_repos="${x2_dispatch#*:}"
             if [[ "${x2_dispatch}" != *:* ]] || ! [[ "${x2_repos}" =~ ^[a-z][a-z0-9_]{0,39}(,[a-z][a-z0-9_]{0,39}){0,7}$ ]]; then
-              echo "::error::ideas-x2 needs x2_dispatch, an arm (X2-0, X2-0', X2-V, X2-C, X2-S, X2-SV or X2-D), ':' and its libraries"
+              echo "::error::ideas-x2 needs x2_dispatch, an arm (X2-0, X2-0', X2-V, X2-C, X2-S, X2-SV, X2-D, X2-P or X2-F), ':' and its libraries"
+              exit 1
+            fi
+            x2_replicate="${INPUT_X2_REPLICATE-}"
+            if [ "${x2_portfolio}" = true ] && ! [[ "${x2_replicate}" =~ ^[1-3]$ ]]; then
+              echo "::error::ideas-x2 X2-P and X2-F need x2_replicate, 1, 2 or 3"
               exit 1
             fi
             commas="${x2_repos//[^,]/}"
@@ -1149,10 +1163,16 @@ jobs:
             export IDEAS_RELAX_LANES='[]' IDEAS_THINK_LINE_ALL=false IDEAS_LANE_FRAMEWORKS=false
             export IDEAS_LENSES='["eliminate","assume_less","name_the_problem","recombine","resolve_tradeoff","far"]'
             export IDEAS_LANE_MODEL=claude-sonnet-5-5 IDEAS_LANE_MODELS='{"eliminate":"claude-haiku-5-5"}'
-            export IDEAS_LEAP_MODEL=claude-opus-5-5 IDEAS_REVIEWER_MODEL=claude-opus-5-5
+            export IDEAS_LEAP_MODEL="${x2_leap}" IDEAS_REVIEWER_MODEL=claude-opus-5-5
             export IDEAS_LANE_VIEWS="${x2_views}" IDEAS_COUNT_CONTRACT="${x2_count}" SITE_STACKS="${x2_stacks}"
             export IDEAS_VIEW_RECORD=true  # emergence round 2, S1: every arm's view_sha rows
             export SHADOW_VERIFY="${x2_shadow}"  # emergence round 2, S4: X2-SV's capture rows
+            if [ "${x2_portfolio}" = true ]; then  # U-portfolio: the deal's run; the library is per case
+              export IDEAS_LEAP_PORTFOLIO=true IDEAS_LEAP_DEAL_RUN="${x2_replicate}"
+            fi
+            if [ "${x2_leap}" = claude-fable-5-2 ]; then  # D63: Fable 5.2 needs 30-day retention
+              export ALLOW_RETENTION_MODELS=true
+            fi
           elif [ -n "${x2_dispatch}" ]; then
             echo "::error::x2_dispatch is only for the ideas-x2 suite"
             exit 1

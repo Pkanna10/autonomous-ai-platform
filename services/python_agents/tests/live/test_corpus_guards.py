@@ -1980,6 +1980,7 @@ def _dispatch(
     ab_arms: str | None = None,
     slice_repos: str | None = None,
     x2_dispatch: str | None = None,
+    x2_replicate: str | None = None,
 ) -> tuple[int, str, str]:
     """The run step under bash -e with a fake ``uv`` that records its call
     (and, in ``rule.txt``, the noise rule, the editor and the noise path; in
@@ -2033,6 +2034,8 @@ def _dispatch(
         env["INPUT_SLICE_REPOS"] = slice_repos
     if x2_dispatch is not None:
         env["INPUT_X2_DISPATCH"] = x2_dispatch
+    if x2_replicate is not None:
+        env["INPUT_X2_REPLICATE"] = x2_replicate
     proc = subprocess.run(
         ["bash", "-e", str(script)],
         env=env,
@@ -2195,6 +2198,8 @@ def test_the_picks_suite_exports_the_op_count_judge_alone(tmp_path: Path) -> Non
         "X2-SV:sqlparse",
         "X2-D:sqlparse",
         "X2-D:tomli,markdown",
+        "X2-P:sqlparse",  # U-portfolio, x2_replicate 2
+        "X2-F:tomli,markdown",
     ],
 )
 def test_the_x2_suite_exports_its_arms_settings_exactly(
@@ -2208,6 +2213,8 @@ def test_the_x2_suite_exports_its_arms_settings_exactly(
     arm's, X2-0' on idna, is ``ideas_x2.x2_plan``'s to refuse)."""
     x2 = importlib.import_module(f"{__package__}.ideas_x2")
     arm = next(a for a in x2.EVERY_ARM if dispatch.startswith(f"{a.key}:"))
+    portfolio = arm in x2.PORTFOLIO_ARMS  # U-portfolio: the deal's run, required
+    replicate = "2" if portfolio else None
     count = dispatch.count(",") + 1
     need = str(math.ceil(count * x2.arm_cap(arm)))
     if dispatch in X2_PLAN:
@@ -2216,7 +2223,8 @@ def test_the_x2_suite_exports_its_arms_settings_exactly(
     for name in ("ok", "below"):
         (tmp_path / name).mkdir()
     code, output, calls = _dispatch(tmp_path / "ok", "ideas-x2", "claude-opus-5-5",
-                                    need, x2_dispatch=dispatch)  # fmt: skip
+                                    need, x2_dispatch=dispatch,
+                                    x2_replicate=replicate)  # fmt: skip
     assert code == 0, output
     argv = "run pytest tests/live/test_ideas_x2_live.py -m live --no-cov -n 0 -rA"
     assert calls.splitlines()[0] == argv
@@ -2225,6 +2233,7 @@ def test_the_x2_suite_exports_its_arms_settings_exactly(
     wanted = x2.arm_env(arm)
     assert {key: exported.get(key) for key in wanted} == wanted
     assert exported[x2.DISPATCH_ENV] == dispatch
+    assert exported.get("IDEAS_LEAP_DEAL_RUN") == replicate
     calls = x2.arm_settings(arm, Settings(_env_file=None)).GENERATOR_MAX_CALLS
     assert (
         exported["GENERATOR_MAX_CALLS"]
@@ -2236,13 +2245,38 @@ def test_the_x2_suite_exports_its_arms_settings_exactly(
     plain = Settings(_env_file=None)
     for key in wanted:
         monkeypatch.setenv(key, exported[key])
+    expected = x2.arm_settings(arm, plain)
+    if replicate is not None:  # the run, never in the arm's mapping
+        monkeypatch.setenv("IDEAS_LEAP_DEAL_RUN", replicate)
+        expected = expected.model_copy(update={"IDEAS_LEAP_DEAL_RUN": int(replicate)})
     built = Settings(_env_file=None)
-    assert built.model_dump() == x2.arm_settings(arm, plain).model_dump()
+    assert built.model_dump() == expected.model_dump()
     x2.check_settings(arm, built)
     below = f"{int(need) - 1}.99"
     code, output, calls = _dispatch(tmp_path / "below", "ideas-x2", "claude-opus-5-5",
-                                    below, x2_dispatch=dispatch)  # fmt: skip
+                                    below, x2_dispatch=dispatch,
+                                    x2_replicate=replicate)  # fmt: skip
     assert (code, calls) == (1, "") and f"suite_cap_usd {below} is below" in output
+
+
+@pytest.mark.parametrize("replicate", [None, "", "0", "4", "1,2", "$(id)"])
+@pytest.mark.parametrize("dispatch", ["X2-P:tomli", "X2-F:sqlparse"])
+def test_the_portfolio_arms_need_a_replicate_of_one_to_three(
+    dispatch: str, replicate: str | None, tmp_path: Path
+) -> None:
+    """U-portfolio: x2_replicate is the deal's run; X2-P and X2-F refuse a
+    dispatch without 1, 2 or 3 before any spend, every other arm ignores it."""
+    code, output, calls = _dispatch(tmp_path, "ideas-x2", "claude-opus-5-5", "20",
+                                    x2_dispatch=dispatch, x2_replicate=replicate)  # fmt: skip
+    assert (code, calls) == (1, "") and "need x2_replicate, 1, 2 or 3" in output
+    (tmp_path / "other").mkdir()
+    code, output, calls = _dispatch(tmp_path / "other", "ideas-x2", "claude-opus-5-5",
+                                    "10", x2_dispatch="X2-0:tomli", x2_replicate="4")  # fmt: skip
+    exported = (tmp_path / "other" / "env.txt").read_text(encoding="utf-8")
+    assert code == 0 and calls, output
+    assert (
+        "IDEAS_LEAP_DEAL_RUN" not in exported and "IDEAS_LEAP_PORTFOLIO" not in exported
+    )
 
 
 def test_the_x2_plan_is_the_x2_dispatch_inputs_description() -> None:
@@ -2274,7 +2308,7 @@ def test_the_run_step_requires_cases_under_the_suite_name(
 
 
 def test_x2_dispatch_is_required_strict_and_for_ideas_x2_only(tmp_path: Path) -> None:
-    bad = (None, "", "X2-F:tomli", "X2-0", "X2-0:", "x2-0:tomli", "X2-0:Tomli",
+    bad = (None, "", "X2-Z:tomli", "X2-0", "X2-0:", "x2-0:tomli", "X2-0:Tomli",
            "X2-0;id:tomli", "X2-0:tomli;id", "X2-0:tomli,", "X2-0:a,b,c,d,e,f,g,h,i",
            "X2-0':$(id)")  # fmt: skip
     for index, value in enumerate(bad):
@@ -2603,8 +2637,8 @@ def test_the_ab_arms_input_is_a_strict_choice_reaching_the_run_via_env() -> None
     assert "INPUT_AB_ARMS: ${{ inputs.ab_arms }}" in step
     inputs = _ci_block("    inputs:\n", "\n\n")
     names = re.findall(r"^      (\w+):$", inputs, re.MULTILINE)
-    assert names[-3:] == ["ab_arms", "slice_repos", "x2_dispatch"]  # Ve's, X2a's
-    assert len(names) == len(set(names)) == 16 <= 25  # U-key: key_slot
+    assert names[-4:] == ["ab_arms", "slice_repos", "x2_dispatch", "x2_replicate"]
+    assert len(names) == len(set(names)) == 17 <= 25  # U-key, U-portfolio
 
 
 @pytest.mark.parametrize(

@@ -62,7 +62,10 @@ def test_the_seeded_s2_stage_holds_the_engines_s2_reservation() -> None:
     """X2 with the Fable 5.2 leap: the static S2 stage (every lane with G4's
     mechanisms block, so a wider bound) is at least the engine's own S2
     reservation, so the seeded call's ``Budget.check`` of S2 cannot fail on
-    the leap; the run cap prices it: 13.85 (X2-0 9.35, X2-V 9.45, unchanged)."""
+    the leap; the run cap prices it: 21.10, each earlier call charged its
+    leap beyond X1's (U-portfolio's ``leap_extra_usd``; it was 13.85 with
+    every earlier call at X1's Opus-leap rate) (X2-0 9.35, X2-V 9.45,
+    unchanged)."""
     cfg = x2.arm_settings(X2_FABLE)
     s1, s2, review = x2.seeded_stages(cfg)
     seeded = cfg.model_copy(update={"IDEAS_SEQUENTIAL_LANES": True})
@@ -72,7 +75,7 @@ def test_the_seeded_s2_stage_holds_the_engines_s2_reservation() -> None:
     assert s2 >= engine_s2
     Budget(cap_usd=s2).check(engine_s2)  # S2 whole, as the pipeline checks it
     assert (s1, s2, review) == pytest.approx((0.215, 4.51015, 0.54))
-    assert x2.run_cap(cfg) == 13.85
+    assert x2.run_cap(cfg) == 21.10
     assert (x2.arm_cap(x2.X2_0), x2.arm_cap(x2.X2_V)) == (9.35, 9.45)
     opus = x2.seeded_stages(x2.arm_settings(x2.X2_0))
     assert opus == pytest.approx((0.215, 1.57215, 0.54))  # the Opus leap's 0.4729

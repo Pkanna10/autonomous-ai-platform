@@ -535,7 +535,7 @@ def test_malformed_rows_are_refused(tmp_path: Path) -> None:
     _refused(
         tmp_path, [{**good[0], "lane": None}, *good[1:]], "not the leap, S1 or a lens"
     )
-    _refused(tmp_path, [{**r, "arm": "X2-F"} for r in good], "unknown arm 'X2-F'")
+    _refused(tmp_path, [{**r, "arm": "X2-Z"} for r in good], "unknown arm 'X2-Z'")
     _refused(
         tmp_path, [{**r, "repo": "numpy"} for r in good], "unknown library 'numpy'"
     )

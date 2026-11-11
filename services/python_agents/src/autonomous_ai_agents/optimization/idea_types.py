@@ -309,6 +309,16 @@ class IdeaCandidate(EngineModel):
     """The rule a rule-relaxing lane's idea relaxes (G3), set by the lane at
     birth and tied to it here; never read from a reply. Not ``None``: a
     quarantined proposal."""
+    framework: str | None = None
+    """U-portfolio: the id of the portfolio leap procedure the idea came
+    from (``idea_frameworks``); ``None`` for every other idea."""
+    cost_model: str | None = None
+    """U-portfolio: the idea's one-line cost model."""
+    more_anchors: tuple[Anchor, ...] = ()
+    """U-portfolio: the further functions a multi-function leap idea
+    changes, each grounded on its own quoted hot lines."""
+    steps_present: tuple[int, ...] = ()
+    """U-portfolio: the step numbers whose products its procedure returned."""
 
     @model_validator(mode="after")
     def _proposal_is_the_lanes(self) -> Self:

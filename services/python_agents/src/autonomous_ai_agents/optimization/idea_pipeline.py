@@ -61,7 +61,16 @@ gets the same bytes where the cache breakpoint sits and no instruction
 grows. ``avoid_titles`` stay where they are (``<already_on_the_table>``,
 S4a), so no title is shown twice. The leap and the reviewer never get it.
 
-What they may change (G3): ``IDEAS_RELAX_LANES`` (off by default) adds
+The portfolio leap (U-portfolio): ``IDEAS_LEAP_PORTFOLIO`` (off by default;
+off keeps every request byte for byte) deals the leap three procedures of
+``idea_frameworks`` for (``IDEAS_LEAP_DEAL_LIBRARY``, ``IDEAS_LEAP_DEAL_RUN``,
+the call's round), noted, and sends ``idea_portfolio_leap``'s ask and schema
+on the leap's own request; its reply gives a ``leap_procedure`` event per
+dealt procedure (also when no reply could be read) and a ``leap_diagnosis``
+event, and each idea a ``framework:<id>`` tag, its cost model and further
+functions in the rationale. On without its deal, the constructor refuses.
+
+What they may change (G3):``IDEAS_RELAX_LANES`` (off by default) adds
 rule-relaxing lanes to S2, after every other lane (in sequence, no other lane
 sees their mechanisms). Their ideas carry ``proposal`` from birth
 (``idea_lanes``); S4a filters them on their own (no other idea is a duplicate
@@ -168,6 +177,7 @@ from autonomous_ai_agents.optimization.idea_dedupe import (
     key_event,
     taken_block,
 )
+from autonomous_ai_agents.optimization.idea_frameworks import Deal, deal
 from autonomous_ai_agents.optimization.idea_lanes import (
     lane_request,
     on_the_table,
@@ -182,6 +192,18 @@ from autonomous_ai_agents.optimization.idea_portfolio import (
     portfolio,
     rotation,
     signature,
+)
+from autonomous_ai_agents.optimization.idea_portfolio_leap import (
+    FRAMEWORK_TAG,
+    deal_settings,
+    not_sent,
+    portfolio_instruction,
+    portfolio_request,
+    read_portfolio_reply,
+    reply_failure,
+    steps_tag,
+    unanswered,
+    with_hypotheses,
 )
 from autonomous_ai_agents.optimization.idea_prompts import (
     IDEAS_SCHEMA,
@@ -308,6 +330,8 @@ class _Call:
     """A second call with a seed to show: it runs its lanes again (D64)."""
     lessons: str = ""
     """The lessons block every lane's data block ends with (W1); ``""``: none."""
+    deal: Deal | None = None
+    """The portfolio leap's three procedures (U-portfolio); ``None``: today's leap."""
 
 
 class IdeaPipelineGenerator:
@@ -359,6 +383,10 @@ class IdeaPipelineGenerator:
         self._seeded = config.IDEAS_ROUND_SEEDS
         self._lessons = config.GENERATOR_LESSONS
         self._view_record = config.IDEAS_VIEW_RECORD
+        self._deal = (  # U-portfolio: refused before any spend without its deal
+            deal_settings(config.IDEAS_LEAP_DEAL_LIBRARY, config.IDEAS_LEAP_DEAL_RUN)
+            if config.IDEAS_LEAP_PORTFOLIO else None
+        )  # fmt: skip
 
     def generate(
         self,
@@ -438,6 +466,14 @@ class IdeaPipelineGenerator:
             *self._cfg.IDEAS_LENSES,
             *((Lane.leap,) if self._cfg.IDEAS_LEAP_N else ()),
         )
+        if self._deal is not None and Lane.leap in lanes:  # U-portfolio
+            c.deal = deal(*self._deal, call_index + 1)
+            dealt = ", ".join(p.framework.id if p.tool is None
+                              else f"{p.framework.id} ({p.tool})"
+                              for p in c.deal.procedures)  # fmt: skip
+            notes.append(f"portfolio leap: dealt {dealt} (library {c.deal.library}, "
+                         f"run {c.deal.run}, round {c.deal.round}, cell "
+                         f"{c.deal.cell})")  # fmt: skip
         if self._cfg.IDEAS_LANE_VIEWS and commit is not None and reader is not None:
             source = ViewSource(
                 reader, commit, tuple(hotspots), fence, tuple(protected),
@@ -565,6 +601,8 @@ class IdeaPipelineGenerator:
                 code="discovery_unaffordable", message=message,
                 level=EventLevel.warning, data={"stage": "lanes", "estimate_usd": total},
             ))  # fmt: skip
+            if c.deal is not None:  # U-portfolio: the dealt procedures, unsent
+                not_sent(c.deal, "the lanes were unaffordable", c.events)
             return None
         if self._sequential:
             return self._in_sequence(c, order, jobs, sizes, table, examples)
@@ -608,6 +646,9 @@ class IdeaPipelineGenerator:
                         data={"stage": "lanes", "lane": lane.value,
                               "estimate_usd": job.estimate},
                     ))  # fmt: skip
+                    if c.deal is not None and Lane.leap in order[at:]:  # U-portfolio
+                        not_sent(c.deal, f"the lanes stopped at {lane.value}",
+                                 c.events)  # fmt: skip
                     break
             self._run(c, [job])
             found += self._read(c, lane, job, sizes[lane])
@@ -770,6 +811,11 @@ class IdeaPipelineGenerator:
             floor=c.objective.min_relative_gain, model=transport.chain[0],
             framework=c.frameworks.get(lane), think=self._cfg.IDEAS_THINK_LINE_ALL,
         )  # fmt: skip
+        portfolio = c.deal if leap else None  # U-portfolio: its own ask, no examples
+        if portfolio is not None:
+            instruction = portfolio_instruction(
+                portfolio, table=table, floor=c.objective.min_relative_gain
+            )
         request = lane_request(
             lane, system=c.research.system, instruction=instruction,
             prefix=prefix, shared=view is None or view.shared,
@@ -777,6 +823,10 @@ class IdeaPipelineGenerator:
             max_tokens=self._leap.max_tokens if leap
             else self._cfg.IDEAS_LANE_MAX_TOKENS,
         )  # fmt: skip
+        if (
+            portfolio is not None
+        ):  # the leap's request (its cap leap_shape's), the portfolio's schema
+            request = portfolio_request(request, portfolio)
         job = self._job(lane.value, transport, request)
         if self._view_record:
             job.view = view_sha(prefix, c.fence)
@@ -842,10 +892,14 @@ class IdeaPipelineGenerator:
                 code=LANE_VIEW, message=f"lane {lane.value}: view {job.view}",
                 data={"lane": lane.value, "view_sha": job.view, "served_model": served},
             ))  # fmt: skip
+        portfolio = c.deal if lane is Lane.leap else None  # U-portfolio
         if job.result is None:
             c.notes.append(f"lane {lane.value}: charged failure, not retried"
                            if isinstance(job.error, BudgetExceeded)
                            else f"lane {lane.value} failed {_failure(job)}")  # fmt: skip
+            if portfolio is not None:
+                unanswered(portfolio, "the request failed", reply_failure(job.error),
+                           c.events)  # fmt: skip
             return []
         view = c.views.get(lane)
         context = c.context if view is None else view.context
@@ -853,9 +907,15 @@ class IdeaPipelineGenerator:
             ideas = read_lane_reply(
                 job.result, lane=lane, context=context, index=c.index, n=n,
                 fence=c.fence, notes=c.notes, events=c.events,
+            ) if portfolio is None else read_portfolio_reply(
+                job.result, deal=portfolio, context=context, index=c.index, n=n,
+                fence=c.fence, notes=c.notes, events=c.events,
             )  # fmt: skip
         except UnusableReplyError as exc:
             c.notes.append(f"lane {lane.value} failed (UnusableReplyError): {exc}")
+            if portfolio is not None:
+                unanswered(portfolio, "the reply is unusable",
+                           reply_failure(exc, job.result), c.events)  # fmt: skip
             return []
         found = [self._ceiling(c, self._floored(c, idea), context) for idea in ideas]
         for idea in found:
@@ -915,6 +975,10 @@ class IdeaPipelineGenerator:
                    f"novel idea(s) past the result's bound of {bound} dropped")  # fmt: skip
         ideas = (*head, *tail[:room], *proposals)
         hypotheses = tuple(self._hypothesis(c, i) for i in ideas)
+        if c.deal is not None:  # U-portfolio: each idea row names its hypothesis
+            c.events = with_hypotheses(c.events, {
+                i.id: h.id for i, h in zip(ideas, hypotheses, strict=True)
+                if i.framework is not None})  # fmt: skip
         if c.seeded:  # the node's own cost line for this call (D64)
             sent = [lane.value for lane in c.per_lane if lane is not Lane.obvious]
             lanes = f"lanes {', '.join(sent)}" if sent else "no lane sent"
@@ -957,11 +1021,19 @@ class IdeaPipelineGenerator:
         )
         if idea.plan is not None:
             rationale += f"\nPlan: {idea.plan}"
+        if idea.cost_model is not None:  # U-portfolio
+            rationale += f"\nCost model: {idea.cost_model}"
+        if idea.more_anchors:  # U-portfolio: a multi-function idea
+            rationale += "\nAlso changes: " + ", ".join(
+                f"{a.path}::{a.qualname}" for a in idea.more_anchors
+            )
         tags = [f"lane:{idea.lane.value}"]
         if idea.proposal is not None:  # the quarantine's tag (G3)
             tags.append(proposal_tag(idea.proposal))
         if idea.review is not None:
             tags.append(f"review:{idea.review.value}")
+        if idea.framework is not None:  # U-portfolio: the procedure it came from
+            tags += [f"{FRAMEWORK_TAG}:{idea.framework}", steps_tag(idea.steps_present)]
         tags += [f"claimed_tier:{idea.tier.value}",
                  f"claimed_mechanism:{idea.mechanism.value}",
                  *(f"claimed_cell:{cell.value}" for cell in idea.morph_cells),

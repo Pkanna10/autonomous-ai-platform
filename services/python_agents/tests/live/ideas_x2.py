@@ -98,6 +98,20 @@ add ``shadow_verify``, the first measured trial's reading
 (``shadow_verify.shadow_reading``, its twin against itself), and its run row
 ``shadow_aa``, the twins that differ from the first (the A/A, 0).
 
+**Portfolio** (U-portfolio): X2-P is X2-0 with ``IDEAS_LEAP_PORTFOLIO`` (the
+leap dealt three procedures of ``idea_frameworks``, its cap 32,000 through
+``leap_shape``), X2-F X2-P with the leap on Fable 5.2 (and
+``ALLOW_RETENTION_MODELS``, D63); both off the plan, ``aa`` none, on the
+sprint's four libraries (the deal's design). The deal's run is
+``IDEAS_LEAP_DEAL_RUN`` (ci.yml's ``x2_replicate``, 1-3, which
+``check_settings`` requires), its library the case's (``run_one`` through
+``ideas_x2_frameworks.deal_library``). Their rows add ``framework``,
+``steps_present`` and ``not_applicable`` per leap idea and the procedure rows
+per round (``ideas_x2_frameworks``). Each earlier call is charged X1's
+dearest plus the arm's leap beyond X2-0's at its static worst
+(``leap_extra_usd``, 0 for every other arm): X2-P's cap 10.55, X2-F's 21.10
+(its share binds), both 113 minutes (the portfolio leap's 951 s timeout, ``leap_shape``).
+
 **Depth** (Window 2): X2-D is X2-0 with three rounds (``PORTFOLIO_ROUNDS``
 and ``MAX_TRIAL_ROUNDS`` 3) and a third generator call
 (``GENERATOR_MAX_CALLS`` 3, the default 2: without it the router reaches
@@ -152,6 +166,7 @@ from autonomous_ai_agents.optimization.evolve import (
     realisation,
 )
 from autonomous_ai_agents.optimization.idea_dedupe import IdeaKey, recorded_keys
+from autonomous_ai_agents.optimization.idea_frameworks import check_run
 from autonomous_ai_agents.optimization.idea_pipeline import LANE_VIEW, SEEDED_CALL
 from autonomous_ai_agents.optimization.idea_types import LENS_LANES, Lane
 from autonomous_ai_agents.optimization.shadow_verify import shadow_aa, shadow_reading
@@ -161,6 +176,7 @@ from autonomous_ai_agents.orchestrator.main import EngineRunResult
 from . import discovery_oss as dx
 from . import ideas_probe as ip
 from . import ideas_slice as isl
+from . import ideas_x2_frameworks as fx
 from . import oss
 from . import x2_patches as xp
 from .conftest import LiveRun, StartLive, key_window, redact_keys, suite_cap
@@ -186,6 +202,7 @@ X1_CALL_USD: Final = 0.9138
 X1_S1_USD: Final = 0.1066
 X1_S1_S2_USD: Final = 0.6073
 X1_LOOP_USD: Final = 0.7213
+FABLE_52: Final = "claude-fable-5-2"  # X2-F's leap (U-portfolio)
 
 
 @dataclass(frozen=True)
@@ -225,8 +242,20 @@ X2_D: Final = X2Arm("X2-D", ("sqlparse", "tomli", "mistune", "markdown"),
                     {**SHARED, "PORTFOLIO_ROUNDS": 3, "MAX_TRIAL_ROUNDS": 3,
                      "GENERATOR_MAX_CALLS": 3},
                     "depth (Window 2): X2-0 with a third round")  # fmt: skip
-# the plan's arms, then those off it (X2-D first, so the older tails stand)
-EVERY_ARM: Final = (*X2_ARMS, X2_D, X2_S, X2_C, X2_SV)
+X2_P: Final = X2Arm("X2-P", ("sqlparse", "tomli", "mistune", "markdown"),
+                    {**SHARED, "IDEAS_LEAP_PORTFOLIO": True},
+                    "portfolio leap (U-portfolio): X2-0 with the leap dealt "
+                    "three procedures, on Opus 5.5")  # fmt: skip
+X2_F: Final = X2Arm("X2-F", X2_P.repos,
+                    {**X2_P.update, "IDEAS_LEAP_MODEL": FABLE_52,
+                     "ALLOW_RETENTION_MODELS": True},
+                    "portfolio leap on Fable 5.2: X2-P with the leap's model only")  # fmt: skip
+PORTFOLIO_ARMS: Final = (X2_P, X2_F)
+"""Their deal's run is ``IDEAS_LEAP_DEAL_RUN`` (ci.yml's ``x2_replicate``,
+never in the mapping), its library each case's (``fx.deal_library``)."""
+# the plan's arms, then those off it (X2-D, X2-P, X2-F first, so the older
+# tails stand)
+EVERY_ARM: Final = (*X2_ARMS, X2_D, *PORTFOLIO_ARMS, X2_S, X2_C, X2_SV)
 LIBRARIES: Final = {r.name: r for r in dx.OSS_SELECTABLE if r.name in ip.E1_REPOS}
 Run = tuple[X2Arm, OssRepo]
 ALL_RUNS: Final[tuple[Run, ...]] = tuple(
@@ -261,6 +290,8 @@ def check_settings(arm: X2Arm, base: Settings = settings) -> None:
     if wrong:
         raise ValueError(f"arm {arm.key}: {', '.join(wrong)} not as its mapping "
                          "(ci.yml exports ideas_x2.arm_env)")  # fmt: skip
+    if arm in PORTFOLIO_ARMS:  # U-portfolio: the deal's run, before any spend
+        check_run(base.IDEAS_LEAP_DEAL_RUN)
     isl.check_engine(base)  # OP_COUNT_JUDGE on, the Opus 5.5 engine and editor
 
 
@@ -317,14 +348,33 @@ def run_trials(cfg: Settings) -> tuple[int, ...]:
 # job wall time): 36, 38 and 62 for three runs (d1, d2, d4; 33, 36 and 43
 # trials), 20 for one (d5, 17), 26 for two (d7, 26): at most 21 a run and
 # 1.44 a trial, against 89 for at most 21 trials (4.2 a trial).
+def leap_extra_usd(cfg: Settings) -> float:
+    """What ``cfg``'s leap may cost beyond the leap X1_CALL_USD was measured
+    with (X2-0's: Opus 5.5, 12,000 tokens, no portfolio), each at its static
+    worst (``ip.lane_usd``: ``leap_shape``'s cap over the leap's chain); 0
+    for every arm whose leap is X2-0's (U-portfolio: X2-P's 32,000 and X2-F's
+    Fable chain are not)."""
+    x1 = cfg.model_copy(
+        update={"IDEAS_LEAP_MODEL": OPUS, "IDEAS_LEAP_PORTFOLIO": False}
+    )
+    return max(0.0, ip.lane_usd(cfg, Lane.leap) - ip.lane_usd(x1, Lane.leap))
+
+
+def call_usd(cfg: Settings) -> float:
+    """A whole generator call as run_cap charges it: X1's dearest measured,
+    plus the arm's leap beyond X1's at its worst."""
+    return X1_CALL_USD + leap_extra_usd(cfg)
+
+
 def run_cap(cfg: Settings) -> float:
     s1, s2, review = seeded_stages(cfg)
     stage = max(s1, X1_S1_USD + s2, X1_S1_S2_USD + review)
-    earlier = (cfg.MAX_TRIAL_ROUNDS - 1) * X1_CALL_USD  # before the last seeded call
+    call = call_usd(cfg)
+    earlier = (cfg.MAX_TRIAL_ROUNDS - 1) * call  # before the last seeded call
     share = (earlier + stage) / cfg.IDEAS_DISCOVERY_MAX_SHARE
     trials = X1_LOOP_USD / LOOP_TRIALS * sum(run_trials(cfg))
     total = (settings_trial_budget(cfg) + dx.OSS_PHASE_ONE_WORST_USD
-             + cfg.MAX_TRIAL_ROUNDS * X1_CALL_USD + trials + stage)  # fmt: skip
+             + cfg.MAX_TRIAL_ROUNDS * call + trials + stage)  # fmt: skip
     return ceil_usd(max(share, total))
 
 
@@ -445,6 +495,9 @@ def _by_round(
             held = []
         else:
             held.append(e.data)
+    tail = [d for d in held if d.get("code") in fx.ROUND_CODES]  # U-portfolio:
+    if tail:  # a call no ranking followed (its lanes unaffordable) keeps its rows
+        out.setdefault(max(out, default=0) + 1, []).extend(tail)
     return out
 
 
@@ -610,7 +663,7 @@ class X2Recorder:
                 "compound": parents is not None,
                 "parents": [] if parents is None else [parents.first, parents.second],
                 "verdict": r.verdict, "gain_pct": r.gain_pct, "floor_pct": r.noise_floor_pct,
-                "op_count": isl._op_count(verdicts.get(h.id)),
+                "op_count": isl._op_count(verdicts.get(h.id)), **fx.hypothesis_fields(h),
                 **({} if clone is None else {"realisation": realised.get(h.id)}),
                 **({} if not shadowed else {"shadow_verify": shadow.get(h.id)}),
                 **({} if not stacked else {"combine": combine_row(stacked.get(h.id), owner)}),
@@ -629,7 +682,7 @@ class X2Recorder:
                 "seeded_cost_usd": math.fsum(_num(d, "cost_usd") for d in costs),
                 "compounds": sum(d.get("code") == "compound" for d in data),
                 "compounds_kept": sum(rounds.get(h.id) == n and COMPOUND_TAG in h.tags
-                                      for h in kept),
+                                      for h in kept), **fx.round_fields(data),
                 **({} if not viewed else {"lane_views": [
                     {k: d.get(k) for k in ("lane", "view_sha", "served_model")}
                     for d in data if d.get("code") == LANE_VIEW]})})  # fmt: skip
@@ -703,7 +756,8 @@ def run_one(arm: X2Arm, repo: OssRepo, *, live: StartLive, root: Path,
     run = live(cap)
     where = root / f"{EVERY_ARM.index(arm)}-{repo.name}"
     where.mkdir(parents=True)
-    loop = start_x2_loop(repo, run, where, isolation, policy=policy)
+    with fx.deal_library(repo.name, arm_settings(arm, recorder.base)):  # U-portfolio
+        loop = start_x2_loop(repo, run, where, isolation, policy=policy)
     commit = (recorder.commits or {}).get(repo.name, "")
     if loop.user.base != commit:
         raise ValueError(

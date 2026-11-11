@@ -43,6 +43,13 @@ near-miss compounds, their standalone points (vs base, not additive) and,
 where per-keep combine records exist, the keeps delivered, beside the
 delivered combine. It is not a contribution: a third round's delivered
 gain is read only from X2-D's combine against the pool (``--variance``).
+
+``--frameworks`` (U-portfolio, X2-P and X2-F) writes ``frameworks.md``
+instead: every file's rows together, per arm and procedure of the portfolio
+leap, what was dealt, unanswered, turned into ideas, trialled and kept, the
+median gain over the floor and the adherence to the steps over the answered
+procedures (``ideas_x2_frameworks.framework_section``). It reads the leap's
+own records only: a framework's ideas are not a contribution either.
 """
 
 from __future__ import annotations
@@ -53,7 +60,7 @@ import json
 import math
 import statistics
 from collections import Counter, defaultdict
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import combinations, product
 from pathlib import Path
@@ -72,6 +79,7 @@ from .conftest import redact_keys
 from .discovery_io import cells, flag, per
 from .ideas_probe import E1_REPOS, SERVICE_DIR
 from .ideas_x2 import EVERY_ARM, IDEA_EXPERIMENT, ROUND_EXPERIMENT, RUN_EXPERIMENT
+from .ideas_x2_frameworks import framework_section
 
 REPORT_DIR: Final = SERVICE_DIR.parents[1] / ".claude/handoff/step3/idea-lab/x2"
 ARMS: Final = tuple(a.key for a in EVERY_ARM)  # the plan's, then those off it
@@ -1007,19 +1015,58 @@ def render_rounds(found: Sequence[Draw]) -> str:
     ])  # fmt: skip
 
 
+def raw_rows(paths: Iterable[Path]) -> list[dict[str, object]]:
+    """Every JSON object row of ``paths`` (blank lines skipped); a line that
+    is not JSON is refused."""
+    found: list[dict[str, object]] = []
+    for path in paths:
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{path}:{n}: not JSON ({exc.msg})") from None
+            if isinstance(row, dict):
+                found.append(row)
+    return found
+
+
+def render_frameworks(rows: Sequence[Mapping[str, object]]) -> str:
+    return "\n".join([
+        "# X2 portfolio leap by framework (U-portfolio, X2-P and X2-F)", "",
+        "- **Dealt.** Each leap call is dealt three procedures by (library, run, "
+        "round); a row per dealt procedure, whatever became of it. No reply: the "
+        "request went out and no reply could be read (its failure kind is on the "
+        "row); not sent: the lanes stopped before the leap.",
+        "- **Ideas, trialled, kept.** Ideas passed the reply's checks; trialled and "
+        "kept are the hypothesis rows of the framework with a round and with a keep.",
+        "- **Median gain / floor.** Over the trialled ideas with a gain and a "
+        "positive floor; standalone, not additive.",
+        "- **Adherence (answered).** Step products returned over steps required, "
+        "over the answered procedures only (dealt less no reply and not sent).", "",
+        *framework_section(rows),
+    ])  # fmt: skip
+
+
 def main(argv: Sequence[str] | None = None, echo: Callable[[str], None] = print) -> int:
     """Write ``x2.md`` (``--variance``: ``variance.md``; ``--rounds``:
-    ``rounds.md``); 2 on a refused or unreadable input (nothing written)."""
+    ``rounds.md``; ``--frameworks``: ``frameworks.md``); 2 on a refused or
+    unreadable input (nothing written)."""
     parser = argparse.ArgumentParser(prog="ideas_x2_report", description=__doc__)
     parser.add_argument("results", nargs="+", type=Path)
     parser.add_argument("--out", type=Path, default=REPORT_DIR)
     page = parser.add_mutually_exclusive_group()
     page.add_argument("--variance", action="store_true")
     page.add_argument("--rounds", action="store_true")
+    page.add_argument("--frameworks", action="store_true")
     args = parser.parse_args(argv)
-    name = "variance.md" if args.variance else "rounds.md" if args.rounds else "x2.md"
+    name = ("variance.md" if args.variance else "rounds.md" if args.rounds
+            else "frameworks.md" if args.frameworks else "x2.md")  # fmt: skip
     try:
-        if args.variance:
+        if args.frameworks:
+            text = render_frameworks(raw_rows(args.results))
+        elif args.variance:
             text = render_variance(draws(args.results))
         elif args.rounds:
             text = render_rounds(draws(args.results))
