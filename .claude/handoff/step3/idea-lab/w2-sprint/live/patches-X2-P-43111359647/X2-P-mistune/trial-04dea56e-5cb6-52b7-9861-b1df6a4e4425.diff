@@ -1,0 +1,38 @@
+diff --git a/src/mistune/_inline/links.py b/src/mistune/_inline/links.py
+index 5ad0ec389dd24859b80a8c62901747c0a3fca1c7..545d9d7a2e443f2ccc5a0be1a3f4bd47bf40c750 100644
+--- a/src/mistune/_inline/links.py
++++ b/src/mistune/_inline/links.py
+@@ -1,5 +1,6 @@
+ from __future__ import annotations
+ 
++import re
+ from bisect import bisect_left
+ from typing import TYPE_CHECKING, Dict, List, Match, Optional, Tuple
+ 
+@@ -236,15 +237,16 @@ def find_link_range_end(src: str, label_start: int, close_pos: int, state: Inlin
+ def build_closing_bracket_map(src: str) -> Dict[int, int]:
+     pairs: Dict[int, int] = {}
+     stack: List[int] = []
+-    pos = 0
+-    while pos < len(src):
+-        char = src[pos]
+-        if char == "\\":
+-            pos += 2
+-            continue
++    if "[" not in src:
++        return pairs
++    for m in _BRACKET_SCAN_RE.finditer(src):
++        char = m.group()
+         if char == "[":
+-            stack.append(pos + 1)
+-        elif char == "]" and stack:
+-            pairs[stack.pop()] = pos
+-        pos += 1
++            stack.append(m.start() + 1)
++        elif char == "]":
++            if stack:
++                pairs[stack.pop()] = m.start()
+     return pairs
++
++
++_BRACKET_SCAN_RE = re.compile(r"\\[\s\S]|[\[\]]")

@@ -1,0 +1,53 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..7e73e9ee395b4d7c06855e05178561999fc47b2a 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -86,6 +86,8 @@ class InlineProcessor(Treeprocessor):
+         self.md = md
+         self.inlinePatterns = md.inlinePatterns
+         self.ancestors: list[str] = []
++        self._inline_memo: dict = {}
++        self._exclude_tags: tuple[str, ...] = ()
+ 
+     def __makePlaceholder(self, type: str) -> tuple[str, str]:
+         """ Generate a placeholder """
+@@ -130,6 +132,17 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         if not isinstance(data, util.AtomicString):
++            memo = self._inline_memo
++            ancestors = self.ancestors
++            key = (
++                data,
++                patternIndex,
++                tuple([tag in ancestors for tag in self._exclude_tags])
++            )
++            if key in memo:
++                return data
++            original = data
++            stash_len = len(self.stashed_nodes)
+             startIndex = 0
+             count = len(self.inlinePatterns)
+             while patternIndex < count:
+@@ -138,6 +151,8 @@ class InlineProcessor(Treeprocessor):
+                 )
+                 if not matched:
+                     patternIndex += 1
++            if len(self.stashed_nodes) == stash_len and data == original:
++                memo[key] = True
+         return data
+ 
+     def __processElementText(self, node: etree.Element, subnode: etree.Element, isText: bool = True) -> None:
+@@ -364,6 +379,12 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         self.stashed_nodes: dict[str, etree.Element | str] = {}
++        self._inline_memo: dict = {}
++        exclude_tags: set[str] = set()
++        for pattern in self.inlinePatterns:
++            for exclude in pattern.ANCESTOR_EXCLUDES:
++                exclude_tags.add(exclude.lower())
++        self._exclude_tags = tuple(sorted(exclude_tags))
+ 
+         # Ensure a valid parent list, but copy passed in lists
+         # to ensure we don't have the user accidentally change it on us.

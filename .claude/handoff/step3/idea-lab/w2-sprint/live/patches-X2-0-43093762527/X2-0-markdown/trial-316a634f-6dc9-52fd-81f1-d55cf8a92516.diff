@@ -1,0 +1,83 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..7f259f10c070b7fa93f92a062813dffcb2682a55 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -52,6 +52,24 @@ def isString(s: object) -> bool:
+     return False
+ 
+ 
++# Literal substrings, at least one of which must occur in the text for the
++# given built-in regular expression to match. Keyed by the exact regex source.
++_REQUIRED_LITERALS: dict[str, tuple[str, ...]] = {
++    inlinepatterns.BACKTICK_RE: ('`',),
++    inlinepatterns.ESCAPE_RE: ('\\',),
++    inlinepatterns.LINK_RE: ('[',),
++    inlinepatterns.IMAGE_LINK_RE: ('![',),
++    inlinepatterns.AUTOLINK_RE: ('<',),
++    inlinepatterns.AUTOMAIL_RE: ('<',),
++    inlinepatterns.HTML_RE: ('<',),
++    inlinepatterns.ENTITY_RE: ('&',),
++    inlinepatterns.LINE_BREAK_RE: ('  \n',),
++    inlinepatterns.NOT_STRONG_RE: ('*', '_'),
++    r'\*': ('*',),
++    r'_': ('_',),
++}
++
++
+ class Treeprocessor(util.Processor):
+     """
+     `Treeprocessor`s are run on the `ElementTree` object before serialization.
+@@ -131,15 +149,43 @@ class InlineProcessor(Treeprocessor):
+         """
+         if not isinstance(data, util.AtomicString):
+             startIndex = 0
+-            count = len(self.inlinePatterns)
++            patterns = self.__patterns
++            hints = self.__hints
++            count = len(patterns)
+             while patternIndex < count:
++                hint = hints[patternIndex]
++                if hint is not None:
++                    for h in hint:
++                        if h in data:
++                            break
++                    else:
++                        patternIndex += 1
++                        startIndex = 0
++                        continue
+                 data, matched, startIndex = self.__applyPattern(
+-                    self.inlinePatterns[patternIndex], data, patternIndex, startIndex
++                    patterns[patternIndex], data, patternIndex, startIndex
+                 )
+                 if not matched:
+                     patternIndex += 1
+         return data
+ 
++    def __computeHints(self) -> None:
++        """ Compute, per pattern, literal substrings of which at least one must occur for a match. """
++        patterns = [p for p in self.inlinePatterns]
++        hints: list[tuple[str, ...] | None] = []
++        for p in patterns:
++            hint = None
++            if (
++                isinstance(p, inlinepatterns.InlineProcessor)
++                and type(p).getCompiledRegExp is inlinepatterns.Pattern.getCompiledRegExp
++            ):
++                cre = getattr(p, 'compiled_re', None)
++                if isinstance(cre, re.Pattern) and not (cre.flags & re.VERBOSE):
++                    hint = _REQUIRED_LITERALS.get(cre.pattern)
++            hints.append(hint)
++        self.__patterns = patterns
++        self.__hints = hints
++
+     def __processElementText(self, node: etree.Element, subnode: etree.Element, isText: bool = True) -> None:
+         """
+         Process placeholders in `Element.text` or `Element.tail`
+@@ -364,6 +410,7 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         self.stashed_nodes: dict[str, etree.Element | str] = {}
++        self.__computeHints()
+ 
+         # Ensure a valid parent list, but copy passed in lists
+         # to ensure we don't have the user accidentally change it on us.

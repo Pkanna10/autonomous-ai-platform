@@ -1,0 +1,97 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..6432391dafa27922ea4d6321d84c9eececf9838d 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -176,6 +176,8 @@ def loads(__s: str, *, parse_float: ParseFloat = float) -> dict[str, Any]:
+     out = Output()
+     header: Key = ()
+     parse_float = make_safe_parse_float(parse_float)
++    # Per-section cache: the nest dict of the current header (None = unresolved)
++    section_cache: list[Any] = [None]
+ 
+     # Parse one statement at a time
+     # (typically means one line in TOML source)
+@@ -199,7 +201,9 @@ def loads(__s: str, *, parse_float: ParseFloat = float) -> dict[str, Any]:
+             pos += 1
+             continue
+         if char in KEY_INITIAL_CHARS:
+-            pos = key_value_rule(src, pos, out, header, parse_float)
++            pos = key_value_rule(
++                src, pos, out, header, parse_float, section_cache
++            )
+             pos = skip_chars(src, pos, TOML_WS)
+         elif char == "[":
+             try:
+@@ -211,6 +215,7 @@ def loads(__s: str, *, parse_float: ParseFloat = float) -> dict[str, Any]:
+                 pos, header = create_list_rule(src, pos, out)
+             else:
+                 pos, header = create_dict_rule(src, pos, out)
++            section_cache[0] = None
+             pos = skip_chars(src, pos, TOML_WS)
+         elif char != "#":
+             raise TOMLDecodeError("Invalid statement", src, pos)
+@@ -426,9 +431,33 @@ def create_list_rule(src: str, pos: Pos, out: Output) -> tuple[Pos, Key]:
+ 
+ 
+ def key_value_rule(
+-    src: str, pos: Pos, out: Output, header: Key, parse_float: ParseFloat
++    src: str,
++    pos: Pos,
++    out: Output,
++    header: Key,
++    parse_float: ParseFloat,
++    section_cache: list[Any] | None = None,
+ ) -> Pos:
+     pos, key, value = parse_key_value_pair(src, pos, parse_float, nest_lvl=0)
++    if section_cache is not None and len(key) == 1:
++        key_stem = key[0]
++        nest = section_cache[0]
++        if nest is None:
++            if out.flags.is_(header, Flags.FROZEN):
++                raise TOMLDecodeError(
++                    f"Cannot mutate immutable namespace {header}", src, pos
++                )
++            try:
++                nest = out.data.get_or_create_nest(header)
++            except KeyError:
++                raise TOMLDecodeError("Cannot overwrite a value", src, pos) from None
++            section_cache[0] = nest
++        if key_stem in nest:
++            raise TOMLDecodeError("Cannot overwrite a value", src, pos)
++        if isinstance(value, (dict, list)):
++            out.flags.set(header + key, Flags.FROZEN, recursive=True)
++        nest[key_stem] = value
++        return pos
+     key_parent, key_stem = key[:-1], key[-1]
+     abs_key_parent = header + key_parent
+ 
+@@ -747,16 +776,19 @@ def parse_value(
+         return parse_inline_table(src, pos, parse_float, nest_lvl + 1)
+ 
+     # Dates and times
+-    datetime_match = RE_DATETIME.match(src, pos)
+-    if datetime_match:
+-        try:
+-            datetime_obj = match_to_datetime(datetime_match)
+-        except ValueError as e:
+-            raise TOMLDecodeError("Invalid date or datetime", src, pos) from e
+-        return datetime_match.end(), datetime_obj
+-    localtime_match = RE_LOCALTIME.match(src, pos)
+-    if localtime_match:
+-        return localtime_match.end(), match_to_localtime(localtime_match)
++    # RE_DATETIME requires "-" at pos+4; RE_LOCALTIME requires ":" at pos+2.
++    if src[pos + 4 : pos + 5] == "-":
++        datetime_match = RE_DATETIME.match(src, pos)
++        if datetime_match:
++            try:
++                datetime_obj = match_to_datetime(datetime_match)
++            except ValueError as e:
++                raise TOMLDecodeError("Invalid date or datetime", src, pos) from e
++            return datetime_match.end(), datetime_obj
++    elif src[pos + 2 : pos + 3] == ":":
++        localtime_match = RE_LOCALTIME.match(src, pos)
++        if localtime_match:
++            return localtime_match.end(), match_to_localtime(localtime_match)
+ 
+     # Integers and "normal" floats.
+     # The regex will greedily match any type starting with a decimal

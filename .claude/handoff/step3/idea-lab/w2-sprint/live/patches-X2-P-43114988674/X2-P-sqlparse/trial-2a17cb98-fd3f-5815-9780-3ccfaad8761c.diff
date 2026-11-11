@@ -1,0 +1,35 @@
+diff --git a/sqlparse/engine/grouping.py b/sqlparse/engine/grouping.py
+index 43ca5b580d5e8499e3fa1ed5275902d7e20ce71b..28b26160548864b5098129cfd63fcf8640d6f773 100644
+--- a/sqlparse/engine/grouping.py
++++ b/sqlparse/engine/grouping.py
+@@ -41,10 +41,12 @@ def _group_matching(tlist, cls, depth=0):
+     opens = []
+     tidx_offset = 0
+     token_list = list(tlist)
++    m_open = cls.M_OPEN
++    m_close = cls.M_CLOSE
++    open_tt = m_open[0]
++    close_tt = m_close[0]
+ 
+     for idx, token in enumerate(token_list):
+-        tidx = idx - tidx_offset
+-
+         if token.is_whitespace:
+             # ~50% of tokens will be whitespace. Will checking early
+             # for them avoid 3 comparisons, but then add 1 more comparison
+@@ -58,10 +60,12 @@ def _group_matching(tlist, cls, depth=0):
+             _group_matching(token, cls, depth + 1)
+             continue
+ 
+-        if token.match(*cls.M_OPEN):
+-            opens.append(tidx)
++        ttype = token.ttype
++        if ttype is open_tt and token.match(*m_open):
++            opens.append(idx - tidx_offset)
+ 
+-        elif token.match(*cls.M_CLOSE):
++        elif ttype is close_tt and token.match(*m_close):
++            tidx = idx - tidx_offset
+             try:
+                 open_idx = opens.pop()
+             except IndexError:

@@ -1,0 +1,57 @@
+diff --git a/src/mistune/_inline/emphasis.py b/src/mistune/_inline/emphasis.py
+index b25aea258aa8640bcb9848c4893e77247a5aef64..4a06e2c7b55709500d673668523910e3d3189c2e 100644
+--- a/src/mistune/_inline/emphasis.py
++++ b/src/mistune/_inline/emphasis.py
+@@ -191,6 +191,11 @@ def _split_text_token(
+     delimiters: List[_Delimiter],
+ ) -> None:
+     text = token["raw"]
++    if not text:
++        return
++    if "*" not in text and "_" not in text:
++        parts.append({"type": "text", "raw": text})
++        return
+     pos = 0
+     while pos < len(text):
+         if text[pos] not in "*_":
+diff --git a/src/mistune/core.py b/src/mistune/core.py
+index 1f6f0678133458fbcbbf8255c01a1d6046bf7f4f..e7ba0b6ff35eba556a37a81a648c9e1da7b05618 100644
+--- a/src/mistune/core.py
++++ b/src/mistune/core.py
+@@ -241,6 +241,7 @@ class BaseRenderer(object):
+ 
+     def __init__(self) -> None:
+         self.__methods: Dict[str, Callable[..., str]] = {}
++        self._method_cache: Dict[str, Callable[..., str]] = {}
+ 
+     def register(self, name: str, method: Callable[..., str]) -> None:
+         """Register a render method for the named token. For example::
+@@ -252,6 +253,7 @@ class BaseRenderer(object):
+         """
+         # bind self into renderer method
+         self.__methods[name] = lambda *arg, **kwargs: method(self, *arg, **kwargs)
++        self._method_cache = {}
+ 
+     def _get_method(self, name: str) -> Callable[..., str]:
+         try:
+diff --git a/src/mistune/renderers/html.py b/src/mistune/renderers/html.py
+index a62e7c78f8510e9681a41c985da1fe05af4b436a..2b0e5907972ba2ddf08c770b98abed8f4fb8f328 100644
+--- a/src/mistune/renderers/html.py
++++ b/src/mistune/renderers/html.py
+@@ -39,7 +39,15 @@ class HTMLRenderer(BaseRenderer):
+ 
+     def render_token(self, token: Dict[str, Any], state: BlockState) -> str:
+         # backward compitable with v2
+-        func = self._get_method(token["type"])
++        _type = token["type"]
++        try:
++            func = self._method_cache[_type]
++        except KeyError:
++            func = self._get_method(_type)
++            self._method_cache[_type] = func
++        except AttributeError:
++            func = self._get_method(_type)
++            self._method_cache = {_type: func}
+         attrs = token.get("attrs")
+ 
+         if "raw" in token:

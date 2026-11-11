@@ -1,0 +1,63 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..852e8077f4e4464c3608206dbdcc2d47ad143c88 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -375,8 +375,10 @@ class InlineProcessor(Treeprocessor):
+         while stack:
+             currElement, parents = stack.pop(0)
+ 
++            # Each stack entry already carries the ancestor chain of its
++            # enclosing element, so only the element's own tag is missing.
++            parents.append(currElement.tag.lower())
+             self.ancestors = parents
+-            self.__build_ancestors(currElement, self.ancestors)
+ 
+             insertQueue = []
+             for child in currElement:
+diff --git a/markdown/util.py b/markdown/util.py
+index 29ffa247de8a6432653f26abb235d669093c232f..15b6f9abe8406848656b74601d166921b613696c 100644
+--- a/markdown/util.py
++++ b/markdown/util.py
+@@ -311,6 +311,7 @@ class Registry(Generic[_T]):
+         self._data: dict[str, _T] = {}
+         self._priority: list[_PriorityItem] = []
+         self._is_sorted = False
++        self._items: list[_T] | None = None
+ 
+     def __contains__(self, item: str | _T) -> bool:
+         if isinstance(item, str):
+@@ -332,6 +333,13 @@ class Registry(Generic[_T]):
+         ...
+ 
+     def __getitem__(self, key: str | int | slice) -> _T | Registry[_T]:
++        if type(key) is int:
++            items = self._items
++            if items is None:
++                self._sort()
++                data_ = self._data
++                items = self._items = [data_[k] for k, p in self._priority]
++            return items[key]
+         self._sort()
+         if isinstance(key, slice):
+             data: Registry[_T] = Registry()
+@@ -382,6 +390,7 @@ class Registry(Generic[_T]):
+             # Remove existing item of same name first
+             self.deregister(name)
+         self._is_sorted = False
++        self._items = None
+         self._data[name] = item
+         self._priority.append(_PriorityItem(name, priority))
+ 
+@@ -391,6 +400,7 @@ class Registry(Generic[_T]):
+ 
+         Set `strict=False` to fail silently. Otherwise a [`ValueError`][] is raised for an unknown `name`.
+         """
++        self._items = None
+         try:
+             index = self.get_index_for_name(name)
+             del self._priority[index]
+@@ -408,3 +418,4 @@ class Registry(Generic[_T]):
+         if not self._is_sorted:
+             self._priority.sort(key=lambda item: item.priority, reverse=True)
+             self._is_sorted = True
++            self._items = None

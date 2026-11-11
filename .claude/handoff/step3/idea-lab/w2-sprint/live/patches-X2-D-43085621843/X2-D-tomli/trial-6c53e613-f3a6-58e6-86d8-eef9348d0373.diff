@@ -1,0 +1,50 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..02541b24da496d1ccd9a0a18bfdec3e1ec85f13c 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -8,6 +8,7 @@ from __future__ import annotations
+ # parse_value().
+ __lazy_modules__ = ["tomli._re", "tomllib._re"]
+ 
++import re
+ import sys
+ 
+ from ._re import (
+@@ -66,6 +67,7 @@ TOML_WS_AND_NEWLINE: Final = TOML_WS | frozenset("\n")
+ BARE_KEY_CHARS: Final = frozenset(
+     "abcdefghijklmnopqrstuvwxyz" "ABCDEFGHIJKLMNOPQRSTUVWXYZ" "0123456789" "-_"
+ )
++_RE_SIMPLE_KEY_EQ: Final = re.compile(r"([A-Za-z0-9_-]+)[ \t]*=")
+ KEY_INITIAL_CHARS: Final = BARE_KEY_CHARS | frozenset("\"'")
+ HEXDIGIT_CHARS: Final = frozenset("abcdef" "ABCDEF" "0123456789")
+ 
+@@ -462,14 +464,21 @@ def key_value_rule(
+ def parse_key_value_pair(
+     src: str, pos: Pos, parse_float: ParseFloat, nest_lvl: int
+ ) -> tuple[Pos, Key, Any]:
+-    pos, key = parse_key(src, pos)
+-    try:
+-        char: str | None = src[pos]
+-    except IndexError:
+-        char = None
+-    if char != "=":
+-        raise TOMLDecodeError("Expected '=' after a key in a key/value pair", src, pos)
+-    pos += 1
++    m = _RE_SIMPLE_KEY_EQ.match(src, pos)
++    if m is not None:
++        key: Key = (m.group(1),)
++        pos = m.end()
++    else:
++        pos, key = parse_key(src, pos)
++        try:
++            char: str | None = src[pos]
++        except IndexError:
++            char = None
++        if char != "=":
++            raise TOMLDecodeError(
++                "Expected '=' after a key in a key/value pair", src, pos
++            )
++        pos += 1
+     pos = skip_chars(src, pos, TOML_WS)
+     pos, value = parse_value(src, pos, parse_float, nest_lvl)
+     return pos, key, value

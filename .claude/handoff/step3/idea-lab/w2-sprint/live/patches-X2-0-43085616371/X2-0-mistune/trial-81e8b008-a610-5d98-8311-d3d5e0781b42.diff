@@ -1,0 +1,42 @@
+diff --git a/src/mistune/_inline/links.py b/src/mistune/_inline/links.py
+index 5ad0ec389dd24859b80a8c62901747c0a3fca1c7..65fc1e88fb03a5a6371f9850546590ef9ab58ed8 100644
+--- a/src/mistune/_inline/links.py
++++ b/src/mistune/_inline/links.py
+@@ -1,5 +1,6 @@
+ from __future__ import annotations
+ 
++import re
+ from bisect import bisect_left
+ from typing import TYPE_CHECKING, Dict, List, Match, Optional, Tuple
+ 
+@@ -14,6 +15,8 @@ from ..util import unikey
+ if TYPE_CHECKING:
+     from ..inline_parser import InlineParser
+ 
++_BRACKET_SCAN_RE = re.compile(r"\\[\s\S]|[\[\]]")
++
+ 
+ def parse_link(inline: "InlineParser", m: Match[str], state: InlineState) -> Optional[int]:
+     pos = m.end()
+@@ -236,15 +239,11 @@ def find_link_range_end(src: str, label_start: int, close_pos: int, state: Inlin
+ def build_closing_bracket_map(src: str) -> Dict[int, int]:
+     pairs: Dict[int, int] = {}
+     stack: List[int] = []
+-    pos = 0
+-    while pos < len(src):
+-        char = src[pos]
+-        if char == "\\":
+-            pos += 2
+-            continue
++    for m in _BRACKET_SCAN_RE.finditer(src):
++        char = m.group()
+         if char == "[":
+-            stack.append(pos + 1)
+-        elif char == "]" and stack:
+-            pairs[stack.pop()] = pos
+-        pos += 1
++            stack.append(m.start() + 1)
++        elif char == "]":
++            if stack:
++                pairs[stack.pop()] = m.start()
+     return pairs

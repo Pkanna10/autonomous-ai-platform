@@ -1,0 +1,131 @@
+diff --git a/sqlparse/engine/grouping.py b/sqlparse/engine/grouping.py
+index 43ca5b580d5e8499e3fa1ed5275902d7e20ce71b..f7a55ad90d8a4595c43c9e04d1d69f34657111df 100644
+--- a/sqlparse/engine/grouping.py
++++ b/sqlparse/engine/grouping.py
+@@ -98,8 +98,10 @@ def group_begin(tlist):
+ 
+ 
+ def group_typecasts(tlist):
++    punct = T.Punctuation
++
+     def match(token):
+-        return token.match(T.Punctuation, '::')
++        return token.ttype is punct and token.normalized == '::'
+ 
+     def valid(token):
+         return token is not None
+@@ -162,12 +164,15 @@ def group_typed_literal(tlist):
+ 
+ 
+ def group_period(tlist):
++    punct = T.Punctuation
++    oper = T.Operator
++
+     def match(token):
+-        for ttype, value in ((T.Punctuation, '.'),
+-                             (T.Operator, '->'),
+-                             (T.Operator, '->>')):
+-            if token.match(ttype, value):
+-                return True
++        ttype = token.ttype
++        if ttype is punct:
++            return token.normalized == '.'
++        if ttype is oper:
++            return token.normalized in ('->', '->>')
+         return False
+ 
+     def valid_prev(token):
+@@ -209,8 +214,10 @@ def group_as(tlist):
+ 
+ 
+ def group_assignment(tlist):
++    assign = T.Assignment
++
+     def match(token):
+-        return token.match(T.Assignment, ':=')
++        return token.ttype is assign and token.normalized == ':='
+ 
+     def valid(token):
+         return token is not None and token.ttype not in (T.Keyword,)
+@@ -319,8 +326,10 @@ def group_identifier_list(tlist):
+     ttypes = (T_NUMERICAL + T_STRING + T_NAME
+               + (T.Keyword, T.Comment, T.Wildcard))
+ 
++    punct = T.Punctuation
++
+     def match(token):
+-        return token.match(T.Punctuation, ',')
++        return token.ttype is punct and token.normalized == ','
+ 
+     def valid(token):
+         return imt(token, i=sqlcls, m=m_role, t=ttypes)
+@@ -499,21 +508,23 @@ def _group(tlist, cls, match,
+     tidx_offset = 0
+     pidx, prev_ = None, None
+     token_list = list(tlist)
++    child_depth = depth + 1
++    token_next = tlist.token_next
+ 
+     for idx, token in enumerate(token_list):
+-        tidx = idx - tidx_offset
+-        if tidx < 0:  # tidx shouldn't get negative
++        if token.is_whitespace:
+             continue
+ 
+-        if token.is_whitespace:
++        tidx = idx - tidx_offset
++        if tidx < 0:  # tidx shouldn't get negative
+             continue
+ 
+         if recurse and token.is_group and not isinstance(token, cls):
+             _group(token, cls, match, valid_prev, valid_next,
+-                   post, extend, True, depth + 1)
++                   post, extend, True, child_depth)
+ 
+         if match(token):
+-            nidx, next_ = tlist.token_next(tidx)
++            nidx, next_ = token_next(tidx)
+             if prev_ and valid_prev(prev_) and valid_next(next_):
+                 from_idx, to_idx = post(tlist, pidx, tidx, nidx)
+                 grp = tlist.group_tokens(cls, from_idx, to_idx, extend=extend)
+diff --git a/sqlparse/sql.py b/sqlparse/sql.py
+index 831dfb96d2b3a282b228bfddac97703a32e608e8..e13d2625ec73696457b7e58946574c3d78e76b56 100644
+--- a/sqlparse/sql.py
++++ b/sqlparse/sql.py
+@@ -98,11 +98,16 @@ class Token:
+         If *regex* is ``True``, the given values are treated as regular
+         expressions. Partial matches are allowed. Defaults to ``False``.
+         """
+-        type_matched = self.ttype is ttype
+-        if not type_matched or values is None:
+-            return type_matched
++        if self.ttype is not ttype:
++            return False
++        if values is None:
++            return True
+ 
+         if isinstance(values, str):
++            if not regex:
++                if self.is_keyword:
++                    return self.normalized == values.upper()
++                return self.normalized == values
+             values = (values,)
+ 
+         if regex:
+@@ -115,10 +120,14 @@ class Token:
+                     return True
+             return False
+ 
++        normalized = self.normalized
+         if self.is_keyword:
+-            values = (v.upper() for v in values)
++            for v in values:
++                if normalized == v.upper():
++                    return True
++            return False
+ 
+-        return self.normalized in values
++        return normalized in values
+ 
+     def within(self, group_cls):
+         """Returns ``True`` if this token is within *group_cls*.

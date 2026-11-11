@@ -1,0 +1,16 @@
+diff --git a/src/mistune/renderers/html.py b/src/mistune/renderers/html.py
+index a62e7c78f8510e9681a41c985da1fe05af4b436a..e90f2b436a57170542444ad9a73647cfd044c396 100644
+--- a/src/mistune/renderers/html.py
++++ b/src/mistune/renderers/html.py
+@@ -39,7 +39,10 @@ class HTMLRenderer(BaseRenderer):
+ 
+     def render_token(self, token: Dict[str, Any], state: BlockState) -> str:
+         # backward compitable with v2
+-        func = self._get_method(token["type"])
++        name = token["type"]
++        func = getattr(self, name, None)
++        if func is None:
++            func = self._get_method(name)
+         attrs = token.get("attrs")
+ 
+         if "raw" in token:

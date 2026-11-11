@@ -1,0 +1,247 @@
+diff --git a/sqlparse/engine/grouping.py b/sqlparse/engine/grouping.py
+index 43ca5b580d5e8499e3fa1ed5275902d7e20ce71b..bce813fe416b4349166ecc57472bfeb438bb6071 100644
+--- a/sqlparse/engine/grouping.py
++++ b/sqlparse/engine/grouping.py
+@@ -41,10 +41,12 @@ def _group_matching(tlist, cls, depth=0):
+     opens = []
+     tidx_offset = 0
+     token_list = list(tlist)
++    m_open = cls.M_OPEN
++    m_close = cls.M_CLOSE
++    open_tt = m_open[0]
++    close_tt = m_close[0]
+ 
+     for idx, token in enumerate(token_list):
+-        tidx = idx - tidx_offset
+-
+         if token.is_whitespace:
+             # ~50% of tokens will be whitespace. Will checking early
+             # for them avoid 3 comparisons, but then add 1 more comparison
+@@ -58,10 +60,12 @@ def _group_matching(tlist, cls, depth=0):
+             _group_matching(token, cls, depth + 1)
+             continue
+ 
+-        if token.match(*cls.M_OPEN):
+-            opens.append(tidx)
++        ttype = token.ttype
++        if ttype is open_tt and token.match(*m_open):
++            opens.append(idx - tidx_offset)
+ 
+-        elif token.match(*cls.M_CLOSE):
++        elif ttype is close_tt and token.match(*m_close):
++            tidx = idx - tidx_offset
+             try:
+                 open_idx = opens.pop()
+             except IndexError:
+@@ -98,8 +102,10 @@ def group_begin(tlist):
+ 
+ 
+ def group_typecasts(tlist):
++    punct = T.Punctuation
++
+     def match(token):
+-        return token.match(T.Punctuation, '::')
++        return token.ttype is punct and token.normalized == '::'
+ 
+     def valid(token):
+         return token is not None
+@@ -162,12 +168,15 @@ def group_typed_literal(tlist):
+ 
+ 
+ def group_period(tlist):
++    punct = T.Punctuation
++    oper = T.Operator
++
+     def match(token):
+-        for ttype, value in ((T.Punctuation, '.'),
+-                             (T.Operator, '->'),
+-                             (T.Operator, '->>')):
+-            if token.match(ttype, value):
+-                return True
++        ttype = token.ttype
++        if ttype is punct:
++            return token.normalized == '.'
++        if ttype is oper:
++            return token.normalized in ('->', '->>')
+         return False
+ 
+     def valid_prev(token):
+@@ -209,8 +218,10 @@ def group_as(tlist):
+ 
+ 
+ def group_assignment(tlist):
++    assign = T.Assignment
++
+     def match(token):
+-        return token.match(T.Assignment, ':=')
++        return token.ttype is assign and token.normalized == ':='
+ 
+     def valid(token):
+         return token is not None and token.ttype not in (T.Keyword,)
+@@ -319,8 +330,10 @@ def group_identifier_list(tlist):
+     ttypes = (T_NUMERICAL + T_STRING + T_NAME
+               + (T.Keyword, T.Comment, T.Wildcard))
+ 
++    punct = T.Punctuation
++
+     def match(token):
+-        return token.match(T.Punctuation, ',')
++        return token.ttype is punct and token.normalized == ','
+ 
+     def valid(token):
+         return imt(token, i=sqlcls, m=m_role, t=ttypes)
+@@ -499,21 +512,23 @@ def _group(tlist, cls, match,
+     tidx_offset = 0
+     pidx, prev_ = None, None
+     token_list = list(tlist)
++    child_depth = depth + 1
++    token_next = tlist.token_next
+ 
+     for idx, token in enumerate(token_list):
+-        tidx = idx - tidx_offset
+-        if tidx < 0:  # tidx shouldn't get negative
++        if token.is_whitespace:
+             continue
+ 
+-        if token.is_whitespace:
++        tidx = idx - tidx_offset
++        if tidx < 0:  # tidx shouldn't get negative
+             continue
+ 
+         if recurse and token.is_group and not isinstance(token, cls):
+             _group(token, cls, match, valid_prev, valid_next,
+-                   post, extend, True, depth + 1)
++                   post, extend, True, child_depth)
+ 
+         if match(token):
+-            nidx, next_ = tlist.token_next(tidx)
++            nidx, next_ = token_next(tidx)
+             if prev_ and valid_prev(prev_) and valid_next(next_):
+                 from_idx, to_idx = post(tlist, pidx, tidx, nidx)
+                 grp = tlist.group_tokens(cls, from_idx, to_idx, extend=extend)
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..0bc2971f5d84ef1b5cf6eb1205f654262f5750bf 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -17,7 +17,6 @@ from threading import Lock
+ from io import TextIOBase
+ 
+ from sqlparse import tokens, keywords
+-from sqlparse.utils import consume
+ 
+ 
+ class Lexer:
+@@ -134,22 +133,30 @@ class Lexer:
+             raise TypeError("Expected text or file-like object, got {!r}".
+                             format(type(text)))
+ 
+-        iterable = enumerate(text)
+-        for pos, char in iterable:
+-            for rexmatch, action in self._SQL_REGEX:
++        sql_regex = self._SQL_REGEX
++        token_type = tokens._TokenType
++        process_as_keyword = keywords.PROCESS_AS_KEYWORD
++        is_keyword = self.is_keyword
++        error = tokens.Error
++        pos = 0
++        n = len(text)
++        while pos < n:
++            for rexmatch, action in sql_regex:
+                 m = rexmatch(text, pos)
+ 
+                 if not m:
+                     continue
+-                elif isinstance(action, tokens._TokenType):
++                elif isinstance(action, token_type):
+                     yield action, m.group()
+-                elif action is keywords.PROCESS_AS_KEYWORD:
+-                    yield self.is_keyword(m.group())
++                elif action is process_as_keyword:
++                    yield is_keyword(m.group())
+ 
+-                consume(iterable, m.end() - pos - 1)
++                end = m.end()
++                pos = end if end > pos else pos + 1
+                 break
+             else:
+-                yield tokens.Error, char
++                yield error, text[pos]
++                pos += 1
+ 
+ 
+ def tokenize(sql, encoding=None):
+diff --git a/sqlparse/sql.py b/sqlparse/sql.py
+index 831dfb96d2b3a282b228bfddac97703a32e608e8..20b3d527998a3a2724fb27cb5e9eeeab75e54592 100644
+--- a/sqlparse/sql.py
++++ b/sqlparse/sql.py
+@@ -98,11 +98,16 @@ class Token:
+         If *regex* is ``True``, the given values are treated as regular
+         expressions. Partial matches are allowed. Defaults to ``False``.
+         """
+-        type_matched = self.ttype is ttype
+-        if not type_matched or values is None:
+-            return type_matched
++        if self.ttype is not ttype:
++            return False
++        if values is None:
++            return True
+ 
+         if isinstance(values, str):
++            if not regex:
++                if self.is_keyword:
++                    return self.normalized == values.upper()
++                return self.normalized == values
+             values = (values,)
+ 
+         if regex:
+@@ -115,10 +120,14 @@ class Token:
+                     return True
+             return False
+ 
++        normalized = self.normalized
+         if self.is_keyword:
+-            values = (v.upper() for v in values)
++            for v in values:
++                if normalized == v.upper():
++                    return True
++            return False
+ 
+-        return self.normalized in values
++        return normalized in values
+ 
+     def within(self, group_cls):
+         """Returns ``True`` if this token is within *group_cls*.
+@@ -263,7 +272,32 @@ class TokenList(Token):
+ 
+     def token_next_by(self, i=None, m=None, t=None, idx=-1, end=None):
+         idx += 1
+-        return self._token_matching(lambda tk: imt(tk, i, m, t), idx, end)
++        tokens = self.tokens
++        if end is None:
++            end = len(tokens)
++        if m:
++            patterns = m if isinstance(m, list) else (m,)
++        else:
++            patterns = ()
++        if t:
++            ttypes = t if isinstance(t, list) else (t,)
++        else:
++            ttypes = ()
++        for pos in range(idx, end):
++            token = tokens[pos]
++            if token is None:
++                continue
++            if i and isinstance(token, i):
++                return pos, token
++            for pattern in patterns:
++                if token.match(*pattern):
++                    return pos, token
++            if ttypes:
++                ttype = token.ttype
++                for tt in ttypes:
++                    if ttype in tt:
++                        return pos, token
++        return None, None
+ 
+     def token_not_matching(self, funcs, idx):
+         funcs = (funcs,) if not isinstance(funcs, (list, tuple)) else funcs

@@ -1,0 +1,90 @@
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..754a013fd424580c562001efafa901cc69422301 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -85,6 +85,51 @@ class Lexer:
+             (re.compile(rx, FLAGS).match, tt)
+             for rx, tt in SQL_REGEX
+         ]
++        self._master_match, self._master_actions = \
++            self._build_master(SQL_REGEX, FLAGS)
++        self._master_src = (self._SQL_REGEX, len(self._SQL_REGEX))
++
++    @staticmethod
++    def _build_master(SQL_REGEX, FLAGS):
++        """Combine all rules into one ordered alternation.
++
++        Returns (match, actions) where actions maps the wrapper group index
++        to the rule's action, or (None, None) if combining is not safe."""
++        backref = re.compile(r'\\(\d+|.)', re.DOTALL)
++        parts = []
++        actions = {}
++        offset = 0
++        try:
++            for rx, tt in SQL_REGEX:
++                if not isinstance(rx, str):
++                    return None, None
++                ngroups = re.compile(rx, FLAGS).groups
++                if '(?P' in rx or re.search(r'\(\?[aiLmsux]+\)', rx):
++                    return None, None
++                wrapper = offset + 1
++                ok = [True]
++
++                def _renum(m, wrapper=wrapper, ngroups=ngroups, ok=ok):
++                    s = m.group(1)
++                    if not s.isdigit():
++                        return m.group(0)
++                    if s[0] == '0' or len(s) > 2 or int(s) > ngroups:
++                        ok[0] = False
++                        return m.group(0)
++                    return '\\%d' % (int(s) + wrapper)
++
++                new_rx = backref.sub(_renum, rx)
++                if not ok[0]:
++                    return None, None
++                parts.append('(' + new_rx + ')')
++                actions[wrapper] = tt
++                offset += ngroups + 1
++            master = re.compile('|'.join(parts), FLAGS)
++        except (re.error, OverflowError, AssertionError):
++            return None, None
++        if master.groups != offset:
++            return None, None
++        return master.match, actions
+ 
+     def add_keywords(self, keywords):
+         """Add keyword dictionaries. Keywords are looked up in the same order
+@@ -134,6 +179,33 @@ class Lexer:
+             raise TypeError("Expected text or file-like object, got {!r}".
+                             format(type(text)))
+ 
++        master = getattr(self, '_master_match', None)
++        src = getattr(self, '_master_src', None)
++        if (master is not None and self._SQL_REGEX and src is not None
++                and src[0] is self._SQL_REGEX
++                and src[1] == len(self._SQL_REGEX)):
++            actions = self._master_actions
++            TokenType = tokens._TokenType
++            PROCESS_AS_KEYWORD = keywords.PROCESS_AS_KEYWORD
++            is_keyword = self.is_keyword
++            Error = tokens.Error
++            pos = 0
++            end = len(text)
++            while pos < end:
++                m = master(text, pos)
++                if m is None:
++                    yield Error, text[pos]
++                    pos += 1
++                    continue
++                action = actions[m.lastindex]
++                if isinstance(action, TokenType):
++                    yield action, m.group()
++                elif action is PROCESS_AS_KEYWORD:
++                    yield is_keyword(m.group())
++                mend = m.end()
++                pos = mend if mend > pos else pos + 1
++            return
++
+         iterable = enumerate(text)
+         for pos, char in iterable:
+             for rexmatch, action in self._SQL_REGEX:

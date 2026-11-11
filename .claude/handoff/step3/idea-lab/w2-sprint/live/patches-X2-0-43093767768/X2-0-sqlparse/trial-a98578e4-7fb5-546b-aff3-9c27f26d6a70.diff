@@ -1,0 +1,50 @@
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..a4f4abe74d3aa2e9f4b793f9d4adcfae60b03848 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -17,7 +17,6 @@ from threading import Lock
+ from io import TextIOBase
+ 
+ from sqlparse import tokens, keywords
+-from sqlparse.utils import consume
+ 
+ 
+ class Lexer:
+@@ -134,22 +133,29 @@ class Lexer:
+             raise TypeError("Expected text or file-like object, got {!r}".
+                             format(type(text)))
+ 
+-        iterable = enumerate(text)
+-        for pos, char in iterable:
+-            for rexmatch, action in self._SQL_REGEX:
++        sql_regex = self._SQL_REGEX
++        TokenType = tokens._TokenType
++        PROCESS_AS_KEYWORD = keywords.PROCESS_AS_KEYWORD
++        is_keyword = self.is_keyword
++        Error = tokens.Error
++        pos = 0
++        n = len(text)
++        while pos < n:
++            for rexmatch, action in sql_regex:
+                 m = rexmatch(text, pos)
+ 
+                 if not m:
+                     continue
+-                elif isinstance(action, tokens._TokenType):
++                elif isinstance(action, TokenType):
+                     yield action, m.group()
+-                elif action is keywords.PROCESS_AS_KEYWORD:
+-                    yield self.is_keyword(m.group())
++                elif action is PROCESS_AS_KEYWORD:
++                    yield is_keyword(m.group())
+ 
+-                consume(iterable, m.end() - pos - 1)
++                pos = m.end()
+                 break
+             else:
+-                yield tokens.Error, char
++                yield Error, text[pos]
++                pos += 1
+ 
+ 
+ def tokenize(sql, encoding=None):

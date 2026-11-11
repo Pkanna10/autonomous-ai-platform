@@ -1,0 +1,35 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..7f1cb72680598f51ca81823e12fdefbd02165969 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -747,16 +747,20 @@ def parse_value(
+         return parse_inline_table(src, pos, parse_float, nest_lvl + 1)
+ 
+     # Dates and times
+-    datetime_match = RE_DATETIME.match(src, pos)
+-    if datetime_match:
+-        try:
+-            datetime_obj = match_to_datetime(datetime_match)
+-        except ValueError as e:
+-            raise TOMLDecodeError("Invalid date or datetime", src, pos) from e
+-        return datetime_match.end(), datetime_obj
+-    localtime_match = RE_LOCALTIME.match(src, pos)
+-    if localtime_match:
+-        return localtime_match.end(), match_to_localtime(localtime_match)
++    # RE_DATETIME requires '-' at offset 4, RE_LOCALTIME requires ':' at
++    # offset 2; skip the regex calls when those characters are absent.
++    if src[pos + 4 : pos + 5] == "-":
++        datetime_match = RE_DATETIME.match(src, pos)
++        if datetime_match:
++            try:
++                datetime_obj = match_to_datetime(datetime_match)
++            except ValueError as e:
++                raise TOMLDecodeError("Invalid date or datetime", src, pos) from e
++            return datetime_match.end(), datetime_obj
++    if src[pos + 2 : pos + 3] == ":":
++        localtime_match = RE_LOCALTIME.match(src, pos)
++        if localtime_match:
++            return localtime_match.end(), match_to_localtime(localtime_match)
+ 
+     # Integers and "normal" floats.
+     # The regex will greedily match any type starting with a decimal

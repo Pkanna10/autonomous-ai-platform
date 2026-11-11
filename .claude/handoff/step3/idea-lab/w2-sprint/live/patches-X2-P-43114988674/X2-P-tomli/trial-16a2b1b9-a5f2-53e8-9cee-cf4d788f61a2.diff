@@ -1,0 +1,39 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..d4457011ce44d4f96138a969fc2f2cb2a2a3c364 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -11,6 +11,7 @@ __lazy_modules__ = ["tomli._re", "tomllib._re"]
+ import sys
+ 
+ from ._re import (
++    RE_BARE_KEY_EQ,
+     RE_DATETIME,
+     RE_LOCALTIME,
+     RE_NUMBER,
+@@ -462,6 +463,11 @@ def key_value_rule(
+ def parse_key_value_pair(
+     src: str, pos: Pos, parse_float: ParseFloat, nest_lvl: int
+ ) -> tuple[Pos, Key, Any]:
++    m = RE_BARE_KEY_EQ.match(src, pos)
++    if m is not None:
++        key: Key = (m.group(1),)
++        pos, value = parse_value(src, m.end(), parse_float, nest_lvl)
++        return pos, key, value
+     pos, key = parse_key(src, pos)
+     try:
+         char: str | None = src[pos]
+diff --git a/src/tomli/_re.py b/src/tomli/_re.py
+index fc374ed63d3e3742a97134349fc25b14223ab57b..464e49e260fb045e9cf454fb91f847ac0afe1a1c 100644
+--- a/src/tomli/_re.py
++++ b/src/tomli/_re.py
+@@ -23,6 +23,10 @@ _TIME_RE_STR: Final = r"""
+ )?
+ """
+ 
++# Fast path for a single bare key followed by '=' (mirrors BARE_KEY_CHARS
++# and TOML_WS in _parser.py exactly).
++RE_BARE_KEY_EQ: Final = re.compile(r"([A-Za-z0-9_\-]+)[ \t]*=[ \t]*")
++
+ RE_NUMBER: Final = re.compile(
+     r"""
+ 0

@@ -1,0 +1,162 @@
+diff --git a/sqlparse/engine/statement_splitter.py b/sqlparse/engine/statement_splitter.py
+index 62aa9d9e9b071b4df00d6094424349cafdc11315..c6f421cbe1cb0cfe0cc8626de477bde2cc5f544b 100644
+--- a/sqlparse/engine/statement_splitter.py
++++ b/sqlparse/engine/statement_splitter.py
+@@ -7,6 +7,10 @@
+ 
+ from sqlparse import sql, tokens as T
+ 
++_EOS_TTYPE = (T.Whitespace, T.Comment.Single)
++_WS_COMMENT_TTYPES = (T.Whitespace, T.Newline, T.Comment.Single,
++                      T.Comment.Multiline)
++
+ 
+ class StatementSplitter:
+     """Filter that split stream at individual statements"""
+@@ -94,7 +98,8 @@ class StatementSplitter:
+ 
+     def process(self, stream):
+         """Process the stream"""
+-        EOS_TTYPE = T.Whitespace, T.Comment.Single
++        EOS_TTYPE = _EOS_TTYPE
++        WS_COMMENT_TTYPES = _WS_COMMENT_TTYPES
+ 
+         # Run over all stream tokens
+         for ttype, value in stream:
+@@ -132,8 +137,7 @@ class StatementSplitter:
+                     self.consume_ws = True
+             elif ttype is T.Keyword and value.split()[0] == 'GO':
+                 self.consume_ws = True
+-            elif (ttype not in (T.Whitespace, T.Newline, T.Comment.Single,
+-                                T.Comment.Multiline)
++            elif (ttype not in WS_COMMENT_TTYPES
+                   and not (ttype is T.Keyword and value.upper() == 'BEGIN')):
+                 # Reset _seen_begin if we see a non-whitespace, non-comment
+                 # token but not for BEGIN itself (which just set the flag)
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..d53efcd9d78f9e157311f9d99f56b792e6996410 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -17,7 +17,6 @@ from threading import Lock
+ from io import TextIOBase
+ 
+ from sqlparse import tokens, keywords
+-from sqlparse.utils import consume
+ 
+ 
+ class Lexer:
+@@ -134,22 +133,30 @@ class Lexer:
+             raise TypeError("Expected text or file-like object, got {!r}".
+                             format(type(text)))
+ 
+-        iterable = enumerate(text)
+-        for pos, char in iterable:
+-            for rexmatch, action in self._SQL_REGEX:
++        sql_regex = self._SQL_REGEX
++        TokenType = tokens._TokenType
++        process_as_keyword = keywords.PROCESS_AS_KEYWORD
++        is_keyword = self.is_keyword
++        Error = tokens.Error
++        pos = 0
++        n = len(text)
++        while pos < n:
++            for rexmatch, action in sql_regex:
+                 m = rexmatch(text, pos)
+ 
+                 if not m:
+                     continue
+-                elif isinstance(action, tokens._TokenType):
++                elif isinstance(action, TokenType):
+                     yield action, m.group()
+-                elif action is keywords.PROCESS_AS_KEYWORD:
+-                    yield self.is_keyword(m.group())
++                elif action is process_as_keyword:
++                    yield is_keyword(m.group())
+ 
+-                consume(iterable, m.end() - pos - 1)
++                end = m.end()
++                pos = end if end > pos else pos + 1
+                 break
+             else:
+-                yield tokens.Error, char
++                yield Error, text[pos]
++                pos += 1
+ 
+ 
+ def tokenize(sql, encoding=None):
+diff --git a/sqlparse/sql.py b/sqlparse/sql.py
+index 831dfb96d2b3a282b228bfddac97703a32e608e8..c46031da005c0ae0bef6b77f9b53b1ead38e9b8c 100644
+--- a/sqlparse/sql.py
++++ b/sqlparse/sql.py
+@@ -12,6 +12,9 @@ import re
+ from sqlparse import tokens as T
+ from sqlparse.utils import imt, remove_quotes
+ 
++# Cache of (is_keyword, is_whitespace, is_newline) per token type.
++_TTYPE_FLAGS = {}
++
+ 
+ class NameAliasMixin:
+     """Implements get_real_name and get_alias."""
+@@ -53,10 +56,18 @@ class Token:
+         self.ttype = ttype
+         self.parent = None
+         self.is_group = False
+-        self.is_keyword = ttype in T.Keyword
+-        self.is_whitespace = self.ttype in T.Whitespace
+-        self.is_newline = self.ttype in T.Newline
+-        self.normalized = value.upper() if self.is_keyword else value
++        try:
++            flags = _TTYPE_FLAGS[ttype]
++        except KeyError:
++            flags = (ttype in T.Keyword, ttype in T.Whitespace,
++                     ttype in T.Newline)
++            _TTYPE_FLAGS[ttype] = flags
++        except TypeError:
++            flags = (ttype in T.Keyword, ttype in T.Whitespace,
++                     ttype in T.Newline)
++        is_keyword, self.is_whitespace, self.is_newline = flags
++        self.is_keyword = is_keyword
++        self.normalized = value.upper() if is_keyword else value
+ 
+     def __str__(self):
+         return self.value
+@@ -263,7 +274,37 @@ class TokenList(Token):
+ 
+     def token_next_by(self, i=None, m=None, t=None, idx=-1, end=None):
+         idx += 1
+-        return self._token_matching(lambda tk: imt(tk, i, m, t), idx, end)
++        tokens = self.tokens
++        if end is None:
++            end = len(tokens)
++        if m:
++            m_list = m if isinstance(m, list) else [m]
++        else:
++            m_list = None
++        if t:
++            t_list = t if isinstance(t, list) else None
++        else:
++            t_list = None
++        for pos in range(idx, end):
++            token = tokens[pos]
++            if token is None:
++                continue
++            if i and isinstance(token, i):
++                return pos, token
++            if m_list is not None:
++                match = token.match
++                for pattern in m_list:
++                    if match(*pattern):
++                        return pos, token
++            if t:
++                ttype = token.ttype
++                if t_list is not None:
++                    for tt in t_list:
++                        if ttype in tt:
++                            return pos, token
++                elif ttype in t:
++                    return pos, token
++        return None, None
+ 
+     def token_not_matching(self, funcs, idx):
+         funcs = (funcs,) if not isinstance(funcs, (list, tuple)) else funcs

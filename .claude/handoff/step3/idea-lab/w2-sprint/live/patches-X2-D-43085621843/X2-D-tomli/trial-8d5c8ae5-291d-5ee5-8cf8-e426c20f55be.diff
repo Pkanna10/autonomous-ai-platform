@@ -1,0 +1,69 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..8ac493a869f4dceabf207a1763f571d2eebb3161 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -14,6 +14,8 @@ from ._re import (
+     RE_DATETIME,
+     RE_LOCALTIME,
+     RE_NUMBER,
++    RE_SIMPLE_ARRAY,
++    RE_SIMPLE_ARRAY_ELEM,
+     match_to_datetime,
+     match_to_localtime,
+     match_to_number,
+@@ -524,6 +526,24 @@ def parse_array(
+     pos += 1
+     array: list[Any] = []
+ 
++    if nest_lvl <= MAX_INLINE_NESTING:
++        fast_match = RE_SIMPLE_ARRAY.match(src, pos)
++        if fast_match:
++            end = fast_match.end()
++            for m in RE_SIMPLE_ARRAY_ELEM.finditer(src, pos, end):
++                idx = m.lastindex
++                if idx == 1:
++                    array.append(m.group(1))
++                elif idx == 2:
++                    array.append(m.group(2))
++                elif idx == 3:
++                    array.append(True)
++                elif idx == 4:
++                    array.append(False)
++                else:
++                    array.append(int(m.group(5)))
++            return end, array
++
+     pos = skip_comments_and_array_ws(src, pos)
+     if src.startswith("]", pos):
+         return pos + 1, array
+diff --git a/src/tomli/_re.py b/src/tomli/_re.py
+index fc374ed63d3e3742a97134349fc25b14223ab57b..191a62487629023b8116d341dc6752cc795a06c8 100644
+--- a/src/tomli/_re.py
++++ b/src/tomli/_re.py
+@@ -55,6 +55,26 @@ RE_DATETIME: Final = re.compile(
+     flags=re.VERBOSE,
+ )
+ 
++# Fast path for flat arrays of simple scalars (escape-free one-line strings,
++# booleans and decimal integers) with no comments. The match begins right
++# after the opening "[" and ends right after the closing "]".
++_SIMPLE_ARRAY_ELEM_STR: Final = (
++    r"\"[^\"\\\x00-\x08\x0a-\x1f\x7f]*\""
++    r"|'[^'\x00-\x08\x0a-\x1f\x7f]*'"
++    r"|true|false"
++    r"|[+-]?(?:0|[1-9](?:_?[0-9])*)"
++)
++RE_SIMPLE_ARRAY: Final = re.compile(
++    rf"[ \t\n]*(?:(?:{_SIMPLE_ARRAY_ELEM_STR})[ \t\n]*"
++    rf"(?:,[ \t\n]*(?:{_SIMPLE_ARRAY_ELEM_STR})[ \t\n]*)*(?:,[ \t\n]*)?)?\]"
++)
++RE_SIMPLE_ARRAY_ELEM: Final = re.compile(
++    r"\"([^\"\\\x00-\x08\x0a-\x1f\x7f]*)\""
++    r"|'([^'\x00-\x08\x0a-\x1f\x7f]*)'"
++    r"|(true)|(false)"
++    r"|([+-]?(?:0|[1-9](?:_?[0-9])*))"
++)
++
+ 
+ def match_to_datetime(match: re.Match[str]) -> datetime | date:
+     """Convert a `RE_DATETIME` match to `datetime.datetime` or `datetime.date`.

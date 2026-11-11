@@ -1,0 +1,50 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..a45c35923e978e0108f0823939abd8963ac27e3d 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -45,6 +45,25 @@ def build_treeprocessors(md: Markdown, **kwargs: Any) -> util.Registry[Treeproce
+     return treeprocessors
+ 
+ 
++# Map of built-in inline regex source strings to a literal substring which
++# any match of that regex provably requires at or after the search start.
++_REQUIRED_LITERALS: dict[str, str] = {
++    inlinepatterns.BACKTICK_RE: '`',
++    inlinepatterns.ESCAPE_RE: '\\',
++    inlinepatterns.LINK_RE: '[',
++    inlinepatterns.IMAGE_LINK_RE: '![',
++    inlinepatterns.AUTOLINK_RE: '<',
++    inlinepatterns.AUTOMAIL_RE: '<',
++    inlinepatterns.HTML_RE: '<',
++    inlinepatterns.ENTITY_RE: '&',
++    inlinepatterns.LINE_BREAK_RE: '  \n',
++    r'\*': '*',
++    r'_': '_',
++}
++
++_LITERAL_CACHE: dict[Any, str | None] = {}
++
++
+ def isString(s: object) -> bool:
+     """ Return `True` if object is a string but not an  [`AtomicString`][markdown.util.AtomicString]. """
+     if not isinstance(s, util.AtomicString):
+@@ -278,6 +297,19 @@ class InlineProcessor(Treeprocessor):
+                 return data, False, 0
+ 
+         if new_style:
++            compiled = pattern.getCompiledRegExp()
++            try:
++                literal = _LITERAL_CACHE[compiled]
++            except (KeyError, TypeError):
++                literal = None
++                if isinstance(compiled, re.Pattern) and not (compiled.flags & re.IGNORECASE):
++                    literal = _REQUIRED_LITERALS.get(compiled.pattern)
++                try:
++                    _LITERAL_CACHE[compiled] = literal
++                except TypeError:  # pragma: no cover
++                    pass
++            if literal is not None and data.find(literal, startIndex) == -1:
++                return data, False, 0
+             match = None
+             # Since `handleMatch` may reject our first match,
+             # we iterate over the buffer looking for matches

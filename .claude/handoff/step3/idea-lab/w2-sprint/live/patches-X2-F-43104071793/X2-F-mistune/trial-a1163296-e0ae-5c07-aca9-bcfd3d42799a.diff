@@ -1,0 +1,70 @@
+diff --git a/src/mistune/helpers.py b/src/mistune/helpers.py
+index be5d0cadd12f8cb925f6a14e5f22860bed67db2b..a9ef04a529c576501b2014ecf5e8d8b12eb30e3d 100644
+--- a/src/mistune/helpers.py
++++ b/src/mistune/helpers.py
+@@ -87,6 +87,8 @@ PRE_TAGS = ("pre", "script", "style", "textarea")
+ _INLINE_LINK_LABEL_RE = re.compile(LINK_LABEL + r"\]")
+ _INLINE_SQUARE_BRACKET_RE = re.compile(PREVENT_BACKSLASH + r"[\[\]]")
+ _ESCAPE_CHAR_RE = re.compile(r"\\(" + PUNCTUATION + r")")
++_HREF_PLAIN_RE = re.compile(r"[^ \t\n\r\f\x00\\()]*")
++_HREF_PLAIN_BLOCK_RE = re.compile(r"[^ \t\n\r\f\x00\\]*")
+ 
+ 
+ def unescape_char(text: str) -> str:
+@@ -154,7 +156,12 @@ def _parse_link_href(
+ 
+     start = pos
+     level = 0
+-    while pos < len(src):
++    plain_match = _HREF_PLAIN_BLOCK_RE.match if block else _HREF_PLAIN_RE.match
++    src_len = len(src)
++    while pos < src_len:
++        pos = plain_match(src, pos).end()
++        if pos >= src_len:
++            break
+         c = src[pos]
+         if c in ASCII_WHITESPACE:
+             break
+diff --git a/src/mistune/renderers/html.py b/src/mistune/renderers/html.py
+index a62e7c78f8510e9681a41c985da1fe05af4b436a..e0bd9c47cec66201aae9ed7ce6568e6f8254403b 100644
+--- a/src/mistune/renderers/html.py
++++ b/src/mistune/renderers/html.py
+@@ -56,6 +56,38 @@ class HTMLRenderer(BaseRenderer):
+         else:
+             return func(text)
+ 
++    def render_tokens(self, tokens: Iterable[Dict[str, Any]], state: BlockState) -> str:
++        cls = type(self)
++        if cls.render_token is not HTMLRenderer.render_token or cls.iter_tokens is not BaseRenderer.iter_tokens:
++            return super(HTMLRenderer, self).render_tokens(tokens, state)
++
++        get_method = self._get_method
++        cache: Dict[str, Any] = {}
++        out = []
++        append = out.append
++        for token in tokens:
++            name = token["type"]
++            func = cache.get(name)
++            if func is None:
++                func = get_method(name)
++                cache[name] = func
++            attrs = token.get("attrs")
++            if "raw" in token:
++                text = token["raw"]
++            elif "children" in token:
++                text = self.render_tokens(token["children"], state)
++            else:
++                if attrs:
++                    append(func(**attrs))
++                else:
++                    append(func())
++                continue
++            if attrs:
++                append(func(text, **attrs))
++            else:
++                append(func(text))
++        return "".join(out)
++
+     def safe_url(self, url: str) -> str:
+         """Ensure the given URL is safe. This method is used for rendering
+         links, images, and etc.

@@ -1,0 +1,76 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..e129e82ee3a7a847fbbd07b06a754ef5353f2d7a 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -52,6 +52,33 @@ def isString(s: object) -> bool:
+     return False
+ 
+ 
++# Stock inline patterns (exact class, regex source). Every one of them needs at
++# least one character from `_INLINE_TRIGGER_RE` to match:
++#   backtick: "`" (or "\\"); escape: "\\"; (image) links/references: "[";
++#   autolink/automail/html: "<"; entity: "&"; linebreak: "\n";
++#   not_strong/em_strong: "*"; em_strong2: "_".
++_STOCK_INLINE_PATTERNS = frozenset([
++    (inlinepatterns.BacktickInlineProcessor, inlinepatterns.BACKTICK_RE),
++    (inlinepatterns.EscapeInlineProcessor, inlinepatterns.ESCAPE_RE),
++    (inlinepatterns.ReferenceInlineProcessor, inlinepatterns.REFERENCE_RE),
++    (inlinepatterns.LinkInlineProcessor, inlinepatterns.LINK_RE),
++    (inlinepatterns.ImageInlineProcessor, inlinepatterns.IMAGE_LINK_RE),
++    (inlinepatterns.ImageReferenceInlineProcessor, inlinepatterns.IMAGE_REFERENCE_RE),
++    (inlinepatterns.ShortReferenceInlineProcessor, inlinepatterns.REFERENCE_RE),
++    (inlinepatterns.ShortImageReferenceInlineProcessor, inlinepatterns.IMAGE_REFERENCE_RE),
++    (inlinepatterns.AutolinkInlineProcessor, inlinepatterns.AUTOLINK_RE),
++    (inlinepatterns.AutomailInlineProcessor, inlinepatterns.AUTOMAIL_RE),
++    (inlinepatterns.SubstituteTagInlineProcessor, inlinepatterns.LINE_BREAK_RE),
++    (inlinepatterns.HtmlInlineProcessor, inlinepatterns.HTML_RE),
++    (inlinepatterns.HtmlInlineProcessor, inlinepatterns.ENTITY_RE),
++    (inlinepatterns.SimpleTextInlineProcessor, inlinepatterns.NOT_STRONG_RE),
++    (inlinepatterns.AsteriskProcessor, r'\*'),
++    (inlinepatterns.UnderscoreProcessor, r'_'),
++])
++
++_INLINE_TRIGGER_RE = re.compile(r'[\\`\[<&*_\n!:@]')
++
++
+ class Treeprocessor(util.Processor):
+     """
+     `Treeprocessor`s are run on the `ElementTree` object before serialization.
+@@ -86,6 +113,7 @@ class InlineProcessor(Treeprocessor):
+         self.md = md
+         self.inlinePatterns = md.inlinePatterns
+         self.ancestors: list[str] = []
++        self._trigger_re: re.Pattern[str] | None = None
+ 
+     def __makePlaceholder(self, type: str) -> tuple[str, str]:
+         """ Generate a placeholder """
+@@ -130,6 +158,9 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         if not isinstance(data, util.AtomicString):
++            trigger = self._trigger_re
++            if trigger is not None and trigger.search(data) is None:
++                return data
+             startIndex = 0
+             count = len(self.inlinePatterns)
+             while patternIndex < count:
+@@ -365,6 +396,19 @@ class InlineProcessor(Treeprocessor):
+         """
+         self.stashed_nodes: dict[str, etree.Element | str] = {}
+ 
++        # Enable the no-trigger fast path only if all patterns are stock ones.
++        trigger_re = _INLINE_TRIGGER_RE
++        for pattern in self.inlinePatterns:
++            compiled = getattr(pattern, 'compiled_re', None)
++            if (
++                (type(pattern), getattr(pattern, 'pattern', None)) not in _STOCK_INLINE_PATTERNS
++                or compiled is None
++                or compiled.pattern != pattern.pattern
++            ):
++                trigger_re = None
++                break
++        self._trigger_re = trigger_re
++
+         # Ensure a valid parent list, but copy passed in lists
+         # to ensure we don't have the user accidentally change it on us.
+         tree_parents = [] if ancestors is None else ancestors[:]

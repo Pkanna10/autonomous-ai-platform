@@ -1,0 +1,172 @@
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..757a3ca0ed3ae51d9876c6cf08ea789f10c3f88a 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -81,10 +81,89 @@ class Lexer:
+     def set_SQL_REGEX(self, SQL_REGEX):
+         """Set the list of regex that will parse the SQL."""
+         FLAGS = re.IGNORECASE | re.UNICODE
++        SQL_REGEX = list(SQL_REGEX)
+         self._SQL_REGEX = [
+             (re.compile(rx, FLAGS).match, tt)
+             for rx, tt in SQL_REGEX
+         ]
++        self._combined_match, self._group_actions = \
++            self._build_combined(SQL_REGEX, FLAGS)
++        # The combined regex is only valid for this exact list object.
++        self._combined_for = self._SQL_REGEX
++
++    @staticmethod
++    def _shift_backrefs(rx, offset):
++        """Renumber numeric backreferences in ``rx`` by ``offset``.
++        Returns None if the pattern cannot be safely rewritten."""
++        out = []
++        i = 0
++        n = len(rx)
++        in_class = False
++        while i < n:
++            c = rx[i]
++            if c == '\\':
++                if i + 1 >= n:
++                    return None
++                nxt = rx[i + 1]
++                if nxt.isdigit() and not in_class:
++                    if nxt == '0' or (i + 2 < n and rx[i + 2].isdigit()):
++                        return None
++                    out.append('(?:\\' + str(int(nxt) + offset) + ')')
++                else:
++                    out.append(c + nxt)
++                i += 2
++                continue
++            if in_class:
++                if c == ']':
++                    in_class = False
++            elif c == '[':
++                in_class = True
++                out.append(c)
++                i += 1
++                # a leading ']' (optionally after '^') is literal
++                if i < n and rx[i] == '^':
++                    out.append('^')
++                    i += 1
++                if i < n and rx[i] == ']':
++                    out.append(']')
++                    i += 1
++                continue
++            out.append(c)
++            i += 1
++        if in_class:
++            return None
++        return ''.join(out)
++
++    @classmethod
++    def _build_combined(cls, SQL_REGEX, FLAGS):
++        """Build one alternation regex of all patterns. Returns
++        (match, actions) where actions maps the outer group index to the
++        action, or (None, None) if combination is unsafe."""
++        if not SQL_REGEX:
++            return None, None
++        parts = []
++        actions = {}
++        group = 0
++        try:
++            for rx, tt in SQL_REGEX:
++                if not isinstance(rx, str):
++                    return None, None
++                if '(?(' in rx or re.search(r'\(\?[aiLmsux]+\)', rx):
++                    return None, None
++                ngroups = re.compile(rx, FLAGS).groups
++                group += 1
++                shifted = cls._shift_backrefs(rx, group)
++                if shifted is None:
++                    return None, None
++                actions[group] = tt
++                parts.append('(' + shifted + ')')
++                group += ngroups
++            combined = re.compile('|'.join(parts), FLAGS)
++        except (re.error, TypeError, ValueError):
++            return None, None
++        if combined.groups != group:
++            return None, None
++        return combined.match, actions
+ 
+     def add_keywords(self, keywords):
+         """Add keyword dictionaries. Keywords are looked up in the same order
+@@ -135,6 +214,28 @@ class Lexer:
+                             format(type(text)))
+ 
+         iterable = enumerate(text)
++
++        combined = getattr(self, '_combined_match', None)
++        if (combined is not None
++                and getattr(self, '_combined_for', None) is self._SQL_REGEX
++                and len(self._group_actions) == len(self._SQL_REGEX)):
++            actions = self._group_actions
++            token_type = tokens._TokenType
++            process_kw = keywords.PROCESS_AS_KEYWORD
++            is_keyword = self.is_keyword
++            for pos, char in iterable:
++                m = combined(text, pos)
++                if m is None:
++                    yield tokens.Error, char
++                    continue
++                action = actions[m.lastindex]
++                if isinstance(action, token_type):
++                    yield action, m.group()
++                elif action is process_kw:
++                    yield is_keyword(m.group())
++                consume(iterable, m.end() - pos - 1)
++            return
++
+         for pos, char in iterable:
+             for rexmatch, action in self._SQL_REGEX:
+                 m = rexmatch(text, pos)
+diff --git a/sqlparse/sql.py b/sqlparse/sql.py
+index 831dfb96d2b3a282b228bfddac97703a32e608e8..62c14e62253dfc28f544c2bb356dee7201837b2b 100644
+--- a/sqlparse/sql.py
++++ b/sqlparse/sql.py
+@@ -263,7 +263,43 @@ class TokenList(Token):
+ 
+     def token_next_by(self, i=None, m=None, t=None, idx=-1, end=None):
+         idx += 1
+-        return self._token_matching(lambda tk: imt(tk, i, m, t), idx, end)
++        tokens = self.tokens
++        if end is None:
++            end = len(tokens)
++        i_ok = bool(i)
++        m_list = m_single = t_list = t_single = None
++        if m:
++            if isinstance(m, list):
++                m_list = m
++            else:
++                m_single = m
++        if t:
++            if isinstance(t, list):
++                t_list = t
++            else:
++                t_single = t
++        for n in range(idx, end):
++            token = tokens[n]
++            if token is None:
++                continue
++            if i_ok and isinstance(token, i):
++                return n, token
++            if m_single is not None:
++                if token.match(*m_single):
++                    return n, token
++            elif m_list is not None:
++                for pattern in m_list:
++                    if token.match(*pattern):
++                        return n, token
++            if t_single is not None:
++                if token.ttype in t_single:
++                    return n, token
++            elif t_list is not None:
++                ttype = token.ttype
++                for tt in t_list:
++                    if ttype in tt:
++                        return n, token
++        return None, None
+ 
+     def token_not_matching(self, funcs, idx):
+         funcs = (funcs,) if not isinstance(funcs, (list, tuple)) else funcs

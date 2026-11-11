@@ -1,0 +1,55 @@
+diff --git a/markdown/extensions/abbr.py b/markdown/extensions/abbr.py
+index 9f609810ad4a7a01403f978b878435b17fef5a0e..dd4d386c0d94d0ea6a10a8840ce4205a8b17cb09 100644
+--- a/markdown/extensions/abbr.py
++++ b/markdown/extensions/abbr.py
+@@ -93,6 +93,7 @@ class AbbrTreeprocessor(Treeprocessor):
+     def __init__(self, md: Markdown | None = None, abbrs: dict | None = None):
+         self.abbrs: dict = abbrs if abbrs is not None else {}
+         self.RE: re.RegexObject | None = None
++        self._first_chars: frozenset | None = None
+         super().__init__(md)
+ 
+     def create_element(self, title: str, text: str, tail: str) -> etree.Element:
+@@ -106,18 +107,23 @@ class AbbrTreeprocessor(Treeprocessor):
+         ''' Recursively iterate over elements, run regex on text and wrap matches in `abbr` tags. '''
+         for child in reversed(el):
+             self.iter_element(child, el)
++        first_chars = self._first_chars
+         if text := el.text:
+             if not isinstance(text, AtomicString):
+-                for m in reversed(list(self.RE.finditer(text))):
+-                    if self.abbrs[m.group(0)]:
+-                        abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), text[m.end():])
+-                        el.insert(0, abbr)
+-                        text = text[:m.start()]
++                if first_chars is None or not first_chars.isdisjoint(text):
++                    for m in reversed(list(self.RE.finditer(text))):
++                        if self.abbrs[m.group(0)]:
++                            abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), text[m.end():])
++                            el.insert(0, abbr)
++                            text = text[:m.start()]
+                 el.text = text
+         if parent is not None and el.tail:
+             tail = el.tail
+-            index = list(parent).index(el) + 1
+             if not isinstance(tail, AtomicString):
++                if first_chars is not None and first_chars.isdisjoint(tail):
++                    el.tail = tail
++                    return
++                index = list(parent).index(el) + 1
+                 for m in reversed(list(self.RE.finditer(tail))):
+                     abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), tail[m.end():])
+                     parent.insert(index, abbr)
+@@ -133,6 +139,12 @@ class AbbrTreeprocessor(Treeprocessor):
+         abbr_list = list(self.abbrs.keys())
+         abbr_list.sort(key=len, reverse=True)
+         self.RE = re.compile(f"\\b(?:{ '|'.join(re.escape(key) for key in abbr_list) })\\b")
++        # Conservative prefilter: a text can only match if it contains the
++        # first character of some abbreviation. Disabled if any key is empty.
++        if all(abbr_list):
++            self._first_chars = frozenset(key[0] for key in abbr_list)
++        else:
++            self._first_chars = None
+         # Step through tree and modify on matches
+         self.iter_element(root)
+ 

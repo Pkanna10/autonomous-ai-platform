@@ -1,0 +1,72 @@
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..e894eae581bcdce86253242d7d0dd080878587f9 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -26,6 +26,7 @@ class Lexer:
+ 
+     _default_instance = None
+     _lock = Lock()
++    _TOKEN_MEMO_SIZE = 8
+ 
+     # Development notes:
+     # - This class is prepared to be able to support additional SQL dialects
+@@ -77,9 +78,11 @@ class Lexer:
+         to make the lexer functional again."""
+         self._SQL_REGEX = []
+         self._keywords = []
++        self._token_memo = {}
+ 
+     def set_SQL_REGEX(self, SQL_REGEX):
+         """Set the list of regex that will parse the SQL."""
++        self._token_memo = {}
+         FLAGS = re.IGNORECASE | re.UNICODE
+         self._SQL_REGEX = [
+             (re.compile(rx, FLAGS).match, tt)
+@@ -89,6 +92,7 @@ class Lexer:
+     def add_keywords(self, keywords):
+         """Add keyword dictionaries. Keywords are looked up in the same order
+         that dictionaries were added."""
++        self._token_memo = {}
+         self._keywords.append(keywords)
+ 
+     def is_keyword(self, value):
+@@ -134,6 +138,16 @@ class Lexer:
+             raise TypeError("Expected text or file-like object, got {!r}".
+                             format(type(text)))
+ 
++        memo = self.__dict__.get('_token_memo')
++        if memo is None:
++            memo = self._token_memo = {}
++        cached = memo.get(text)
++        if cached is not None:
++            yield from cached
++            return
++
++        result = []
++        append = result.append
+         iterable = enumerate(text)
+         for pos, char in iterable:
+             for rexmatch, action in self._SQL_REGEX:
+@@ -142,14 +156,19 @@ class Lexer:
+                 if not m:
+                     continue
+                 elif isinstance(action, tokens._TokenType):
+-                    yield action, m.group()
++                    append((action, m.group()))
+                 elif action is keywords.PROCESS_AS_KEYWORD:
+-                    yield self.is_keyword(m.group())
++                    append(self.is_keyword(m.group()))
+ 
+                 consume(iterable, m.end() - pos - 1)
+                 break
+             else:
+-                yield tokens.Error, char
++                append((tokens.Error, char))
++
++        memo[text] = result
++        while len(memo) > self._TOKEN_MEMO_SIZE:
++            del memo[next(iter(memo))]
++        yield from result
+ 
+ 
+ def tokenize(sql, encoding=None):

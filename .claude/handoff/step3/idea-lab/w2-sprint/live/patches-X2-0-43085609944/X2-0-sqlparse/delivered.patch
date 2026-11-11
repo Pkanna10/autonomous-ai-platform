@@ -1,0 +1,277 @@
+diff --git a/sqlparse/engine/grouping.py b/sqlparse/engine/grouping.py
+index 43ca5b580d5e8499e3fa1ed5275902d7e20ce71b..386edafa2226f3f93c4cd560c3e1331c88febcb4 100644
+--- a/sqlparse/engine/grouping.py
++++ b/sqlparse/engine/grouping.py
+@@ -24,6 +24,17 @@ T_STRING = (T.String, T.String.Single, T.String.Symbol)
+ T_NAME = (T.Name, T.Name.Placeholder)
+ 
+ 
++def _prepare_match(spec):
++    """Turn a (ttype, values) pair into (ttype, raw_set, upper_set)."""
++    ttype, values = spec
++    if values is None:
++        return ttype, None, None
++    if isinstance(values, str):
++        values = (values,)
++    raw = frozenset(values)
++    return ttype, raw, frozenset(v.upper() for v in raw)
++
++
+ def _group_matching(tlist, cls, depth=0):
+     """Groups Tokens that have beginning and end."""
+     if MAX_GROUPING_DEPTH is not None and depth > MAX_GROUPING_DEPTH:
+@@ -38,6 +49,9 @@ def _group_matching(tlist, cls, depth=0):
+             f"Maximum number of tokens exceeded ({MAX_GROUPING_TOKENS})."
+         )
+ 
++    open_ttype, open_raw, open_up = _prepare_match(cls.M_OPEN)
++    close_ttype, close_raw, close_up = _prepare_match(cls.M_CLOSE)
++
+     opens = []
+     tidx_offset = 0
+     token_list = list(tlist)
+@@ -58,10 +72,17 @@ def _group_matching(tlist, cls, depth=0):
+             _group_matching(token, cls, depth + 1)
+             continue
+ 
+-        if token.match(*cls.M_OPEN):
++        ttype = token.ttype
++        if ttype is open_ttype and (
++                open_raw is None
++                or token.normalized in (
++                    open_up if token.is_keyword else open_raw)):
+             opens.append(tidx)
+ 
+-        elif token.match(*cls.M_CLOSE):
++        elif ttype is close_ttype and (
++                close_raw is None
++                or token.normalized in (
++                    close_up if token.is_keyword else close_raw)):
+             try:
+                 open_idx = opens.pop()
+             except IndexError:
+@@ -439,7 +460,88 @@ def group_values(tlist):
+         tlist.group_tokens(sql.Values, start_idx, end_idx, extend=True)
+ 
+ 
++_SKIP_SAFE_NESTING = 20
++
++
++def _skippable_passes(stmt):
++    """Return the set of grouping passes that can't change the tree.
++
++    A pass is only skipped when its trigger token is absent from the
++    statement's leaf tokens. For oversized or deeply nested input nothing
++    is skipped, so the depth/token limit errors are raised exactly as before.
++    """
++    if MAX_GROUPING_TOKENS is not None \
++       and len(stmt.tokens) > MAX_GROUPING_TOKENS:
++        return ()
++
++    has_typecast = has_tzcast = has_assign = has_bracket = False
++    has_if = has_for = has_begin = has_case = False
++    nesting = max_nesting = 0
++    T_Keyword = T.Keyword
++    T_Punct = T.Punctuation
++    T_TZCast = T.Keyword.TZCast
++    T_Assignment = T.Assignment
++    m_brackets = sql.SquareBrackets.M_OPEN
++    m_if = sql.If.M_OPEN
++    m_for = sql.For.M_OPEN
++    m_begin = sql.Begin.M_OPEN
++    m_case = sql.Case.M_OPEN
++
++    for token in stmt.flatten():
++        ttype = token.ttype
++        if ttype is T_Punct:
++            value = token.value
++            if value == '(' or value == '[':
++                nesting += 1
++                if nesting > max_nesting:
++                    max_nesting = nesting
++            elif value == ')' or value == ']':
++                nesting -= 1
++            elif value == '::':
++                has_typecast = True
++            if not has_bracket and token.match(*m_brackets):
++                has_bracket = True
++        elif ttype is T_Keyword:
++            if not has_case and token.match(*m_case):
++                has_case = True
++            elif not has_if and token.match(*m_if):
++                has_if = True
++            elif not has_for and token.match(*m_for):
++                has_for = True
++            elif not has_begin and token.match(*m_begin):
++                has_begin = True
++        elif ttype is not None:
++            if ttype == T_TZCast:
++                has_tzcast = True
++            elif ttype in T_Assignment:
++                has_assign = True
++
++    if max_nesting > _SKIP_SAFE_NESTING:
++        return ()
++
++    skip = set()
++    if not has_bracket:
++        skip.add(group_brackets)
++        skip.add(group_arrays)
++    if not has_case:
++        skip.add(group_case)
++    if not has_if:
++        skip.add(group_if)
++    if not has_for:
++        skip.add(group_for)
++    if not has_begin:
++        skip.add(group_begin)
++    if not has_typecast:
++        skip.add(group_typecasts)
++    if not has_tzcast:
++        skip.add(group_tzcasts)
++    if not has_assign:
++        skip.add(group_assignment)
++    return skip
++
++
+ def group(stmt):
++    skip = _skippable_passes(stmt)
+     for func in [
+         group_comments,
+ 
+@@ -471,6 +573,8 @@ def group(stmt):
+         group_identifier_list,
+         group_values,
+     ]:
++        if func in skip:
++            continue
+         func(stmt)
+     return stmt
+ 
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..754a013fd424580c562001efafa901cc69422301 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -85,6 +85,51 @@ class Lexer:
+             (re.compile(rx, FLAGS).match, tt)
+             for rx, tt in SQL_REGEX
+         ]
++        self._master_match, self._master_actions = \
++            self._build_master(SQL_REGEX, FLAGS)
++        self._master_src = (self._SQL_REGEX, len(self._SQL_REGEX))
++
++    @staticmethod
++    def _build_master(SQL_REGEX, FLAGS):
++        """Combine all rules into one ordered alternation.
++
++        Returns (match, actions) where actions maps the wrapper group index
++        to the rule's action, or (None, None) if combining is not safe."""
++        backref = re.compile(r'\\(\d+|.)', re.DOTALL)
++        parts = []
++        actions = {}
++        offset = 0
++        try:
++            for rx, tt in SQL_REGEX:
++                if not isinstance(rx, str):
++                    return None, None
++                ngroups = re.compile(rx, FLAGS).groups
++                if '(?P' in rx or re.search(r'\(\?[aiLmsux]+\)', rx):
++                    return None, None
++                wrapper = offset + 1
++                ok = [True]
++
++                def _renum(m, wrapper=wrapper, ngroups=ngroups, ok=ok):
++                    s = m.group(1)
++                    if not s.isdigit():
++                        return m.group(0)
++                    if s[0] == '0' or len(s) > 2 or int(s) > ngroups:
++                        ok[0] = False
++                        return m.group(0)
++                    return '\\%d' % (int(s) + wrapper)
++
++                new_rx = backref.sub(_renum, rx)
++                if not ok[0]:
++                    return None, None
++                parts.append('(' + new_rx + ')')
++                actions[wrapper] = tt
++                offset += ngroups + 1
++            master = re.compile('|'.join(parts), FLAGS)
++        except (re.error, OverflowError, AssertionError):
++            return None, None
++        if master.groups != offset:
++            return None, None
++        return master.match, actions
+ 
+     def add_keywords(self, keywords):
+         """Add keyword dictionaries. Keywords are looked up in the same order
+@@ -134,6 +179,33 @@ class Lexer:
+             raise TypeError("Expected text or file-like object, got {!r}".
+                             format(type(text)))
+ 
++        master = getattr(self, '_master_match', None)
++        src = getattr(self, '_master_src', None)
++        if (master is not None and self._SQL_REGEX and src is not None
++                and src[0] is self._SQL_REGEX
++                and src[1] == len(self._SQL_REGEX)):
++            actions = self._master_actions
++            TokenType = tokens._TokenType
++            PROCESS_AS_KEYWORD = keywords.PROCESS_AS_KEYWORD
++            is_keyword = self.is_keyword
++            Error = tokens.Error
++            pos = 0
++            end = len(text)
++            while pos < end:
++                m = master(text, pos)
++                if m is None:
++                    yield Error, text[pos]
++                    pos += 1
++                    continue
++                action = actions[m.lastindex]
++                if isinstance(action, TokenType):
++                    yield action, m.group()
++                elif action is PROCESS_AS_KEYWORD:
++                    yield is_keyword(m.group())
++                mend = m.end()
++                pos = mend if mend > pos else pos + 1
++            return
++
+         iterable = enumerate(text)
+         for pos, char in iterable:
+             for rexmatch, action in self._SQL_REGEX:
+diff --git a/sqlparse/sql.py b/sqlparse/sql.py
+index 831dfb96d2b3a282b228bfddac97703a32e608e8..8cf40f322bad44f68f83831df2bd3318b1f62af5 100644
+--- a/sqlparse/sql.py
++++ b/sqlparse/sql.py
+@@ -263,7 +263,31 @@ class TokenList(Token):
+ 
+     def token_next_by(self, i=None, m=None, t=None, idx=-1, end=None):
+         idx += 1
+-        return self._token_matching(lambda tk: imt(tk, i, m, t), idx, end)
++        tokens = self.tokens
++        if end is None:
++            end = len(tokens)
++        m_list = isinstance(m, list)
++        t_list = isinstance(t, list)
++        for n in range(idx, end):
++            token = tokens[n]
++            if token is None:
++                continue
++            if i and isinstance(token, i):
++                return n, token
++            if m:
++                if m_list:
++                    if any(token.match(*pattern) for pattern in m):
++                        return n, token
++                elif token.match(*m):
++                    return n, token
++            if t:
++                ttype = token.ttype
++                if t_list:
++                    if any(ttype in tt for tt in t):
++                        return n, token
++                elif ttype in t:
++                    return n, token
++        return None, None
+ 
+     def token_not_matching(self, funcs, idx):
+         funcs = (funcs,) if not isinstance(funcs, (list, tuple)) else funcs

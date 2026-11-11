@@ -1,0 +1,32 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..5d113a69fef7e23dd5927b9346011d13f9b66e28 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -432,14 +432,19 @@ def key_value_rule(
+     key_parent, key_stem = key[:-1], key[-1]
+     abs_key_parent = header + key_parent
+ 
+-    relative_path_cont_keys = (header + key[:i] for i in range(1, len(key)))
+-    for cont_key in relative_path_cont_keys:
+-        # Check that dotted key syntax does not redefine an existing table
+-        if out.flags.is_(cont_key, Flags.EXPLICIT_NEST):
+-            raise TOMLDecodeError(f"Cannot redefine namespace {cont_key}", src, pos)
+-        # Containers in the relative path can't be opened with the table syntax or
+-        # dotted key/value syntax in following table sections.
+-        out.flags.add_pending(cont_key, Flags.EXPLICIT_NEST)
++    key_len = len(key)
++    if key_len > 1:
++        flags = out.flags
++        for i in range(1, key_len):
++            cont_key = header + key[:i]
++            # Check that dotted key syntax does not redefine an existing table
++            if flags.is_(cont_key, Flags.EXPLICIT_NEST):
++                raise TOMLDecodeError(
++                    f"Cannot redefine namespace {cont_key}", src, pos
++                )
++            # Containers in the relative path can't be opened with the table
++            # syntax or dotted key/value syntax in following table sections.
++            flags.add_pending(cont_key, Flags.EXPLICIT_NEST)
+ 
+     if out.flags.is_(abs_key_parent, Flags.FROZEN):
+         raise TOMLDecodeError(

@@ -1,0 +1,84 @@
+diff --git a/markdown/extensions/abbr.py b/markdown/extensions/abbr.py
+index 9f609810ad4a7a01403f978b878435b17fef5a0e..3cf0dad583ebdc863d2369a7da743cc5be9955c2 100644
+--- a/markdown/extensions/abbr.py
++++ b/markdown/extensions/abbr.py
+@@ -108,21 +108,25 @@ class AbbrTreeprocessor(Treeprocessor):
+             self.iter_element(child, el)
+         if text := el.text:
+             if not isinstance(text, AtomicString):
+-                for m in reversed(list(self.RE.finditer(text))):
+-                    if self.abbrs[m.group(0)]:
+-                        abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), text[m.end():])
+-                        el.insert(0, abbr)
+-                        text = text[:m.start()]
+-                el.text = text
++                matches = list(self.RE.finditer(text))
++                if matches:
++                    for m in reversed(matches):
++                        if self.abbrs[m.group(0)]:
++                            abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), text[m.end():])
++                            el.insert(0, abbr)
++                            text = text[:m.start()]
++                    el.text = text
+         if parent is not None and el.tail:
+             tail = el.tail
+-            index = list(parent).index(el) + 1
+             if not isinstance(tail, AtomicString):
+-                for m in reversed(list(self.RE.finditer(tail))):
+-                    abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), tail[m.end():])
+-                    parent.insert(index, abbr)
+-                    tail = tail[:m.start()]
+-                el.tail = tail
++                matches = list(self.RE.finditer(tail))
++                if matches:
++                    index = list(parent).index(el) + 1
++                    for m in reversed(matches):
++                        abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), tail[m.end():])
++                        parent.insert(index, abbr)
++                        tail = tail[:m.start()]
++                    el.tail = tail
+ 
+     def run(self, root: etree.Element) -> etree.Element | None:
+         ''' Step through tree to find known abbreviations. '''
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..6cfb69ef0a65b0e4504d47df4e743daf56d1112d 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -369,14 +369,15 @@ class InlineProcessor(Treeprocessor):
+         # to ensure we don't have the user accidentally change it on us.
+         tree_parents = [] if ancestors is None else ancestors[:]
+ 
+-        self.parent_map = {c: p for p in tree.iter() for c in p}
+         stack = [(tree, tree_parents)]
+ 
+         while stack:
+             currElement, parents = stack.pop(0)
+ 
++            # Each stacked list already holds the chain of tags above
++            # `currElement`; only its own tag needs adding.
+             self.ancestors = parents
+-            self.__build_ancestors(currElement, self.ancestors)
++            parents.append(currElement.tag.lower())
+ 
+             insertQueue = []
+             for child in currElement:
+@@ -389,8 +390,6 @@ class InlineProcessor(Treeprocessor):
+                     lst = self.__processPlaceholders(
+                         self.__handleInline(text), child
+                     )
+-                    for item in lst:
+-                        self.parent_map[item[0]] = child
+                     stack += lst
+                     insertQueue.append((child, lst))
+                     self.ancestors.pop()
+@@ -404,10 +403,8 @@ class InlineProcessor(Treeprocessor):
+                     pos = list(currElement).index(child) + 1
+                     tailResult.reverse()
+                     for newChild in tailResult:
+-                        self.parent_map[newChild[0]] = currElement
+                         currElement.insert(pos, newChild[0])
+                 if len(child):
+-                    self.parent_map[child] = currElement
+                     stack.append((child, self.ancestors[:]))
+ 
+             for element, lst in insertQueue:

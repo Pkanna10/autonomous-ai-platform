@@ -1,0 +1,52 @@
+diff --git a/sqlparse/engine/grouping.py b/sqlparse/engine/grouping.py
+index 43ca5b580d5e8499e3fa1ed5275902d7e20ce71b..a79c0d9c2122be7de40b2a41bf8dafdcf6361384 100644
+--- a/sqlparse/engine/grouping.py
++++ b/sqlparse/engine/grouping.py
+@@ -24,6 +24,17 @@ T_STRING = (T.String, T.String.Single, T.String.Symbol)
+ T_NAME = (T.Name, T.Name.Placeholder)
+ 
+ 
++def _prepare_match(spec):
++    """Turn a (ttype, values) pair into (ttype, raw_set, upper_set)."""
++    ttype, values = spec
++    if values is None:
++        return ttype, None, None
++    if isinstance(values, str):
++        values = (values,)
++    raw = frozenset(values)
++    return ttype, raw, frozenset(v.upper() for v in raw)
++
++
+ def _group_matching(tlist, cls, depth=0):
+     """Groups Tokens that have beginning and end."""
+     if MAX_GROUPING_DEPTH is not None and depth > MAX_GROUPING_DEPTH:
+@@ -38,6 +49,9 @@ def _group_matching(tlist, cls, depth=0):
+             f"Maximum number of tokens exceeded ({MAX_GROUPING_TOKENS})."
+         )
+ 
++    open_ttype, open_raw, open_up = _prepare_match(cls.M_OPEN)
++    close_ttype, close_raw, close_up = _prepare_match(cls.M_CLOSE)
++
+     opens = []
+     tidx_offset = 0
+     token_list = list(tlist)
+@@ -58,10 +72,17 @@ def _group_matching(tlist, cls, depth=0):
+             _group_matching(token, cls, depth + 1)
+             continue
+ 
+-        if token.match(*cls.M_OPEN):
++        ttype = token.ttype
++        if ttype is open_ttype and (
++                open_raw is None
++                or token.normalized in (
++                    open_up if token.is_keyword else open_raw)):
+             opens.append(tidx)
+ 
+-        elif token.match(*cls.M_CLOSE):
++        elif ttype is close_ttype and (
++                close_raw is None
++                or token.normalized in (
++                    close_up if token.is_keyword else close_raw)):
+             try:
+                 open_idx = opens.pop()
+             except IndexError:

@@ -1,0 +1,73 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..927df156278d1565d4067fe793f5f68954ea6899 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -86,6 +86,49 @@ class InlineProcessor(Treeprocessor):
+         self.md = md
+         self.inlinePatterns = md.inlinePatterns
+         self.ancestors: list[str] = []
++        self._trigger_re: re.Pattern[str] | None = None
++
++    def _build_trigger_re(self) -> re.Pattern[str] | None:
++        """
++        Build a regex matching any character that at least one registered
++        inline pattern requires to match. Return `None` (disabling the fast
++        path) if any registered pattern is not a known built-in.
++        """
++        ip = inlinepatterns
++        known = {
++            'backtick': (ip.BacktickInlineProcessor, ip.BACKTICK_RE, '`'),
++            'escape': (ip.EscapeInlineProcessor, ip.ESCAPE_RE, '\\'),
++            'reference': (ip.ReferenceInlineProcessor, ip.REFERENCE_RE, '['),
++            'link': (ip.LinkInlineProcessor, ip.LINK_RE, '['),
++            'image_link': (ip.ImageInlineProcessor, ip.IMAGE_LINK_RE, '['),
++            'image_reference': (ip.ImageReferenceInlineProcessor, ip.IMAGE_REFERENCE_RE, '['),
++            'short_reference': (ip.ShortReferenceInlineProcessor, ip.REFERENCE_RE, '['),
++            'short_image_ref': (ip.ShortImageReferenceInlineProcessor, ip.IMAGE_REFERENCE_RE, '['),
++            'autolink': (ip.AutolinkInlineProcessor, ip.AUTOLINK_RE, '<'),
++            'automail': (ip.AutomailInlineProcessor, ip.AUTOMAIL_RE, '<'),
++            'linebreak': (ip.SubstituteTagInlineProcessor, ip.LINE_BREAK_RE, '\n'),
++            'html': (ip.HtmlInlineProcessor, ip.HTML_RE, '<'),
++            'entity': (ip.HtmlInlineProcessor, ip.ENTITY_RE, '&'),
++            'not_strong': (ip.SimpleTextInlineProcessor, ip.NOT_STRONG_RE, '*_'),
++            'em_strong': (ip.AsteriskProcessor, r'\*', '*'),
++            'em_strong2': (ip.UnderscoreProcessor, r'_', '_'),
++        }
++        chars = set()
++        try:
++            items = list(self.inlinePatterns._data.items())
++        except AttributeError:  # pragma: no cover
++            return None
++        for name, pattern in items:
++            entry = known.get(name)
++            if entry is None:
++                return None
++            cls, pat, needed = entry
++            if type(pattern) is not cls or getattr(pattern, 'pattern', None) != pat:
++                return None
++            chars.update(needed)
++        if not chars:
++            return None
++        return re.compile('[' + ''.join(re.escape(c) for c in sorted(chars)) + ']')
+ 
+     def __makePlaceholder(self, type: str) -> tuple[str, str]:
+         """ Generate a placeholder """
+@@ -130,6 +173,10 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         if not isinstance(data, util.AtomicString):
++            trigger_re = self._trigger_re
++            if trigger_re is not None and trigger_re.search(data) is None:
++                # No built-in pattern can possibly match this text.
++                return data
+             startIndex = 0
+             count = len(self.inlinePatterns)
+             while patternIndex < count:
+@@ -364,6 +411,7 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         self.stashed_nodes: dict[str, etree.Element | str] = {}
++        self._trigger_re = self._build_trigger_re()
+ 
+         # Ensure a valid parent list, but copy passed in lists
+         # to ensure we don't have the user accidentally change it on us.

@@ -1,0 +1,36 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..7bdce8d8a4d746bc2d6046b3c39c091971736d71 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -86,6 +86,7 @@ class InlineProcessor(Treeprocessor):
+         self.md = md
+         self.inlinePatterns = md.inlinePatterns
+         self.ancestors: list[str] = []
++        self._pattern_list: list | None = None
+ 
+     def __makePlaceholder(self, type: str) -> tuple[str, str]:
+         """ Generate a placeholder """
+@@ -131,10 +132,13 @@ class InlineProcessor(Treeprocessor):
+         """
+         if not isinstance(data, util.AtomicString):
+             startIndex = 0
+-            count = len(self.inlinePatterns)
++            patterns = self._pattern_list
++            if patterns is None:
++                patterns = list(self.inlinePatterns)
++            count = len(patterns)
+             while patternIndex < count:
+                 data, matched, startIndex = self.__applyPattern(
+-                    self.inlinePatterns[patternIndex], data, patternIndex, startIndex
++                    patterns[patternIndex], data, patternIndex, startIndex
+                 )
+                 if not matched:
+                     patternIndex += 1
+@@ -371,6 +375,7 @@ class InlineProcessor(Treeprocessor):
+ 
+         self.parent_map = {c: p for p in tree.iter() for c in p}
+         stack = [(tree, tree_parents)]
++        self._pattern_list = list(self.inlinePatterns)
+ 
+         while stack:
+             currElement, parents = stack.pop(0)

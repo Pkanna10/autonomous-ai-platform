@@ -1,0 +1,32 @@
+diff --git a/src/mistune/renderers/html.py b/src/mistune/renderers/html.py
+index a62e7c78f8510e9681a41c985da1fe05af4b436a..b1965ac67bf295d67ff91c1e89f2dafab0add402 100644
+--- a/src/mistune/renderers/html.py
++++ b/src/mistune/renderers/html.py
+@@ -9,6 +9,7 @@ class HTMLRenderer(BaseRenderer):
+     """A renderer for converting Markdown to HTML."""
+ 
+     _escape: bool
++    _fast_text: bool = False
+     _allow_harmful_protocols: Optional[Union[bool, Iterable[str]]]
+     NAME: ClassVar[Literal["html"]] = "html"
+     SAFE_PROTOCOLS: ClassVar[Tuple[str, ...]] = (
+@@ -36,8 +37,19 @@ class HTMLRenderer(BaseRenderer):
+         super(HTMLRenderer, self).__init__()
+         self._allow_harmful_protocols = allow_harmful_protocols
+         self._escape = escape
++        self._fast_text = type(self).text is HTMLRenderer.text
+ 
+     def render_token(self, token: Dict[str, Any], state: BlockState) -> str:
++        if (
++            token["type"] == "text"
++            and self._fast_text
++            and "raw" in token
++            and not token.get("attrs")
++            and "text" not in self.__dict__
++        ):
++            if self._escape:
++                return escape_text(token["raw"])
++            return safe_entity(token["raw"])
+         # backward compitable with v2
+         func = self._get_method(token["type"])
+         attrs = token.get("attrs")

@@ -1,0 +1,35 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..df313ebdcbb154270360cb31539fde18213d695d 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -8,6 +8,7 @@ from __future__ import annotations
+ # parse_value().
+ __lazy_modules__ = ["tomli._re", "tomllib._re"]
+ 
++import re
+ import sys
+ 
+ from ._re import (
+@@ -67,6 +68,11 @@ BARE_KEY_CHARS: Final = frozenset(
+     "abcdefghijklmnopqrstuvwxyz" "ABCDEFGHIJKLMNOPQRSTUVWXYZ" "0123456789" "-_"
+ )
+ KEY_INITIAL_CHARS: Final = BARE_KEY_CHARS | frozenset("\"'")
++# Fast path for the common `bare_key = ` prefix. Character classes must match
++# BARE_KEY_CHARS and TOML_WS exactly.
++_RE_BARE_KEY_EQ_match: Final = re.compile(
++    r"([A-Za-z0-9_\-]+)[ \t]*=[ \t]*"
++).match
+ HEXDIGIT_CHARS: Final = frozenset("abcdef" "ABCDEF" "0123456789")
+ 
+ BASIC_STR_ESCAPE_REPLACEMENTS: Final = frozendict(
+@@ -462,6 +468,10 @@ def key_value_rule(
+ def parse_key_value_pair(
+     src: str, pos: Pos, parse_float: ParseFloat, nest_lvl: int
+ ) -> tuple[Pos, Key, Any]:
++    m = _RE_BARE_KEY_EQ_match(src, pos)
++    if m is not None:
++        pos, value = parse_value(src, m.end(), parse_float, nest_lvl)
++        return pos, (m.group(1),), value
+     pos, key = parse_key(src, pos)
+     try:
+         char: str | None = src[pos]

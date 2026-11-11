@@ -1,0 +1,49 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..a99366687f4093ba7b421401af117a6a2d1a7065 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -530,17 +530,39 @@ def parse_array(
+     while True:
+         pos, val = parse_value(src, pos, parse_float, nest_lvl)
+         array.append(val)
+-        pos = skip_comments_and_array_ws(src, pos)
+-
+-        c = src[pos : pos + 1]
++        try:
++            c = src[pos]
++        except IndexError:
++            c = ""
++        if c in TOML_WS_AND_NEWLINE or c == "#":
++            pos = skip_comments_and_array_ws(src, pos)
++            try:
++                c = src[pos]
++            except IndexError:
++                c = ""
+         if c == "]":
+             return pos + 1, array
+         if c != ",":
+             raise TOMLDecodeError("Unclosed array", src, pos)
+         pos += 1
+ 
+-        pos = skip_comments_and_array_ws(src, pos)
+-        if src.startswith("]", pos):
++        try:
++            c = src[pos]
++        except IndexError:
++            c = ""
++        if c == " ":
++            pos += 1
++            try:
++                c = src[pos]
++            except IndexError:
++                c = ""
++        if c in TOML_WS_AND_NEWLINE or c == "#":
++            pos = skip_comments_and_array_ws(src, pos)
++            try:
++                c = src[pos]
++            except IndexError:
++                c = ""
++        if c == "]":
+             return pos + 1, array
+ 
+ 

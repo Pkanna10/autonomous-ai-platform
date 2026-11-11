@@ -1,0 +1,75 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..b9a9211fd803b807bbfc128e001b55aeee079637 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -175,6 +175,7 @@ def loads(__s: str, *, parse_float: ParseFloat = float) -> dict[str, Any]:
+     pos = 0
+     out = Output()
+     header: Key = ()
++    header_nest: dict[str, Any] | None = None
+     parse_float = make_safe_parse_float(parse_float)
+ 
+     # Parse one statement at a time
+@@ -199,7 +200,9 @@ def loads(__s: str, *, parse_float: ParseFloat = float) -> dict[str, Any]:
+             pos += 1
+             continue
+         if char in KEY_INITIAL_CHARS:
+-            pos = key_value_rule(src, pos, out, header, parse_float)
++            pos, header_nest = key_value_rule(
++                src, pos, out, header, parse_float, header_nest
++            )
+             pos = skip_chars(src, pos, TOML_WS)
+         elif char == "[":
+             try:
+@@ -207,6 +210,7 @@ def loads(__s: str, *, parse_float: ParseFloat = float) -> dict[str, Any]:
+             except IndexError:
+                 second_char = None
+             out.flags.finalize_pending()
++            header_nest = None
+             if second_char == "[":
+                 pos, header = create_list_rule(src, pos, out)
+             else:
+@@ -426,9 +430,32 @@ def create_list_rule(src: str, pos: Pos, out: Output) -> tuple[Pos, Key]:
+ 
+ 
+ def key_value_rule(
+-    src: str, pos: Pos, out: Output, header: Key, parse_float: ParseFloat
+-) -> Pos:
++    src: str,
++    pos: Pos,
++    out: Output,
++    header: Key,
++    parse_float: ParseFloat,
++    header_nest: dict[str, Any] | None = None,
++) -> tuple[Pos, dict[str, Any] | None]:
+     pos, key, value = parse_key_value_pair(src, pos, parse_float, nest_lvl=0)
++    if len(key) == 1:
++        key_stem = key[0]
++        if out.flags.is_(header, Flags.FROZEN):
++            raise TOMLDecodeError(
++                f"Cannot mutate immutable namespace {header}", src, pos
++            )
++        if header_nest is None:
++            try:
++                header_nest = out.data.get_or_create_nest(header)
++            except KeyError:
++                raise TOMLDecodeError("Cannot overwrite a value", src, pos) from None
++        if key_stem in header_nest:
++            raise TOMLDecodeError("Cannot overwrite a value", src, pos)
++        if isinstance(value, (dict, list)):
++            out.flags.set(header + key, Flags.FROZEN, recursive=True)
++        header_nest[key_stem] = value
++        return pos, header_nest
++
+     key_parent, key_stem = key[:-1], key[-1]
+     abs_key_parent = header + key_parent
+ 
+@@ -456,7 +483,7 @@ def key_value_rule(
+     if isinstance(value, (dict, list)):
+         out.flags.set(header + key, Flags.FROZEN, recursive=True)
+     nest[key_stem] = value
+-    return pos
++    return pos, header_nest
+ 
+ 
+ def parse_key_value_pair(

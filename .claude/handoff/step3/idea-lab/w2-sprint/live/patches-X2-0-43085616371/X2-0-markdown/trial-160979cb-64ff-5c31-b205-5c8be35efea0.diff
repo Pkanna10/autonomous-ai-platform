@@ -1,0 +1,62 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..4203146e3397fde56559581ba9b88c0edc6d8456 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -72,6 +72,32 @@ class Treeprocessor(util.Processor):
+         pass  # pragma: no cover
+ 
+ 
++_TRIGGERS: dict[str, str] = {
++    inlinepatterns.BACKTICK_RE: '`',
++    inlinepatterns.ESCAPE_RE: '\\',
++    inlinepatterns.LINK_RE: '[',
++    inlinepatterns.IMAGE_LINK_RE: '![',
++    inlinepatterns.AUTOLINK_RE: '<',
++    inlinepatterns.AUTOMAIL_RE: '<',
++    inlinepatterns.HTML_RE: '<',
++    inlinepatterns.ENTITY_RE: '&',
++    inlinepatterns.LINE_BREAK_RE: '  \n',
++    r'\*': '*',
++    r'_': '_',
++}
++""" Literal substrings every match of the given built-in regex must contain. """
++
++
++def _pattern_trigger(pattern: inlinepatterns.Pattern) -> str | None:
++    """ Return a literal required by every match of `pattern`, or `None` if unknown. """
++    if type(pattern).getCompiledRegExp is not inlinepatterns.Pattern.getCompiledRegExp:
++        return None
++    compiled = getattr(pattern, 'compiled_re', None)
++    if compiled is None or compiled.flags & re.VERBOSE:
++        return None
++    return _TRIGGERS.get(compiled.pattern)
++
++
+ class InlineProcessor(Treeprocessor):
+     """
+     A `Treeprocessor` that traverses a tree, applying inline patterns.
+@@ -86,6 +112,7 @@ class InlineProcessor(Treeprocessor):
+         self.md = md
+         self.inlinePatterns = md.inlinePatterns
+         self.ancestors: list[str] = []
++        self.__triggers: dict = {}
+ 
+     def __makePlaceholder(self, type: str) -> tuple[str, str]:
+         """ Generate a placeholder """
+@@ -278,6 +305,16 @@ class InlineProcessor(Treeprocessor):
+                 return data, False, 0
+ 
+         if new_style:
++            triggers = self.__triggers
++            try:
++                trigger = triggers[pattern]
++            except KeyError:
++                trigger = _pattern_trigger(pattern)
++                triggers[pattern] = trigger
++            except TypeError:  # pragma: no cover
++                trigger = None
++            if trigger is not None and data.find(trigger, startIndex) == -1:
++                return data, False, 0
+             match = None
+             # Since `handleMatch` may reject our first match,
+             # we iterate over the buffer looking for matches

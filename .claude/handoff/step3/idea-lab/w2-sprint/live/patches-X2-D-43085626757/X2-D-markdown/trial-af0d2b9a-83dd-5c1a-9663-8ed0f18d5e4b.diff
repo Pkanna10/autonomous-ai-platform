@@ -1,0 +1,78 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..10e2625f4374684971a27599c5362ea8ba86dff0 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -131,15 +131,63 @@ class InlineProcessor(Treeprocessor):
+         """
+         if not isinstance(data, util.AtomicString):
+             startIndex = 0
+-            count = len(self.inlinePatterns)
++            patterns = self.__patterns
++            triggers = self.__triggers
++            count = len(patterns)
+             while patternIndex < count:
++                trig = triggers[patternIndex]
++                if trig is not None:
++                    for t in trig:
++                        if t in data:
++                            break
++                    else:
++                        # No required literal present: the pattern cannot match.
++                        patternIndex += 1
++                        startIndex = 0
++                        continue
+                 data, matched, startIndex = self.__applyPattern(
+-                    self.inlinePatterns[patternIndex], data, patternIndex, startIndex
++                    patterns[patternIndex], data, patternIndex, startIndex
+                 )
+                 if not matched:
+                     patternIndex += 1
+         return data
+ 
++    def __buildTriggers(self) -> None:
++        """ Build a list of required literal substrings, parallel to the inline patterns. """
++        ip = inlinepatterns
++        known = {
++            (ip.BacktickInlineProcessor, ip.BACKTICK_RE): ('`',),
++            (ip.EscapeInlineProcessor, ip.ESCAPE_RE): ('\\',),
++            (ip.ReferenceInlineProcessor, ip.REFERENCE_RE): ('[',),
++            (ip.LinkInlineProcessor, ip.LINK_RE): ('[',),
++            (ip.ImageInlineProcessor, ip.IMAGE_LINK_RE): ('![',),
++            (ip.ImageReferenceInlineProcessor, ip.IMAGE_REFERENCE_RE): ('![',),
++            (ip.ShortReferenceInlineProcessor, ip.REFERENCE_RE): ('[',),
++            (ip.ShortImageReferenceInlineProcessor, ip.IMAGE_REFERENCE_RE): ('![',),
++            (ip.AutolinkInlineProcessor, ip.AUTOLINK_RE): ('<',),
++            (ip.AutomailInlineProcessor, ip.AUTOMAIL_RE): ('<',),
++            (ip.SubstituteTagInlineProcessor, ip.LINE_BREAK_RE): ('  \n',),
++            (ip.HtmlInlineProcessor, ip.HTML_RE): ('<',),
++            (ip.HtmlInlineProcessor, ip.ENTITY_RE): ('&',),
++            (ip.SimpleTextInlineProcessor, ip.NOT_STRONG_RE): ('*', '_'),
++            (ip.AsteriskProcessor, r'\*'): ('*',),
++            (ip.UnderscoreProcessor, r'_'): ('_',),
++        }
++        patterns = list(self.inlinePatterns)
++        triggers: list[tuple[str, ...] | None] = []
++        for pattern in patterns:
++            trig = None
++            compiled = getattr(pattern, 'compiled_re', None)
++            if (
++                compiled is not None
++                and type(pattern).getCompiledRegExp is ip.Pattern.getCompiledRegExp
++                and 'getCompiledRegExp' not in vars(pattern)
++            ):
++                trig = known.get((type(pattern), compiled.pattern))
++            triggers.append(trig)
++        self.__patterns = patterns
++        self.__triggers = triggers
++
+     def __processElementText(self, node: etree.Element, subnode: etree.Element, isText: bool = True) -> None:
+         """
+         Process placeholders in `Element.text` or `Element.tail`
+@@ -364,6 +412,7 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         self.stashed_nodes: dict[str, etree.Element | str] = {}
++        self.__buildTriggers()
+ 
+         # Ensure a valid parent list, but copy passed in lists
+         # to ensure we don't have the user accidentally change it on us.

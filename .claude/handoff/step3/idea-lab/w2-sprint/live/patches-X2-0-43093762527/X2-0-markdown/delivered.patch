@@ -1,0 +1,63 @@
+diff --git a/markdown/extensions/abbr.py b/markdown/extensions/abbr.py
+index 9f609810ad4a7a01403f978b878435b17fef5a0e..5e8f0fc711db47a73d5f347d7ecbf2caab789834 100644
+--- a/markdown/extensions/abbr.py
++++ b/markdown/extensions/abbr.py
+@@ -102,10 +102,13 @@ class AbbrTreeprocessor(Treeprocessor):
+         abbr.tail = tail
+         return abbr
+ 
+-    def iter_element(self, el: etree.Element, parent: etree.Element | None = None) -> None:
++    def iter_element(
++        self, el: etree.Element, parent: etree.Element | None = None, index: int | None = None
++    ) -> None:
+         ''' Recursively iterate over elements, run regex on text and wrap matches in `abbr` tags. '''
+-        for child in reversed(el):
+-            self.iter_element(child, el)
++        last = len(el) - 1
++        for k, child in enumerate(reversed(el)):
++            self.iter_element(child, el, last - k)
+         if text := el.text:
+             if not isinstance(text, AtomicString):
+                 for m in reversed(list(self.RE.finditer(text))):
+@@ -116,7 +119,10 @@ class AbbrTreeprocessor(Treeprocessor):
+                 el.text = text
+         if parent is not None and el.tail:
+             tail = el.tail
+-            index = list(parent).index(el) + 1
++            if index is None:
++                index = list(parent).index(el) + 1
++            else:
++                index += 1
+             if not isinstance(tail, AtomicString):
+                 for m in reversed(list(self.RE.finditer(tail))):
+                     abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), tail[m.end():])
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..999dd9d46517b4e3fec4aeecdaf672bc10d61e4d 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -131,10 +131,14 @@ class InlineProcessor(Treeprocessor):
+         """
+         if not isinstance(data, util.AtomicString):
+             startIndex = 0
+-            count = len(self.inlinePatterns)
++            patterns = getattr(self, '_patterns', None)
++            if patterns is None:
++                patterns = list(self.inlinePatterns)
++            count = len(patterns)
++            applyPattern = self.__applyPattern
+             while patternIndex < count:
+-                data, matched, startIndex = self.__applyPattern(
+-                    self.inlinePatterns[patternIndex], data, patternIndex, startIndex
++                data, matched, startIndex = applyPattern(
++                    patterns[patternIndex], data, patternIndex, startIndex
+                 )
+                 if not matched:
+                     patternIndex += 1
+@@ -364,6 +368,7 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         self.stashed_nodes: dict[str, etree.Element | str] = {}
++        self._patterns = list(self.inlinePatterns)
+ 
+         # Ensure a valid parent list, but copy passed in lists
+         # to ensure we don't have the user accidentally change it on us.

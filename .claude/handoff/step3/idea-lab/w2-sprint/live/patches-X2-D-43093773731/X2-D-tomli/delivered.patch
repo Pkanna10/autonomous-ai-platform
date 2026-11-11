@@ -1,0 +1,80 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..a53f8f32471a0cc2a4daddd48f8325d1d1f6acbc 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -8,6 +8,7 @@ from __future__ import annotations
+ # parse_value().
+ __lazy_modules__ = ["tomli._re", "tomllib._re"]
+ 
++import re
+ import sys
+ 
+ from ._re import (
+@@ -49,6 +50,11 @@ MAX_INLINE_NESTING: Final = 400
+ # and RecursionError.
+ MAX_KEY_PARTS: Final = sys.getrecursionlimit()
+ 
++_RE_FLAT_INT_ARRAY: Final = re.compile(
++    r"[ \t]*(?:0|[1-9][0-9]*)[ \t]*(?:,[ \t]*(?:0|[1-9][0-9]*)[ \t]*)*,?[ \t]*\]"
++)
++_RE_DIGITS: Final = re.compile(r"[0-9]+")
++
+ ASCII_CTRL: Final = frozenset(chr(i) for i in range(32)) | frozenset(chr(127))
+ 
+ # Neither of these sets include quotation mark or backslash. They are
+@@ -429,17 +435,24 @@ def key_value_rule(
+     src: str, pos: Pos, out: Output, header: Key, parse_float: ParseFloat
+ ) -> Pos:
+     pos, key, value = parse_key_value_pair(src, pos, parse_float, nest_lvl=0)
+-    key_parent, key_stem = key[:-1], key[-1]
+-    abs_key_parent = header + key_parent
+-
+-    relative_path_cont_keys = (header + key[:i] for i in range(1, len(key)))
+-    for cont_key in relative_path_cont_keys:
+-        # Check that dotted key syntax does not redefine an existing table
+-        if out.flags.is_(cont_key, Flags.EXPLICIT_NEST):
+-            raise TOMLDecodeError(f"Cannot redefine namespace {cont_key}", src, pos)
+-        # Containers in the relative path can't be opened with the table syntax or
+-        # dotted key/value syntax in following table sections.
+-        out.flags.add_pending(cont_key, Flags.EXPLICIT_NEST)
++    key_stem = key[-1]
++    key_len = len(key)
++    if key_len == 1:
++        key_parent: Key = ()
++        abs_key_parent = header
++    else:
++        key_parent = key[:-1]
++        abs_key_parent = header + key_parent if header else key_parent
++        for i in range(1, key_len):
++            cont_key = header + key[:i] if header else key[:i]
++            # Check that dotted key syntax does not redefine an existing table
++            if out.flags.is_(cont_key, Flags.EXPLICIT_NEST):
++                raise TOMLDecodeError(
++                    f"Cannot redefine namespace {cont_key}", src, pos
++                )
++            # Containers in the relative path can't be opened with the table
++            # syntax or dotted key/value syntax in following table sections.
++            out.flags.add_pending(cont_key, Flags.EXPLICIT_NEST)
+ 
+     if out.flags.is_(abs_key_parent, Flags.FROZEN):
+         raise TOMLDecodeError(
+@@ -454,7 +467,7 @@ def key_value_rule(
+         raise TOMLDecodeError("Cannot overwrite a value", src, pos)
+     # Mark inline table and array namespaces recursively immutable
+     if isinstance(value, (dict, list)):
+-        out.flags.set(header + key, Flags.FROZEN, recursive=True)
++        out.flags.set(header + key if header else key, Flags.FROZEN, recursive=True)
+     nest[key_stem] = value
+     return pos
+ 
+@@ -522,6 +535,10 @@ def parse_array(
+     src: str, pos: Pos, parse_float: ParseFloat, nest_lvl: int
+ ) -> tuple[Pos, list[Any]]:
+     pos += 1
++    fast = _RE_FLAT_INT_ARRAY.match(src, pos)
++    if fast is not None:
++        end = fast.end()
++        return end, [int(x) for x in _RE_DIGITS.findall(src, pos, end)]
+     array: list[Any] = []
+ 
+     pos = skip_comments_and_array_ws(src, pos)

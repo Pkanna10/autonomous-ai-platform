@@ -1,0 +1,30 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..3864c146df717c667f2f9a386d10bd9309f6af9e 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -131,10 +131,14 @@ class InlineProcessor(Treeprocessor):
+         """
+         if not isinstance(data, util.AtomicString):
+             startIndex = 0
+-            count = len(self.inlinePatterns)
++            patterns = getattr(self, '_patterns', None)
++            if patterns is None:
++                patterns = list(self.inlinePatterns)
++            count = len(patterns)
++            applyPattern = self.__applyPattern
+             while patternIndex < count:
+-                data, matched, startIndex = self.__applyPattern(
+-                    self.inlinePatterns[patternIndex], data, patternIndex, startIndex
++                data, matched, startIndex = applyPattern(
++                    patterns[patternIndex], data, patternIndex, startIndex
+                 )
+                 if not matched:
+                     patternIndex += 1
+@@ -371,6 +375,7 @@ class InlineProcessor(Treeprocessor):
+ 
+         self.parent_map = {c: p for p in tree.iter() for c in p}
+         stack = [(tree, tree_parents)]
++        self._patterns = list(self.inlinePatterns)
+ 
+         while stack:
+             currElement, parents = stack.pop(0)

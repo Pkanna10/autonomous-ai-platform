@@ -1,0 +1,40 @@
+diff --git a/markdown/extensions/abbr.py b/markdown/extensions/abbr.py
+index 9f609810ad4a7a01403f978b878435b17fef5a0e..b80a3352ac3ea53af8b0df5576710aa0176a2c3d 100644
+--- a/markdown/extensions/abbr.py
++++ b/markdown/extensions/abbr.py
+@@ -106,22 +106,25 @@ class AbbrTreeprocessor(Treeprocessor):
+         ''' Recursively iterate over elements, run regex on text and wrap matches in `abbr` tags. '''
+         for child in reversed(el):
+             self.iter_element(child, el)
++        RE = self.RE
+         if text := el.text:
+             if not isinstance(text, AtomicString):
+-                for m in reversed(list(self.RE.finditer(text))):
+-                    if self.abbrs[m.group(0)]:
+-                        abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), text[m.end():])
+-                        el.insert(0, abbr)
+-                        text = text[:m.start()]
++                if RE.search(text) is not None:
++                    for m in reversed(list(RE.finditer(text))):
++                        if self.abbrs[m.group(0)]:
++                            abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), text[m.end():])
++                            el.insert(0, abbr)
++                            text = text[:m.start()]
+                 el.text = text
+         if parent is not None and el.tail:
+             tail = el.tail
+-            index = list(parent).index(el) + 1
+             if not isinstance(tail, AtomicString):
+-                for m in reversed(list(self.RE.finditer(tail))):
+-                    abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), tail[m.end():])
+-                    parent.insert(index, abbr)
+-                    tail = tail[:m.start()]
++                if RE.search(tail) is not None:
++                    index = list(parent).index(el) + 1
++                    for m in reversed(list(RE.finditer(tail))):
++                        abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), tail[m.end():])
++                        parent.insert(index, abbr)
++                        tail = tail[:m.start()]
+                 el.tail = tail
+ 
+     def run(self, root: etree.Element) -> etree.Element | None:

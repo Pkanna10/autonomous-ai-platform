@@ -1,0 +1,99 @@
+diff --git a/src/mistune/inline_parser.py b/src/mistune/inline_parser.py
+index abe671654a9d562f3505134e8cf16ec9d59cf3ec..b339427b2d9a04f75aae95585b797f2769315741 100644
+--- a/src/mistune/inline_parser.py
++++ b/src/mistune/inline_parser.py
+@@ -228,44 +228,55 @@ class InlineParser(Parser[InlineState]):
+     def parse(self, state: InlineState) -> List[Dict[str, Any]]:
+         pos = 0
+         sc = self.compile_sc()
+-        while pos < len(state.src):
+-            fast_end = self._find_fast_text_end(state.src, pos)
+-            if fast_end is None:
+-                m = sc.search(state.src, pos)
++        src = state.src
++        src_len = len(src)
++        trigger_re = self._get_cached_fast_trigger_re()
++        process_text = self.process_text
++        parse_method = self.parse_method
++        find_linebreak_start = self._find_linebreak_start
++        while pos < src_len:
++            if trigger_re is None:
++                fast_end = None
++                m = sc.search(src, pos)
+             else:
++                tm = trigger_re.search(src, pos)
++                if tm is None:
++                    fast_end = src_len
++                else:
++                    fast_end = tm.start()
++                    if src[fast_end] == "\n":
++                        fast_end = find_linebreak_start(src, pos, fast_end)
+                 if fast_end > pos:
+-                    self.process_text(state.src[pos:fast_end], state)
++                    process_text(src[pos:fast_end], state)
+                     pos = fast_end
+-                if pos >= len(state.src):
++                if pos >= src_len:
+                     break
+-                m = sc.match(state.src, pos)
++                m = sc.match(src, pos)
+ 
+             if not m:
+                 if fast_end is not None:
+-                    self.process_text(state.src[pos : pos + 1], state)
++                    process_text(src[pos : pos + 1], state)
+                     pos += 1
+                     continue
+                 break
+ 
+             end_pos = m.start()
+             if end_pos > pos:
+-                hole = state.src[pos:end_pos]
+-                self.process_text(hole, state)
++                process_text(src[pos:end_pos], state)
+ 
+-            new_pos = self.parse_method(m, state)
++            new_pos = parse_method(m, state)
+             if not new_pos:
+                 # move cursor 1 character forward
+                 pos = end_pos + 1
+-                hole = state.src[end_pos:pos]
+-                self.process_text(hole, state)
++                process_text(src[end_pos:pos], state)
+             else:
+                 pos = new_pos
+ 
+         if pos == 0:
+             # special case, just pure text
+-            self.process_text(state.src, state)
+-        elif pos < len(state.src):
+-            self.process_text(state.src[pos:], state)
++            process_text(src, state)
++        elif pos < src_len:
++            process_text(src[pos:], state)
+         state.tokens = finalize_emphasis_tokens(
+             state.tokens,
+             "emphasis" in self.rules,
+@@ -273,12 +284,20 @@ class InlineParser(Parser[InlineState]):
+         )
+         return state.tokens
+ 
+-    def _find_fast_text_end(self, src: str, pos: int) -> Optional[int]:
++    def _get_cached_fast_trigger_re(self) -> Optional[re.Pattern[str]]:
++        trigger_re = self._fast_trigger_re
++        if trigger_re is not None:
++            return trigger_re
+         chars = self._get_fast_trigger_chars()
+         if chars is None:
+             return None
++        return self._get_fast_trigger_re(chars)
++
++    def _find_fast_text_end(self, src: str, pos: int) -> Optional[int]:
++        trigger_re = self._get_cached_fast_trigger_re()
++        if trigger_re is None:
++            return None
+ 
+-        trigger_re = self._get_fast_trigger_re(chars)
+         m = trigger_re.search(src, pos)
+         if m is None:
+             return len(src)

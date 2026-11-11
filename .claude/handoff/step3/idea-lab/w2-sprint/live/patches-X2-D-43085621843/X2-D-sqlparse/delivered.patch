@@ -1,0 +1,240 @@
+diff --git a/sqlparse/engine/grouping.py b/sqlparse/engine/grouping.py
+index 43ca5b580d5e8499e3fa1ed5275902d7e20ce71b..88615870ffca7096223e230c8fd2ece5681222f8 100644
+--- a/sqlparse/engine/grouping.py
++++ b/sqlparse/engine/grouping.py
+@@ -440,37 +440,57 @@ def group_values(tlist):
+ 
+ 
+ def group(stmt):
+-    for func in [
+-        group_comments,
+-
+-        # _group_matching
+-        group_brackets,
+-        group_parenthesis,
+-        group_case,
+-        group_if,
+-        group_for,
+-        group_begin,
+-
+-        group_over,
+-        group_functions,
+-        group_where,
+-        group_period,
+-        group_arrays,
+-        group_identifier,
+-        group_order,
+-        group_typecasts,
+-        group_tzcasts,
+-        group_typed_literal,
+-        group_operator,
+-        group_comparison,
+-        group_as,
+-        group_aliased,
+-        group_assignment,
+-
+-        align_comments,
+-        group_identifier_list,
+-        group_values,
+-    ]:
++    # Pre-scan the leaves once so that passes whose trigger token is
++    # absent (and which therefore cannot group anything) can be skipped.
++    values = set()
++    ttypes = set()
++    for leaf in stmt.flatten():
++        values.add(leaf.normalized)
++        ttypes.add(leaf.ttype)
++
++    has_comment = any(tt in T.Comment for tt in ttypes)
++    has_brackets = '[' in values
++
++    funcs = []
++    if has_comment:
++        funcs.append(group_comments)
++    if has_brackets:
++        funcs.append(group_brackets)
++    funcs.append(group_parenthesis)
++    funcs.append(group_case)
++    if 'IF' in values:
++        funcs.append(group_if)
++    if 'FOR' in values or 'FOREACH' in values:
++        funcs.append(group_for)
++    if 'BEGIN' in values:
++        funcs.append(group_begin)
++    if 'OVER' in values:
++        funcs.append(group_over)
++    funcs.append(group_functions)
++    funcs.append(group_where)
++    funcs.append(group_period)
++    if has_brackets:
++        funcs.append(group_arrays)
++    funcs.append(group_identifier)
++    funcs.append(group_order)
++    if '::' in values:
++        funcs.append(group_typecasts)
++    if T.Keyword.TZCast in ttypes:
++        funcs.append(group_tzcasts)
++    if T.Name.Builtin in ttypes or 'TIMESTAMP' in values:
++        funcs.append(group_typed_literal)
++    funcs.append(group_operator)
++    funcs.append(group_comparison)
++    funcs.append(group_as)
++    funcs.append(group_aliased)
++    if ':=' in values:
++        funcs.append(group_assignment)
++    if has_comment:
++        funcs.append(align_comments)
++    funcs.append(group_identifier_list)
++    funcs.append(group_values)
++
++    for func in funcs:
+         func(stmt)
+     return stmt
+ 
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..dcba1c5c8a7259e59bc6e6fead09a006636b501d 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -85,6 +85,16 @@ class Lexer:
+             (re.compile(rx, FLAGS).match, tt)
+             for rx, tt in SQL_REGEX
+         ]
++        firsts = [_first_chars(rx, FLAGS) for rx, _ in SQL_REGEX]
++        dispatch = {}
++        for code in range(128):
++            c = chr(code)
++            dispatch[c] = [
++                rule for rule, fs in zip(self._SQL_REGEX, firsts)
++                if fs is None or c in fs
++            ]
++        self._dispatch = dispatch
++        self._dispatch_src = (self._SQL_REGEX, len(self._SQL_REGEX))
+ 
+     def add_keywords(self, keywords):
+         """Add keyword dictionaries. Keywords are looked up in the same order
+@@ -134,9 +144,16 @@ class Lexer:
+             raise TypeError("Expected text or file-like object, got {!r}".
+                             format(type(text)))
+ 
++        full = self._SQL_REGEX
++        src = getattr(self, '_dispatch_src', None)
++        if src is not None and src[0] is full and src[1] == len(full):
++            dispatch_get = self._dispatch.get
++        else:
++            dispatch_get = {}.get
++
+         iterable = enumerate(text)
+         for pos, char in iterable:
+-            for rexmatch, action in self._SQL_REGEX:
++            for rexmatch, action in dispatch_get(char, full):
+                 m = rexmatch(text, pos)
+ 
+                 if not m:
+@@ -152,6 +169,107 @@ class Lexer:
+                 yield tokens.Error, char
+ 
+ 
++_CATEGORY_CLASSES = {
++    'CATEGORY_DIGIT': r'\d',
++    'CATEGORY_NOT_DIGIT': r'\D',
++    'CATEGORY_SPACE': r'\s',
++    'CATEGORY_NOT_SPACE': r'\S',
++    'CATEGORY_WORD': r'\w',
++    'CATEGORY_NOT_WORD': r'\W',
++}
++
++_ASCII_CHARS = [chr(code) for code in range(128)]
++
++
++class _Unknown(Exception):
++    pass
++
++
++def _chars_matching(class_rx, flags):
++    match = re.compile(class_rx, flags).match
++    return frozenset(c for c in _ASCII_CHARS if match(c))
++
++
++def _first_seq(seq, flags):
++    """Return (set of possible ASCII first chars, nullable) for a sequence.
++
++    Conservative: may over-approximate the set; raises _Unknown if the
++    construct can't be analysed."""
++    result = set()
++    for op, av in seq:
++        chars, nullable = _first_item(op, av, flags)
++        result |= chars
++        if not nullable:
++            return result, False
++    return result, True
++
++
++def _first_item(op, av, flags):
++    name = op.name
++    if name == 'LITERAL':
++        return _chars_matching(re.escape(chr(av)), flags), False
++    if name == 'IN':
++        negate = False
++        parts = []
++        for iop, iav in av:
++            iname = iop.name
++            if iname == 'NEGATE':
++                negate = True
++            elif iname == 'LITERAL':
++                parts.append(re.escape(chr(iav)))
++            elif iname == 'RANGE':
++                parts.append('{}-{}'.format(re.escape(chr(iav[0])),
++                                            re.escape(chr(iav[1]))))
++            elif iname == 'CATEGORY' and iav.name in _CATEGORY_CLASSES:
++                parts.append(_CATEGORY_CLASSES[iav.name])
++            else:
++                raise _Unknown()
++        if not parts:
++            raise _Unknown()
++        class_rx = '[{}{}]'.format('^' if negate else '', ''.join(parts))
++        return _chars_matching(class_rx, flags), False
++    if name == 'BRANCH':
++        result = set()
++        nullable = False
++        for sub in av[1]:
++            chars, sub_nullable = _first_seq(sub, flags)
++            result |= chars
++            nullable = nullable or sub_nullable
++        return result, nullable
++    if name == 'SUBPATTERN':
++        if len(av) != 4 or av[1] or av[2]:
++            raise _Unknown()
++        return _first_seq(av[3], flags)
++    if name in ('MAX_REPEAT', 'MIN_REPEAT', 'POSSESSIVE_REPEAT'):
++        chars, nullable = _first_seq(av[2], flags)
++        return chars, nullable or av[0] == 0
++    if name in ('AT', 'ASSERT', 'ASSERT_NOT'):
++        # zero-width; ignoring the assertion only widens the set
++        return set(), True
++    raise _Unknown()
++
++
++def _first_chars(rx, flags):
++    """Return a frozenset of ASCII characters a match of ``rx`` can start
++    with, or None if this can't be determined (rule always tried)."""
++    if not isinstance(rx, str):
++        return None
++    try:
++        try:
++            from re import _parser as sre_parse
++        except ImportError:
++            import sre_parse
++        parsed = sre_parse.parse(rx, flags)
++        if parsed.state.flags & ~(re.IGNORECASE | re.UNICODE):
++            return None
++        chars, nullable = _first_seq(list(parsed), flags)
++    except Exception:
++        return None
++    if nullable:
++        return None
++    return frozenset(chars)
++
++
+ def tokenize(sql, encoding=None):
+     """Tokenize sql.
+ 

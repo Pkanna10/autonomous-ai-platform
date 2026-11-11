@@ -1,0 +1,16 @@
+diff --git a/sqlparse/sql.py b/sqlparse/sql.py
+index 831dfb96d2b3a282b228bfddac97703a32e608e8..4e1a6f8c9e427f0dc240eebfad16ad129ec8906a 100644
+--- a/sqlparse/sql.py
++++ b/sqlparse/sql.py
+@@ -158,8 +158,9 @@ class TokenList(Token):
+ 
+     def __init__(self, tokens=None):
+         self.tokens = tokens or []
+-        [setattr(token, 'parent', self) for token in self.tokens]
+-        super().__init__(None, str(self))
++        for token in self.tokens:
++            token.parent = self
++        super().__init__(None, ''.join([t.value for t in self.tokens]))
+         self.is_group = True
+ 
+     def __str__(self):

@@ -1,0 +1,102 @@
+diff --git a/sqlparse/engine/grouping.py b/sqlparse/engine/grouping.py
+index 43ca5b580d5e8499e3fa1ed5275902d7e20ce71b..28bacaa5c42da2eafdae1c87cc112212426a602d 100644
+--- a/sqlparse/engine/grouping.py
++++ b/sqlparse/engine/grouping.py
+@@ -439,7 +439,88 @@ def group_values(tlist):
+         tlist.group_tokens(sql.Values, start_idx, end_idx, extend=True)
+ 
+ 
++_SKIP_SAFE_NESTING = 20
++
++
++def _skippable_passes(stmt):
++    """Return the set of grouping passes that can't change the tree.
++
++    A pass is only skipped when its trigger token is absent from the
++    statement's leaf tokens. For oversized or deeply nested input nothing
++    is skipped, so the depth/token limit errors are raised exactly as before.
++    """
++    if MAX_GROUPING_TOKENS is not None \
++       and len(stmt.tokens) > MAX_GROUPING_TOKENS:
++        return ()
++
++    has_typecast = has_tzcast = has_assign = has_bracket = False
++    has_if = has_for = has_begin = has_case = False
++    nesting = max_nesting = 0
++    T_Keyword = T.Keyword
++    T_Punct = T.Punctuation
++    T_TZCast = T.Keyword.TZCast
++    T_Assignment = T.Assignment
++    m_brackets = sql.SquareBrackets.M_OPEN
++    m_if = sql.If.M_OPEN
++    m_for = sql.For.M_OPEN
++    m_begin = sql.Begin.M_OPEN
++    m_case = sql.Case.M_OPEN
++
++    for token in stmt.flatten():
++        ttype = token.ttype
++        if ttype is T_Punct:
++            value = token.value
++            if value == '(' or value == '[':
++                nesting += 1
++                if nesting > max_nesting:
++                    max_nesting = nesting
++            elif value == ')' or value == ']':
++                nesting -= 1
++            elif value == '::':
++                has_typecast = True
++            if not has_bracket and token.match(*m_brackets):
++                has_bracket = True
++        elif ttype is T_Keyword:
++            if not has_case and token.match(*m_case):
++                has_case = True
++            elif not has_if and token.match(*m_if):
++                has_if = True
++            elif not has_for and token.match(*m_for):
++                has_for = True
++            elif not has_begin and token.match(*m_begin):
++                has_begin = True
++        elif ttype is not None:
++            if ttype == T_TZCast:
++                has_tzcast = True
++            elif ttype in T_Assignment:
++                has_assign = True
++
++    if max_nesting > _SKIP_SAFE_NESTING:
++        return ()
++
++    skip = set()
++    if not has_bracket:
++        skip.add(group_brackets)
++        skip.add(group_arrays)
++    if not has_case:
++        skip.add(group_case)
++    if not has_if:
++        skip.add(group_if)
++    if not has_for:
++        skip.add(group_for)
++    if not has_begin:
++        skip.add(group_begin)
++    if not has_typecast:
++        skip.add(group_typecasts)
++    if not has_tzcast:
++        skip.add(group_tzcasts)
++    if not has_assign:
++        skip.add(group_assignment)
++    return skip
++
++
+ def group(stmt):
++    skip = _skippable_passes(stmt)
+     for func in [
+         group_comments,
+ 
+@@ -471,6 +552,8 @@ def group(stmt):
+         group_identifier_list,
+         group_values,
+     ]:
++        if func in skip:
++            continue
+         func(stmt)
+     return stmt
+ 

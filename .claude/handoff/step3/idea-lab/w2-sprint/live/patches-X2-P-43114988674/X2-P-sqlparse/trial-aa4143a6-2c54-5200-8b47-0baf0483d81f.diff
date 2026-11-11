@@ -1,0 +1,178 @@
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..4a4eca09261172243560627f3a4730abc723d210 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -19,6 +19,121 @@ from io import TextIOBase
+ from sqlparse import tokens, keywords
+ from sqlparse.utils import consume
+ 
++try:  # Python >= 3.11
++    from re import _parser as _sre_parse
++    from re import _constants as _sre_c
++except ImportError:  # pragma: no cover
++    import sre_parse as _sre_parse
++    import sre_constants as _sre_c
++
++
++_ASCII = [chr(i) for i in range(128)]
++
++
++class _Unknown(Exception):
++    pass
++
++
++def _fold(chars):
++    out = set()
++    for c in chars:
++        out.add(c)
++        out.add(c.lower())
++        out.add(c.upper())
++    return {c for c in out if len(c) == 1 and ord(c) < 128}
++
++
++_CATEGORY_RX = {}
++for _name, _rx in (('CATEGORY_DIGIT', r'\d'), ('CATEGORY_WORD', r'\w'),
++                   ('CATEGORY_SPACE', r'\s')):
++    _op = getattr(_sre_c, _name, None)
++    if _op is not None:
++        _CATEGORY_RX[_op] = _rx
++
++
++def _category_set(cat, flags):
++    rx = _CATEGORY_RX.get(cat)
++    if rx is None:
++        raise _Unknown
++    m = re.compile(rx, flags).match
++    return {c for c in _ASCII if m(c)}
++
++
++def _in_set(items, flags):
++    result = set()
++    for op, av in items:
++        if op is _sre_c.LITERAL:
++            if av >= 128:
++                raise _Unknown
++            result |= _fold(chr(av))
++        elif op is _sre_c.RANGE:
++            lo, hi = av
++            if hi >= 128:
++                raise _Unknown
++            result |= _fold(chr(i) for i in range(lo, hi + 1))
++        elif op is _sre_c.CATEGORY:
++            result |= _category_set(av, flags)
++        else:
++            raise _Unknown
++    return result
++
++
++def _seq_first(seq, flags):
++    """Return (set of possible ASCII first chars, nullable)."""
++    result = set()
++    for op, av in seq:
++        first, nullable = _item_first(op, av, flags)
++        result |= first
++        if not nullable:
++            return result, False
++    return result, True
++
++
++def _item_first(op, av, flags):
++    c = _sre_c
++    if op is c.LITERAL:
++        if av >= 128:
++            raise _Unknown
++        return _fold(chr(av)), False
++    if op is c.IN:
++        return _in_set(av, flags), False
++    if op is c.SUBPATTERN:
++        return _seq_first(av[-1], flags)
++    if op in (c.MAX_REPEAT, c.MIN_REPEAT) or \
++            op is getattr(c, 'POSSESSIVE_REPEAT', None):
++        lo, _hi, sub = av
++        first, nullable = _seq_first(sub, flags)
++        return first, nullable or lo == 0
++    if op is c.BRANCH:
++        result = set()
++        nullable = False
++        for alt in av[1]:
++            first, n = _seq_first(alt, flags)
++            result |= first
++            nullable = nullable or n
++        return result, nullable
++    if op is getattr(c, 'ATOMIC_GROUP', None):
++        return _seq_first(av, flags)
++    if op in (c.AT, c.ASSERT, c.ASSERT_NOT):
++        # zero-width; ignoring the restriction is conservative
++        return set(), True
++    raise _Unknown
++
++
++def _first_chars(rx, flags):
++    """Conservatively compute the set of ASCII characters a match of
++    ``rx`` may start with. Returns None if unknown (match anywhere)."""
++    if not isinstance(rx, str):
++        return None
++    try:
++        parsed = _sre_parse.parse(rx, flags)
++        first, nullable = _seq_first(parsed, flags)
++    except _Unknown:
++        return None
++    if nullable:
++        return None
++    return frozenset(first)
++
+ 
+ class Lexer:
+     """The Lexer supports configurable syntax.
+@@ -77,6 +192,9 @@ class Lexer:
+         to make the lexer functional again."""
+         self._SQL_REGEX = []
+         self._keywords = []
++        self._dispatch = {}
++        self._dispatch_src = None
++        self._dispatch_len = 0
+ 
+     def set_SQL_REGEX(self, SQL_REGEX):
+         """Set the list of regex that will parse the SQL."""
+@@ -85,6 +203,22 @@ class Lexer:
+             (re.compile(rx, FLAGS).match, tt)
+             for rx, tt in SQL_REGEX
+         ]
++        firsts = []
++        for rx, _ in SQL_REGEX:
++            try:
++                firsts.append(_first_chars(rx, FLAGS))
++            except Exception:
++                firsts.append(None)
++        dispatch = {}
++        for code in range(128):
++            c = chr(code)
++            dispatch[c] = [
++                rule for rule, fs in zip(self._SQL_REGEX, firsts)
++                if fs is None or c in fs
++            ]
++        self._dispatch = dispatch
++        self._dispatch_src = self._SQL_REGEX
++        self._dispatch_len = len(self._SQL_REGEX)
+ 
+     def add_keywords(self, keywords):
+         """Add keyword dictionaries. Keywords are looked up in the same order
+@@ -134,9 +268,17 @@ class Lexer:
+             raise TypeError("Expected text or file-like object, got {!r}".
+                             format(type(text)))
+ 
++        full = self._SQL_REGEX
++        dispatch = getattr(self, '_dispatch', None)
++        if (dispatch is None
++                or getattr(self, '_dispatch_src', None) is not full
++                or self._dispatch_len != len(full)):
++            dispatch = {}
++        get_rules = dispatch.get
++
+         iterable = enumerate(text)
+         for pos, char in iterable:
+-            for rexmatch, action in self._SQL_REGEX:
++            for rexmatch, action in get_rules(char, full):
+                 m = rexmatch(text, pos)
+ 
+                 if not m:

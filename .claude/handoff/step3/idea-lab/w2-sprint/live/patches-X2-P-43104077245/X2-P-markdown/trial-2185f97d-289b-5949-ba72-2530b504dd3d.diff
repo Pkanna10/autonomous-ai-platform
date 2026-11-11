@@ -1,0 +1,53 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..4bfe5f1350c649c01f9bee3da23d9546034a295a 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -86,6 +86,9 @@ class InlineProcessor(Treeprocessor):
+         self.md = md
+         self.inlinePatterns = md.inlinePatterns
+         self.ancestors: list[str] = []
++        self.stashed_nodes: dict[str, etree.Element | str] = {}
++        self._noChangeCache: set = set()
++        self._excludeTags: tuple = ()
+ 
+     def __makePlaceholder(self, type: str) -> tuple[str, str]:
+         """ Generate a placeholder """
+@@ -130,6 +133,15 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         if not isinstance(data, util.AtomicString):
++            ancestors = self.ancestors
++            key = (data, patternIndex,
++                   tuple([t for t in self._excludeTags if t in ancestors]))
++            cache = self._noChangeCache
++            if key in cache:
++                return data
++            original = data
++            stash_len = len(self.stashed_nodes)
++            html_counter = self.md.htmlStash.html_counter
+             startIndex = 0
+             count = len(self.inlinePatterns)
+             while patternIndex < count:
+@@ -138,6 +150,9 @@ class InlineProcessor(Treeprocessor):
+                 )
+                 if not matched:
+                     patternIndex += 1
++            if (data is original and len(self.stashed_nodes) == stash_len
++                    and self.md.htmlStash.html_counter == html_counter):
++                cache.add(key)
+         return data
+ 
+     def __processElementText(self, node: etree.Element, subnode: etree.Element, isText: bool = True) -> None:
+@@ -364,6 +379,12 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         self.stashed_nodes: dict[str, etree.Element | str] = {}
++        self._noChangeCache = set()
++        excludes = set()
++        for pattern in self.inlinePatterns:
++            for exclude in pattern.ANCESTOR_EXCLUDES:
++                excludes.add(exclude.lower())
++        self._excludeTags = tuple(sorted(excludes))
+ 
+         # Ensure a valid parent list, but copy passed in lists
+         # to ensure we don't have the user accidentally change it on us.

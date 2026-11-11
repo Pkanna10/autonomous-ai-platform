@@ -1,0 +1,211 @@
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..6d1e9db210649b147028e628ef0c2dd6fafd3e5f 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -19,6 +19,145 @@ from io import TextIOBase
+ from sqlparse import tokens, keywords
+ from sqlparse.utils import consume
+ 
++try:  # Python 3.11+
++    import re._parser as _sre_parse
++except ImportError:  # pragma: no cover
++    try:
++        import sre_parse as _sre_parse
++    except ImportError:
++        _sre_parse = None
++
++
++def _first_leaves(seq):
++    """Return (leaves, nullable) for a parsed subpattern sequence.
++
++    ``leaves`` is a list of (op, av) items one of which must match the
++    first consumed character, or None if any character may start a match.
++    """
++    sp = _sre_parse
++    leaves = []
++    for op, av in seq:
++        if op in (sp.LITERAL, sp.NOT_LITERAL, sp.ANY, sp.IN):
++            leaves.append((op, av))
++            return leaves, False
++        elif op is sp.SUBPATTERN:
++            if av[1] or av[2]:
++                return None, True
++            sub, nullable = _first_leaves(av[3])
++            if sub is None:
++                return None, True
++            leaves.extend(sub)
++            if not nullable:
++                return leaves, False
++        elif op is sp.BRANCH:
++            any_nullable = False
++            for alt in av[1]:
++                sub, nullable = _first_leaves(alt)
++                if sub is None:
++                    return None, True
++                leaves.extend(sub)
++                any_nullable = any_nullable or nullable
++            if not any_nullable:
++                return leaves, False
++        elif op in (sp.MAX_REPEAT, sp.MIN_REPEAT):
++            sub, nullable = _first_leaves(av[2])
++            if sub is None:
++                return None, True
++            leaves.extend(sub)
++            if av[0] > 0 and not nullable:
++                return leaves, False
++        elif op is sp.AT:
++            continue
++        elif op in (sp.ASSERT, sp.ASSERT_NOT):
++            if av[0] < 0:  # lookbehind: keep rule always
++                return None, True
++            continue  # lookahead only restricts matches
++        else:
++            return None, True
++    return leaves, True
++
++
++_CATEGORY_RX = {}
++
++
++def _category_match(cat, c):
++    sp = _sre_parse
++    if not _CATEGORY_RX:
++        flags = re.IGNORECASE | re.UNICODE
++        for name, rx in (('CATEGORY_DIGIT', r'\d'),
++                         ('CATEGORY_NOT_DIGIT', r'\D'),
++                         ('CATEGORY_SPACE', r'\s'),
++                         ('CATEGORY_NOT_SPACE', r'\S'),
++                         ('CATEGORY_WORD', r'\w'),
++                         ('CATEGORY_NOT_WORD', r'\W')):
++            const = getattr(sp, name, None)
++            if const is not None:
++                _CATEGORY_RX[const] = re.compile(rx, flags).match
++    m = _CATEGORY_RX.get(cat)
++    if m is None:
++        return True
++    return m(c) is not None
++
++
++def _code_match(v, c, letter):
++    if v >= 128:
++        return letter
++    if letter:
++        return chr(v).lower() == c.lower()
++    return chr(v) == c
++
++
++def _leaf_may_match(leaf, c):
++    """Conservative test whether ``leaf`` may match ASCII char ``c``."""
++    sp = _sre_parse
++    op, av = leaf
++    letter = c.isalpha()
++    if op is sp.LITERAL:
++        return _code_match(av, c, letter)
++    if op is sp.IN:
++        for iop, iav in av:
++            if iop is sp.LITERAL:
++                if _code_match(iav, c, letter):
++                    return True
++            elif iop is sp.RANGE:
++                lo, hi = iav
++                if letter:
++                    if hi >= 128:
++                        return True
++                    if (lo <= ord(c.lower()) <= hi
++                            or lo <= ord(c.upper()) <= hi):
++                        return True
++                elif lo <= ord(c) <= hi:
++                    return True
++            elif iop is sp.CATEGORY:
++                if _category_match(iav, c):
++                    return True
++            else:  # NEGATE or anything unknown
++                return True
++        return False
++    return True
++
++
++def _rule_leaves(rexmatch):
++    """Analyse a rule's compiled regex; None means 'may match anything'."""
++    if _sre_parse is None:
++        return None
++    try:
++        pattern = rexmatch.__self__
++        if not isinstance(pattern, re.Pattern) or rexmatch.__name__ != 'match':
++            return None
++        if not isinstance(pattern.pattern, str):
++            return None
++        if pattern.flags & (re.ASCII | re.LOCALE):
++            return None
++        parsed = _sre_parse.parse(pattern.pattern, pattern.flags)
++        leaves, nullable = _first_leaves(list(parsed))
++        if leaves is None or nullable:
++            return None
++        return leaves
++    except Exception:
++        return None
++
+ 
+ class Lexer:
+     """The Lexer supports configurable syntax.
+@@ -77,6 +216,25 @@ class Lexer:
+         to make the lexer functional again."""
+         self._SQL_REGEX = []
+         self._keywords = []
++        self._reset_candidates()
++
++    def _reset_candidates(self):
++        self._cand_src = None
++        self._cand_len = -1
++        self._cand_leaves = None
++        self._cand_by_char = {}
++
++    def _candidates_for(self, char):
++        """Return the rules (in original order) that may match at a
++        position whose first character is ``char``."""
++        rules = self._cand_src
++        leaves_list = self._cand_leaves
++        cands = tuple(
++            rule for rule, leaves in zip(rules, leaves_list)
++            if leaves is None
++            or any(_leaf_may_match(leaf, char) for leaf in leaves))
++        self._cand_by_char[char] = cands
++        return cands
+ 
+     def set_SQL_REGEX(self, SQL_REGEX):
+         """Set the list of regex that will parse the SQL."""
+@@ -85,6 +243,7 @@ class Lexer:
+             (re.compile(rx, FLAGS).match, tt)
+             for rx, tt in SQL_REGEX
+         ]
++        self._reset_candidates()
+ 
+     def add_keywords(self, keywords):
+         """Add keyword dictionaries. Keywords are looked up in the same order
+@@ -134,9 +293,25 @@ class Lexer:
+             raise TypeError("Expected text or file-like object, got {!r}".
+                             format(type(text)))
+ 
++        all_rules = self._SQL_REGEX
++        snapshot = tuple(all_rules)
++        if getattr(self, '_cand_src', None) != snapshot:
++            self._cand_src = snapshot
++            self._cand_leaves = [_rule_leaves(rexmatch)
++                                 for rexmatch, _ in snapshot]
++            self._cand_by_char = {}
++        by_char = self._cand_by_char
++        candidates_for = self._candidates_for
++
+         iterable = enumerate(text)
+         for pos, char in iterable:
+-            for rexmatch, action in self._SQL_REGEX:
++            if char < '\x80':
++                rules = by_char.get(char)
++                if rules is None:
++                    rules = candidates_for(char)
++            else:
++                rules = all_rules
++            for rexmatch, action in rules:
+                 m = rexmatch(text, pos)
+ 
+                 if not m:

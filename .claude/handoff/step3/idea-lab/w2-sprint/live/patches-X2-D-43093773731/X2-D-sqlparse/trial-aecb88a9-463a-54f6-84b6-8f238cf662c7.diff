@@ -1,0 +1,114 @@
+diff --git a/sqlparse/engine/grouping.py b/sqlparse/engine/grouping.py
+index 43ca5b580d5e8499e3fa1ed5275902d7e20ce71b..286bab3bb133d4b04c6651db18b34cf8d2d520f1 100644
+--- a/sqlparse/engine/grouping.py
++++ b/sqlparse/engine/grouping.py
+@@ -42,6 +42,22 @@ def _group_matching(tlist, cls, depth=0):
+     tidx_offset = 0
+     token_list = list(tlist)
+ 
++    m_open = cls.M_OPEN
++    m_close = cls.M_CLOSE
++    fast = not (len(m_open) != 2 or len(m_close) != 2
++                or m_open[1] is None or m_close[1] is None)
++    if fast:
++        open_ttype, open_vals = m_open
++        close_ttype, close_vals = m_close
++        if isinstance(open_vals, str):
++            open_vals = (open_vals,)
++        if isinstance(close_vals, str):
++            close_vals = (close_vals,)
++        open_raw = frozenset(open_vals)
++        open_up = frozenset(v.upper() for v in open_vals)
++        close_raw = frozenset(close_vals)
++        close_up = frozenset(v.upper() for v in close_vals)
++
+     for idx, token in enumerate(token_list):
+         tidx = idx - tidx_offset
+ 
+@@ -58,19 +74,30 @@ def _group_matching(tlist, cls, depth=0):
+             _group_matching(token, cls, depth + 1)
+             continue
+ 
+-        if token.match(*cls.M_OPEN):
++        ttype = token.ttype
++        if fast:
++            if ttype is open_ttype and token.normalized in (
++                    open_up if token.is_keyword else open_raw):
++                opens.append(tidx)
++                continue
++            if not (ttype is close_ttype and token.normalized in (
++                    close_up if token.is_keyword else close_raw)):
++                continue
++        elif token.match(*m_open):
+             opens.append(tidx)
++            continue
++        elif not token.match(*m_close):
++            continue
+ 
+-        elif token.match(*cls.M_CLOSE):
+-            try:
+-                open_idx = opens.pop()
+-            except IndexError:
+-                # this indicates invalid sql and unbalanced tokens.
+-                # instead of break, continue in case other "valid" groups exist
+-                continue
+-            close_idx = tidx
+-            tlist.group_tokens(cls, open_idx, close_idx)
+-            tidx_offset += close_idx - open_idx
++        try:
++            open_idx = opens.pop()
++        except IndexError:
++            # this indicates invalid sql and unbalanced tokens.
++            # instead of break, continue in case other "valid" groups exist
++            continue
++        close_idx = tidx
++        tlist.group_tokens(cls, open_idx, close_idx)
++        tidx_offset += close_idx - open_idx
+ 
+ 
+ def group_brackets(tlist):
+diff --git a/sqlparse/sql.py b/sqlparse/sql.py
+index 831dfb96d2b3a282b228bfddac97703a32e608e8..77f4bb82917865bf21c47a20c34a819541f77a26 100644
+--- a/sqlparse/sql.py
++++ b/sqlparse/sql.py
+@@ -263,7 +263,39 @@ class TokenList(Token):
+ 
+     def token_next_by(self, i=None, m=None, t=None, idx=-1, end=None):
+         idx += 1
+-        return self._token_matching(lambda tk: imt(tk, i, m, t), idx, end)
++        tokens = self.tokens
++        if end is None:
++            end = len(tokens)
++        m_list = None
++        if m:
++            if isinstance(m, list):
++                m_list = m
++            else:
++                m_list = (m,)
++        t_list = None
++        if t:
++            if isinstance(t, list):
++                t_list = t
++            else:
++                t_list = (t,)
++        if not i:
++            i = None
++        for pos in range(idx, end):
++            token = tokens[pos]
++            if token is None:
++                continue
++            if i is not None and isinstance(token, i):
++                return pos, token
++            if m_list is not None:
++                for pattern in m_list:
++                    if token.match(*pattern):
++                        return pos, token
++            if t_list is not None:
++                ttype = token.ttype
++                for tt in t_list:
++                    if ttype in tt:
++                        return pos, token
++        return None, None
+ 
+     def token_not_matching(self, funcs, idx):
+         funcs = (funcs,) if not isinstance(funcs, (list, tuple)) else funcs

@@ -1,0 +1,40 @@
+diff --git a/src/mistune/core.py b/src/mistune/core.py
+index 1f6f0678133458fbcbbf8255c01a1d6046bf7f4f..b631d479b851dd38e15bf07cad192ea97dc560d3 100644
+--- a/src/mistune/core.py
++++ b/src/mistune/core.py
+@@ -241,6 +241,7 @@ class BaseRenderer(object):
+ 
+     def __init__(self) -> None:
+         self.__methods: Dict[str, Callable[..., str]] = {}
++        self._method_cache: Dict[str, Callable[..., str]] = {}
+ 
+     def register(self, name: str, method: Callable[..., str]) -> None:
+         """Register a render method for the named token. For example::
+@@ -252,6 +253,9 @@ class BaseRenderer(object):
+         """
+         # bind self into renderer method
+         self.__methods[name] = lambda *arg, **kwargs: method(self, *arg, **kwargs)
++        cache = self.__dict__.get("_method_cache")
++        if cache is not None:
++            cache.clear()
+ 
+     def _get_method(self, name: str) -> Callable[..., str]:
+         try:
+diff --git a/src/mistune/renderers/html.py b/src/mistune/renderers/html.py
+index a62e7c78f8510e9681a41c985da1fe05af4b436a..1129ee13dcff6672ccb052c7c1de5cce77568ebe 100644
+--- a/src/mistune/renderers/html.py
++++ b/src/mistune/renderers/html.py
+@@ -39,7 +39,12 @@ class HTMLRenderer(BaseRenderer):
+ 
+     def render_token(self, token: Dict[str, Any], state: BlockState) -> str:
+         # backward compitable with v2
+-        func = self._get_method(token["type"])
++        tok_type = token["type"]
++        cache = self._method_cache
++        func = cache.get(tok_type)
++        if func is None:
++            func = self._get_method(tok_type)
++            cache[tok_type] = func
+         attrs = token.get("attrs")
+ 
+         if "raw" in token:

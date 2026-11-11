@@ -1,0 +1,57 @@
+diff --git a/src/mistune/core.py b/src/mistune/core.py
+index 1f6f0678133458fbcbbf8255c01a1d6046bf7f4f..68efb8e55ad45c3fe5b34aa3deab4d292af1994e 100644
+--- a/src/mistune/core.py
++++ b/src/mistune/core.py
+@@ -252,6 +252,9 @@ class BaseRenderer(object):
+         """
+         # bind self into renderer method
+         self.__methods[name] = lambda *arg, **kwargs: method(self, *arg, **kwargs)
++        cache = self.__dict__.get("_method_cache")
++        if cache:
++            cache.clear()
+ 
+     def _get_method(self, name: str) -> Callable[..., str]:
+         try:
+diff --git a/src/mistune/renderers/html.py b/src/mistune/renderers/html.py
+index a62e7c78f8510e9681a41c985da1fe05af4b436a..64a547e615c167cd439dec94652a38b9f20b661f 100644
+--- a/src/mistune/renderers/html.py
++++ b/src/mistune/renderers/html.py
+@@ -56,6 +56,38 @@ class HTMLRenderer(BaseRenderer):
+         else:
+             return func(text)
+ 
++    def render_tokens(self, tokens: Iterable[Dict[str, Any]], state: BlockState) -> str:
++        cls = type(self)
++        if cls.render_token is not HTMLRenderer.render_token or cls.iter_tokens is not BaseRenderer.iter_tokens:
++            return "".join(self.iter_tokens(tokens, state))
++        cache = self.__dict__.get("_method_cache")
++        if cache is None:
++            cache = self._method_cache = {}
++        out = []
++        append = out.append
++        for token in tokens:
++            name = token["type"]
++            func = cache.get(name)
++            if func is None:
++                func = self._get_method(name)
++                cache[name] = func
++            attrs = token.get("attrs")
++            if "raw" in token:
++                text = token["raw"]
++            elif "children" in token:
++                text = self.render_tokens(token["children"], state)
++            else:
++                if attrs:
++                    append(func(**attrs))
++                else:
++                    append(func())
++                continue
++            if attrs:
++                append(func(text, **attrs))
++            else:
++                append(func(text))
++        return "".join(out)
++
+     def safe_url(self, url: str) -> str:
+         """Ensure the given URL is safe. This method is used for rendering
+         links, images, and etc.

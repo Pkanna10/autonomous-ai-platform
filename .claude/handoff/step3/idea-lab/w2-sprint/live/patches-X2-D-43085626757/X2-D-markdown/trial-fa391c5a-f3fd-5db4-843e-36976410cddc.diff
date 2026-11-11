@@ -1,0 +1,89 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..a3e6f03bd7cc67ff603d070aac94c14aa2f10494 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -131,15 +131,29 @@ class InlineProcessor(Treeprocessor):
+         """
+         if not isinstance(data, util.AtomicString):
+             startIndex = 0
+-            count = len(self.inlinePatterns)
++            cache = self._pattern_cache
++            count = len(cache)
++            applyPattern = self.__applyPattern
+             while patternIndex < count:
+-                data, matched, startIndex = self.__applyPattern(
+-                    self.inlinePatterns[patternIndex], data, patternIndex, startIndex
++                data, matched, startIndex = applyPattern(
++                    cache[patternIndex], data, patternIndex, startIndex
+                 )
+                 if not matched:
+                     patternIndex += 1
+         return data
+ 
++    def _build_pattern_cache(self) -> None:
++        """ Precompute per-pattern data used by `__applyPattern`. """
++        cache = []
++        for pattern in self.inlinePatterns:
++            cache.append((
++                pattern,
++                pattern.getCompiledRegExp(),
++                isinstance(pattern, inlinepatterns.InlineProcessor),
++                tuple(exclude.lower() for exclude in pattern.ANCESTOR_EXCLUDES),
++            ))
++        self._pattern_cache = cache
++
+     def __processElementText(self, node: etree.Element, subnode: etree.Element, isText: bool = True) -> None:
+         """
+         Process placeholders in `Element.text` or `Element.tail`
+@@ -252,7 +266,7 @@ class InlineProcessor(Treeprocessor):
+ 
+     def __applyPattern(
+         self,
+-        pattern: inlinepatterns.Pattern,
++        entry: tuple,
+         data: str,
+         patternIndex: int,
+         startIndex: int = 0
+@@ -271,18 +285,20 @@ class InlineProcessor(Treeprocessor):
+             String with placeholders instead of `ElementTree` elements.
+ 
+         """
+-        new_style = isinstance(pattern, inlinepatterns.InlineProcessor)
++        pattern, compiled, new_style, excludes = entry
+ 
+-        for exclude in pattern.ANCESTOR_EXCLUDES:
+-            if exclude.lower() in self.ancestors:
+-                return data, False, 0
++        if excludes:
++            ancestors = self.ancestors
++            for exclude in excludes:
++                if exclude in ancestors:
++                    return data, False, 0
+ 
+         if new_style:
+             match = None
+             # Since `handleMatch` may reject our first match,
+             # we iterate over the buffer looking for matches
+             # until we can't find any more.
+-            for match in pattern.getCompiledRegExp().finditer(data, startIndex):
++            for match in compiled.finditer(data, startIndex):
+                 node, start, end = pattern.handleMatch(match, data)
+                 if start is None or end is None:
+                     startIndex += match.end(0)
+@@ -290,7 +306,7 @@ class InlineProcessor(Treeprocessor):
+                     continue
+                 break
+         else:  # pragma: no cover
+-            match = pattern.getCompiledRegExp().match(data[startIndex:])
++            match = compiled.match(data[startIndex:])
+             leftData = data[:startIndex]
+ 
+         if not match:
+@@ -364,6 +380,7 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         self.stashed_nodes: dict[str, etree.Element | str] = {}
++        self._build_pattern_cache()
+ 
+         # Ensure a valid parent list, but copy passed in lists
+         # to ensure we don't have the user accidentally change it on us.

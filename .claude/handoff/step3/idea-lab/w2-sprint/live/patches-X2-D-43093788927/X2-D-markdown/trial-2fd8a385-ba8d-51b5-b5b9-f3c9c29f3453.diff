@@ -1,0 +1,70 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..70a69663d95dc54b37ffbe47d76ddc7b310b98cb 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -86,6 +86,16 @@ class InlineProcessor(Treeprocessor):
+         self.md = md
+         self.inlinePatterns = md.inlinePatterns
+         self.ancestors: list[str] = []
++        self._pattern_snapshot: list[inlinepatterns.Pattern] | None = None
++        self._pattern_new_style: list[bool] = []
++
++    def __snapshotPatterns(self) -> None:
++        """ Snapshot the inline pattern registry for fast indexed access. """
++        patterns = list(self.inlinePatterns)
++        self._pattern_snapshot = patterns
++        self._pattern_new_style = [
++            isinstance(p, inlinepatterns.InlineProcessor) for p in patterns
++        ]
+ 
+     def __makePlaceholder(self, type: str) -> tuple[str, str]:
+         """ Generate a placeholder """
+@@ -131,10 +141,17 @@ class InlineProcessor(Treeprocessor):
+         """
+         if not isinstance(data, util.AtomicString):
+             startIndex = 0
+-            count = len(self.inlinePatterns)
++            patterns = self._pattern_snapshot
++            if patterns is None:
++                self.__snapshotPatterns()
++                patterns = self._pattern_snapshot
++            flags = self._pattern_new_style
++            count = len(patterns)
++            applyPattern = self.__applyPattern
+             while patternIndex < count:
+-                data, matched, startIndex = self.__applyPattern(
+-                    self.inlinePatterns[patternIndex], data, patternIndex, startIndex
++                data, matched, startIndex = applyPattern(
++                    patterns[patternIndex], data, patternIndex, startIndex,
++                    flags[patternIndex]
+                 )
+                 if not matched:
+                     patternIndex += 1
+@@ -255,7 +272,8 @@ class InlineProcessor(Treeprocessor):
+         pattern: inlinepatterns.Pattern,
+         data: str,
+         patternIndex: int,
+-        startIndex: int = 0
++        startIndex: int = 0,
++        new_style: bool | None = None
+     ) -> tuple[str, bool, int]:
+         """
+         Check if the line fits the pattern, create the necessary
+@@ -271,7 +289,8 @@ class InlineProcessor(Treeprocessor):
+             String with placeholders instead of `ElementTree` elements.
+ 
+         """
+-        new_style = isinstance(pattern, inlinepatterns.InlineProcessor)
++        if new_style is None:
++            new_style = isinstance(pattern, inlinepatterns.InlineProcessor)
+ 
+         for exclude in pattern.ANCESTOR_EXCLUDES:
+             if exclude.lower() in self.ancestors:
+@@ -364,6 +383,7 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         self.stashed_nodes: dict[str, etree.Element | str] = {}
++        self.__snapshotPatterns()
+ 
+         # Ensure a valid parent list, but copy passed in lists
+         # to ensure we don't have the user accidentally change it on us.

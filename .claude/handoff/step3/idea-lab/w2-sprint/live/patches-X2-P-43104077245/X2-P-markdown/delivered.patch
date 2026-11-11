@@ -1,0 +1,109 @@
+diff --git a/markdown/extensions/abbr.py b/markdown/extensions/abbr.py
+index 9f609810ad4a7a01403f978b878435b17fef5a0e..93ed6e64b6751599301ad3a1c96a87b8dc452dff 100644
+--- a/markdown/extensions/abbr.py
++++ b/markdown/extensions/abbr.py
+@@ -106,9 +106,10 @@ class AbbrTreeprocessor(Treeprocessor):
+         ''' Recursively iterate over elements, run regex on text and wrap matches in `abbr` tags. '''
+         for child in reversed(el):
+             self.iter_element(child, el)
++        RE = self.RE
+         if text := el.text:
+-            if not isinstance(text, AtomicString):
+-                for m in reversed(list(self.RE.finditer(text))):
++            if not isinstance(text, AtomicString) and RE.search(text) is not None:
++                for m in reversed(list(RE.finditer(text))):
+                     if self.abbrs[m.group(0)]:
+                         abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), text[m.end():])
+                         el.insert(0, abbr)
+@@ -116,9 +117,9 @@ class AbbrTreeprocessor(Treeprocessor):
+                 el.text = text
+         if parent is not None and el.tail:
+             tail = el.tail
+-            index = list(parent).index(el) + 1
+-            if not isinstance(tail, AtomicString):
+-                for m in reversed(list(self.RE.finditer(tail))):
++            if not isinstance(tail, AtomicString) and RE.search(tail) is not None:
++                index = list(parent).index(el) + 1
++                for m in reversed(list(RE.finditer(tail))):
+                     abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), tail[m.end():])
+                     parent.insert(index, abbr)
+                     tail = tail[:m.start()]
+diff --git a/markdown/inlinepatterns.py b/markdown/inlinepatterns.py
+index 0f3533b2e2ccc0e7ac5d7d3a3034d45c203f32f2..cbfaf3a64c8599dee8ebb1ee66525588ff499eb6 100644
+--- a/markdown/inlinepatterns.py
++++ b/markdown/inlinepatterns.py
+@@ -92,6 +92,27 @@ def build_inlinepatterns(md: Markdown, **kwargs: Any) -> util.Registry[InlinePro
+     inlinePatterns.register(SimpleTextInlineProcessor(NOT_STRONG_RE), 'not_strong', 70)
+     inlinePatterns.register(AsteriskProcessor(r'\*'), 'em_strong', 60)
+     inlinePatterns.register(UnderscoreProcessor(r'_'), 'em_strong2', 50)
++    # Literal substrings which every match of the given built-in pattern must contain.
++    # Used by the `InlineProcessor` tree processor as a cheap prefilter.
++    _triggers = {
++        'backtick': '`',
++        'escape': '\\',
++        'reference': '[',
++        'link': '[',
++        'image_link': '![',
++        'image_reference': '![',
++        'short_reference': '[',
++        'short_image_ref': '![',
++        'autolink': '<',
++        'automail': '<',
++        'linebreak': '  \n',
++        'html': '<',
++        'entity': '&',
++        'em_strong': '*',
++        'em_strong2': '_',
++    }
++    for _name, _trigger in _triggers.items():
++        inlinePatterns[_name]._trigger = _trigger
+     return inlinePatterns
+ 
+ 
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..2d8996dc70ae5e39d7b9cdac7772703735a12dc6 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -86,6 +86,7 @@ class InlineProcessor(Treeprocessor):
+         self.md = md
+         self.inlinePatterns = md.inlinePatterns
+         self.ancestors: list[str] = []
++        self._patterns: list | None = None
+ 
+     def __makePlaceholder(self, type: str) -> tuple[str, str]:
+         """ Generate a placeholder """
+@@ -131,10 +132,13 @@ class InlineProcessor(Treeprocessor):
+         """
+         if not isinstance(data, util.AtomicString):
+             startIndex = 0
+-            count = len(self.inlinePatterns)
++            patterns = self._patterns
++            if patterns is None:
++                patterns = self._patterns = list(self.inlinePatterns)
++            count = len(patterns)
+             while patternIndex < count:
+                 data, matched, startIndex = self.__applyPattern(
+-                    self.inlinePatterns[patternIndex], data, patternIndex, startIndex
++                    patterns[patternIndex], data, patternIndex, startIndex
+                 )
+                 if not matched:
+                     patternIndex += 1
+@@ -271,6 +275,10 @@ class InlineProcessor(Treeprocessor):
+             String with placeholders instead of `ElementTree` elements.
+ 
+         """
++        trigger = getattr(pattern, '_trigger', None)
++        if trigger is not None and data.find(trigger, startIndex) == -1:
++            return data, False, 0
++
+         new_style = isinstance(pattern, inlinepatterns.InlineProcessor)
+ 
+         for exclude in pattern.ANCESTOR_EXCLUDES:
+@@ -364,6 +372,7 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         self.stashed_nodes: dict[str, etree.Element | str] = {}
++        self._patterns = list(self.inlinePatterns)
+ 
+         # Ensure a valid parent list, but copy passed in lists
+         # to ensure we don't have the user accidentally change it on us.

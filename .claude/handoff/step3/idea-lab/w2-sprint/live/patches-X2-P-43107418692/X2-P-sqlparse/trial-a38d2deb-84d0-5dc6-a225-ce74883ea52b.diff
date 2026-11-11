@@ -1,0 +1,129 @@
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..2af1991fd04147c70377380964029779e0fc6fed 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -85,6 +85,92 @@ class Lexer:
+             (re.compile(rx, FLAGS).match, tt)
+             for rx, tt in SQL_REGEX
+         ]
++        self._master = None
++        self._master_src = None
++        try:
++            master = self._build_master(SQL_REGEX, FLAGS)
++        except Exception:
++            master = None
++        if master is not None:
++            self._master = master
++            self._master_src = self._SQL_REGEX
++
++    @staticmethod
++    def _shift_backrefs(rx, offset):
++        """Shift numbered backreferences in ``rx`` by ``offset``.
++        Returns None if the pattern cannot be safely rewritten."""
++        out = []
++        i = 0
++        n = len(rx)
++        in_class = False
++        while i < n:
++            c = rx[i]
++            if c == '\\':
++                if i + 1 >= n:
++                    return None
++                nxt = rx[i + 1]
++                if not in_class and nxt in '123456789':
++                    j = i + 1
++                    while j < n and j < i + 3 and rx[j].isdigit():
++                        j += 1
++                    if j < n and rx[j].isdigit():
++                        return None  # possible octal escape
++                    num = int(rx[i + 1:j]) + offset
++                    if num >= 100:
++                        return None
++                    out.append('(?:\\%d)' % num)
++                    i = j
++                    continue
++                if nxt == 'g' or nxt == '0':
++                    return None
++                out.append(rx[i:i + 2])
++                i += 2
++                continue
++            if in_class:
++                if c == ']':
++                    in_class = False
++            elif c == '[':
++                in_class = True
++                out.append(c)
++                i += 1
++                # a ']' (optionally after '^') right after '[' is literal
++                if i < n and rx[i] == '^':
++                    out.append('^')
++                    i += 1
++                if i < n and rx[i] == ']':
++                    out.append(']')
++                    i += 1
++                continue
++            elif c == '(' and rx.startswith('(?P=', i):
++                return None
++            out.append(c)
++            i += 1
++        return ''.join(out)
++
++    @classmethod
++    def _build_master(cls, SQL_REGEX, flags):
++        parts = []
++        actions = {}
++        group_count = 0
++        for idx, (rx, tt) in enumerate(SQL_REGEX):
++            if '(?P' in rx or rx.lstrip().startswith('(?') and \
++                    re.match(r'\(\?[aiLmsux]+\)', rx):
++                return None
++            compiled = re.compile(rx, flags)
++            if compiled.groupindex:
++                return None
++            group_count += 1  # the wrapper group
++            shifted = cls._shift_backrefs(rx, group_count)
++            if shifted is None:
++                return None
++            name = 'g%d' % idx
++            parts.append('(?P<%s>%s)' % (name, shifted))
++            actions[name] = tt
++            group_count += compiled.groups
++        master = re.compile('|'.join(parts), flags)
++        if master.groups != group_count:
++            return None
++        return master.match, actions
+ 
+     def add_keywords(self, keywords):
+         """Add keyword dictionaries. Keywords are looked up in the same order
+@@ -134,6 +220,31 @@ class Lexer:
+             raise TypeError("Expected text or file-like object, got {!r}".
+                             format(type(text)))
+ 
++        master = getattr(self, '_master', None)
++        if (master is not None and self._master_src is self._SQL_REGEX
++                and len(self._SQL_REGEX) == len(master[1])):
++            master_match, actions = master
++            token_type = tokens._TokenType
++            process_kw = keywords.PROCESS_AS_KEYWORD
++            is_keyword = self.is_keyword
++            Error = tokens.Error
++            pos = 0
++            end = len(text)
++            while pos < end:
++                m = master_match(text, pos)
++                if m is None:
++                    yield Error, text[pos]
++                    pos += 1
++                    continue
++                action = actions[m.lastgroup]
++                if isinstance(action, token_type):
++                    yield action, m.group()
++                elif action is process_kw:
++                    yield is_keyword(m.group())
++                new_pos = m.end()
++                pos = new_pos if new_pos > pos else pos + 1
++            return
++
+         iterable = enumerate(text)
+         for pos, char in iterable:
+             for rexmatch, action in self._SQL_REGEX:

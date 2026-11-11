@@ -1,0 +1,183 @@
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..d7841212f5494aa6d7c46409b6d2d870ca4e2085 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -19,6 +19,108 @@ from io import TextIOBase
+ from sqlparse import tokens, keywords
+ from sqlparse.utils import consume
+ 
++try:
++    from re import _parser as _sre_parse
++except ImportError:  # Python < 3.11
++    import sre_parse as _sre_parse
++
++
++class _UnknownFirst(Exception):
++    pass
++
++
++_CATEGORY_CLASSES = {}
++for _name, _cls in (('CATEGORY_DIGIT', r'\d'), ('CATEGORY_NOT_DIGIT', r'\D'),
++                    ('CATEGORY_SPACE', r'\s'), ('CATEGORY_NOT_SPACE', r'\S'),
++                    ('CATEGORY_WORD', r'\w'), ('CATEGORY_NOT_WORD', r'\W')):
++    _const = getattr(_sre_parse, _name, None)
++    if _const is not None:
++        _CATEGORY_CLASSES[_const] = _cls
++
++
++def _class_fragment(items):
++    parts = []
++    negate = ''
++    for op, av in items:
++        if op is _sre_parse.NEGATE:
++            negate = '^'
++        elif op is _sre_parse.LITERAL:
++            parts.append(re.escape(chr(av)))
++        elif op is _sre_parse.RANGE:
++            lo, hi = av
++            parts.append(re.escape(chr(lo)) + '-' + re.escape(chr(hi)))
++        elif op is _sre_parse.CATEGORY and av in _CATEGORY_CLASSES:
++            parts.append(_CATEGORY_CLASSES[av])
++        else:
++            raise _UnknownFirst
++    if not parts:
++        raise _UnknownFirst
++    return '[' + negate + ''.join(parts) + ']'
++
++
++def _first_fragments(seq):
++    """Return (fragments, nullable) for a parsed subpattern sequence.
++
++    ``fragments`` are single-character regex fragments; the sequence can
++    only start matching with a character matched by one of them, unless
++    ``nullable`` is True (it may match the empty string)."""
++    P = _sre_parse
++    frags = []
++    for op, av in seq:
++        if op is P.LITERAL:
++            frags.append(re.escape(chr(av)))
++            return frags, False
++        elif op is P.NOT_LITERAL:
++            frags.append('[^' + re.escape(chr(av)) + ']')
++            return frags, False
++        elif op is P.IN:
++            frags.append(_class_fragment(av))
++            return frags, False
++        elif op is P.SUBPATTERN:
++            _group, add_flags, del_flags, sub = av
++            if add_flags or del_flags:
++                raise _UnknownFirst
++            sub_frags, nullable = _first_fragments(sub)
++            frags.extend(sub_frags)
++            if not nullable:
++                return frags, False
++        elif op is P.BRANCH:
++            any_nullable = False
++            for sub in av[1]:
++                sub_frags, nullable = _first_fragments(sub)
++                frags.extend(sub_frags)
++                any_nullable = any_nullable or nullable
++            if not any_nullable:
++                return frags, False
++        elif op in (P.MAX_REPEAT, P.MIN_REPEAT):
++            lo, hi, sub = av
++            if hi == 0:
++                continue
++            sub_frags, nullable = _first_fragments(sub)
++            frags.extend(sub_frags)
++            if lo > 0 and not nullable:
++                return frags, False
++        elif op in (P.ASSERT, P.ASSERT_NOT, P.AT):
++            # zero-width: only restricts matches, skipping is conservative
++            continue
++        else:
++            raise _UnknownFirst
++    return frags, True
++
++
++def _first_char_matcher(rx, flags):
++    """Return a predicate telling whether a match of ``rx`` may start with
++    a given character, or None if this cannot be determined."""
++    try:
++        parsed = _sre_parse.parse(rx, flags)
++        frags, nullable = _first_fragments(list(parsed))
++        if nullable or not frags:
++            return None
++        first = re.compile('(?:' + '|'.join(frags) + ')', flags).fullmatch
++    except Exception:
++        return None
++    return lambda char: first(char) is not None
++
+ 
+ class Lexer:
+     """The Lexer supports configurable syntax.
+@@ -26,6 +128,8 @@ class Lexer:
+ 
+     _default_instance = None
+     _lock = Lock()
++    _table_src = None
++    _table_len = -1
+ 
+     # Development notes:
+     # - This class is prepared to be able to support additional SQL dialects
+@@ -77,6 +181,10 @@ class Lexer:
+         to make the lexer functional again."""
+         self._SQL_REGEX = []
+         self._keywords = []
++        self._first_matchers = []
++        self._regex_by_char = {}
++        self._table_src = None
++        self._table_len = -1
+ 
+     def set_SQL_REGEX(self, SQL_REGEX):
+         """Set the list of regex that will parse the SQL."""
+@@ -85,6 +193,26 @@ class Lexer:
+             (re.compile(rx, FLAGS).match, tt)
+             for rx, tt in SQL_REGEX
+         ]
++        # Conservative static first-character analysis per pattern.
++        # None means "could start with anything" (goes in every bucket).
++        self._first_matchers = [
++            _first_char_matcher(rx, FLAGS) for rx, _ in SQL_REGEX
++        ]
++        self._regex_by_char = {}
++        self._table_src = self._SQL_REGEX
++        self._table_len = len(self._SQL_REGEX)
++
++    def _candidates(self, char):
++        """Ordered subset of regexes that may match at a position
++        starting with ``char`` (superset of those that actually can)."""
++        cands = [
++            entry for entry, first in zip(self._SQL_REGEX,
++                                          self._first_matchers)
++            if first is None or first(char)
++        ]
++        if len(self._regex_by_char) < 4096:
++            self._regex_by_char[char] = cands
++        return cands
+ 
+     def add_keywords(self, keywords):
+         """Add keyword dictionaries. Keywords are looked up in the same order
+@@ -134,9 +262,21 @@ class Lexer:
+             raise TypeError("Expected text or file-like object, got {!r}".
+                             format(type(text)))
+ 
++        full = self._SQL_REGEX
++        if full is self._table_src and len(full) == self._table_len:
++            by_char = self._regex_by_char
++            candidates = self._candidates
++        else:
++            by_char = None
+         iterable = enumerate(text)
+         for pos, char in iterable:
+-            for rexmatch, action in self._SQL_REGEX:
++            if by_char is None:
++                regexes = full
++            else:
++                regexes = by_char.get(char)
++                if regexes is None:
++                    regexes = candidates(char)
++            for rexmatch, action in regexes:
+                 m = rexmatch(text, pos)
+ 
+                 if not m:

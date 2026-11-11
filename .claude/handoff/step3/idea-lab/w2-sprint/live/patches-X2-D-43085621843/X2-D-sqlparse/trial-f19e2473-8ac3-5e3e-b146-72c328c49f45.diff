@@ -1,0 +1,93 @@
+diff --git a/sqlparse/engine/grouping.py b/sqlparse/engine/grouping.py
+index 43ca5b580d5e8499e3fa1ed5275902d7e20ce71b..88615870ffca7096223e230c8fd2ece5681222f8 100644
+--- a/sqlparse/engine/grouping.py
++++ b/sqlparse/engine/grouping.py
+@@ -440,37 +440,57 @@ def group_values(tlist):
+ 
+ 
+ def group(stmt):
+-    for func in [
+-        group_comments,
+-
+-        # _group_matching
+-        group_brackets,
+-        group_parenthesis,
+-        group_case,
+-        group_if,
+-        group_for,
+-        group_begin,
+-
+-        group_over,
+-        group_functions,
+-        group_where,
+-        group_period,
+-        group_arrays,
+-        group_identifier,
+-        group_order,
+-        group_typecasts,
+-        group_tzcasts,
+-        group_typed_literal,
+-        group_operator,
+-        group_comparison,
+-        group_as,
+-        group_aliased,
+-        group_assignment,
+-
+-        align_comments,
+-        group_identifier_list,
+-        group_values,
+-    ]:
++    # Pre-scan the leaves once so that passes whose trigger token is
++    # absent (and which therefore cannot group anything) can be skipped.
++    values = set()
++    ttypes = set()
++    for leaf in stmt.flatten():
++        values.add(leaf.normalized)
++        ttypes.add(leaf.ttype)
++
++    has_comment = any(tt in T.Comment for tt in ttypes)
++    has_brackets = '[' in values
++
++    funcs = []
++    if has_comment:
++        funcs.append(group_comments)
++    if has_brackets:
++        funcs.append(group_brackets)
++    funcs.append(group_parenthesis)
++    funcs.append(group_case)
++    if 'IF' in values:
++        funcs.append(group_if)
++    if 'FOR' in values or 'FOREACH' in values:
++        funcs.append(group_for)
++    if 'BEGIN' in values:
++        funcs.append(group_begin)
++    if 'OVER' in values:
++        funcs.append(group_over)
++    funcs.append(group_functions)
++    funcs.append(group_where)
++    funcs.append(group_period)
++    if has_brackets:
++        funcs.append(group_arrays)
++    funcs.append(group_identifier)
++    funcs.append(group_order)
++    if '::' in values:
++        funcs.append(group_typecasts)
++    if T.Keyword.TZCast in ttypes:
++        funcs.append(group_tzcasts)
++    if T.Name.Builtin in ttypes or 'TIMESTAMP' in values:
++        funcs.append(group_typed_literal)
++    funcs.append(group_operator)
++    funcs.append(group_comparison)
++    funcs.append(group_as)
++    funcs.append(group_aliased)
++    if ':=' in values:
++        funcs.append(group_assignment)
++    if has_comment:
++        funcs.append(align_comments)
++    funcs.append(group_identifier_list)
++    funcs.append(group_values)
++
++    for func in funcs:
+         func(stmt)
+     return stmt
+ 

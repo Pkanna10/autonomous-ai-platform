@@ -1,0 +1,52 @@
+diff --git a/src/mistune/core.py b/src/mistune/core.py
+index 1f6f0678133458fbcbbf8255c01a1d6046bf7f4f..161df0366bbe82126d97d6ba668cf842b5e0c2d1 100644
+--- a/src/mistune/core.py
++++ b/src/mistune/core.py
+@@ -241,6 +241,7 @@ class BaseRenderer(object):
+ 
+     def __init__(self) -> None:
+         self.__methods: Dict[str, Callable[..., str]] = {}
++        self._method_cache: Dict[str, Callable[..., str]] = {}
+ 
+     def register(self, name: str, method: Callable[..., str]) -> None:
+         """Register a render method for the named token. For example::
+@@ -252,6 +253,7 @@ class BaseRenderer(object):
+         """
+         # bind self into renderer method
+         self.__methods[name] = lambda *arg, **kwargs: method(self, *arg, **kwargs)
++        self._method_cache.clear()
+ 
+     def _get_method(self, name: str) -> Callable[..., str]:
+         try:
+@@ -263,7 +265,12 @@ class BaseRenderer(object):
+             return method
+ 
+     def render_token(self, token: Dict[str, Any], state: BlockState) -> str:
+-        func = self._get_method(token["type"])
++        name = token["type"]
++        cache = self._method_cache
++        func = cache.get(name)
++        if func is None:
++            func = self._get_method(name)
++            cache[name] = func
+         return func(token, state)
+ 
+     def iter_tokens(self, tokens: Iterable[Dict[str, Any]], state: BlockState) -> Iterable[str]:
+diff --git a/src/mistune/renderers/html.py b/src/mistune/renderers/html.py
+index a62e7c78f8510e9681a41c985da1fe05af4b436a..ccd461e89e8f4726866462cfc6fe406045e7404e 100644
+--- a/src/mistune/renderers/html.py
++++ b/src/mistune/renderers/html.py
+@@ -39,7 +39,12 @@ class HTMLRenderer(BaseRenderer):
+ 
+     def render_token(self, token: Dict[str, Any], state: BlockState) -> str:
+         # backward compitable with v2
+-        func = self._get_method(token["type"])
++        name = token["type"]
++        cache = self._method_cache
++        func = cache.get(name)
++        if func is None:
++            func = self._get_method(name)
++            cache[name] = func
+         attrs = token.get("attrs")
+ 
+         if "raw" in token:

@@ -1,0 +1,149 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..5437fd02fcfd1f72ef9fe1710cb36fd48afc2677 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -11,6 +11,7 @@ __lazy_modules__ = ["tomli._re", "tomllib._re"]
+ import sys
+ 
+ from ._re import (
++    RE_BARE_KEY_EQ,
+     RE_DATETIME,
+     RE_LOCALTIME,
+     RE_NUMBER,
+@@ -429,17 +430,23 @@ def key_value_rule(
+     src: str, pos: Pos, out: Output, header: Key, parse_float: ParseFloat
+ ) -> Pos:
+     pos, key, value = parse_key_value_pair(src, pos, parse_float, nest_lvl=0)
+-    key_parent, key_stem = key[:-1], key[-1]
+-    abs_key_parent = header + key_parent
+-
+-    relative_path_cont_keys = (header + key[:i] for i in range(1, len(key)))
+-    for cont_key in relative_path_cont_keys:
+-        # Check that dotted key syntax does not redefine an existing table
+-        if out.flags.is_(cont_key, Flags.EXPLICIT_NEST):
+-            raise TOMLDecodeError(f"Cannot redefine namespace {cont_key}", src, pos)
+-        # Containers in the relative path can't be opened with the table syntax or
+-        # dotted key/value syntax in following table sections.
+-        out.flags.add_pending(cont_key, Flags.EXPLICIT_NEST)
++    if len(key) == 1:
++        key_stem = key[0]
++        abs_key_parent = header
++    else:
++        key_parent, key_stem = key[:-1], key[-1]
++        abs_key_parent = header + key_parent
++
++        relative_path_cont_keys = (header + key[:i] for i in range(1, len(key)))
++        for cont_key in relative_path_cont_keys:
++            # Check that dotted key syntax does not redefine an existing table
++            if out.flags.is_(cont_key, Flags.EXPLICIT_NEST):
++                raise TOMLDecodeError(
++                    f"Cannot redefine namespace {cont_key}", src, pos
++                )
++            # Containers in the relative path can't be opened with the table
++            # syntax or dotted key/value syntax in following table sections.
++            out.flags.add_pending(cont_key, Flags.EXPLICIT_NEST)
+ 
+     if out.flags.is_(abs_key_parent, Flags.FROZEN):
+         raise TOMLDecodeError(
+@@ -462,6 +469,11 @@ def key_value_rule(
+ def parse_key_value_pair(
+     src: str, pos: Pos, parse_float: ParseFloat, nest_lvl: int
+ ) -> tuple[Pos, Key, Any]:
++    m = RE_BARE_KEY_EQ.match(src, pos)
++    if m is not None:
++        key_fast: Key = (m.group(1),)
++        pos, value = parse_value(src, m.end(), parse_float, nest_lvl)
++        return pos, key_fast, value
+     pos, key = parse_key(src, pos)
+     try:
+         char: str | None = src[pos]
+@@ -530,17 +542,39 @@ def parse_array(
+     while True:
+         pos, val = parse_value(src, pos, parse_float, nest_lvl)
+         array.append(val)
+-        pos = skip_comments_and_array_ws(src, pos)
+-
+-        c = src[pos : pos + 1]
++        try:
++            c = src[pos]
++        except IndexError:
++            c = ""
++        if c in TOML_WS_AND_NEWLINE or c == "#":
++            pos = skip_comments_and_array_ws(src, pos)
++            try:
++                c = src[pos]
++            except IndexError:
++                c = ""
+         if c == "]":
+             return pos + 1, array
+         if c != ",":
+             raise TOMLDecodeError("Unclosed array", src, pos)
+         pos += 1
+ 
+-        pos = skip_comments_and_array_ws(src, pos)
+-        if src.startswith("]", pos):
++        try:
++            c = src[pos]
++        except IndexError:
++            c = ""
++        if c == " ":
++            pos += 1
++            try:
++                c = src[pos]
++            except IndexError:
++                c = ""
++        if c in TOML_WS_AND_NEWLINE or c == "#":
++            pos = skip_comments_and_array_ws(src, pos)
++            try:
++                c = src[pos]
++            except IndexError:
++                c = ""
++        if c == "]":
+             return pos + 1, array
+ 
+ 
+@@ -747,16 +781,20 @@ def parse_value(
+         return parse_inline_table(src, pos, parse_float, nest_lvl + 1)
+ 
+     # Dates and times
+-    datetime_match = RE_DATETIME.match(src, pos)
+-    if datetime_match:
+-        try:
+-            datetime_obj = match_to_datetime(datetime_match)
+-        except ValueError as e:
+-            raise TOMLDecodeError("Invalid date or datetime", src, pos) from e
+-        return datetime_match.end(), datetime_obj
+-    localtime_match = RE_LOCALTIME.match(src, pos)
+-    if localtime_match:
+-        return localtime_match.end(), match_to_localtime(localtime_match)
++    # RE_DATETIME requires '-' at offset 4, RE_LOCALTIME requires ':' at
++    # offset 2; skip the regex calls when those characters are absent.
++    if src[pos + 4 : pos + 5] == "-":
++        datetime_match = RE_DATETIME.match(src, pos)
++        if datetime_match:
++            try:
++                datetime_obj = match_to_datetime(datetime_match)
++            except ValueError as e:
++                raise TOMLDecodeError("Invalid date or datetime", src, pos) from e
++            return datetime_match.end(), datetime_obj
++    if src[pos + 2 : pos + 3] == ":":
++        localtime_match = RE_LOCALTIME.match(src, pos)
++        if localtime_match:
++            return localtime_match.end(), match_to_localtime(localtime_match)
+ 
+     # Integers and "normal" floats.
+     # The regex will greedily match any type starting with a decimal
+diff --git a/src/tomli/_re.py b/src/tomli/_re.py
+index fc374ed63d3e3742a97134349fc25b14223ab57b..9d5510f9ce768b73fdadf81cd596b35725f8eb58 100644
+--- a/src/tomli/_re.py
++++ b/src/tomli/_re.py
+@@ -54,6 +54,9 @@ RE_DATETIME: Final = re.compile(
+ """,
+     flags=re.VERBOSE,
+ )
++# Fast path for the commonest key/value prefix: a single bare key, optional
++# whitespace, "=", optional whitespace.
++RE_BARE_KEY_EQ: Final = re.compile(r"([A-Za-z0-9_-]+)[ \t]*=[ \t]*")
+ 
+ 
+ def match_to_datetime(match: re.Match[str]) -> datetime | date:

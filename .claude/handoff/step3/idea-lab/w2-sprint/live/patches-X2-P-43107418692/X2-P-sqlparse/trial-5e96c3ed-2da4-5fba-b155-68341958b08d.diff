@@ -1,0 +1,143 @@
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..39f5f021268dcef6008b5249d10bac8fb0e45dad 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -19,6 +19,86 @@ from io import TextIOBase
+ from sqlparse import tokens, keywords
+ from sqlparse.utils import consume
+ 
++try:
++    from re import _parser as _sre_parse, _compiler as _sre_compile
++except ImportError:  # pragma: no cover - Python < 3.11
++    try:
++        import sre_parse as _sre_parse
++        import sre_compile as _sre_compile
++    except ImportError:
++        _sre_parse = _sre_compile = None
++
++
++class _Unknown(Exception):
++    pass
++
++
++def _first_nodes(seq, out):
++    """Collect single-character nodes that may start a match of seq.
++
++    Returns True if seq may match the empty string. Raises _Unknown if
++    the start cannot be determined. Over-approximates the start set.
++    """
++    P = _sre_parse
++    single = (P.LITERAL, P.NOT_LITERAL, P.IN, P.ANY)
++    repeats = tuple(getattr(P, name) for name in
++                    ('MAX_REPEAT', 'MIN_REPEAT', 'POSSESSIVE_REPEAT')
++                    if hasattr(P, name))
++    zero_width = (P.AT, P.ASSERT, P.ASSERT_NOT)
++    atomic = getattr(P, 'ATOMIC_GROUP', None)
++    for op, av in seq:
++        if op in single:
++            out.append((op, av))
++            return False
++        elif op in zero_width:
++            continue
++        elif op is P.SUBPATTERN:
++            if len(av) != 4 or av[1] or av[2]:
++                raise _Unknown
++            if not _first_nodes(av[3], out):
++                return False
++        elif op is P.BRANCH:
++            nullable = False
++            for alt in av[1]:
++                if _first_nodes(alt, out):
++                    nullable = True
++            if not nullable:
++                return False
++        elif op in repeats:
++            min_, _max, sub = av
++            if not _first_nodes(sub, out) and min_ > 0:
++                return False
++        elif atomic is not None and op is atomic:
++            if not _first_nodes(av, out):
++                return False
++        else:
++            raise _Unknown
++    return True
++
++
++def _first_char_probes(rexmatch):
++    """Return a list of single-char match functions, any of which must
++    succeed for the regex to possibly match at a position starting with
++    that char; or None if the regex must always be tried."""
++    if _sre_parse is None:
++        return None
++    try:
++        pattern = rexmatch.__self__
++        parsed = _sre_parse.parse(pattern.pattern, pattern.flags)
++        nodes = []
++        if _first_nodes(parsed, nodes):
++            return None
++        state = getattr(parsed, 'state', None)
++        if state is None:
++            state = parsed.pattern
++        probes = []
++        for node in nodes:
++            sub = _sre_parse.SubPattern(state, [node])
++            probes.append(_sre_compile.compile(sub, pattern.flags).match)
++        return probes
++    except Exception:
++        return None
++
+ 
+ class Lexer:
+     """The Lexer supports configurable syntax.
+@@ -86,6 +166,31 @@ class Lexer:
+             for rx, tt in SQL_REGEX
+         ]
+ 
++    def _build_dispatch(self):
++        """Prepare the per-first-character candidate cache."""
++        regex_list = self._SQL_REGEX
++        entries = []
++        for rexmatch, action in regex_list:
++            entries.append((rexmatch, action, _first_char_probes(rexmatch)))
++        self._dispatch_entries = entries
++        self._dispatch = {}
++        self._dispatch_src = regex_list
++
++    def _candidates_for(self, char):
++        """Return (and cache) regexes that may match starting with char."""
++        candidates = []
++        for rexmatch, action, probes in self._dispatch_entries:
++            if probes is None:
++                candidates.append((rexmatch, action))
++                continue
++            for probe in probes:
++                if probe(char):
++                    candidates.append((rexmatch, action))
++                    break
++        candidates = tuple(candidates)
++        self._dispatch[char] = candidates
++        return candidates
++
+     def add_keywords(self, keywords):
+         """Add keyword dictionaries. Keywords are looked up in the same order
+         that dictionaries were added."""
+@@ -134,9 +239,18 @@ class Lexer:
+             raise TypeError("Expected text or file-like object, got {!r}".
+                             format(type(text)))
+ 
++        regex_list = self._SQL_REGEX
++        if getattr(self, '_dispatch_src', None) is not regex_list:
++            self._build_dispatch()
++        dispatch = self._dispatch
++        candidates_for = self._candidates_for
++
+         iterable = enumerate(text)
+         for pos, char in iterable:
+-            for rexmatch, action in self._SQL_REGEX:
++            candidates = dispatch.get(char)
++            if candidates is None:
++                candidates = candidates_for(char)
++            for rexmatch, action in candidates:
+                 m = rexmatch(text, pos)
+ 
+                 if not m:

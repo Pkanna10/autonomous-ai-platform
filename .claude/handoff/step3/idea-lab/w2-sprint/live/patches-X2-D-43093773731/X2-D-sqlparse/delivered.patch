@@ -1,0 +1,293 @@
+diff --git a/sqlparse/engine/grouping.py b/sqlparse/engine/grouping.py
+index 43ca5b580d5e8499e3fa1ed5275902d7e20ce71b..286bab3bb133d4b04c6651db18b34cf8d2d520f1 100644
+--- a/sqlparse/engine/grouping.py
++++ b/sqlparse/engine/grouping.py
+@@ -42,6 +42,22 @@ def _group_matching(tlist, cls, depth=0):
+     tidx_offset = 0
+     token_list = list(tlist)
+ 
++    m_open = cls.M_OPEN
++    m_close = cls.M_CLOSE
++    fast = not (len(m_open) != 2 or len(m_close) != 2
++                or m_open[1] is None or m_close[1] is None)
++    if fast:
++        open_ttype, open_vals = m_open
++        close_ttype, close_vals = m_close
++        if isinstance(open_vals, str):
++            open_vals = (open_vals,)
++        if isinstance(close_vals, str):
++            close_vals = (close_vals,)
++        open_raw = frozenset(open_vals)
++        open_up = frozenset(v.upper() for v in open_vals)
++        close_raw = frozenset(close_vals)
++        close_up = frozenset(v.upper() for v in close_vals)
++
+     for idx, token in enumerate(token_list):
+         tidx = idx - tidx_offset
+ 
+@@ -58,19 +74,30 @@ def _group_matching(tlist, cls, depth=0):
+             _group_matching(token, cls, depth + 1)
+             continue
+ 
+-        if token.match(*cls.M_OPEN):
++        ttype = token.ttype
++        if fast:
++            if ttype is open_ttype and token.normalized in (
++                    open_up if token.is_keyword else open_raw):
++                opens.append(tidx)
++                continue
++            if not (ttype is close_ttype and token.normalized in (
++                    close_up if token.is_keyword else close_raw)):
++                continue
++        elif token.match(*m_open):
+             opens.append(tidx)
++            continue
++        elif not token.match(*m_close):
++            continue
+ 
+-        elif token.match(*cls.M_CLOSE):
+-            try:
+-                open_idx = opens.pop()
+-            except IndexError:
+-                # this indicates invalid sql and unbalanced tokens.
+-                # instead of break, continue in case other "valid" groups exist
+-                continue
+-            close_idx = tidx
+-            tlist.group_tokens(cls, open_idx, close_idx)
+-            tidx_offset += close_idx - open_idx
++        try:
++            open_idx = opens.pop()
++        except IndexError:
++            # this indicates invalid sql and unbalanced tokens.
++            # instead of break, continue in case other "valid" groups exist
++            continue
++        close_idx = tidx
++        tlist.group_tokens(cls, open_idx, close_idx)
++        tidx_offset += close_idx - open_idx
+ 
+ 
+ def group_brackets(tlist):
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..057bdad7edbed7010a78ee8fb9219b3f2d711ee4 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -19,6 +19,130 @@ from io import TextIOBase
+ from sqlparse import tokens, keywords
+ from sqlparse.utils import consume
+ 
++try:  # Python 3.11+
++    from re import _parser as _sre_parse, _constants as _sre_c
++except ImportError:  # pragma: no cover
++    import sre_parse as _sre_parse
++    import sre_constants as _sre_c
++
++_OP_LITERAL = _sre_c.LITERAL
++_OP_IN = _sre_c.IN
++_OP_RANGE = _sre_c.RANGE
++_OP_CATEGORY = _sre_c.CATEGORY
++_OP_SUBPATTERN = _sre_c.SUBPATTERN
++_OP_BRANCH = _sre_c.BRANCH
++_OP_REPEATS = tuple(getattr(_sre_c, name) for name in
++                    ('MAX_REPEAT', 'MIN_REPEAT', 'POSSESSIVE_REPEAT')
++                    if hasattr(_sre_c, name))
++_OP_ZERO_WIDTH = (_sre_c.ASSERT, _sre_c.ASSERT_NOT, _sre_c.AT)
++_ALWAYS = (_sre_c.ANY, _sre_c.NOT_LITERAL)
++
++_CATEGORY_RX = {
++    _sre_c.CATEGORY_DIGIT: re.compile(r'\d').match,
++    _sre_c.CATEGORY_NOT_DIGIT: re.compile(r'\D').match,
++    _sre_c.CATEGORY_SPACE: re.compile(r'\s').match,
++    _sre_c.CATEGORY_NOT_SPACE: re.compile(r'\S').match,
++    _sre_c.CATEGORY_WORD: re.compile(r'\w').match,
++    _sre_c.CATEGORY_NOT_WORD: re.compile(r'\W').match,
++}
++
++# Non-ASCII characters that case-insensitively match ASCII letters.
++_SPECIAL_FOLDS = frozenset('\u212a\u017f\u0130\u0131')
++
++
++class _Unknown(Exception):
++    pass
++
++
++def _first(seq):
++    """Return (items, nullable) where items are single-character matchers
++    that may consume the first character of a match of ``seq``."""
++    items = []
++    for op, av in seq:
++        if op == _OP_LITERAL or op == _OP_IN or op in _ALWAYS:
++            items.append((op, av))
++            return items, False
++        elif op == _OP_SUBPATTERN:
++            if av[1] or av[2]:
++                raise _Unknown
++            sub, nullable = _first(av[-1])
++            items.extend(sub)
++            if not nullable:
++                return items, False
++        elif op == _OP_BRANCH:
++            any_nullable = False
++            for alt in av[1]:
++                sub, nullable = _first(alt)
++                items.extend(sub)
++                any_nullable = any_nullable or nullable
++            if not any_nullable:
++                return items, False
++        elif op in _OP_REPEATS:
++            mn, _mx, subseq = av
++            sub, nullable = _first(subseq)
++            items.extend(sub)
++            if mn > 0 and not nullable:
++                return items, False
++        elif op in _OP_ZERO_WIDTH:
++            # zero-width; ignoring it only widens the first set
++            continue
++        else:
++            raise _Unknown
++    return items, True
++
++
++def _first_items(rexmatch):
++    """Return the list of first-character matchers of a compiled rule,
++    or None if the rule must always be tried."""
++    try:
++        pattern = rexmatch.__self__
++        parsed = _sre_parse.parse(pattern.pattern, pattern.flags)
++        items, nullable = _first(parsed)
++    except Exception:
++        return None
++    if nullable:
++        return None
++    return items
++
++
++def _char_variants(char):
++    cands = {char, char.lower(), char.upper()}
++    if char.isalpha():
++        cands |= _SPECIAL_FOLDS
++    return cands
++
++
++def _literal_match(code, cands):
++    lit = chr(code)
++    return bool({lit, lit.lower(), lit.upper()} & cands)
++
++
++def _items_match(items, cands):
++    for op, av in items:
++        if op == _OP_LITERAL:
++            if _literal_match(av, cands):
++                return True
++        elif op == _OP_IN:
++            for sop, sav in av:
++                if sop == _OP_LITERAL:
++                    if _literal_match(sav, cands):
++                        return True
++                elif sop == _OP_RANGE:
++                    lo, hi = sav
++                    for c in cands:
++                        if len(c) == 1 and lo <= ord(c) <= hi:
++                            return True
++                elif sop == _OP_CATEGORY:
++                    rx = _CATEGORY_RX.get(sav)
++                    if rx is None or any(rx(c) for c in cands):
++                        return True
++                else:
++                    # NEGATE or anything unknown: be conservative
++                    return True
++        else:
++            return True
++    return False
++
+ 
+ class Lexer:
+     """The Lexer supports configurable syntax.
+@@ -104,6 +228,22 @@ class Lexer:
+         else:
+             return tokens.Name, value
+ 
++    def _rules_for_char(self, char):
++        """Return (and cache) the ordered sublist of rules that could
++        possibly match at a position starting with ``char``."""
++        regex = self._SQL_REGEX
++        if ord(char) >= 128:
++            rules = regex
++        else:
++            if self._first_items is None:
++                self._first_items = [_first_items(rexmatch)
++                                     for rexmatch, _ in regex]
++            cands = _char_variants(char)
++            rules = [rule for rule, items in zip(regex, self._first_items)
++                     if items is None or _items_match(items, cands)]
++        self._char_cache[char] = rules
++        return rules
++
+     def get_tokens(self, text, encoding=None):
+         """
+         Return an iterable of (tokentype, value) pairs generated from
+@@ -134,9 +274,19 @@ class Lexer:
+             raise TypeError("Expected text or file-like object, got {!r}".
+                             format(type(text)))
+ 
++        regex = self._SQL_REGEX
++        if self.__dict__.get('_char_cache_src') is not regex:
++            self._char_cache_src = regex
++            self._char_cache = {}
++            self._first_items = None
++        cache = self._char_cache
++
+         iterable = enumerate(text)
+         for pos, char in iterable:
+-            for rexmatch, action in self._SQL_REGEX:
++            rules = cache.get(char)
++            if rules is None:
++                rules = self._rules_for_char(char)
++            for rexmatch, action in rules:
+                 m = rexmatch(text, pos)
+ 
+                 if not m:
+diff --git a/sqlparse/sql.py b/sqlparse/sql.py
+index 831dfb96d2b3a282b228bfddac97703a32e608e8..77f4bb82917865bf21c47a20c34a819541f77a26 100644
+--- a/sqlparse/sql.py
++++ b/sqlparse/sql.py
+@@ -263,7 +263,39 @@ class TokenList(Token):
+ 
+     def token_next_by(self, i=None, m=None, t=None, idx=-1, end=None):
+         idx += 1
+-        return self._token_matching(lambda tk: imt(tk, i, m, t), idx, end)
++        tokens = self.tokens
++        if end is None:
++            end = len(tokens)
++        m_list = None
++        if m:
++            if isinstance(m, list):
++                m_list = m
++            else:
++                m_list = (m,)
++        t_list = None
++        if t:
++            if isinstance(t, list):
++                t_list = t
++            else:
++                t_list = (t,)
++        if not i:
++            i = None
++        for pos in range(idx, end):
++            token = tokens[pos]
++            if token is None:
++                continue
++            if i is not None and isinstance(token, i):
++                return pos, token
++            if m_list is not None:
++                for pattern in m_list:
++                    if token.match(*pattern):
++                        return pos, token
++            if t_list is not None:
++                ttype = token.ttype
++                for tt in t_list:
++                    if ttype in tt:
++                        return pos, token
++        return None, None
+ 
+     def token_not_matching(self, funcs, idx):
+         funcs = (funcs,) if not isinstance(funcs, (list, tuple)) else funcs

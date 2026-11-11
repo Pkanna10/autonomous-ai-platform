@@ -1,0 +1,61 @@
+diff --git a/sqlparse/sql.py b/sqlparse/sql.py
+index 831dfb96d2b3a282b228bfddac97703a32e608e8..c77deb925961516e167bb3720ba82e10795067a2 100644
+--- a/sqlparse/sql.py
++++ b/sqlparse/sql.py
+@@ -12,6 +12,8 @@ import re
+ from sqlparse import tokens as T
+ from sqlparse.utils import imt, remove_quotes
+ 
++_REGEX_CACHE = {}
++
+ 
+ class NameAliasMixin:
+     """Implements get_real_name and get_alias."""
+@@ -102,23 +104,33 @@ class Token:
+         if not type_matched or values is None:
+             return type_matched
+ 
++        if not regex:
++            if isinstance(values, str):
++                if self.is_keyword:
++                    return self.normalized == values.upper()
++                return self.normalized == values
++            normalized = self.normalized
++            if self.is_keyword:
++                for v in values:
++                    if normalized == v.upper():
++                        return True
++                return False
++            return normalized in values
++
+         if isinstance(values, str):
+             values = (values,)
+ 
+-        if regex:
+-            # TODO: Add test for regex with is_keyword = false
+-            flag = re.IGNORECASE if self.is_keyword else 0
+-            values = (re.compile(v, flag) for v in values)
+-
+-            for pattern in values:
+-                if pattern.search(self.normalized):
+-                    return True
+-            return False
+-
+-        if self.is_keyword:
+-            values = (v.upper() for v in values)
+-
+-        return self.normalized in values
++        # TODO: Add test for regex with is_keyword = false
++        flag = re.IGNORECASE if self.is_keyword else 0
++        cache = _REGEX_CACHE
++        for v in values:
++            key = (v, flag)
++            pattern = cache.get(key)
++            if pattern is None:
++                pattern = cache[key] = re.compile(v, flag)
++            if pattern.search(self.normalized):
++                return True
++        return False
+ 
+     def within(self, group_cls):
+         """Returns ``True`` if this token is within *group_cls*.

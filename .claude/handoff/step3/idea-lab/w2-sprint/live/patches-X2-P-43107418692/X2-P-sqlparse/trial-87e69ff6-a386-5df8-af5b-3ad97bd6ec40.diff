@@ -1,0 +1,27 @@
+diff --git a/sqlparse/sql.py b/sqlparse/sql.py
+index 831dfb96d2b3a282b228bfddac97703a32e608e8..8f5e0d6f287cbe84e43880c6b4dc414c6a3927df 100644
+--- a/sqlparse/sql.py
++++ b/sqlparse/sql.py
+@@ -229,8 +229,21 @@ class TokenList(Token):
+         if start is None:
+             return None
+ 
++        tokens = self.tokens
+         if not isinstance(funcs, (list, tuple)):
+-            funcs = (funcs,)
++            func = funcs
++            if reverse:
++                assert end is None
++                indexes = range(start - 2, -1, -1)
++            else:
++                if end is None:
++                    end = len(tokens)
++                indexes = range(start, end)
++            for idx in indexes:
++                token = tokens[idx]
++                if func(token):
++                    return idx, token
++            return None, None
+ 
+         if reverse:
+             assert end is None

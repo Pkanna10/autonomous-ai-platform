@@ -1,0 +1,28 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..d46c8619df99ad6d48657cbcd22481294e652c0a 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -131,10 +131,21 @@ class InlineProcessor(Treeprocessor):
+         """
+         if not isinstance(data, util.AtomicString):
+             startIndex = 0
+-            count = len(self.inlinePatterns)
++            patterns = self.inlinePatterns
++            count = len(patterns)
++            new_style_cls = inlinepatterns.InlineProcessor
+             while patternIndex < count:
++                pattern = patterns[patternIndex]
++                if (
++                    isinstance(pattern, new_style_cls)
++                    and pattern.getCompiledRegExp().search(data, startIndex) is None
++                ):
++                    # No match possible: same result as `__applyPattern` returning `(data, False, 0)`.
++                    startIndex = 0
++                    patternIndex += 1
++                    continue
+                 data, matched, startIndex = self.__applyPattern(
+-                    self.inlinePatterns[patternIndex], data, patternIndex, startIndex
++                    pattern, data, patternIndex, startIndex
+                 )
+                 if not matched:
+                     patternIndex += 1

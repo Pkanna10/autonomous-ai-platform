@@ -1,0 +1,131 @@
+diff --git a/markdown/extensions/abbr.py b/markdown/extensions/abbr.py
+index 9f609810ad4a7a01403f978b878435b17fef5a0e..dd4d386c0d94d0ea6a10a8840ce4205a8b17cb09 100644
+--- a/markdown/extensions/abbr.py
++++ b/markdown/extensions/abbr.py
+@@ -93,6 +93,7 @@ class AbbrTreeprocessor(Treeprocessor):
+     def __init__(self, md: Markdown | None = None, abbrs: dict | None = None):
+         self.abbrs: dict = abbrs if abbrs is not None else {}
+         self.RE: re.RegexObject | None = None
++        self._first_chars: frozenset | None = None
+         super().__init__(md)
+ 
+     def create_element(self, title: str, text: str, tail: str) -> etree.Element:
+@@ -106,18 +107,23 @@ class AbbrTreeprocessor(Treeprocessor):
+         ''' Recursively iterate over elements, run regex on text and wrap matches in `abbr` tags. '''
+         for child in reversed(el):
+             self.iter_element(child, el)
++        first_chars = self._first_chars
+         if text := el.text:
+             if not isinstance(text, AtomicString):
+-                for m in reversed(list(self.RE.finditer(text))):
+-                    if self.abbrs[m.group(0)]:
+-                        abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), text[m.end():])
+-                        el.insert(0, abbr)
+-                        text = text[:m.start()]
++                if first_chars is None or not first_chars.isdisjoint(text):
++                    for m in reversed(list(self.RE.finditer(text))):
++                        if self.abbrs[m.group(0)]:
++                            abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), text[m.end():])
++                            el.insert(0, abbr)
++                            text = text[:m.start()]
+                 el.text = text
+         if parent is not None and el.tail:
+             tail = el.tail
+-            index = list(parent).index(el) + 1
+             if not isinstance(tail, AtomicString):
++                if first_chars is not None and first_chars.isdisjoint(tail):
++                    el.tail = tail
++                    return
++                index = list(parent).index(el) + 1
+                 for m in reversed(list(self.RE.finditer(tail))):
+                     abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), tail[m.end():])
+                     parent.insert(index, abbr)
+@@ -133,6 +139,12 @@ class AbbrTreeprocessor(Treeprocessor):
+         abbr_list = list(self.abbrs.keys())
+         abbr_list.sort(key=len, reverse=True)
+         self.RE = re.compile(f"\\b(?:{ '|'.join(re.escape(key) for key in abbr_list) })\\b")
++        # Conservative prefilter: a text can only match if it contains the
++        # first character of some abbreviation. Disabled if any key is empty.
++        if all(abbr_list):
++            self._first_chars = frozenset(key[0] for key in abbr_list)
++        else:
++            self._first_chars = None
+         # Step through tree and modify on matches
+         self.iter_element(root)
+ 
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..40a1510015a067d02479e2b0822471290dbdb78c 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -45,6 +45,25 @@ def build_treeprocessors(md: Markdown, **kwargs: Any) -> util.Registry[Treeproce
+     return treeprocessors
+ 
+ 
++# Map of built-in inline regex source strings to a literal substring which
++# any match of that regex provably requires at or after the search start.
++_REQUIRED_LITERALS: dict[str, str] = {
++    inlinepatterns.BACKTICK_RE: '`',
++    inlinepatterns.ESCAPE_RE: '\\',
++    inlinepatterns.LINK_RE: '[',
++    inlinepatterns.IMAGE_LINK_RE: '![',
++    inlinepatterns.AUTOLINK_RE: '<',
++    inlinepatterns.AUTOMAIL_RE: '<',
++    inlinepatterns.HTML_RE: '<',
++    inlinepatterns.ENTITY_RE: '&',
++    inlinepatterns.LINE_BREAK_RE: '  \n',
++    r'\*': '*',
++    r'_': '_',
++}
++
++_LITERAL_CACHE: dict[Any, str | None] = {}
++
++
+ def isString(s: object) -> bool:
+     """ Return `True` if object is a string but not an  [`AtomicString`][markdown.util.AtomicString]. """
+     if not isinstance(s, util.AtomicString):
+@@ -131,10 +150,14 @@ class InlineProcessor(Treeprocessor):
+         """
+         if not isinstance(data, util.AtomicString):
+             startIndex = 0
+-            count = len(self.inlinePatterns)
++            patterns = getattr(self, '_patterns_list', None)
++            if patterns is None:
++                patterns = list(self.inlinePatterns)
++            count = len(patterns)
++            applyPattern = self.__applyPattern
+             while patternIndex < count:
+-                data, matched, startIndex = self.__applyPattern(
+-                    self.inlinePatterns[patternIndex], data, patternIndex, startIndex
++                data, matched, startIndex = applyPattern(
++                    patterns[patternIndex], data, patternIndex, startIndex
+                 )
+                 if not matched:
+                     patternIndex += 1
+@@ -278,6 +301,19 @@ class InlineProcessor(Treeprocessor):
+                 return data, False, 0
+ 
+         if new_style:
++            compiled = pattern.getCompiledRegExp()
++            try:
++                literal = _LITERAL_CACHE[compiled]
++            except (KeyError, TypeError):
++                literal = None
++                if isinstance(compiled, re.Pattern) and not (compiled.flags & re.IGNORECASE):
++                    literal = _REQUIRED_LITERALS.get(compiled.pattern)
++                try:
++                    _LITERAL_CACHE[compiled] = literal
++                except TypeError:  # pragma: no cover
++                    pass
++            if literal is not None and data.find(literal, startIndex) == -1:
++                return data, False, 0
+             match = None
+             # Since `handleMatch` may reject our first match,
+             # we iterate over the buffer looking for matches
+@@ -364,6 +400,7 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         self.stashed_nodes: dict[str, etree.Element | str] = {}
++        self._patterns_list = list(self.inlinePatterns)
+ 
+         # Ensure a valid parent list, but copy passed in lists
+         # to ensure we don't have the user accidentally change it on us.

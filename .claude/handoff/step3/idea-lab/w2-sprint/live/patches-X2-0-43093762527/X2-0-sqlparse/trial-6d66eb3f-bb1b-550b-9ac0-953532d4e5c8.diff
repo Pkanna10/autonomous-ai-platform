@@ -1,0 +1,72 @@
+diff --git a/sqlparse/engine/statement_splitter.py b/sqlparse/engine/statement_splitter.py
+index 62aa9d9e9b071b4df00d6094424349cafdc11315..c6f421cbe1cb0cfe0cc8626de477bde2cc5f544b 100644
+--- a/sqlparse/engine/statement_splitter.py
++++ b/sqlparse/engine/statement_splitter.py
+@@ -7,6 +7,10 @@
+ 
+ from sqlparse import sql, tokens as T
+ 
++_EOS_TTYPE = (T.Whitespace, T.Comment.Single)
++_WS_COMMENT_TTYPES = (T.Whitespace, T.Newline, T.Comment.Single,
++                      T.Comment.Multiline)
++
+ 
+ class StatementSplitter:
+     """Filter that split stream at individual statements"""
+@@ -94,7 +98,8 @@ class StatementSplitter:
+ 
+     def process(self, stream):
+         """Process the stream"""
+-        EOS_TTYPE = T.Whitespace, T.Comment.Single
++        EOS_TTYPE = _EOS_TTYPE
++        WS_COMMENT_TTYPES = _WS_COMMENT_TTYPES
+ 
+         # Run over all stream tokens
+         for ttype, value in stream:
+@@ -132,8 +137,7 @@ class StatementSplitter:
+                     self.consume_ws = True
+             elif ttype is T.Keyword and value.split()[0] == 'GO':
+                 self.consume_ws = True
+-            elif (ttype not in (T.Whitespace, T.Newline, T.Comment.Single,
+-                                T.Comment.Multiline)
++            elif (ttype not in WS_COMMENT_TTYPES
+                   and not (ttype is T.Keyword and value.upper() == 'BEGIN')):
+                 # Reset _seen_begin if we see a non-whitespace, non-comment
+                 # token but not for BEGIN itself (which just set the flag)
+diff --git a/sqlparse/sql.py b/sqlparse/sql.py
+index 831dfb96d2b3a282b228bfddac97703a32e608e8..175a978ba63387547425c9600012bd1643197b90 100644
+--- a/sqlparse/sql.py
++++ b/sqlparse/sql.py
+@@ -12,6 +12,9 @@ import re
+ from sqlparse import tokens as T
+ from sqlparse.utils import imt, remove_quotes
+ 
++# Cache of (is_keyword, is_whitespace, is_newline) per token type.
++_TTYPE_FLAGS = {}
++
+ 
+ class NameAliasMixin:
+     """Implements get_real_name and get_alias."""
+@@ -53,10 +56,18 @@ class Token:
+         self.ttype = ttype
+         self.parent = None
+         self.is_group = False
+-        self.is_keyword = ttype in T.Keyword
+-        self.is_whitespace = self.ttype in T.Whitespace
+-        self.is_newline = self.ttype in T.Newline
+-        self.normalized = value.upper() if self.is_keyword else value
++        try:
++            flags = _TTYPE_FLAGS[ttype]
++        except KeyError:
++            flags = (ttype in T.Keyword, ttype in T.Whitespace,
++                     ttype in T.Newline)
++            _TTYPE_FLAGS[ttype] = flags
++        except TypeError:
++            flags = (ttype in T.Keyword, ttype in T.Whitespace,
++                     ttype in T.Newline)
++        is_keyword, self.is_whitespace, self.is_newline = flags
++        self.is_keyword = is_keyword
++        self.normalized = value.upper() if is_keyword else value
+ 
+     def __str__(self):
+         return self.value

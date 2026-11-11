@@ -1,0 +1,51 @@
+diff --git a/src/mistune/_inline/links.py b/src/mistune/_inline/links.py
+index 5ad0ec389dd24859b80a8c62901747c0a3fca1c7..411e6806623712d68a3c82ab54b422ece3c7c5ad 100644
+--- a/src/mistune/_inline/links.py
++++ b/src/mistune/_inline/links.py
+@@ -164,6 +164,9 @@ def find_closing_bracket(state: InlineState, pos: int) -> Optional[int]:
+ def label_contains_link(state: InlineState, start: int, end: int) -> bool:
+     if start >= end:
+         return False
++    # Every link range starts at a '[' in src; none in [start, end) means no match.
++    if state.src.find("[", start, end) == -1:
++        return False
+ 
+     starts, suffix_min_ends = get_link_range_index(state)
+     index = bisect_left(starts, start)
+diff --git a/src/mistune/core.py b/src/mistune/core.py
+index 1f6f0678133458fbcbbf8255c01a1d6046bf7f4f..d0775b2ef4949eea7ec294e72c151551b05ee165 100644
+--- a/src/mistune/core.py
++++ b/src/mistune/core.py
+@@ -241,6 +241,7 @@ class BaseRenderer(object):
+ 
+     def __init__(self) -> None:
+         self.__methods: Dict[str, Callable[..., str]] = {}
++        self._method_cache: Dict[str, Callable[..., str]] = {}
+ 
+     def register(self, name: str, method: Callable[..., str]) -> None:
+         """Register a render method for the named token. For example::
+@@ -250,6 +251,7 @@ class BaseRenderer(object):
+ 
+         renderer.register('wiki', render_wiki)
+         """
++        self._method_cache = {}
+         # bind self into renderer method
+         self.__methods[name] = lambda *arg, **kwargs: method(self, *arg, **kwargs)
+ 
+diff --git a/src/mistune/renderers/html.py b/src/mistune/renderers/html.py
+index a62e7c78f8510e9681a41c985da1fe05af4b436a..cb35ecb3d3b048d7f2da4a55407381f55d24048b 100644
+--- a/src/mistune/renderers/html.py
++++ b/src/mistune/renderers/html.py
+@@ -39,7 +39,11 @@ class HTMLRenderer(BaseRenderer):
+ 
+     def render_token(self, token: Dict[str, Any], state: BlockState) -> str:
+         # backward compitable with v2
+-        func = self._get_method(token["type"])
++        cache = self._method_cache
++        ttype = token["type"]
++        func = cache.get(ttype)
++        if func is None:
++            func = cache[ttype] = self._get_method(ttype)
+         attrs = token.get("attrs")
+ 
+         if "raw" in token:

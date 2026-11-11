@@ -1,0 +1,58 @@
+diff --git a/src/mistune/_inline/links.py b/src/mistune/_inline/links.py
+index 5ad0ec389dd24859b80a8c62901747c0a3fca1c7..b740f3e67877887514ac02eb10b728d97423286f 100644
+--- a/src/mistune/_inline/links.py
++++ b/src/mistune/_inline/links.py
+@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, Dict, List, Match, Optional, Tuple
+ 
+ from ..core import InlineState
+ from ..helpers import (
+-    parse_link as parse_link_destination,
+     parse_link_label,
+     parse_link_with_end,
+ )
+@@ -75,7 +74,12 @@ def parse_link(inline: "InlineParser", m: Match[str], state: InlineState) -> Opt
+     if end_pos < len(state.src):
+         char = state.src[end_pos]
+         if char == "(":
+-            attrs, pos2, scan_end = parse_link_with_end(state.src, end_pos + 1)
++            src = state.src
++            cached = state.link_dest_memo.pop((id(src), end_pos + 1), None)
++            if cached is not None and cached[0] is src:
++                attrs, pos2, scan_end = cached[1]
++            else:
++                attrs, pos2, scan_end = parse_link_with_end(src, end_pos + 1)
+             if pos2:
+                 if text is None:
+                     text = state.src[text_start:text_end]
+@@ -214,8 +218,9 @@ def find_link_range_end(src: str, label_start: int, close_pos: int, state: Inlin
+     if end_pos < len(src):
+         marker = src[end_pos]
+         if marker == "(":
+-            _attrs, new_pos = parse_link_destination(src, end_pos + 1)
+-            return new_pos
++            result = parse_link_with_end(src, end_pos + 1)
++            state.link_dest_memo[(id(src), end_pos + 1)] = (src, result)
++            return result[1]
+ 
+         if marker == "[":
+             label, new_pos = parse_link_label(src, end_pos + 1)
+diff --git a/src/mistune/core.py b/src/mistune/core.py
+index 1f6f0678133458fbcbbf8255c01a1d6046bf7f4f..c6367dbf339adf1e7d960a6ab0ba0d3bd064052d 100644
+--- a/src/mistune/core.py
++++ b/src/mistune/core.py
+@@ -136,6 +136,7 @@ class InlineState:
+         self.link_brackets: Dict[int, Tuple[str, Dict[int, int]]] = {}
+         self.link_ranges: Dict[int, Tuple[str, List[int], List[int]]] = {}
+         self.formatting_no_end: Dict[Tuple[int, str], Tuple[str, int]] = {}
++        self.link_dest_memo: Dict[Tuple[int, int], Tuple[str, Any]] = {}
+ 
+     def prepend_token(self, token: Dict[str, Any]) -> None:
+         """Insert token before the last token."""
+@@ -154,6 +155,7 @@ class InlineState:
+         state.link_brackets = self.link_brackets
+         state.link_ranges = self.link_ranges
+         state.formatting_no_end = self.formatting_no_end
++        state.link_dest_memo = self.link_dest_memo
+         return state
+ 
+ 

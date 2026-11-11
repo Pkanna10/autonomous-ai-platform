@@ -1,0 +1,37 @@
+diff --git a/src/mistune/renderers/html.py b/src/mistune/renderers/html.py
+index a62e7c78f8510e9681a41c985da1fe05af4b436a..344499aa19e82ec99b4b8b0faaedd404d2582063 100644
+--- a/src/mistune/renderers/html.py
++++ b/src/mistune/renderers/html.py
+@@ -9,6 +9,8 @@ class HTMLRenderer(BaseRenderer):
+     """A renderer for converting Markdown to HTML."""
+ 
+     _escape: bool
++    _fast_text: bool = False
++    _fast_softbreak: bool = False
+     _allow_harmful_protocols: Optional[Union[bool, Iterable[str]]]
+     NAME: ClassVar[Literal["html"]] = "html"
+     SAFE_PROTOCOLS: ClassVar[Tuple[str, ...]] = (
+@@ -36,10 +38,22 @@ class HTMLRenderer(BaseRenderer):
+         super(HTMLRenderer, self).__init__()
+         self._allow_harmful_protocols = allow_harmful_protocols
+         self._escape = escape
++        cls = type(self)
++        self._fast_text = cls.text is HTMLRenderer.text
++        self._fast_softbreak = cls.softbreak is HTMLRenderer.softbreak
+ 
+     def render_token(self, token: Dict[str, Any], state: BlockState) -> str:
+         # backward compitable with v2
+-        func = self._get_method(token["type"])
++        _type = token["type"]
++        if _type == "text":
++            if self._fast_text and "text" not in self.__dict__:
++                if self._escape:
++                    return escape_text(token["raw"])
++                return safe_entity(token["raw"])
++        elif _type == "softbreak":
++            if self._fast_softbreak and "softbreak" not in self.__dict__:
++                return "\n"
++        func = self._get_method(_type)
+         attrs = token.get("attrs")
+ 
+         if "raw" in token:

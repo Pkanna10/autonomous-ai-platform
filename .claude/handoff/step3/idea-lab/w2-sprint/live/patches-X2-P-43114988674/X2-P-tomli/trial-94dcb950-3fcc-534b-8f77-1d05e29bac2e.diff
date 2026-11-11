@@ -1,0 +1,36 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..3d911e813bac4fda4e464875aed781a33d6c8d04 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -8,6 +8,7 @@ from __future__ import annotations
+ # parse_value().
+ __lazy_modules__ = ["tomli._re", "tomllib._re"]
+ 
++import re
+ import sys
+ 
+ from ._re import (
+@@ -66,6 +67,11 @@ TOML_WS_AND_NEWLINE: Final = TOML_WS | frozenset("\n")
+ BARE_KEY_CHARS: Final = frozenset(
+     "abcdefghijklmnopqrstuvwxyz" "ABCDEFGHIJKLMNOPQRSTUVWXYZ" "0123456789" "-_"
+ )
++_SIMPLE_BARE_KEY_MATCH: Final = re.compile(r"([A-Za-z0-9_\-]+)[ \t]*").match
++assert BARE_KEY_CHARS == frozenset(
++    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
++)
++assert TOML_WS == frozenset(" \t")
+ KEY_INITIAL_CHARS: Final = BARE_KEY_CHARS | frozenset("\"'")
+ HEXDIGIT_CHARS: Final = frozenset("abcdef" "ABCDEF" "0123456789")
+ 
+@@ -476,6 +482,11 @@ def parse_key_value_pair(
+ 
+ 
+ def parse_key(src: str, pos: Pos) -> tuple[Pos, Key]:
++    m = _SIMPLE_BARE_KEY_MATCH(src, pos)
++    if m is not None:
++        end = m.end()
++        if src[end : end + 1] != ".":
++            return end, (m.group(1),)
+     pos, key_part = parse_key_part(src, pos)
+     key: Key = (key_part,)
+     pos = skip_chars(src, pos, TOML_WS)

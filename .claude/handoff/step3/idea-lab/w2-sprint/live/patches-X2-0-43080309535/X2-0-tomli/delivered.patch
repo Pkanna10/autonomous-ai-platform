@@ -1,0 +1,126 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..2425be279b07dfaab3ce3f5ece7cb08c30ba2795 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -8,10 +8,15 @@ from __future__ import annotations
+ # parse_value().
+ __lazy_modules__ = ["tomli._re", "tomllib._re"]
+ 
++import re
+ import sys
+ 
+ from ._re import (
+     RE_DATETIME,
++    RE_FLAT_INT_ARRAY,
++    RE_FLAT_INT_TOKEN,
++    RE_FLAT_STR_ARRAY,
++    RE_FLAT_STR_TOKEN,
+     RE_LOCALTIME,
+     RE_NUMBER,
+     match_to_datetime,
+@@ -67,6 +72,11 @@ BARE_KEY_CHARS: Final = frozenset(
+     "abcdefghijklmnopqrstuvwxyz" "ABCDEFGHIJKLMNOPQRSTUVWXYZ" "0123456789" "-_"
+ )
+ KEY_INITIAL_CHARS: Final = BARE_KEY_CHARS | frozenset("\"'")
++# Fast path for the common `bare_key = ` prefix. Character classes must match
++# BARE_KEY_CHARS and TOML_WS exactly.
++_RE_BARE_KEY_EQ_match: Final = re.compile(
++    r"([A-Za-z0-9_\-]+)[ \t]*=[ \t]*"
++).match
+ HEXDIGIT_CHARS: Final = frozenset("abcdef" "ABCDEF" "0123456789")
+ 
+ BASIC_STR_ESCAPE_REPLACEMENTS: Final = frozendict(
+@@ -429,17 +439,23 @@ def key_value_rule(
+     src: str, pos: Pos, out: Output, header: Key, parse_float: ParseFloat
+ ) -> Pos:
+     pos, key, value = parse_key_value_pair(src, pos, parse_float, nest_lvl=0)
+-    key_parent, key_stem = key[:-1], key[-1]
+-    abs_key_parent = header + key_parent
+-
+-    relative_path_cont_keys = (header + key[:i] for i in range(1, len(key)))
+-    for cont_key in relative_path_cont_keys:
+-        # Check that dotted key syntax does not redefine an existing table
+-        if out.flags.is_(cont_key, Flags.EXPLICIT_NEST):
+-            raise TOMLDecodeError(f"Cannot redefine namespace {cont_key}", src, pos)
+-        # Containers in the relative path can't be opened with the table syntax or
+-        # dotted key/value syntax in following table sections.
+-        out.flags.add_pending(cont_key, Flags.EXPLICIT_NEST)
++    if len(key) == 1:
++        key_stem = key[0]
++        abs_key_parent = header
++    else:
++        key_parent, key_stem = key[:-1], key[-1]
++        abs_key_parent = header + key_parent
++
++        relative_path_cont_keys = (header + key[:i] for i in range(1, len(key)))
++        for cont_key in relative_path_cont_keys:
++            # Check that dotted key syntax does not redefine an existing table
++            if out.flags.is_(cont_key, Flags.EXPLICIT_NEST):
++                raise TOMLDecodeError(
++                    f"Cannot redefine namespace {cont_key}", src, pos
++                )
++            # Containers in the relative path can't be opened with the table
++            # syntax or dotted key/value syntax in following table sections.
++            out.flags.add_pending(cont_key, Flags.EXPLICIT_NEST)
+ 
+     if out.flags.is_(abs_key_parent, Flags.FROZEN):
+         raise TOMLDecodeError(
+@@ -462,6 +478,10 @@ def key_value_rule(
+ def parse_key_value_pair(
+     src: str, pos: Pos, parse_float: ParseFloat, nest_lvl: int
+ ) -> tuple[Pos, Key, Any]:
++    m = _RE_BARE_KEY_EQ_match(src, pos)
++    if m is not None:
++        pos, value = parse_value(src, m.end(), parse_float, nest_lvl)
++        return pos, (m.group(1),), value
+     pos, key = parse_key(src, pos)
+     try:
+         char: str | None = src[pos]
+@@ -522,6 +542,17 @@ def parse_array(
+     src: str, pos: Pos, parse_float: ParseFloat, nest_lvl: int
+ ) -> tuple[Pos, list[Any]]:
+     pos += 1
++
++    if nest_lvl <= MAX_INLINE_NESTING:
++        fast_match = RE_FLAT_INT_ARRAY.match(src, pos)
++        if fast_match:
++            end = fast_match.end()
++            return end, [int(t) for t in RE_FLAT_INT_TOKEN.findall(src, pos, end)]
++        fast_match = RE_FLAT_STR_ARRAY.match(src, pos)
++        if fast_match:
++            end = fast_match.end()
++            return end, [a or b for a, b in RE_FLAT_STR_TOKEN.findall(src, pos, end)]
++
+     array: list[Any] = []
+ 
+     pos = skip_comments_and_array_ws(src, pos)
+diff --git a/src/tomli/_re.py b/src/tomli/_re.py
+index fc374ed63d3e3742a97134349fc25b14223ab57b..4ac66cbf9d12cba0b4416bd177ac4a371fd4f5c7 100644
+--- a/src/tomli/_re.py
++++ b/src/tomli/_re.py
+@@ -55,6 +55,25 @@ RE_DATETIME: Final = re.compile(
+     flags=re.VERBOSE,
+ )
+ 
++# Fast paths for flat arrays (the part after the opening "[").
++_ARR_WS: Final = r"[ \t\n]*"
++_ARR_INT: Final = r"[+-]?(?:0|[1-9][0-9]*)"
++_ARR_STR: Final = (
++    r'"[^"\\\x00-\x08\x0a-\x1f\x7f]*"' r"|'[^'\x00-\x08\x0a-\x1f\x7f]*'"
++)
++RE_FLAT_INT_ARRAY: Final = re.compile(
++    rf"{_ARR_WS}{_ARR_INT}{_ARR_WS}(?:,{_ARR_WS}{_ARR_INT}{_ARR_WS})*"
++    rf"(?:,{_ARR_WS})?\]"
++)
++RE_FLAT_STR_ARRAY: Final = re.compile(
++    rf"{_ARR_WS}(?:{_ARR_STR}){_ARR_WS}(?:,{_ARR_WS}(?:{_ARR_STR}){_ARR_WS})*"
++    rf"(?:,{_ARR_WS})?\]"
++)
++RE_FLAT_INT_TOKEN: Final = re.compile(r"[+-]?[0-9]+")
++RE_FLAT_STR_TOKEN: Final = re.compile(
++    r'"([^"\\\x00-\x08\x0a-\x1f\x7f]*)"' r"|'([^'\x00-\x08\x0a-\x1f\x7f]*)'"
++)
++
+ 
+ def match_to_datetime(match: re.Match[str]) -> datetime | date:
+     """Convert a `RE_DATETIME` match to `datetime.datetime` or `datetime.date`.

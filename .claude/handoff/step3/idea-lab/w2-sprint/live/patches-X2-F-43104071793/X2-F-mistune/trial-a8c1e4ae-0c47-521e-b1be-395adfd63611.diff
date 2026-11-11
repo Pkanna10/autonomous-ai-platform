@@ -1,0 +1,38 @@
+diff --git a/src/mistune/core.py b/src/mistune/core.py
+index 1f6f0678133458fbcbbf8255c01a1d6046bf7f4f..a1755fd64785af12ca213fe3233a304d80beaf30 100644
+--- a/src/mistune/core.py
++++ b/src/mistune/core.py
+@@ -241,6 +241,7 @@ class BaseRenderer(object):
+ 
+     def __init__(self) -> None:
+         self.__methods: Dict[str, Callable[..., str]] = {}
++        self._method_cache: Dict[str, Callable[..., str]] = {}
+ 
+     def register(self, name: str, method: Callable[..., str]) -> None:
+         """Register a render method for the named token. For example::
+@@ -252,15 +253,23 @@ class BaseRenderer(object):
+         """
+         # bind self into renderer method
+         self.__methods[name] = lambda *arg, **kwargs: method(self, *arg, **kwargs)
++        self._method_cache = {}
+ 
+     def _get_method(self, name: str) -> Callable[..., str]:
+         try:
+-            return cast(Callable[..., str], object.__getattribute__(self, name))
++            return self._method_cache[name]
++        except KeyError:
++            cache = self._method_cache
++        except AttributeError:
++            cache = self._method_cache = {}
++        try:
++            method = cast(Callable[..., str], object.__getattribute__(self, name))
+         except AttributeError:
+             method = self.__methods.get(name)
+             if not method:
+                 raise AttributeError('No renderer "{!r}"'.format(name))
+-            return method
++        cache[name] = method
++        return method
+ 
+     def render_token(self, token: Dict[str, Any], state: BlockState) -> str:
+         func = self._get_method(token["type"])

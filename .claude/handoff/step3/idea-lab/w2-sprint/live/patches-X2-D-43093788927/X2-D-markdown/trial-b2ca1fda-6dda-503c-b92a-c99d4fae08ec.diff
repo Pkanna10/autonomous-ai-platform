@@ -1,0 +1,74 @@
+diff --git a/markdown/extensions/abbr.py b/markdown/extensions/abbr.py
+index 9f609810ad4a7a01403f978b878435b17fef5a0e..a608269229740c3e6a78805968e5f6da4d446b92 100644
+--- a/markdown/extensions/abbr.py
++++ b/markdown/extensions/abbr.py
+@@ -102,10 +102,13 @@ class AbbrTreeprocessor(Treeprocessor):
+         abbr.tail = tail
+         return abbr
+ 
+-    def iter_element(self, el: etree.Element, parent: etree.Element | None = None) -> None:
++    def iter_element(self, el: etree.Element, parent: etree.Element | None = None,
++                     position: int | None = None) -> None:
+         ''' Recursively iterate over elements, run regex on text and wrap matches in `abbr` tags. '''
+-        for child in reversed(el):
+-            self.iter_element(child, el)
++        children = list(el)
++        for i in range(len(children) - 1, -1, -1):
++            # Insertions into `el` only happen after position `i`, so `i` stays valid.
++            self.iter_element(children[i], el, i)
+         if text := el.text:
+             if not isinstance(text, AtomicString):
+                 for m in reversed(list(self.RE.finditer(text))):
+@@ -116,7 +119,9 @@ class AbbrTreeprocessor(Treeprocessor):
+                 el.text = text
+         if parent is not None and el.tail:
+             tail = el.tail
+-            index = list(parent).index(el) + 1
++            if position is None:
++                position = list(parent).index(el)
++            index = position + 1
+             if not isinstance(tail, AtomicString):
+                 for m in reversed(list(self.RE.finditer(tail))):
+                     abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), tail[m.end():])
+diff --git a/markdown/util.py b/markdown/util.py
+index 29ffa247de8a6432653f26abb235d669093c232f..3c19b3469c343d392ed799bf387af23c79f18309 100644
+--- a/markdown/util.py
++++ b/markdown/util.py
+@@ -311,6 +311,7 @@ class Registry(Generic[_T]):
+         self._data: dict[str, _T] = {}
+         self._priority: list[_PriorityItem] = []
+         self._is_sorted = False
++        self._items_cache: list[_T] | None = None
+ 
+     def __contains__(self, item: str | _T) -> bool:
+         if isinstance(item, str):
+@@ -332,6 +333,13 @@ class Registry(Generic[_T]):
+         ...
+ 
+     def __getitem__(self, key: str | int | slice) -> _T | Registry[_T]:
++        if type(key) is int:
++            items = self._items_cache
++            if items is None:
++                self._sort()
++                data_ = self._data
++                items = self._items_cache = [data_[k] for k, p in self._priority]
++            return items[key]
+         self._sort()
+         if isinstance(key, slice):
+             data: Registry[_T] = Registry()
+@@ -382,6 +390,7 @@ class Registry(Generic[_T]):
+             # Remove existing item of same name first
+             self.deregister(name)
+         self._is_sorted = False
++        self._items_cache = None
+         self._data[name] = item
+         self._priority.append(_PriorityItem(name, priority))
+ 
+@@ -393,6 +402,7 @@ class Registry(Generic[_T]):
+         """
+         try:
+             index = self.get_index_for_name(name)
++            self._items_cache = None
+             del self._priority[index]
+             del self._data[name]
+         except ValueError:

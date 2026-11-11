@@ -1,0 +1,86 @@
+diff --git a/sqlparse/engine/statement_splitter.py b/sqlparse/engine/statement_splitter.py
+index 62aa9d9e9b071b4df00d6094424349cafdc11315..e5bf7060406bfd16981a166e51efa5b0c6f55e23 100644
+--- a/sqlparse/engine/statement_splitter.py
++++ b/sqlparse/engine/statement_splitter.py
+@@ -7,6 +7,12 @@
+ 
+ from sqlparse import sql, tokens as T
+ 
++# Memoized "ttype in T.Keyword" results per token type.
++_IS_KEYWORD = {}
++_EOS_TTYPES = frozenset((T.Whitespace, T.Comment.Single))
++_NON_RESET_TTYPES = frozenset((T.Whitespace, T.Newline, T.Comment.Single,
++                               T.Comment.Multiline))
++
+ 
+ class StatementSplitter:
+     """Filter that split stream at individual statements"""
+@@ -34,8 +40,13 @@ class StatementSplitter:
+             return 1
+         elif ttype is T.Punctuation and value == ')':
+             return -1
+-        elif ttype not in T.Keyword:  # if normal token return
+-            return 0
++        else:
++            try:
++                is_kw = _IS_KEYWORD[ttype]
++            except KeyError:
++                is_kw = _IS_KEYWORD[ttype] = ttype in T.Keyword
++            if not is_kw:  # if normal token return
++                return 0
+ 
+         # Everything after here is ttype = T.Keyword
+         # Also to note, once entered an If statement you are done and basically
+@@ -94,7 +105,8 @@ class StatementSplitter:
+ 
+     def process(self, stream):
+         """Process the stream"""
+-        EOS_TTYPE = T.Whitespace, T.Comment.Single
++        EOS_TTYPE = _EOS_TTYPES
++        NON_RESET_TTYPES = _NON_RESET_TTYPES
+ 
+         # Run over all stream tokens
+         for ttype, value in stream:
+@@ -132,8 +144,7 @@ class StatementSplitter:
+                     self.consume_ws = True
+             elif ttype is T.Keyword and value.split()[0] == 'GO':
+                 self.consume_ws = True
+-            elif (ttype not in (T.Whitespace, T.Newline, T.Comment.Single,
+-                                T.Comment.Multiline)
++            elif (ttype not in NON_RESET_TTYPES
+                   and not (ttype is T.Keyword and value.upper() == 'BEGIN')):
+                 # Reset _seen_begin if we see a non-whitespace, non-comment
+                 # token but not for BEGIN itself (which just set the flag)
+diff --git a/sqlparse/sql.py b/sqlparse/sql.py
+index 831dfb96d2b3a282b228bfddac97703a32e608e8..1cf1ff5240b70f8c8ef82426f9b76261a4fd70e3 100644
+--- a/sqlparse/sql.py
++++ b/sqlparse/sql.py
+@@ -12,6 +12,9 @@ import re
+ from sqlparse import tokens as T
+ from sqlparse.utils import imt, remove_quotes
+ 
++# Memoized (is_keyword, is_whitespace, is_newline) per token type.
++_TTYPE_FLAGS = {}
++
+ 
+ class NameAliasMixin:
+     """Implements get_real_name and get_alias."""
+@@ -53,10 +56,14 @@ class Token:
+         self.ttype = ttype
+         self.parent = None
+         self.is_group = False
+-        self.is_keyword = ttype in T.Keyword
+-        self.is_whitespace = self.ttype in T.Whitespace
+-        self.is_newline = self.ttype in T.Newline
+-        self.normalized = value.upper() if self.is_keyword else value
++        try:
++            flags = _TTYPE_FLAGS[ttype]
++        except KeyError:
++            flags = _TTYPE_FLAGS[ttype] = (ttype in T.Keyword,
++                                           ttype in T.Whitespace,
++                                           ttype in T.Newline)
++        self.is_keyword, self.is_whitespace, self.is_newline = flags
++        self.normalized = value.upper() if flags[0] else value
+ 
+     def __str__(self):
+         return self.value

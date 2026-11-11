@@ -1,0 +1,196 @@
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..240de35fbb004bb9cecc12c262493eb2bade436c 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -19,6 +19,161 @@ from io import TextIOBase
+ from sqlparse import tokens, keywords
+ from sqlparse.utils import consume
+ 
++try:  # Python 3.11+
++    from re import _parser as _sre_parse
++except ImportError:  # pragma: no cover
++    import sre_parse as _sre_parse
++
++
++class _Unanalysable(Exception):
++    pass
++
++
++# Non-ASCII code points that may case-fold onto ASCII letters.
++_FOLD_SPECIALS = (0x130, 0x131, 0x17F, 0x212A)
++
++_CATEGORY_RX = {
++    'CATEGORY_DIGIT': re.compile(r'\d').match,
++    'CATEGORY_NOT_DIGIT': re.compile(r'\D').match,
++    'CATEGORY_SPACE': re.compile(r'\s').match,
++    'CATEGORY_NOT_SPACE': re.compile(r'\S').match,
++    'CATEGORY_WORD': re.compile(r'\w').match,
++    'CATEGORY_NOT_WORD': re.compile(r'\W').match,
++}
++
++_ZERO_WIDTH_OPS = tuple(
++    getattr(_sre_parse, name) for name in ('ASSERT', 'ASSERT_NOT', 'AT')
++    if hasattr(_sre_parse, name))
++_REPEAT_OPS = tuple(
++    getattr(_sre_parse, name)
++    for name in ('MAX_REPEAT', 'MIN_REPEAT', 'POSSESSIVE_REPEAT')
++    if hasattr(_sre_parse, name))
++_ATOMIC_OP = getattr(_sre_parse, 'ATOMIC_GROUP', None)
++
++
++def _first_seq(items, out):
++    """Collect first-char tests of a sequence; return True if nullable."""
++    for op, av in items:
++        if not _first_item(op, av, out):
++            return False
++    return True
++
++
++def _first_item(op, av, out):
++    """Collect first-char tests of one node; return True if nullable."""
++    P = _sre_parse
++    if op is P.LITERAL or op is P.NOT_LITERAL or op is P.IN:
++        out.append((op, av))
++        return False
++    if op in _ZERO_WIDTH_OPS:
++        return True
++    if op is P.SUBPATTERN:
++        add_flags, del_flags, sub = av[1], av[2], av[3]
++        if add_flags or del_flags:
++            raise _Unanalysable
++        return _first_seq(sub, out)
++    if _ATOMIC_OP is not None and op is _ATOMIC_OP:
++        return _first_seq(av, out)
++    if op is P.BRANCH:
++        nullable = False
++        for alt in av[1]:
++            if _first_seq(alt, out):
++                nullable = True
++        return nullable
++    if op in _REPEAT_OPS:
++        lo, _hi, sub = av
++        sub_nullable = _first_seq(sub, out)
++        return lo == 0 or sub_nullable
++    raise _Unanalysable
++
++
++def _analyse(rexmatch):
++    """Return (tests, ignorecase) or None if pattern can't be analysed."""
++    try:
++        pattern = rexmatch.__self__
++        if not isinstance(pattern, re.Pattern) or \
++                not isinstance(pattern.pattern, str):
++            return None
++        flags = pattern.flags
++        if flags & re.LOCALE:
++            return None
++        parsed = _sre_parse.parse(pattern.pattern, flags)
++        out = []
++        if _first_seq(list(parsed), out):
++            return None  # may match empty string
++        return out, bool(flags & re.IGNORECASE)
++    except Exception:
++        return None
++
++
++def _lit(v, c, ic):
++    """Tri-state: does literal code point v match ASCII char c?"""
++    if v < 128:
++        if ic:
++            return chr(v).lower() == c.lower()
++        return chr(v) == c
++    if ic and v in _FOLD_SPECIALS:
++        return None
++    return False
++
++
++def _range(lo, hi, c, ic):
++    if ic:
++        variants = (ord(c), ord(c.lower()), ord(c.upper()))
++    else:
++        variants = (ord(c),)
++    for o in variants:
++        if lo <= o <= hi:
++            return True
++    if ic and hi >= 128:
++        for s in _FOLD_SPECIALS:
++            if lo <= s <= hi:
++                return None
++    return False
++
++
++def _in(items, c, ic):
++    P = _sre_parse
++    negate = False
++    result = False
++    for op, av in items:
++        if op is P.NEGATE:
++            negate = True
++            continue
++        if op is P.LITERAL:
++            r = _lit(av, c, ic)
++        elif op is P.RANGE:
++            r = _range(av[0], av[1], c, ic)
++        elif op is P.CATEGORY:
++            fn = _CATEGORY_RX.get(getattr(av, 'name', None))
++            r = None if fn is None else bool(fn(c))
++        else:
++            r = None
++        if r:
++            result = True
++            break
++        if r is None:
++            result = None
++    if result is None:
++        return None
++    return (not result) if negate else result
++
++
++def _may_start_with(analysis, c):
++    tests, ic = analysis
++    P = _sre_parse
++    for op, av in tests:
++        if op is P.LITERAL:
++            r = _lit(av, c, ic)
++        elif op is P.NOT_LITERAL:
++            r = _lit(av, c, ic)
++            r = None if r is None else not r
++        else:
++            r = _in(av, c, ic)
++        if r is None or r:
++            return True
++    return False
++
+ 
+ class Lexer:
+     """The Lexer supports configurable syntax.
+@@ -134,9 +289,28 @@ class Lexer:
+             raise TypeError("Expected text or file-like object, got {!r}".
+                             format(type(text)))
+ 
++        regex = self._SQL_REGEX
++        state = self.__dict__.get('_first_char_state')
++        if state is None or state[0] is not regex \
++                or state[1] != len(regex):
++            state = (regex, len(regex),
++                     [_analyse(rexmatch) for rexmatch, _ in regex], {})
++            self._first_char_state = state
++        analyses = state[2]
++        cache = state[3]
++
+         iterable = enumerate(text)
+         for pos, char in iterable:
+-            for rexmatch, action in self._SQL_REGEX:
++            candidates = cache.get(char)
++            if candidates is None:
++                if char.isascii():
++                    candidates = [
++                        rule for rule, an in zip(regex, analyses)
++                        if an is None or _may_start_with(an, char)]
++                else:
++                    candidates = regex
++                cache[char] = candidates
++            for rexmatch, action in candidates:
+                 m = rexmatch(text, pos)
+ 
+                 if not m:

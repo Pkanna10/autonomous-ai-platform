@@ -1,0 +1,63 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..cdc08c20331f2ecb4c6b5f9177395a06e02b71f6 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -12,6 +12,10 @@ import sys
+ 
+ from ._re import (
+     RE_DATETIME,
++    RE_FLAT_INT_ARRAY,
++    RE_FLAT_INT_TOKEN,
++    RE_FLAT_STR_ARRAY,
++    RE_FLAT_STR_TOKEN,
+     RE_LOCALTIME,
+     RE_NUMBER,
+     match_to_datetime,
+@@ -522,6 +526,17 @@ def parse_array(
+     src: str, pos: Pos, parse_float: ParseFloat, nest_lvl: int
+ ) -> tuple[Pos, list[Any]]:
+     pos += 1
++
++    if nest_lvl <= MAX_INLINE_NESTING:
++        fast_match = RE_FLAT_INT_ARRAY.match(src, pos)
++        if fast_match:
++            end = fast_match.end()
++            return end, [int(t) for t in RE_FLAT_INT_TOKEN.findall(src, pos, end)]
++        fast_match = RE_FLAT_STR_ARRAY.match(src, pos)
++        if fast_match:
++            end = fast_match.end()
++            return end, [a or b for a, b in RE_FLAT_STR_TOKEN.findall(src, pos, end)]
++
+     array: list[Any] = []
+ 
+     pos = skip_comments_and_array_ws(src, pos)
+diff --git a/src/tomli/_re.py b/src/tomli/_re.py
+index fc374ed63d3e3742a97134349fc25b14223ab57b..4ac66cbf9d12cba0b4416bd177ac4a371fd4f5c7 100644
+--- a/src/tomli/_re.py
++++ b/src/tomli/_re.py
+@@ -55,6 +55,25 @@ RE_DATETIME: Final = re.compile(
+     flags=re.VERBOSE,
+ )
+ 
++# Fast paths for flat arrays (the part after the opening "[").
++_ARR_WS: Final = r"[ \t\n]*"
++_ARR_INT: Final = r"[+-]?(?:0|[1-9][0-9]*)"
++_ARR_STR: Final = (
++    r'"[^"\\\x00-\x08\x0a-\x1f\x7f]*"' r"|'[^'\x00-\x08\x0a-\x1f\x7f]*'"
++)
++RE_FLAT_INT_ARRAY: Final = re.compile(
++    rf"{_ARR_WS}{_ARR_INT}{_ARR_WS}(?:,{_ARR_WS}{_ARR_INT}{_ARR_WS})*"
++    rf"(?:,{_ARR_WS})?\]"
++)
++RE_FLAT_STR_ARRAY: Final = re.compile(
++    rf"{_ARR_WS}(?:{_ARR_STR}){_ARR_WS}(?:,{_ARR_WS}(?:{_ARR_STR}){_ARR_WS})*"
++    rf"(?:,{_ARR_WS})?\]"
++)
++RE_FLAT_INT_TOKEN: Final = re.compile(r"[+-]?[0-9]+")
++RE_FLAT_STR_TOKEN: Final = re.compile(
++    r'"([^"\\\x00-\x08\x0a-\x1f\x7f]*)"' r"|'([^'\x00-\x08\x0a-\x1f\x7f]*)'"
++)
++
+ 
+ def match_to_datetime(match: re.Match[str]) -> datetime | date:
+     """Convert a `RE_DATETIME` match to `datetime.datetime` or `datetime.date`.

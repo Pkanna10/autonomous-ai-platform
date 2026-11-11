@@ -1,0 +1,91 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..bdf4342756a5020da8da44c03ec780a5e154549e 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -175,6 +175,7 @@ def loads(__s: str, *, parse_float: ParseFloat = float) -> dict[str, Any]:
+     pos = 0
+     out = Output()
+     header: Key = ()
++    header_nest: dict[str, Any] | None = None
+     parse_float = make_safe_parse_float(parse_float)
+ 
+     # Parse one statement at a time
+@@ -199,7 +200,9 @@ def loads(__s: str, *, parse_float: ParseFloat = float) -> dict[str, Any]:
+             pos += 1
+             continue
+         if char in KEY_INITIAL_CHARS:
+-            pos = key_value_rule(src, pos, out, header, parse_float)
++            pos, header_nest = key_value_rule_cached(
++                src, pos, out, header, parse_float, header_nest
++            )
+             pos = skip_chars(src, pos, TOML_WS)
+         elif char == "[":
+             try:
+@@ -207,6 +210,7 @@ def loads(__s: str, *, parse_float: ParseFloat = float) -> dict[str, Any]:
+             except IndexError:
+                 second_char = None
+             out.flags.finalize_pending()
++            header_nest = None
+             if second_char == "[":
+                 pos, header = create_list_rule(src, pos, out)
+             else:
+@@ -459,6 +463,59 @@ def key_value_rule(
+     return pos
+ 
+ 
++def key_value_rule_cached(
++    src: str,
++    pos: Pos,
++    out: Output,
++    header: Key,
++    parse_float: ParseFloat,
++    header_nest: dict[str, Any] | None,
++) -> tuple[Pos, dict[str, Any] | None]:
++    """Like key_value_rule, but with a fast path for single-part keys.
++
++    `header_nest` is the cached nest dict of `header` (whose FROZEN check
++    already passed), or None if not yet resolved. Returns the new position
++    and the (possibly newly resolved) cached header nest.
++    """
++    pos, key, value = parse_key_value_pair(src, pos, parse_float, nest_lvl=0)
++    if len(key) != 1:
++        key_parent, key_stem = key[:-1], key[-1]
++        abs_key_parent = header + key_parent
++        for i in range(1, len(key)):
++            cont_key = header + key[:i]
++            if out.flags.is_(cont_key, Flags.EXPLICIT_NEST):
++                raise TOMLDecodeError(
++                    f"Cannot redefine namespace {cont_key}", src, pos
++                )
++            out.flags.add_pending(cont_key, Flags.EXPLICIT_NEST)
++        if out.flags.is_(abs_key_parent, Flags.FROZEN):
++            raise TOMLDecodeError(
++                f"Cannot mutate immutable namespace {abs_key_parent}", src, pos
++            )
++        try:
++            nest = out.data.get_or_create_nest(abs_key_parent)
++        except KeyError:
++            raise TOMLDecodeError("Cannot overwrite a value", src, pos) from None
++    else:
++        key_stem = key[0]
++        if header_nest is None:
++            if out.flags.is_(header, Flags.FROZEN):
++                raise TOMLDecodeError(
++                    f"Cannot mutate immutable namespace {header}", src, pos
++                )
++            try:
++                header_nest = out.data.get_or_create_nest(header)
++            except KeyError:
++                raise TOMLDecodeError("Cannot overwrite a value", src, pos) from None
++        nest = header_nest
++    if key_stem in nest:
++        raise TOMLDecodeError("Cannot overwrite a value", src, pos)
++    if isinstance(value, (dict, list)):
++        out.flags.set(header + key, Flags.FROZEN, recursive=True)
++    nest[key_stem] = value
++    return pos, header_nest
++
++
+ def parse_key_value_pair(
+     src: str, pos: Pos, parse_float: ParseFloat, nest_lvl: int
+ ) -> tuple[Pos, Key, Any]:

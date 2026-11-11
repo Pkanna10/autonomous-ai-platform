@@ -1,0 +1,89 @@
+diff --git a/markdown/extensions/abbr.py b/markdown/extensions/abbr.py
+index 9f609810ad4a7a01403f978b878435b17fef5a0e..852b0f44947c082824b8f92ab6f4f9da69f0c0ed 100644
+--- a/markdown/extensions/abbr.py
++++ b/markdown/extensions/abbr.py
+@@ -102,12 +102,18 @@ class AbbrTreeprocessor(Treeprocessor):
+         abbr.tail = tail
+         return abbr
+ 
+-    def iter_element(self, el: etree.Element, parent: etree.Element | None = None) -> None:
++    def iter_element(
++        self, el: etree.Element, parent: etree.Element | None = None, pos: int | None = None
++    ) -> None:
+         ''' Recursively iterate over elements, run regex on text and wrap matches in `abbr` tags. '''
+-        for child in reversed(el):
+-            self.iter_element(child, el)
++        n = len(el)
++        if n:
++            iter_element = self.iter_element
++            for i in range(n - 1, -1, -1):
++                iter_element(el[i], el, i)
++        search = self.RE.search
+         if text := el.text:
+-            if not isinstance(text, AtomicString):
++            if not isinstance(text, AtomicString) and search(text) is not None:
+                 for m in reversed(list(self.RE.finditer(text))):
+                     if self.abbrs[m.group(0)]:
+                         abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), text[m.end():])
+@@ -116,8 +122,11 @@ class AbbrTreeprocessor(Treeprocessor):
+                 el.text = text
+         if parent is not None and el.tail:
+             tail = el.tail
+-            index = list(parent).index(el) + 1
+-            if not isinstance(tail, AtomicString):
++            if not isinstance(tail, AtomicString) and search(tail) is not None:
++                if pos is None:
++                    index = list(parent).index(el) + 1
++                else:
++                    index = pos + 1
+                 for m in reversed(list(self.RE.finditer(tail))):
+                     abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), tail[m.end():])
+                     parent.insert(index, abbr)
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..bc9d2f6806494484e097bca171ae38f8c8514f05 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -86,6 +86,7 @@ class InlineProcessor(Treeprocessor):
+         self.md = md
+         self.inlinePatterns = md.inlinePatterns
+         self.ancestors: list[str] = []
++        self.__nomatch_cache: dict[tuple, bool] = {}
+ 
+     def __makePlaceholder(self, type: str) -> tuple[str, str]:
+         """ Generate a placeholder """
+@@ -130,14 +131,26 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         if not isinstance(data, util.AtomicString):
++            cache = self.__nomatch_cache
++            key = (data, patternIndex, tuple(self.ancestors))
++            if key in cache:
++                return data
++            original = data
++            stash_len = len(self.stashed_nodes)
++            any_matched = False
+             startIndex = 0
+             count = len(self.inlinePatterns)
+             while patternIndex < count:
+                 data, matched, startIndex = self.__applyPattern(
+                     self.inlinePatterns[patternIndex], data, patternIndex, startIndex
+                 )
+-                if not matched:
++                if matched:
++                    any_matched = True
++                else:
+                     patternIndex += 1
++            if (not any_matched and data is original
++                    and len(self.stashed_nodes) == stash_len):
++                cache[key] = True
+         return data
+ 
+     def __processElementText(self, node: etree.Element, subnode: etree.Element, isText: bool = True) -> None:
+@@ -364,6 +377,7 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         self.stashed_nodes: dict[str, etree.Element | str] = {}
++        self.__nomatch_cache: dict[tuple, bool] = {}
+ 
+         # Ensure a valid parent list, but copy passed in lists
+         # to ensure we don't have the user accidentally change it on us.

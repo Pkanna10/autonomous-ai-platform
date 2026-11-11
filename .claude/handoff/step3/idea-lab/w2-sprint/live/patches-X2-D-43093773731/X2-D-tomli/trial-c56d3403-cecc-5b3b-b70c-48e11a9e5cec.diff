@@ -1,0 +1,35 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..46cfdea8d9d42b869f8f3a95d2ba01ba6d92f9d3 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -8,6 +8,7 @@ from __future__ import annotations
+ # parse_value().
+ __lazy_modules__ = ["tomli._re", "tomllib._re"]
+ 
++import re
+ import sys
+ 
+ from ._re import (
+@@ -49,6 +50,11 @@ MAX_INLINE_NESTING: Final = 400
+ # and RecursionError.
+ MAX_KEY_PARTS: Final = sys.getrecursionlimit()
+ 
++_RE_FLAT_INT_ARRAY: Final = re.compile(
++    r"[ \t]*(?:0|[1-9][0-9]*)[ \t]*(?:,[ \t]*(?:0|[1-9][0-9]*)[ \t]*)*,?[ \t]*\]"
++)
++_RE_DIGITS: Final = re.compile(r"[0-9]+")
++
+ ASCII_CTRL: Final = frozenset(chr(i) for i in range(32)) | frozenset(chr(127))
+ 
+ # Neither of these sets include quotation mark or backslash. They are
+@@ -522,6 +528,10 @@ def parse_array(
+     src: str, pos: Pos, parse_float: ParseFloat, nest_lvl: int
+ ) -> tuple[Pos, list[Any]]:
+     pos += 1
++    fast = _RE_FLAT_INT_ARRAY.match(src, pos)
++    if fast is not None:
++        end = fast.end()
++        return end, [int(x) for x in _RE_DIGITS.findall(src, pos, end)]
+     array: list[Any] = []
+ 
+     pos = skip_comments_and_array_ws(src, pos)

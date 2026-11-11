@@ -1,0 +1,42 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..e6406d634e52fc7792285d930e3070d121e3374b 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -8,6 +8,7 @@ from __future__ import annotations
+ # parse_value().
+ __lazy_modules__ = ["tomli._re", "tomllib._re"]
+ 
++import re
+ import sys
+ 
+ from ._re import (
+@@ -67,6 +68,16 @@ BARE_KEY_CHARS: Final = frozenset(
+     "abcdefghijklmnopqrstuvwxyz" "ABCDEFGHIJKLMNOPQRSTUVWXYZ" "0123456789" "-_"
+ )
+ KEY_INITIAL_CHARS: Final = BARE_KEY_CHARS | frozenset("\"'")
++_FLAT_ELEM = r'(?:[+-]?(?:0|[1-9][0-9]*)|"[^"\\\x00-\x08\x0a-\x1f\x7f]*")'
++# A whole single-line array of plain decimal ints and escape-free basic strings.
++RE_FLAT_ARRAY: Final = re.compile(
++    r"\[[ \t]*(?:"
++    + _FLAT_ELEM
++    + r"(?:[ \t]*,[ \t]*"
++    + _FLAT_ELEM
++    + r")*[ \t]*(?:,[ \t]*)?)?\]"
++)
++RE_FLAT_ARRAY_ELEM: Final = re.compile(r'"([^"]*)"|([+-]?[0-9]+)')
+ HEXDIGIT_CHARS: Final = frozenset("abcdef" "ABCDEF" "0123456789")
+ 
+ BASIC_STR_ESCAPE_REPLACEMENTS: Final = frozendict(
+@@ -521,6 +532,12 @@ def parse_one_line_basic_str(src: str, pos: Pos) -> tuple[Pos, str]:
+ def parse_array(
+     src: str, pos: Pos, parse_float: ParseFloat, nest_lvl: int
+ ) -> tuple[Pos, list[Any]]:
++    fast = RE_FLAT_ARRAY.match(src, pos)
++    if fast is not None:
++        return fast.end(), [
++            int(num) if num else s
++            for s, num in RE_FLAT_ARRAY_ELEM.findall(src, pos, fast.end())
++        ]
+     pos += 1
+     array: list[Any] = []
+ 

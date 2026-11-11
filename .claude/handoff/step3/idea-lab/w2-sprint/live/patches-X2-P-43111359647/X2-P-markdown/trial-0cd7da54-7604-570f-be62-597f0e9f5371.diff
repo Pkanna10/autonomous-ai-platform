@@ -1,0 +1,80 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..22447b4719f41f632466c7f266fff8ab216b686c 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -45,6 +45,39 @@ def build_treeprocessors(md: Markdown, **kwargs: Any) -> util.Registry[Treeproce
+     return treeprocessors
+ 
+ 
++# Map of known inline regex sources to characters, at least one of which must
++# be present in the text for the regex to match anywhere in it.
++_PATTERN_TRIGGERS: dict[str, tuple[str, ...]] = {
++    inlinepatterns.BACKTICK_RE: ('`',),
++    inlinepatterns.ESCAPE_RE: ('\\',),
++    inlinepatterns.LINK_RE: ('[',),
++    inlinepatterns.IMAGE_LINK_RE: ('[',),
++    inlinepatterns.AUTOLINK_RE: ('<',),
++    inlinepatterns.AUTOMAIL_RE: ('<',),
++    inlinepatterns.HTML_RE: ('<',),
++    inlinepatterns.ENTITY_RE: ('&',),
++    inlinepatterns.LINE_BREAK_RE: ('\n',),
++    inlinepatterns.NOT_STRONG_RE: ('*', '_'),
++    inlinepatterns.EM_STRONG_RE: ('*',),
++    inlinepatterns.EM_STRONG2_RE: ('_',),
++    r'\*': ('*',),
++    r'_': ('_',),
++}
++
++
++def _pattern_triggers(pattern: Any) -> tuple[str, ...] | None:
++    """ Return trigger characters for a new-style pattern with a known regex, else `None`. """
++    if not isinstance(pattern, inlinepatterns.InlineProcessor):
++        return None
++    try:
++        source = pattern.getCompiledRegExp().pattern
++    except Exception:  # pragma: no cover
++        return None
++    if not isinstance(source, str):  # pragma: no cover
++        return None
++    return _PATTERN_TRIGGERS.get(source)
++
++
+ def isString(s: object) -> bool:
+     """ Return `True` if object is a string but not an  [`AtomicString`][markdown.util.AtomicString]. """
+     if not isinstance(s, util.AtomicString):
+@@ -86,6 +119,7 @@ class InlineProcessor(Treeprocessor):
+         self.md = md
+         self.inlinePatterns = md.inlinePatterns
+         self.ancestors: list[str] = []
++        self._pattern_triggers: list[tuple[str, ...] | None] | None = None
+ 
+     def __makePlaceholder(self, type: str) -> tuple[str, str]:
+         """ Generate a placeholder """
+@@ -132,7 +166,19 @@ class InlineProcessor(Treeprocessor):
+         if not isinstance(data, util.AtomicString):
+             startIndex = 0
+             count = len(self.inlinePatterns)
++            triggers = self._pattern_triggers
++            if triggers is None or len(triggers) != count:
++                triggers = [None] * count
+             while patternIndex < count:
++                trig = triggers[patternIndex]
++                if trig is not None:
++                    for c in trig:
++                        if c in data:
++                            break
++                    else:
++                        patternIndex += 1
++                        startIndex = 0
++                        continue
+                 data, matched, startIndex = self.__applyPattern(
+                     self.inlinePatterns[patternIndex], data, patternIndex, startIndex
+                 )
+@@ -364,6 +410,7 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         self.stashed_nodes: dict[str, etree.Element | str] = {}
++        self._pattern_triggers = [_pattern_triggers(p) for p in self.inlinePatterns]
+ 
+         # Ensure a valid parent list, but copy passed in lists
+         # to ensure we don't have the user accidentally change it on us.

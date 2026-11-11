@@ -1,0 +1,24 @@
+diff --git a/markdown/extensions/abbr.py b/markdown/extensions/abbr.py
+index 9f609810ad4a7a01403f978b878435b17fef5a0e..6c0b65e21b156088e2a74629c7622dc82c841153 100644
+--- a/markdown/extensions/abbr.py
++++ b/markdown/extensions/abbr.py
+@@ -116,12 +116,14 @@ class AbbrTreeprocessor(Treeprocessor):
+                 el.text = text
+         if parent is not None and el.tail:
+             tail = el.tail
+-            index = list(parent).index(el) + 1
+             if not isinstance(tail, AtomicString):
+-                for m in reversed(list(self.RE.finditer(tail))):
+-                    abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), tail[m.end():])
+-                    parent.insert(index, abbr)
+-                    tail = tail[:m.start()]
++                matches = list(self.RE.finditer(tail))
++                if matches:
++                    index = list(parent).index(el) + 1
++                    for m in reversed(matches):
++                        abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), tail[m.end():])
++                        parent.insert(index, abbr)
++                        tail = tail[:m.start()]
+                 el.tail = tail
+ 
+     def run(self, root: etree.Element) -> etree.Element | None:

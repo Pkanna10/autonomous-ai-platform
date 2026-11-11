@@ -1,0 +1,143 @@
+diff --git a/sqlparse/engine/grouping.py b/sqlparse/engine/grouping.py
+index 43ca5b580d5e8499e3fa1ed5275902d7e20ce71b..73a68f9fe7b7ff5868a4a8e1a28f48f90cf57ee4 100644
+--- a/sqlparse/engine/grouping.py
++++ b/sqlparse/engine/grouping.py
+@@ -439,39 +439,106 @@ def group_values(tlist):
+         tlist.group_tokens(sql.Values, start_idx, end_idx, extend=True)
+ 
+ 
++def _within_limits(tlist):
++    """Return True if no grouping pass could hit the depth/token limits."""
++    max_depth = MAX_GROUPING_DEPTH
++    max_tokens = MAX_GROUPING_TOKENS
++    stack = [(tlist, 0)]
++    pop = stack.pop
++    push = stack.append
++    while stack:
++        grp, depth = pop()
++        if max_depth is not None and depth > max_depth:
++            return False
++        tokens = grp.tokens
++        if max_tokens is not None and len(tokens) > max_tokens:
++            return False
++        for tok in tokens:
++            if tok.is_group:
++                push((tok, depth + 1))
++    return True
++
++
++def _leaf_triggers(stmt):
++    """Collect which optional passes have a trigger leaf in the statement."""
++    checks = [
++        ('brackets', lambda t: t.match(*sql.SquareBrackets.M_OPEN)),
++        ('case', lambda t: t.match(*sql.Case.M_OPEN)),
++        ('if', lambda t: t.match(*sql.If.M_OPEN)),
++        ('for', lambda t: t.match(*sql.For.M_OPEN)),
++        ('begin', lambda t: t.match(*sql.Begin.M_OPEN)),
++        ('typecasts', lambda t: t.match(T.Punctuation, '::')),
++        ('tzcasts', lambda t: t.ttype == T.Keyword.TZCast),
++        ('typed_literal', lambda t: imt(t, m=sql.TypedLiteral.M_OPEN)),
++        ('assignment', lambda t: t.match(T.Assignment, ':=')),
++    ]
++    found = set()
++    for leaf in stmt.flatten():
++        if leaf.is_whitespace:
++            continue
++        remaining = []
++        for name, check in checks:
++            if check(leaf):
++                found.add(name)
++            else:
++                remaining.append((name, check))
++        if not remaining:
++            break
++        checks = remaining
++    return found
++
++
+ def group(stmt):
+-    for func in [
+-        group_comments,
+-
+-        # _group_matching
+-        group_brackets,
+-        group_parenthesis,
+-        group_case,
+-        group_if,
+-        group_for,
+-        group_begin,
+-
+-        group_over,
+-        group_functions,
+-        group_where,
+-        group_period,
+-        group_arrays,
+-        group_identifier,
+-        group_order,
+-        group_typecasts,
+-        group_tzcasts,
+-        group_typed_literal,
+-        group_operator,
+-        group_comparison,
+-        group_as,
+-        group_aliased,
+-        group_assignment,
+-
+-        align_comments,
+-        group_identifier_list,
+-        group_values,
+-    ]:
+-        func(stmt)
++    group_comments(stmt)
++
++    # Leaves are never created or removed by grouping, so the set of trigger
++    # tokens can be computed once. A pass is only skipped when its trigger is
++    # absent (so it would not change the tree) and the tree is within the
++    # depth/token limits (so it would not raise).
++    found = _leaf_triggers(stmt)
++
++    def run_optional(funcs):
++        # The limit check result is cached until a pass modifies the tree.
++        safe = None
++        for name, func in funcs:
++            if name not in found:
++                if safe is None:
++                    safe = _within_limits(stmt)
++                if safe:
++                    continue
++            func(stmt)
++            safe = None
++
++    run_optional([('brackets', group_brackets)])
++    group_parenthesis(stmt)
++    run_optional([
++        ('case', group_case),
++        ('if', group_if),
++        ('for', group_for),
++        ('begin', group_begin),
++    ])
++    group_over(stmt)
++    group_functions(stmt)
++    group_where(stmt)
++    group_period(stmt)
++    # group_arrays only matches SquareBrackets groups, created from '['.
++    run_optional([('brackets', group_arrays)])
++    group_identifier(stmt)
++    group_order(stmt)
++    run_optional([
++        ('typecasts', group_typecasts),
++        ('tzcasts', group_tzcasts),
++        ('typed_literal', group_typed_literal),
++    ])
++    group_operator(stmt)
++    group_comparison(stmt)
++    group_as(stmt)
++    group_aliased(stmt)
++    run_optional([('assignment', group_assignment)])
++
++    align_comments(stmt)
++    group_identifier_list(stmt)
++    group_values(stmt)
+     return stmt
+ 
+ 

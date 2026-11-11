@@ -1,0 +1,48 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..97629405ae80d1a3129087f2a07d58df3cc73a16 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -207,6 +207,7 @@ def loads(__s: str, *, parse_float: ParseFloat = float) -> dict[str, Any]:
+             except IndexError:
+                 second_char = None
+             out.flags.finalize_pending()
++            out.cached_header = None
+             if second_char == "[":
+                 pos, header = create_list_rule(src, pos, out)
+             else:
+@@ -328,6 +329,9 @@ class Output:
+     def __init__(self) -> None:
+         self.data = NestedDict()
+         self.flags = Flags()
++        # Cursor cache: nest dict of the current table header (single-part keys)
++        self.cached_header: Key | None = None
++        self.cached_nest: dict[str, Any] = {}
+ 
+ 
+ def skip_chars(src: str, pos: Pos, chars: Iterable[str]) -> Pos:
+@@ -429,6 +433,15 @@ def key_value_rule(
+     src: str, pos: Pos, out: Output, header: Key, parse_float: ParseFloat
+ ) -> Pos:
+     pos, key, value = parse_key_value_pair(src, pos, parse_float, nest_lvl=0)
++    if len(key) == 1 and out.cached_header is header:
++        nest = out.cached_nest
++        key_stem = key[0]
++        if key_stem in nest:
++            raise TOMLDecodeError("Cannot overwrite a value", src, pos)
++        if isinstance(value, (dict, list)):
++            out.flags.set(header + key, Flags.FROZEN, recursive=True)
++        nest[key_stem] = value
++        return pos
+     key_parent, key_stem = key[:-1], key[-1]
+     abs_key_parent = header + key_parent
+ 
+@@ -450,6 +463,9 @@ def key_value_rule(
+         nest = out.data.get_or_create_nest(abs_key_parent)
+     except KeyError:
+         raise TOMLDecodeError("Cannot overwrite a value", src, pos) from None
++    if not key_parent:
++        out.cached_header = header
++        out.cached_nest = nest
+     if key_stem in nest:
+         raise TOMLDecodeError("Cannot overwrite a value", src, pos)
+     # Mark inline table and array namespaces recursively immutable

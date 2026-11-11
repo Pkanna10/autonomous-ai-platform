@@ -1,0 +1,73 @@
+diff --git a/sqlparse/engine/grouping.py b/sqlparse/engine/grouping.py
+index 43ca5b580d5e8499e3fa1ed5275902d7e20ce71b..8729070a7b76e7ef2c8620408526d22f93b0b178 100644
+--- a/sqlparse/engine/grouping.py
++++ b/sqlparse/engine/grouping.py
+@@ -439,18 +439,59 @@ def group_values(tlist):
+         tlist.group_tokens(sql.Values, start_idx, end_idx, extend=True)
+ 
+ 
++_MATCHING_PASSES = (
++    (sql.SquareBrackets, group_brackets),
++    (sql.Parenthesis, group_parenthesis),
++    (sql.Case, group_case),
++    (sql.If, group_if),
++    (sql.For, group_for),
++    (sql.Begin, group_begin),
++)
++
++_MATCHING_OPEN_TTYPES = frozenset(cls.M_OPEN[0] for cls, _ in _MATCHING_PASSES)
++
++
++def _check_matching_limits(tlist, depth=0):
++    """Raise the same limit errors _group_matching would raise on a pass
++    that cannot group anything (no instances of its class exist)."""
++    if MAX_GROUPING_DEPTH is not None and depth > MAX_GROUPING_DEPTH:
++        raise SQLParseError(
++            f"Maximum grouping depth exceeded ({MAX_GROUPING_DEPTH})."
++        )
++    if MAX_GROUPING_TOKENS is not None \
++       and len(tlist.tokens) > MAX_GROUPING_TOKENS:
++        raise SQLParseError(
++            f"Maximum number of tokens exceeded ({MAX_GROUPING_TOKENS})."
++        )
++    for token in tlist.tokens:
++        if token.is_group:
++            _check_matching_limits(token, depth + 1)
++
++
+ def group(stmt):
+-    for func in [
+-        group_comments,
++    group_comments(stmt)
+ 
+-        # _group_matching
+-        group_brackets,
+-        group_parenthesis,
+-        group_case,
+-        group_if,
+-        group_for,
+-        group_begin,
++    present = set()
++    open_ttypes = _MATCHING_OPEN_TTYPES
++    for token in stmt.flatten():
++        if token.ttype not in open_ttypes:
++            continue
++        for cls, _ in _MATCHING_PASSES:
++            if cls not in present and token.match(*cls.M_OPEN):
++                present.add(cls)
++
++    # A skipped pass leaves the tree untouched, so the limit check only
++    # needs to be redone after a pass actually ran.
++    checked = False
++    for cls, func in _MATCHING_PASSES:
++        if cls in present:
++            func(stmt)
++            checked = False
++        elif not checked:
++            _check_matching_limits(stmt)
++            checked = True
+ 
++    for func in [
+         group_over,
+         group_functions,
+         group_where,

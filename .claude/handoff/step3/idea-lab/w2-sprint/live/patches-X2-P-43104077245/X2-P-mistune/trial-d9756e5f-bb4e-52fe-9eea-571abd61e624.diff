@@ -1,0 +1,24 @@
+diff --git a/src/mistune/helpers.py b/src/mistune/helpers.py
+index be5d0cadd12f8cb925f6a14e5f22860bed67db2b..73e721342c9dc1a6f7ac4a3a1f2227e3a268f77b 100644
+--- a/src/mistune/helpers.py
++++ b/src/mistune/helpers.py
+@@ -87,6 +87,8 @@ PRE_TAGS = ("pre", "script", "style", "textarea")
+ _INLINE_LINK_LABEL_RE = re.compile(LINK_LABEL + r"\]")
+ _INLINE_SQUARE_BRACKET_RE = re.compile(PREVENT_BACKSLASH + r"[\[\]]")
+ _ESCAPE_CHAR_RE = re.compile(r"\\(" + PUNCTUATION + r")")
++_PLAIN_HREF_RUN_RE = re.compile(r"[^ \t\n\r\f\x00\\()]*")
++_PLAIN_HREF_STOP = ASCII_WHITESPACE + ")"
+ 
+ 
+ def unescape_char(text: str) -> str:
+@@ -153,6 +155,10 @@ def _parse_link_href(
+         return None, None, pos
+ 
+     start = pos
++    if not block:
++        end = _PLAIN_HREF_RUN_RE.match(src, pos).end()
++        if end == len(src) or src[end] in _PLAIN_HREF_STOP:
++            return src[start:end], end, end
+     level = 0
+     while pos < len(src):
+         c = src[pos]

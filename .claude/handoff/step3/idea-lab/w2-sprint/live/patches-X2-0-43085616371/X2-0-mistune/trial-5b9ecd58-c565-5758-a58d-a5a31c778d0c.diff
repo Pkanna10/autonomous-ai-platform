@@ -1,0 +1,48 @@
+diff --git a/src/mistune/helpers.py b/src/mistune/helpers.py
+index be5d0cadd12f8cb925f6a14e5f22860bed67db2b..49cf8f801096efd7289dacac11fa9ebdee959a6b 100644
+--- a/src/mistune/helpers.py
++++ b/src/mistune/helpers.py
+@@ -87,6 +87,7 @@ PRE_TAGS = ("pre", "script", "style", "textarea")
+ _INLINE_LINK_LABEL_RE = re.compile(LINK_LABEL + r"\]")
+ _INLINE_SQUARE_BRACKET_RE = re.compile(PREVENT_BACKSLASH + r"[\[\]]")
+ _ESCAPE_CHAR_RE = re.compile(r"\\(" + PUNCTUATION + r")")
++_HREF_SPECIAL_RE = re.compile(r"[ \t\n\r\f\x00\\()]")
+ 
+ 
+ def unescape_char(text: str) -> str:
+@@ -154,6 +155,35 @@ def _parse_link_href(
+ 
+     start = pos
+     level = 0
++    if not block:
++        n = len(src)
++        search = _HREF_SPECIAL_RE.search
++        while pos < n:
++            m = search(src, pos)
++            if m is None:
++                pos = n
++                break
++            pos = m.start()
++            c = src[pos]
++            if c in ASCII_WHITESPACE:
++                break
++            if c == "\x00":
++                return None, None, pos
++            if c == "\\":
++                if pos + 1 < n and src[pos + 1] in string.punctuation:
++                    pos = min(pos + 2, n)
++                    continue
++            elif c == "(":
++                level += 1
++            elif level == 0:
++                break
++            else:
++                level -= 1
++            pos += 1
++        if level != 0:
++            return None, None, pos
++        return src[start:pos], pos, pos
++
+     while pos < len(src):
+         c = src[pos]
+         if c in ASCII_WHITESPACE:

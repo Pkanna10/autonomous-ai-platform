@@ -1,0 +1,48 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..bc9d2f6806494484e097bca171ae38f8c8514f05 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -86,6 +86,7 @@ class InlineProcessor(Treeprocessor):
+         self.md = md
+         self.inlinePatterns = md.inlinePatterns
+         self.ancestors: list[str] = []
++        self.__nomatch_cache: dict[tuple, bool] = {}
+ 
+     def __makePlaceholder(self, type: str) -> tuple[str, str]:
+         """ Generate a placeholder """
+@@ -130,14 +131,26 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         if not isinstance(data, util.AtomicString):
++            cache = self.__nomatch_cache
++            key = (data, patternIndex, tuple(self.ancestors))
++            if key in cache:
++                return data
++            original = data
++            stash_len = len(self.stashed_nodes)
++            any_matched = False
+             startIndex = 0
+             count = len(self.inlinePatterns)
+             while patternIndex < count:
+                 data, matched, startIndex = self.__applyPattern(
+                     self.inlinePatterns[patternIndex], data, patternIndex, startIndex
+                 )
+-                if not matched:
++                if matched:
++                    any_matched = True
++                else:
+                     patternIndex += 1
++            if (not any_matched and data is original
++                    and len(self.stashed_nodes) == stash_len):
++                cache[key] = True
+         return data
+ 
+     def __processElementText(self, node: etree.Element, subnode: etree.Element, isText: bool = True) -> None:
+@@ -364,6 +377,7 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         self.stashed_nodes: dict[str, etree.Element | str] = {}
++        self.__nomatch_cache: dict[tuple, bool] = {}
+ 
+         # Ensure a valid parent list, but copy passed in lists
+         # to ensure we don't have the user accidentally change it on us.
