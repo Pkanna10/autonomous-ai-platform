@@ -54,6 +54,15 @@ lanes, the seeded call's calls and USD, compounds tried and kept),
 ``ideas-x2-run`` per run (commit, cap, cost, discovery and D64's
 ``seeded_calls``/``seeded_cost_usd``, refusals, the combine, the guard).
 
+**Patches** (U-patch, record-only, every arm): each kept trial's recorded
+diff and the held combine's delivered patch go to files beside the results
+(``x2_patches``, redacted); a kept hypothesis row adds ``diff`` (its
+verdict's trial id and commit, file, sha256, truncation, whether the
+delivered patch applied it, or the error), the run row ``base_commit``,
+``patch_dir``, ``kept_diffs``, ``delivered_patch`` (the delivery's tip and
+the combination's applied trial ids) and a note for each when none is
+written; a failed write is an error on its entry, never a lost row.
+
 **X2-C** (emergence round 1, S1): X2-0 plus ``IDEAS_COUNT_CONTRACT=record``,
 no request changed, so the cap and minutes are X2-0's; off ``X2_ARMS`` and
 the plan until dispatched. Its hypothesis rows add ``realisation``, each
@@ -111,6 +120,9 @@ from autonomous_ai_agents.common.config import (
     settings,
 )
 from autonomous_ai_agents.common.models import (
+    Combination,
+    Delivery,
+    DeliveryKind,
     EngineEvent,
     Hypothesis,
     JsonScalar,
@@ -138,7 +150,8 @@ from . import discovery_oss as dx
 from . import ideas_probe as ip
 from . import ideas_slice as isl
 from . import oss
-from .conftest import LiveRun, StartLive, redact_keys, suite_cap
+from . import x2_patches as xp
+from .conftest import LiveRun, StartLive, key_window, redact_keys, suite_cap
 from .corpus import CorpusOutcome, Loop, role_wiring, settings_trial_budget
 from .discovery import OPUS, SONNET, ceil_usd, run_engine
 from .discovery_io import ResultsSink
@@ -472,6 +485,46 @@ def combine_row(keep: KeepRecord | None, owner: Mapping[str, str]) -> dict[str, 
             "reconcile": keep.reconcile}  # fmt: skip
 
 
+def _delivered_patch(writer: xp.PatchWriter, comb: Combination | None,
+                     delivery: Delivery | None) -> tuple[xp.Entry | None, str | None]:  # fmt: skip
+    """U-patch: the held combine's delivered patch, or why none is written.
+    Its trials are the combination's ``applied_trial_ids``: the tip the
+    publisher diffs is theirs (``combine_kept``; the delivery's verdict ids
+    are the same trials' verdicts)."""
+    if comb is None:
+        return None, xp.NO_COMBINE
+    if not comb.holds:
+        return None, xp.NOT_HELD
+    if not isinstance(delivery, Delivery) or delivery.kind is DeliveryKind.report_only:
+        return None, xp.NO_BRANCH
+    entry = writer.write(xp.DELIVERED_FILE, delivery.combined_diff)
+    return {**entry, "base_commit": comb.base_commit, "tip_commit": delivery.commit,
+            "branch": delivery.branch,
+            "applied_trial_ids": list(comb.applied_trial_ids)}, None  # fmt: skip
+
+
+def _kept_diffs(writer: xp.PatchWriter, hyps: Iterable[Hypothesis],
+                verdicts: Mapping[str, Verdict], trials: Iterable[Trial],
+                applied: Iterable[str]) -> dict[str, xp.Entry]:  # fmt: skip
+    """U-patch: per kept hypothesis its verdict's trial's recorded diff, one
+    file, and whether the delivered patch applied it."""
+    by_id, delivered, out = {t.id: t for t in trials}, {*applied}, {}
+    for h in hyps:
+        v = verdicts.get(h.id)
+        if v is None or v.outcome is not VerdictOutcome.keep:
+            continue
+        t = by_id.get(v.trial_id)
+        entry = xp.missing(xp.ORPHAN) if t is None else {
+            **writer.write(xp.trial_file(t.id), t.diff),
+            "commit": t.commit, "base_commit": t.base_commit}  # fmt: skip
+        out[h.id] = {
+            "trial_id": v.trial_id,
+            **entry,
+            "applied": v.trial_id in delivered,
+        }
+    return out
+
+
 @dataclass
 class X2Recorder:
     plan: X2Plan
@@ -511,6 +564,14 @@ class X2Recorder:
         comb = None if st is None else st["combination"]
         owner = {} if st is None else {t.id: t.hypothesis_id for t in st["trials"]}
         stacked = {owner.get(k.trial_id, k.trial_id): k for k in (() if comb is None else comb.keeps)}  # fmt: skip
+        writer = xp.PatchWriter(xp.patch_root(self.sink), xp.run_dir(arm.key, repo))
+        patch, patch_note = _delivered_patch(
+            writer, comb, None if st is None else st["delivery"]
+        )
+        applied = () if patch is None or comb is None else comb.applied_trial_ids
+        diffs = _kept_diffs(
+            writer, hyps, verdicts, [] if st is None else st["trials"], applied
+        )
         for h, r in zip(hyps, ranks, strict=True):
             key, lane, parents = keys.get(h.id), _tag(h, "lane"), compound_parents(h)
             self.sink.write({**head, "experiment": IDEA_EXPERIMENT, "round": rounds.get(h.id),
@@ -524,7 +585,8 @@ class X2Recorder:
                 "op_count": isl._op_count(verdicts.get(h.id)),
                 **({} if clone is None else {"realisation": realised.get(h.id)}),
                 **({} if not shadowed else {"shadow_verify": shadow.get(h.id)}),
-                **({} if not stacked else {"combine": combine_row(stacked.get(h.id), owner)})})  # fmt: skip
+                **({} if not stacked else {"combine": combine_row(stacked.get(h.id), owner)}),
+                **({} if h.id not in diffs else {"diff": diffs[h.id]})})  # fmt: skip
         kept = [h for h in hyps if (v := verdicts.get(h.id)) is not None
                 and v.outcome is VerdictOutcome.keep]  # fmt: skip
         for n, data in sorted(_by_round(events).items()):
@@ -546,6 +608,7 @@ class X2Recorder:
         j = isl._primary(result)
         self.sink.write({**head, "experiment": RUN_EXPERIMENT, "dispatch": self.plan.dispatch,
             "commit": commit, "cap_usd": run.cap_usd, "cost_usd": run.spent_usd,
+            "window": key_window(self.sink.environ),
             "discovery_cost_usd": 0.0 if st is None else st["discovery_cost_usd"],
             "seeded_calls": 0 if st is None else st["seeded_calls"],
             "seeded_cost_usd": 0.0 if st is None else st["seeded_cost_usd"],
@@ -557,6 +620,11 @@ class X2Recorder:
             "gain_pct": None if j is None else dx._pct(j.gain),
             "floor_pct": None if j is None else dx._pct(j.noise_floor),
             "delivered": st is not None and st["delivery"] is not None, "guard": guard,
+            "base_commit": None if st is None else st.get("base_commit"),
+            "patch_dir": writer.folder,
+            "kept_diffs": [{"hypothesis_id": k, **d} for k, d in diffs.items()],
+            "kept_diffs_note": None if diffs else xp.NO_KEEP,
+            "delivered_patch": patch, "delivered_patch_note": patch_note,
             **({} if not shadowed else {"shadow_aa": aa}),
             **({} if not viewed or started is None else {"minutes_planned": run_minutes(cfg),
                "seconds_measured": round(time.monotonic() - started, 1)}),

@@ -29,7 +29,7 @@ import dataclasses
 import inspect
 import json
 import os
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -565,13 +565,15 @@ def x2_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> Iterator[Callable[..., tuple[_Engine, list[Json]]]]:
     def go(engine: _Engine | None = None, base: Settings | None = None,
-           arm: x2.X2Arm = x2.X2_0) -> tuple[_Engine, list[Json]]:  # fmt: skip
+           arm: x2.X2Arm = x2.X2_0,
+           environ: Mapping[str, str] | None = None) -> tuple[_Engine, list[Json]]:  # fmt: skip
         engine = engine or _Engine()
         monkeypatch.setattr(x2, "start_x2_loop", engine.start)
         monkeypatch.setattr(x2, "run_engine", engine.run)
         out = tmp_path / "x2.jsonl"
         plan = x2.x2_plan({**X2_0_NEED, x2.DISPATCH_ENV: f"{arm.key}:{REPO}"})
-        recorder = x2.X2Recorder(plan, ResultsSink({RESULTS_ENV: str(out)}),
+        sink = ResultsSink({**(environ or {}), RESULTS_ENV: str(out)})
+        recorder = x2.X2Recorder(plan, sink,
                                  base=_arm_cfg(arm), commits={REPO: COMMIT})  # fmt: skip
         if base is not None:
             recorder.base = base

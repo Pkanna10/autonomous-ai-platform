@@ -1299,14 +1299,18 @@ jobs:
           uv run pytest "${paths[@]}" -m live --no-cov -n 0 -rA
 
       # One JSON line per corpus run (CorpusOutcome), kept for the STATUS
-      # ledger and the stage M comparison across runs.
+      # ledger and the stage M comparison across runs; ideas-x2 also writes
+      # each kept diff and the delivered patch to live-patches/ beside it
+      # (x2_patches.PATCH_DIR, U-patch), the artifact rooted at runner.temp.
       # The artifact names the window whose key paid (U-key): W1 or W2.
       - name: Upload live corpus results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: live-results-${{ inputs.key_slot == '2' && 'W2' || 'W1' }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/live-results.jsonl
+          path: |
+            ${{ runner.temp }}/live-results.jsonl
+            ${{ runner.temp }}/live-patches/
           if-no-files-found: ignore
           retention-days: 30
 
