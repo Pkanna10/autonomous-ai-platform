@@ -39,9 +39,11 @@ import pytest
 from autonomous_ai_agents.clients.structured import Fence
 from autonomous_ai_agents.clients.transport import AnthropicTransport
 from autonomous_ai_agents.common.config import (
+    FABLE_LEAP_FALLBACKS,
     IDEA_VIEWS,
     Role,
     Settings,
+    leap_shape,
     role_chain,
     settings,
 )
@@ -107,11 +109,13 @@ LIVE_DIR = TESTS_DIR / "live"
 SHA = "0123456789abcdef0123456789abcdef01234567"
 # The E1 row (spec amendment section 6), per pipeline call and per library:
 # the spec's E1 row re-derived by E0b (D61) on its measured prompt maxima.
-E1_ROW = {"B": 1.99, "C": 2.475, "D": 4.53, "E": 1.04525, "auditor": 0.69}
-# The row's caps, independent of the needs (E1's whole plan needs 8 x 11.40).
-E1_CAP = 92.0  # the E1 cap re-derived from E0b, recorded in STATUS D61 (was 90)
+# Arm D since the Fable leap: its leap at 32,000 tokens on Fable 5.1 and Opus
+# 4.8 (2 x (38,000 x 12.50 + 32,000 x 50) / 1e6 = 4.15), was E1's 1.475.
+E1_ROW = {"B": 1.99, "C": 2.475, "D": 7.205, "E": 1.04525, "auditor": 0.69}
+# The row's caps, independent of the needs (E1's whole plan needs 8 x 14.10).
+E1_CAP = 113.0  # D61's 92 (was 90), re-derived for arm D's Fable leap
 E1B_CAP = 20.0
-TABLE = {"default": 46, "count": 9, "C-low,C-high": 20}  # the ci.yml needs
+TABLE = {"default": 57, "count": 9, "C-low,C-high": 20}  # the ci.yml needs
 # E1 runs four libraries a dispatch (4 x 56 = 224 of the 240-minute job)
 E1_DISPATCH = "pyparsing,tomli,mistune,idna"
 
@@ -184,7 +188,7 @@ def test_the_three_dispatches_need_their_table_entries_within_the_row_caps() -> 
     per_library = ceil_usd(
         OSS_PHASE_ONE_WORST_USD + sum(ip.arm_usd(a) for a in ip.E1_ARMS) + ip.AUDIT_USD
     )
-    assert e1.library_cap() == whole.library_cap() == per_library == 11.40
+    assert e1.library_cap() == whole.library_cap() == per_library == 14.10
     assert ip.probe_need(whole) == pytest.approx(8 * per_library)
     assert ip.probe_need(whole) <= E1_CAP
     assert ip.probe_need(e1) == pytest.approx(4 * per_library)
@@ -250,30 +254,33 @@ def test_knobs_parse_strictly_before_any_spend(env: dict[str, str], match: str) 
 def test_a_plan_past_the_jobs_minutes_is_refused_before_any_spend() -> None:
     """Re-pinned from E1's recorded seconds (Vd): each stage takes twice its
     slowest request's E1 maximum, a parallel stage the slowest of each round
-    of ``IDEAS_LANE_WORKERS``; phase 1 ``PHASE_ONE_MINUTES``. E1 41 minutes
-    a library (phase 1 2, then A 23.5 s, B 360.4, C 421.5, D 841.5, E 464.9,
-    the auditor 217.2: 38.8 minutes, rounded up), so five fit a 240-minute
-    dispatch (205), six are refused (246); E0b's ten at 4, E1b's four at 16
-    on recorded facts."""
-    assert ip.ProbePlan(ip.E1_ARMS, _repos(("tomli",))).library_minutes() == 41
+    of ``IDEAS_LANE_WORKERS``; phase 1 ``PHASE_ONE_MINUTES``. E1 49 minutes
+    a library (phase 1 2, then A 23.5 s, B 360.4, C 421.5, D 1323.9 with
+    its Fable leap at its 951 s timeout, E 464.9, the auditor 217.2: 46.9
+    minutes, rounded up), so four fit a 240-minute dispatch (196), five are
+    refused (245); E0b's ten at 4, E1b's four at 16 on recorded facts."""
+    assert ip.ProbePlan(ip.E1_ARMS, _repos(("tomli",))).library_minutes() == 49
     assert ip.JOB_MINUTES == 240 and ip.TIME_MARGIN == 2
     assert ip.PHASE_ONE_MINUTES == 2
     seconds = [ip.arm_seconds(a) for a in ip.E1_ARMS]
-    assert seconds == pytest.approx([23.544, 360.362, 421.46, 841.504, 464.876])
+    assert seconds == pytest.approx([23.544, 360.362, 421.46, 1323.938, 464.876])
+    lane = ip.request_seconds("lane", SONNET)  # S1, four lenses, then the leap's round
+    d = 2 * lane + 951.0 + ip.request_seconds("reviewer", FABLE)
+    assert seconds[3] == pytest.approx(d)
     assert ip.arm_seconds(ip.ARM_COUNT) == pytest.approx(ip.COUNT_SENT * 47.732)
     assert ip.AUDIT_SECONDS == pytest.approx(217.226)
-    assert ip.ProbePlan(ip.E1_ARMS, _repos(("tomli",))).library_minutes() == 41
-    assert ip.probe_plan({ip.REPOS_ENV: E1_DISPATCH}).minutes() == 4 * 41 == 164
+    assert ip.ProbePlan(ip.E1_ARMS, _repos(("tomli",))).library_minutes() == 49
+    assert ip.probe_plan({ip.REPOS_ENV: E1_DISPATCH}).minutes() == 4 * 49 == 196
     assert ip.probe_plan({ip.ARMS_ENV: "count"}).minutes() == 10 * 4
     e1b = ip.ProbePlan((ip.ARM_C_LOW, ip.ARM_C_HIGH), _repos(ip.E1B_REPOS), Path("f"))
     assert e1b.library_minutes() == 16 and e1b.minutes() == 64
-    six = ",".join(ip.E1_REPOS[:6])
-    for env in ({}, {ip.REPOS_ENV: six}):
+    five = ",".join(ip.E1_REPOS[:5])
+    for env in ({}, {ip.REPOS_ENV: five}):
         with pytest.raises(ValueError, match="past the 240-minute job"):
             ip.probe_plan(env)
-    assert ip.ProbePlan(ip.E1_ARMS, _repos(ip.E1_REPOS[:5])).minutes() == 205
-    assert ip.ProbePlan(ip.E1_ARMS, _repos(ip.E1_REPOS[:6])).minutes() == 246
-    assert ip.probe_plan({ip.REPOS_ENV: "idna"}).minutes() == 41
+    assert ip.ProbePlan(ip.E1_ARMS, _repos(ip.E1_REPOS[:4])).minutes() == 196
+    assert ip.ProbePlan(ip.E1_ARMS, _repos(ip.E1_REPOS[:5])).minutes() == 245
+    assert ip.probe_plan({ip.REPOS_ENV: "idna"}).minutes() == 49
 
 
 E1_RESULTS = TESTS_DIR.parents[2] / ".claude/handoff/step3/idea-lab/e1"
@@ -378,7 +385,7 @@ D58: dict[str, dict[Role, tuple[str, str, int]]] = {  # per arm and role
           "reviewer": (SONNET, "high", 16_000)},
     "C": {"lane": (SONNET, "medium", 12_000), "leap": (OPUS, "high", 12_000),
           "reviewer": (OPUS, "high", 16_000)},
-    "D": {"lane": (SONNET, "medium", 12_000), "leap": (FABLE, "high", 20_000),
+    "D": {"lane": (SONNET, "medium", 12_000), "leap": (FABLE, "high", 32_000),
           "reviewer": (FABLE, "high", 20_000)},
     "E": {"lane": (HAIKU, "medium", 12_000), "leap": (OPUS, "high", 12_000),
           "reviewer": (OPUS, "high", 16_000)},
@@ -399,7 +406,14 @@ def test_each_arm_runs_its_roles_on_d58s_models_and_efforts(arm: ip.IdeaArm) -> 
     assert cfg.ALLOW_RETENTION_MODELS is (arm is ip.ARM_D)
     for role, (model, effort, tokens) in D58.get(arm.key, {}).items():
         prefix = TOKENS[role]
-        assert role_chain(cfg, role) == (model,), (arm.key, role)
+        # A Fable leap (arm D) falls back to Opus 4.8 and sends leap_shape's
+        # effort and output cap (its IDEAS_LEAP_* settings are not read).
+        fallbacks = FABLE_LEAP_FALLBACKS if (role, model) == ("leap", FABLE) else ()
+        assert role_chain(cfg, role) == (model, *fallbacks), (arm.key, role)
+        if role == "leap":
+            shape = leap_shape(cfg)
+            assert (shape.effort, shape.max_tokens) == (effort, tokens), arm.key
+            continue
         assert getattr(cfg, f"{prefix}_EFFORT") == effort, (arm.key, role)
         assert getattr(cfg, f"{prefix}_MAX_TOKENS") == tokens, (arm.key, role)
     if arm is ip.ARM_A:
@@ -1269,9 +1283,9 @@ def _dispatch(
 @pytest.mark.parametrize(
     ("arms", "repos", "need", "exported", "facts"),
     [
-        (None, E1_DISPATCH, "46", "A,B,C,D,E", "unset"),
-        ("A,B,C,D,E", E1_DISPATCH, "46", "A,B,C,D,E", "unset"),
-        ("A,B,C,D,E", "idna", "12", "A,B,C,D,E", "unset"),
+        (None, E1_DISPATCH, "57", "A,B,C,D,E", "unset"),
+        ("A,B,C,D,E", E1_DISPATCH, "57", "A,B,C,D,E", "unset"),
+        ("A,B,C,D,E", "idna", "15", "A,B,C,D,E", "unset"),
         ("count", None, "9", "count", "unset"),
         ("count", "", "9", "count", "unset"),
         ("count", "tomli,idna,mistune", "3", "count", "unset"),
@@ -1341,7 +1355,7 @@ def test_the_ideas_inputs_are_strict_and_for_the_probe_only(tmp_path: Path) -> N
         assert (code, calls) == (1, []) and "ideas_repos must be" in output, bad
     for index, unset in enumerate((None, "")):  # E1's eight: the module refuses
         code, output, calls = _dispatch(
-            tmp_path / f"e1-{index}", None, "46", repos=unset
+            tmp_path / f"e1-{index}", None, "57", repos=unset
         )
         assert code == 0 and calls[1] == "A,B,C,D,E" and calls[5] == "unset", output
         with pytest.raises(ValueError, match="past the 240-minute job"):
@@ -1365,7 +1379,7 @@ def test_the_suite_row_timeout_noise_rule_and_stage_a_ignore() -> None:
     assert "ideas-probe" in inputs
     cap_help = _ci_block("      suite_cap_usd:", "\n\n")
     assert (
-        "ideas-probe 46 (E1, four libraries of ideas_repos, one 12; "
+        "ideas-probe 57 (E1, four libraries of ideas_repos, one 15; "
         "ideas_arms count 9, C-low,C-high 20; X1 51 for three libraries of "
         "ideas_repos, under the 80 USD fuse, one 17; X1-1 33 for the four of "
         "run 1, one 9)" in cap_help

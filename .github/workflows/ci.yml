@@ -79,7 +79,7 @@ on:
         options: [default, claude-sonnet-5-5]
         default: default
       suite_cap_usd:
-        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75 (corpus_select controls 15), hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 112, sweep-fable 41, sweep-record 24, ab 140, ab-v2-p 59, ab-v2 68 (L5b; ab_arms A, L5a, 17), escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, evolve-p 56, heal-hard 8, build 27, grader 2, upstream-verify 0 (no request, but the cap must be above 0), upstream 50, agent-probes 1, heal-agent 8, research-agent 8, watch 2, watch-cleanup 2, ideas-probe 46 (E1, four libraries of ideas_repos, one 12; ideas_arms count 9, C-low,C-high 20; X1 51 for three libraries of ideas_repos, under the 80 USD fuse, one 17; X1-1 33 for the four of run 1, one 9), ideas-views 0 (no request, but the cap must be above 0), ideas-marker 24 (Vb: 48 rank sets x Opus 5.5 and Opus 5), ideas-validate 8 (Vc: the Sonnet 5 and Fable 5 smoke requests, 17 Opus 5 label requests), ideas-slice 75 (Ve: two libraries of slice_repos x (4 configurations x 3 trials x 2.50 + the markers 2.00 + the pooled tournament 5.45), one 38; under the 80 USD fuse), ideas-pool 22 (V-O40: the pooled tournament on more_itertools, mistune, markdown and idna, 4 x 5.45), ideas-reaudit 3 (V-reaudit: the pooled re-audit of the X1-1 re-run, 4 libraries x one Opus 5.5 auditor request at its 0.70 cap; run 1 measured 1.445 for four), ideas-picks 8 (V-picks, O48: the seven would-try ideas of the blind reader, one engine loop per library, each loop at its measured spend plus the reservation of its dearest request: sqlparse 1.60, more_itertools 2.15, mistune 2.15, tomli 1.65; need 7.55 under the owner cap of 8), ideas-x2 38 (X2a: x2_dispatch one arm on four libraries, 4 runs x ideas_x2.run_cap, 9.35 for X2-0 and its twin, 9.45 for X2-V (X2-D 12.90 a run, two a dispatch, 26), each run capped by the engine reservation rules at X1 measured rates with round 1 trialling the whole idea result; one run 10; under the 80 USD fuse)'
+        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75 (corpus_select controls 15), hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 112, sweep-fable 41, sweep-record 24, ab 140, ab-v2-p 59, ab-v2 68 (L5b; ab_arms A, L5a, 17), escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, evolve-p 56, heal-hard 8, build 27, grader 2, upstream-verify 0 (no request, but the cap must be above 0), upstream 50, agent-probes 1, heal-agent 8, research-agent 8, watch 2, watch-cleanup 2, ideas-probe 57 (E1, four libraries of ideas_repos, one 15; ideas_arms count 9, C-low,C-high 20; X1 51 for three libraries of ideas_repos, under the 80 USD fuse, one 17; X1-1 33 for the four of run 1, one 9), ideas-views 0 (no request, but the cap must be above 0), ideas-marker 24 (Vb: 48 rank sets x Opus 5.5 and Opus 5), ideas-validate 8 (Vc: the Sonnet 5 and Fable 5 smoke requests, 17 Opus 5 label requests), ideas-slice 75 (Ve: two libraries of slice_repos x (4 configurations x 3 trials x 2.50 + the markers 2.00 + the pooled tournament 5.45), one 38; under the 80 USD fuse), ideas-pool 22 (V-O40: the pooled tournament on more_itertools, mistune, markdown and idna, 4 x 5.45), ideas-reaudit 3 (V-reaudit: the pooled re-audit of the X1-1 re-run, 4 libraries x one Opus 5.5 auditor request at its 0.70 cap; run 1 measured 1.445 for four), ideas-picks 8 (V-picks, O48: the seven would-try ideas of the blind reader, one engine loop per library, each loop at its measured spend plus the reservation of its dearest request: sqlparse 1.60, more_itertools 2.15, mistune 2.15, tomli 1.65; need 7.55 under the owner cap of 8), ideas-x2 38 (X2a: x2_dispatch one arm on four libraries, 4 runs x ideas_x2.run_cap, 9.35 for X2-0 and its twin, 9.45 for X2-V (X2-D 12.90 a run, two a dispatch, 26), each run capped by the engine reservation rules at X1 measured rates with round 1 trialling the whole idea result; one run 10; under the 80 USD fuse)'
         type: string
         default: '12'
       key_slot:
@@ -112,12 +112,12 @@ on:
         options: [all, controls]
         default: all
       ideas_arms:
-        description: 'ideas-probe only: LIVE_IDEAS_ARMS, the arms each library runs (A,B,C,D,E: E1 with the auditor, four of its 8 libraries a dispatch named in ideas_repos, need 11.40 a library, 46 for four; count: E0b on the 10 OSS libraries, need 9; C-low,C-high: E1b on the facts E1 recorded, need 20; X1: arm A and X1-0 to X1-4 with the auditor on the facts E1 recorded and the views Va recorded, three of the 8 libraries a dispatch named in ideas_repos (four pass the job minutes since the 32,000-token X1-1 lanes of O42), need 16.95 a library, 51 for three; X1-1: the O42 re-run, arm A and X1-1 (its lanes at 32,000 output tokens) with the auditor on the same facts and views, the four libraries of run 1 unless ideas_repos names others, need 8.20 a library, 33 for four)'
+        description: 'ideas-probe only: LIVE_IDEAS_ARMS, the arms each library runs (A,B,C,D,E: E1 with the auditor, four of its 8 libraries a dispatch named in ideas_repos, need 14.10 a library, 57 for four; count: E0b on the 10 OSS libraries, need 9; C-low,C-high: E1b on the facts E1 recorded, need 20; X1: arm A and X1-0 to X1-4 with the auditor on the facts E1 recorded and the views Va recorded, three of the 8 libraries a dispatch named in ideas_repos (four pass the job minutes since the 32,000-token X1-1 lanes of O42), need 16.95 a library, 51 for three; X1-1: the O42 re-run, arm A and X1-1 (its lanes at 32,000 output tokens) with the auditor on the same facts and views, the four libraries of run 1 unless ideas_repos names others, need 8.20 a library, 33 for four)'
         type: choice
         options: ['A,B,C,D,E', count, 'C-low,C-high', X1, X1-1]
         default: 'A,B,C,D,E'
       ideas_repos:
-        description: 'ideas-probe only, and required for E1 and X1: LIVE_IDEAS_REPOS, comma-separated OSS library names (E1 at most four a dispatch, e.g. pyparsing,tomli,mistune,idna; X1 at most three, e.g. mistune,sqlparse,markdown then idna; X1-1 at most four, empty for the four of run 1, more_itertools,pyparsing,tomli,sortedcontainers; empty: the libraries of the arms); the need is the libraries x 11.40 (E1), 0.85 (count), 4.95 (C-low,C-high), 16.95 (X1) or 8.20 (X1-1), rounded up'
+        description: 'ideas-probe only, and required for E1 and X1: LIVE_IDEAS_REPOS, comma-separated OSS library names (E1 at most four a dispatch, e.g. pyparsing,tomli,mistune,idna; X1 at most three, e.g. mistune,sqlparse,markdown then idna; X1-1 at most four, empty for the four of run 1, more_itertools,pyparsing,tomli,sortedcontainers; empty: the libraries of the arms); the need is the libraries x 14.10 (E1), 0.85 (count), 4.95 (C-low,C-high), 16.95 (X1) or 8.20 (X1-1), rounded up'
         type: string
         default: ''
       ab_arms:
@@ -656,7 +656,8 @@ jobs:
     # request twice E1's slowest of its role and model (ideas_probe.E1_SECONDS,
     # re-pinned from E1's recorded seconds; a parallel stage the slowest of
     # each round of four workers) and 2 minutes for phase 1 (E0b: a
-    # count-mode library about 47 s): E1 41 a library (164 for four); X1 74
+    # count-mode library about 47 s): E1 49 a library (196 for four; arm D's
+    # Fable leap may run to its 951 s timeout); X1 74
     # to 76 a library on recorded facts (O42: an X1-1 lane at 32,000 tokens
     # takes twice its model's slowest X1 run-1 rate, over any reply of 1,000
     # tokens or more, over the cap: Fable 5.1 951 s, Fable 5 924 s, Opus 5.5
@@ -867,9 +868,10 @@ jobs:
           # watch 1.85 (A3: one hosted run's worst case, the 25-cent session
           # budget + one maximal Haiku 5.5 request + 22 watched minutes, 1.60,
           # and a listing's triage, 0.25); watch-cleanup 1.60 (one session no
-          # ledger saw); ideas-probe E1 45.6 (4 libraries a dispatch x 11.40,
+          # ledger saw); ideas-probe E1 56.4 (4 libraries a dispatch x 14.10,
           # on D55's bounds re-derived from E0b's counts: phase 1 0.38, arms A
-          # 0.27, B 1.99, C 2.475, D 4.53, E 1.045, the auditor 0.69), E0b
+          # 0.27, B 1.99, C 2.475, D 7.205 (its Fable leap at 32,000 tokens
+          # with Opus 4.8 as fallback), E 1.045, the auditor 0.69), E0b
           # count 8.5 (10 x 0.85, 0.38 + 2 x 0.215), E1b 19.8 (4 x 2 x 2.475
           # on recorded facts), X1 50.85 (Vd: 3 libraries a dispatch x 16.95 on
           # E1's facts: A 0.27, X1-0 2.475, X1-1 7.216 with each lens on its
@@ -940,7 +942,7 @@ jobs:
             research-agent) paths=(tests/live/experiments/test_research_agent_live.py); need=8 ;;
             watch) paths=(tests/live/experiments/test_watch_managed_live.py); need=2 ;;
             watch-cleanup) paths=(tests/live/experiments/test_watch_managed_live.py); need=2 ;;
-            ideas-probe) paths=(tests/live/test_ideas_probe_live.py); need=46 ;;
+            ideas-probe) paths=(tests/live/test_ideas_probe_live.py); need=57 ;;
             ideas-views) paths=(tests/live/test_ideas_views_live.py); need=0 ;;
             ideas-marker) paths=(tests/live/test_ideas_marker_live.py); need=24 ;;
             ideas-validate) paths=(tests/live/test_ideas_validate_live.py); need=8 ;;
@@ -1018,7 +1020,7 @@ jobs:
           ideas_repos="${INPUT_IDEAS_REPOS-}"
           if [ "${INPUT_SUITE}" = ideas-probe ]; then
             case "${ideas_arms}" in
-              A,B,C,D,E) cents=1140 ;;
+              A,B,C,D,E) cents=1410 ;;
               count) cents=85; need=9 ;;
               C-low,C-high)
                 cents=495

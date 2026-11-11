@@ -275,15 +275,8 @@ def seeded_stages(cfg: Settings) -> tuple[float, float, float]:
     one, so an upper bound) and the reviewer."""
     seeded = cfg.model_copy(update={"IDEAS_SEQUENTIAL_LANES": True})
 
-    def one(lane: Lane) -> float:
-        out = (
-            seeded.IDEAS_LEAP_MAX_TOKENS
-            if lane is Lane.leap
-            else seeded.IDEAS_LANE_MAX_TOKENS
-        )
-        return ip.request_usd(
-            ip.lane_bound(seeded, lane), out, lane_chain(seeded, lane)[0]
-        )
+    def one(lane: Lane) -> float:  # the leap on ``leap_shape`` and its chain
+        return ip.lane_usd(seeded, lane)
 
     bound = (
         ip.VIEW_REVIEW_PROMPT_BOUND if cfg.IDEAS_LANE_VIEWS else ip.REVIEW_PROMPT_BOUND

@@ -8,6 +8,7 @@ rather than in the middle of a run.
 
 import os
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal, Self, get_args
@@ -58,9 +59,11 @@ _ALL: Final = frozenset(_LEVELS)
 _NO_XHIGH: Final = _ALL - {"xhigh"}
 
 # The effort page (platform.claude.com/docs/en/build-with-claude/effort, read
-# 2026-10-23): its supported-model list and the "Effort levels" table. max:
-# every listed model but Opus 4.5; xhigh: Fable 5.1 / 5, Mythos 5.1 / 5, Opus
-# 5.5 / 5 / 4.8 / 4.7, Sonnet 5.5 / 5 and Haiku 5.5 ("Not every model that
+# 2026-10-23; Fable 5.2 read 2026-11-11: on the supported-model list and in
+# both the max and xhigh rows, and "Claude Fable 5.2 supports all five effort
+# levels"): its supported-model list and the "Effort levels" table. max:
+# every listed model but Opus 4.5; xhigh: Fable 5.2 / 5.1 / 5, Mythos 5.1 /
+# 5, Opus 5.5 / 5 / 4.8 / 4.7, Sonnet 5.5 / 5 and Haiku 5.5 ("Not every model that
 # supports max supports xhigh"). The per-model sections say Opus 5.5, Sonnet
 # 5.5, Haiku 5.5 and Fable 5.1 "support all five effort levels". Opus 4.5
 # (claude-opus-4-5-20251101) is on the page's supported-model list but in
@@ -72,6 +75,7 @@ EFFORT_LEVELS: Final[Mapping[str, frozenset[Effort]]] = MappingProxyType(
     {
         **dict.fromkeys(
             (
+                "claude-fable-5-2",
                 "claude-fable-5-1",
                 "claude-mythos-5-1",
                 "claude-fable-5",
@@ -116,7 +120,9 @@ _MIB = 1024 * _KIB
 # 5.1's 0.025x); Haiku 4.5 $1/$5, writes $1.25, hits $0.10 (1-hour writes
 # $2, not stored: only 5-minute breakpoints are sent). None of the three has
 # a long-context tier. Haiku 4.5 is priced only: its request shape is
-# deferred (O31, ``DEFERRED_SHAPE_MODELS``).
+# deferred (O31, ``DEFERRED_SHAPE_MODELS``). Fable 5.2 from the pricing page,
+# read 2026-11-11 ("Model pricing"): $8/$40, 5-minute writes $10, hits $0.20
+# (footnote 1: 0.025x input, as Fable 5.1's), no long-context tier.
 _DEFAULT_PRICING: dict[str, ModelPrice] = {
     "claude-opus-5-5": ModelPrice(
         input=4.0, output=20.0, cache_write=5.0, cache_read=0.20
@@ -129,6 +135,9 @@ _DEFAULT_PRICING: dict[str, ModelPrice] = {
     ),
     "claude-sonnet-5-5": ModelPrice(
         input=2.0, output=10.0, cache_write=2.5, cache_read=0.10
+    ),
+    "claude-fable-5-2": ModelPrice(
+        input=8.0, output=40.0, cache_write=10.0, cache_read=0.20
     ),
     "claude-fable-5-1": ModelPrice(
         input=10.0, output=50.0, cache_write=12.5, cache_read=0.25
@@ -170,11 +179,35 @@ PORTFOLIO_ROUNDS_MAX: Final = 3
 """Most rounds a keep waits for before it ends exploration (D54): the default
 ``MAX_TRIAL_ROUNDS``, past which rule 4 of the router ends the run anyway."""
 RETENTION_REQUIRED_MODELS: Final = frozenset(
-    {"claude-fable-5-1", "claude-fable-5", "claude-mythos-5-1", "claude-mythos-5"}
+    {
+        "claude-fable-5-2",
+        "claude-fable-5-1",
+        "claude-fable-5",
+        "claude-mythos-5-2",
+        "claude-mythos-5-1",
+        "claude-mythos-5",
+    }
 )
 """Models whose use requires 30-day data retention (D63; the advisor-tool docs
-name all four): refused in every role that sends repository text unless
+name the 5 and 5.1 four, the claude-api skill's Fable 5.2 section the 5.2
+two): refused in every role that sends repository text unless
 ``ALLOW_RETENTION_MODELS`` is set."""
+FABLE_LEAP_MODELS: Final = frozenset(
+    {"claude-fable-5", "claude-fable-5-1", "claude-fable-5-2"}
+)
+"""Leap models that take the Fable leap (``leap_shape``, ``role_chain``)."""
+FABLE_LEAP_FALLBACKS: Final = ("claude-opus-4-8",)
+"""A Fable leap's server-side fallbacks, sent as the explicit array: a
+refusal re-runs the leap on Opus 4.8, which the price, effort and retention
+checks cover as part of the leap's chain."""
+FABLE_LEAP_EFFORT: Final[Effort] = "high"
+"""A Fable leap's effort, always sent (the effort page: start Fable at high)."""
+FABLE_LEAP_MAX_TOKENS: Final = 32_000
+"""A Fable leap's output cap: O42's 32,000, the cap X1-1's lanes ran at."""
+FABLE_LEAP_TIMEOUT_S: Final = 951.0
+"""A Fable leap's least request timeout: X1-1's (``tests/live/ideas_probe.py``
+``X1_1_TIMEOUT_S``, pinned equal by a test), on the leap's settings copy
+only (``role_settings``), never the run's; a longer ``LLM_TIMEOUT_S`` stays."""
 DEFERRED_SHAPE_MODELS: Final = frozenset({"claude-haiku-4-5"})
 """Priced models whose request shape is not built (O31): Haiku 4.5 takes no
 effort and wants ``thinking: {type: "enabled", budget_tokens: N}``. Refused
@@ -345,6 +378,8 @@ class Settings(BaseSettings):
     birth, parked for a human, never trialled, delivered or counted)."""
     IDEAS_LANE_WORKERS: int = Field(default=4, ge=1, le=8)
     IDEAS_LEAP_MODEL: str = "claude-opus-5-5"
+    """A Fable (``FABLE_LEAP_MODELS``) takes the Fable leap: Opus 4.8 as its
+    fallback and a fixed shape (``leap_shape``), whatever the next two say."""
     IDEAS_LEAP_EFFORT: Effort | None = "high"
     IDEAS_LEAP_MAX_TOKENS: int = Field(default=12000, ge=1)
     IDEAS_LEAP_N: int = Field(default=3, ge=0, le=5)
@@ -776,7 +811,9 @@ class Settings(BaseSettings):
             ("IDEAS_REVIEWER_EFFORT", "reviewer"),
         )
         for key, role in keys:
-            level: Effort | None = getattr(self, key)
+            level: Effort | None = (
+                leap_shape(self).effort if role == "leap" else getattr(self, key)
+            )
             serving = lane_models(self) if role == "lane" else role_chain(self, role)
             for model in dict.fromkeys(serving) if level is not None else ():
                 accepted = EFFORT_LEVELS.get(model)
@@ -864,7 +901,8 @@ def role_chain(cfg: Settings, role: Role) -> tuple[str, ...]:
 
     The engine (and the editor while ``EDITOR_MODEL`` is unset) keeps
     ``cost.chain``'s: ``ENGINE_MODEL`` plus ``ENGINE_FALLBACK_MODELS`` when
-    ``ENGINE_FALLBACKS`` is on. Every other role runs its model alone.
+    ``ENGINE_FALLBACKS`` is on. A Fable leap falls back to
+    ``FABLE_LEAP_FALLBACKS``. Every other role runs its model alone.
     """
     model = {
         "engine": None,
@@ -875,11 +913,35 @@ def role_chain(cfg: Settings, role: Role) -> tuple[str, ...]:
         "leap": cfg.IDEAS_LEAP_MODEL,
         "reviewer": cfg.IDEAS_REVIEWER_MODEL,
     }[role]
+    if role == "leap" and model in FABLE_LEAP_MODELS:
+        return (cfg.IDEAS_LEAP_MODEL, *FABLE_LEAP_FALLBACKS)
     if model is not None:
         return (model,)
     if cfg.ENGINE_FALLBACKS:
         return (cfg.ENGINE_MODEL, *cfg.ENGINE_FALLBACK_MODELS)
     return (cfg.ENGINE_MODEL,)
+
+
+@dataclass(frozen=True)
+class LeapShape:
+    """What the leap request sends: its effort, output cap and timeout
+    (``None``: the transport's ``LLM_TIMEOUT_S``)."""
+
+    effort: Effort | None
+    max_tokens: int
+    timeout_s: float | None
+
+
+def leap_shape(cfg: Settings) -> LeapShape:
+    """The one source of what the leap request sends (the pipeline, the leap's
+    settings copy, the validators and every static cap read it): a Fable
+    leap's fixed shape (effort ``high`` sent, 32,000 output tokens, X1-1's
+    timeout or the run's, the longer); any other leap's ``IDEAS_LEAP_EFFORT``
+    and ``IDEAS_LEAP_MAX_TOKENS`` on the run's timeout."""
+    if cfg.IDEAS_LEAP_MODEL in FABLE_LEAP_MODELS:
+        timeout = max(cfg.LLM_TIMEOUT_S, FABLE_LEAP_TIMEOUT_S)
+        return LeapShape(FABLE_LEAP_EFFORT, FABLE_LEAP_MAX_TOKENS, timeout)
+    return LeapShape(cfg.IDEAS_LEAP_EFFORT, cfg.IDEAS_LEAP_MAX_TOKENS, None)
 
 
 def lane_chain(cfg: Settings, lane: Lane) -> tuple[str, ...]:
@@ -916,7 +978,9 @@ def role_settings(base: Settings, role: Role, **update: object) -> Settings:
     Promoted from ``tests/live/discovery.py``'s ``model_settings``: a role
     with its own model gets it as ``ENGINE_MODEL`` with fallbacks off, and the
     efforts of the other roles are cleared so they are not re-checked against
-    a model they never run on; then ``update`` applies. So
+    a model they never run on (a role whose chain has fallbacks, the Fable
+    leap, sends them, and that leap gets ``leap_shape``'s timeout); then
+    ``update`` applies. So
     ``cost.chain(role_settings(base, role)) == role_chain(base, role)``, and
     a transport built from the copy serves that role. ``base`` is unchanged.
     """
@@ -925,11 +989,16 @@ def role_settings(base: Settings, role: Role, **update: object) -> Settings:
     if model != role_chain(base, "engine"):
         changes = {
             "ENGINE_MODEL": model[0],
-            "ENGINE_FALLBACKS": False,
+            "ENGINE_FALLBACKS": len(model) > 1,
             "EDITOR_MODEL": None,
             "UNDERSTAND_EFFORT": None,
             "EDITOR_EFFORT": base.EDITOR_EFFORT if role == "editor" else None,
         }
+        if len(model) > 1:  # the Fable leap's fallback
+            changes["ENGINE_FALLBACK_MODELS"] = model[1:]
+    timeout = leap_shape(base).timeout_s if role == "leap" else None
+    if timeout is not None:
+        changes["LLM_TIMEOUT_S"] = timeout
     copy = base.model_copy(update={**changes, **update})
     return type(base).model_validate(copy.model_dump())
 

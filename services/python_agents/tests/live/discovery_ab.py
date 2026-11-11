@@ -79,6 +79,7 @@ from autonomous_ai_agents.clients.transport import LLMTransport
 from autonomous_ai_agents.common.config import (
     PIPELINE_ROLES,
     Settings,
+    leap_shape,
     role_chain,
     settings,
 )
@@ -198,7 +199,7 @@ def pipeline_worst_usd(cfg: Settings) -> float:
     lane role, the leap (``IDEAS_LEAP_N``) and the reviewer (``IDEAS_REVIEW``)."""
     bound = IDEAS_LANE_PROMPT_BOUND
     lane = chain_worst_usd(bound, cfg.IDEAS_LANE_MAX_TOKENS, role_chain(cfg, "lane"))
-    leap = chain_worst_usd(bound, cfg.IDEAS_LEAP_MAX_TOKENS, role_chain(cfg, "leap"))
+    leap = chain_worst_usd(bound, leap_shape(cfg).max_tokens, role_chain(cfg, "leap"))
     review = chain_worst_usd(
         IDEAS_REVIEW_PROMPT_BOUND,
         cfg.IDEAS_REVIEWER_MAX_TOKENS,

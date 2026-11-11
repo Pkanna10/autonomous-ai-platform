@@ -123,6 +123,7 @@ from autonomous_ai_agents.common.config import (
     IdeaView,
     Role,
     Settings,
+    leap_shape,
     role_chain,
     settings,
 )
@@ -331,9 +332,10 @@ class IdeaPipelineGenerator:
         fallback: HypothesisGenerator | None = None,
         view_builder: ViewBuilder = build_view,
     ) -> None:
+        self._leap = leap_shape(config)  # a Fable leap's fixed shape
         efforts = {
             "lane": config.IDEAS_LANE_EFFORT,
-            "leap": config.IDEAS_LEAP_EFFORT,
+            "leap": self._leap.effort,
             "reviewer": config.IDEAS_REVIEWER_EFFORT,
         }
         self._transports: dict[Role, LLMTransport] = {}
@@ -772,7 +774,7 @@ class IdeaPipelineGenerator:
             lane, system=c.research.system, instruction=instruction,
             prefix=prefix, shared=view is None or view.shared,
             schema=IDEAS_SCHEMA, effort=self._efforts[role],
-            max_tokens=self._cfg.IDEAS_LEAP_MAX_TOKENS if leap
+            max_tokens=self._leap.max_tokens if leap
             else self._cfg.IDEAS_LANE_MAX_TOKENS,
         )  # fmt: skip
         job = self._job(lane.value, transport, request)

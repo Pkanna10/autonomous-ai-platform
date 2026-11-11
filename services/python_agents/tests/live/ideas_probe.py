@@ -42,7 +42,8 @@ nearest measured request): a request takes ``TIME_MARGIN`` times that, a
 parallel stage the slowest of each round of ``IDEAS_LANE_WORKERS`` (one lane
 a round with ``IDEAS_SEQUENTIAL_LANES``, G4), phase 1 ``PHASE_ONE_MINUTES``
 (E0b: a count-mode library about 47 s); a plan past ci.yml's ``JOB_MINUTES``
-is refused: E1 41 minutes a library, X1 74 to 76 (O42: a lane past E1's
+is refused: E1 49 minutes a library (arm D's Fable leap at its 951 s
+timeout), X1 74 to 76 (O42: a lane past E1's
 12,000-token cap takes ``cap_seconds``, the cap at its model's slowest X1
 run-1 rate), so three a dispatch, O42's re-run 47 to 50; any X1 plan at most
 four (``X1_LIBRARIES_A_DISPATCH``). Count mode also counts the reviewer request with its ideas
@@ -51,11 +52,12 @@ bound is for 16 ideas; S1 and one lens give fewer).
 
 Caps: an arm's cap is the sum of its requests' worst cases on D55's bounds,
 re-derived from E0b's counted maxima (D61; the E1 row: B 1.99, C 2.475, D
-4.53, E 1.045, the auditor 0.69; A on the oss-ab suite's measured blind
+7.205 since the Fable leap (E1's 4.53), E 1.045, the auditor 0.69; A on the
+oss-ab suite's measured blind
 bound, 0.27; X1-1 7.216 (O42), X1-2 2.539 and X1-3 2.675 on wider bounds for the
 mechanisms block and the views, X1-4 1.075), count mode's real spend is
 ``COUNT_SENT`` lane requests (0.43, the tap refuses past it); a library's
-run is phase 1, its arms and the auditor, rounded up (E1 11.40, count 0.85,
+run is phase 1, its arms and the auditor, rounded up (E1 14.10, count 0.85,
 C-low/C-high 4.95, X1 16.95 and O42's re-run 8.20 on recorded facts); a plan past
 the 150 USD ceiling is refused in the module fixture. Fable (30-day
 retention) gets ``ALLOW_RETENTION_MODELS`` only in arm D's copy and only for
@@ -114,6 +116,7 @@ from autonomous_ai_agents.common.config import (
     Settings,
     lane_chain,
     lane_settings,
+    leap_shape,
     role_chain,
     role_settings,
     settings,
@@ -318,6 +321,10 @@ ARM_D: Final = IdeaArm(
         ("IDEAS_REVIEWER_MAX_TOKENS", RETENTION_MAX_TOKENS),
     ),
 )
+"""Arm D, E1's Fable 5.1 leap and reviewer. Since the Fable leap
+(``leap_shape``) its leap request is not E1's: 32,000 output tokens (its
+``IDEAS_LEAP_MAX_TOKENS`` is ignored), Opus 4.8 as its server-side fallback
+and a 951 s timeout; its cap and minutes price that request."""
 ARM_E: Final = IdeaArm("E", True, (("IDEAS_LANE_MODEL", HAIKU),))
 ARM_C_LOW: Final = IdeaArm("C-low", True, (("IDEAS_LANE_EFFORT", "low"),), e1=False)
 ARM_C_HIGH: Final = IdeaArm("C-high", True, (("IDEAS_LANE_EFFORT", "high"),), e1=False)
@@ -447,19 +454,20 @@ def lane_bound(cfg: Settings, lane: Lane) -> int:
     return bound
 
 
+def lane_usd(cfg: Settings, lane: Lane) -> float:
+    """D55's worst case of one S1 or S2 request: its bound, its whole chain
+    (the engine's preflight: one attempt per model, dearest rates over the
+    chain) and its output cap, the leap's ``leap_shape``'s (a Fable leap's
+    32,000 on Fable and Opus 4.8)."""
+    out = leap_shape(cfg).max_tokens if lane is Lane.leap else cfg.IDEAS_LANE_MAX_TOKENS
+    chain = lane_chain(cfg, lane)
+    return preflight_estimate(lane_bound(cfg, lane), out, chain, settings.MODEL_PRICING)
+
+
 def pipeline_usd(cfg: Settings) -> float:
     """One pipeline call at its worst: S1, each S2 lane on its own model (G1)
-    and bound, the reviewer (with the views' code, G2)."""
-    lanes = [
-        request_usd(
-            lane_bound(cfg, lane),
-            cfg.IDEAS_LEAP_MAX_TOKENS
-            if lane is Lane.leap
-            else cfg.IDEAS_LANE_MAX_TOKENS,
-            lane_chain(cfg, lane)[0],
-        )  # fmt: skip
-        for lane in (Lane.obvious, *s2_lanes(cfg))
-    ]
+    and bound (``lane_usd``), the reviewer (with the views' code, G2)."""
+    lanes = [lane_usd(cfg, lane) for lane in (Lane.obvious, *s2_lanes(cfg))]
     bound = VIEW_REVIEW_PROMPT_BOUND if cfg.IDEAS_LANE_VIEWS else REVIEW_PROMPT_BOUND
     review = request_usd(bound, cfg.IDEAS_REVIEWER_MAX_TOKENS, cfg.IDEAS_REVIEWER_MODEL)
     return math.fsum((*lanes, review if cfg.IDEAS_REVIEW else 0.0))
@@ -508,8 +516,9 @@ def arm_seconds(
 
     def one(lane: Lane) -> float:
         model = lane_chain(cfg, lane)[0]
-        if lane is Lane.leap:
-            return request_seconds("leap", model)
+        if lane is Lane.leap:  # a Fable leap may run to its timeout (951 s)
+            timeout = leap_shape(cfg).timeout_s
+            return request_seconds("leap", model) if timeout is None else timeout
         cap = cap_seconds(cfg.IDEAS_LANE_MAX_TOKENS, model)
         return max(request_seconds("lane", model), cap)
 

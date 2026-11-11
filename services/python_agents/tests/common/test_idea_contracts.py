@@ -389,11 +389,13 @@ RETENTION_KEYS = [
 
 def test_the_retention_set_is_every_30_day_retention_model() -> None:
     # The advisor-tool docs (2026-10-26) list Fable 5, Fable 5.1, Mythos 5 and
-    # Mythos 5.1 as the models that require 30-day retention; an unpriced one
-    # is refused anyway, but the guard must not depend on that.
+    # Mythos 5.1 as the models that require 30-day retention, the claude-api
+    # skill's Fable 5.2 section Fable 5.2 and Mythos 5.2; an unpriced one is
+    # refused anyway, but the guard must not depend on that.
     assert RETENTION_REQUIRED_MODELS == frozenset(
-        {"claude-fable-5-1", "claude-fable-5", "claude-mythos-5-1", "claude-mythos-5"}
-    )
+        {"claude-fable-5-2", "claude-fable-5-1", "claude-fable-5",
+         "claude-mythos-5-2", "claude-mythos-5-1", "claude-mythos-5"}
+    )  # fmt: skip
     assert FABLE in RETENTION_REQUIRED_MODELS
 
 
