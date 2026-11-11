@@ -1,93 +1,79 @@
 # Project Status - Autonomous AI Platform
 
-**Last Updated:** 2026-11-01
+**Last Updated:** 2026-11-11
 
 ---
 
 ## Current Step
 
-**Build step:** 3 (wired discovery, engine self-retry, review delivery, quality
-check, noise rule, idea pipeline). Waves 1 and 2 are built, live-tested and
-closed out on PR #22 (see "Step 3 Wave 2 summary"); next is the idea lab on
-`claude/step3-idea-lab` (spec `.claude/handoff/step3/spec-idea-lab.md`, revision
-4, approved with changes, O36-O37). Step 2 is merged (PR
-[#12](https://github.com/Pkanna10/autonomous-ai-platform/pull/12)); the Window 0
-live experiments are closed out on PR
-[#21](https://github.com/Pkanna10/autonomous-ai-platform/pull/21). **Branch:**
-`claude/step3-research` (draft PR
-[#22](https://github.com/Pkanna10/autonomous-ai-platform/pull/22)); the spec
-(revision 4, approved by the owner) is `.claude/handoff/step3/spec.md`.
-**Vision:** a self-improving optimization engine that uses research findings and
-novel ideas to provably improve existing code, or build something new and then
-improve it (see `CLAUDE.md`).
+**Build step:** 3, the idea lab and its emergence rounds, now in the **Window 2
+sprint** (O59, owner, 2026-11-11). Steps 0-2 are merged; Step 3's Waves 1-2 are
+closed out on PR #22; the idea lab (spec
+`.claude/handoff/step3/spec-idea-lab.md`, revision 4, O36-O37) runs under the
+emergence charter (O54, O55). **Vision:** a self-improving optimization engine
+that uses research findings and novel ideas to provably improve existing code,
+or build something new and then improve it (see `CLAUDE.md`).
 
-### Resume here (handoff, 2026-10-25)
+### Resume here (handoff, 2026-11-11)
 
-A new session picks up from this section. Everything it needs is in the repo;
-nothing lives only in an old session. The Step 2 spec, Lead notes, research
-notes and Window 0 plan lived in `.claude/handoff/step2/` until the close-out;
-their decisions, accepted trade-offs and verified facts are in "Decisions",
-"Known gaps" and "Next" below, and the files themselves stay readable in git
-history at `5ce95a4` (`git show 5ce95a4:.claude/handoff/step2/spec.md`).
+A new session picks up from this section. Older handoff text is in git history
+(`git show 95eaa84:STATUS.md`).
 
-- **Step 2 is complete**: PR #12 merged into `master` on 2026-10-24 as `311212b`
-  (a merge commit); CI on `master` green (run 40072834645, all 11 jobs). See
-  "Step 2 summary" and the close-out report under it.
-- **Window 0 is closed out** (2026-10-25): every live experiment, its cost,
-  models, tokens and the decision it fed are in "Experiment register (Window 0)"
-  and the ledger under "Live API testing plan"; read the register before
-  planning a live run, so the next one adds to it instead of repeating it.
-- **Step 3, Wave 1 is built and committed** on `claude/step3-research`
-  (2026-10-25; see "Step 3 Wave 1 summary"). The owner approved the spec
-  (revision 4, `.claude/handoff/step3/spec.md`) on 2026-10-24, with the
-  decisions in `.claude/handoff/step3/owner-step3-review.md`. Units and commits:
-  U1 `3ee4e76`, U2 `427fdbe`, U3 `7eaa3b2`, U4 `6342eca`, U5 `b67130a`, U6
-  `183c538`, U7 `806b87d`, U8 `373d4c2`, U9 `753a158`, U10 `04088f7`, U11a
-  `b848717`, U11 `60cee15`, U12 `6b3db0c`, U13 `08ba4ec`, U16 `4ac8798`, U17
-  `34b1360`, U18 `82e93c5`, U19 `1d05562`, U20 `414f03b`, U21 `6ebd118`, U22
-  `65891ea`, U23 `e27aed6`, U24 `1285820`, U25 `ce937d4`, U27 `a78275a` (Lead-
-  assigned, see Lessons); Lead fixes `f1080dc` (macOS interpreters) and
-  `3e04294` (graphwalk size).
-- **E2E done:** U14 (`de34b18`, `tests/e2e/test_step3.py`, E3-A to E3-E, 8
-  tests, about 3.5 min serially; its frame lines are version-independent, the
-  review checked 3.11) and U26 (`1c64bea`, `tests/e2e/test_step3_quality.py`,
-  E3-F to E3-I, 6 tests, about 4 min; E3-I runs on a synthetic clock, so its
-  verdicts are exact). U15's docs are `5acdfeb`; `46aed4b` formats U14's fixture
-  (CI Lint Code was red on `de34b18`: the Lead's gate now also runs prettier).
-- **Live runs so far (2026-10-25, $6.75):** L0 passed (0 of 130 single-look
-  false wins, floors 2.0-5.9 %); L1a (hard, `wired`) 10/10 delivered and 10/10
-  at the reference gain on its re-run, every guard held; L1b (corpus, `wired`)
-  12/12 slowdowns delivered at the reference gain, 0/3 controls; the ledger has
-  the detail. Timeouts re-pinned from them: hard 90, corpus 120 (OSS keeps 300
-  until L2a measures it).
-- **L2a delivered 8 of 20** (`oss`, `wired`, Sonnet low editor; rep 1 2/10, rep
-  2 6/10, 5.94 USD), below W5's 10 of 20: the editor default stays Opus.
-- **L2b delivered 7 of 10** (Opus editor, same rule, 5.46 USD): Opus stays the
-  editor default. Wave 1's live runs are done; next is the Wave 1 report.
-  **Recorded, not resolvable (2026-11-01):** on the L1a re-run (run 40244866489)
-  `eventagg` delivered 30.9 % (one kept idea, "drop the unused f-string id
-  field") while its best trial measured 92.3 % on peak RSS; the first L1a run
-  had kept that streaming idea at 92.3 %. The results row, the job summary and
-  the full job log hold only the kept titles, the delivered and best-trial
-  gains; the per-trial verdicts and the combine summary were never recorded, so
-  whether the confirmation or the combine dropped it cannot be read back. Both
-  stay unverified. The run still met the 30 % reference. Fix for the future: the
-  idea lab's live suite records every trial's verdict and the combine summary
-  (E3-A's test already prints the latter).
-- **Wave 2 is approved** (O6: hard corpus v2, the `ledgerclose` rebuild, the A/B
-  instrument, grader labels, L3-L5). **Wave 3 is held** until Wave 1's live runs
-  report (O6); each of its units has its own gate (spec section 7).
-- **Credit:**
-  - **Window 1:** $200, expires 2026-11-25; plan to have it used by 2026-11-23
-    (the owner's buffer). 21.08 USD is left after emergence round 1's E1 and E2.
-  - **Window 2** (owner, 2026-11-07): a second API key with $200 of fresh
-    credit, going into the GitHub `live` environment secret.
-    - Expiry: not yet given by the owner.
-    - 120 USD is emergence round 2's live ceiling, under the variance rule.
-    - 80 USD is reserved for the ladder (K2's setter or K3).
-    - Before any plan is costed against it, the ideas-validate smoke requests
-      (Sonnet 5, Fable 5) must confirm the organisation serves both models and
-      allows retention.
+- **Branches:**
+  - `master` at `30fdcc4`.
+  - `claude/step3-idea-lab`: the G and V units, X1, X2 and the charter. Draft PR
+    [#45](https://github.com/Pkanna10/autonomous-ai-platform/pull/45) to
+    `master` is green and clean at `1f4d75d` (the first CI run of the macOS and
+    Postgres jobs on this line). Not for merging: Step 3's stage gate has not
+    run.
+  - `claude/step3-emergence-r1`: merges the lab branch and carries emergence
+    rounds 1 and 2 (round-2 builds `818a05e` S1 and `775890d` S4 unit 1, report
+    `95eaa84`) and the sprint. **Live dispatches run from this branch.**
+- **Emergence:** round 2 is reported
+  (`.claude/handoff/step3/idea-lab/emergence/ round-2.md`, board entry [96]);
+  the owner's rulings are O60. Round 3 does not start until the sprint has
+  reported.
+- **Credit (two keys in the GitHub `live` environment):**
+  - **Window 1, key 1** (`ANTHROPIC_API_KEY`): 21.08 USD by the ledger (the
+    console shows 21.06). The key expires 2026-11-22; use it by 2026-11-20. Its
+    plan: P2a, X2-SV on sqlparse, three dispatches (O59 section 6).
+  - **Window 2, key 2** (`ANTHROPIC_API_KEY_2`): 200 USD, expires 2026-11-15. No
+    new dispatch on key 2 after 2026-11-14 12:00 UTC. Ceilings: pilots 8, X2-0
+    35, X2-D 45, X2-P 42, X2-F 60 (190 in all). No ideas-validate smoke: the
+    pilot is the smoke.
+  - A dispatch picks its key with the `key_slot` input (U-key); every ledger row
+    names its window.
+- **The sprint (O59):** five units, then a pilot, then waves.
+  - **Units:** U-key (key slot), U-patch (diffs and the delivered patch in the
+    results artifact), U-fable52 (Fable 5.2 rows and the Fable leap's request
+    shape), U-depth (arm X2-D, three rounds), U-portfolio (the framework
+    portfolio leap; arms X2-P and X2-F). Each is built test-first, reviewed by a
+    different model, gated by the Lead and committed alone.
+  - **Pilot on key 2, tomli:** one X2-0 run, then one X2-F run once its units
+    are gated. It checks models served, retention accepted, no history-editing
+    400 on the editor, the 429 count and the patch files in the artifact.
+  - **Waves:** sqlparse, tomli, mistune and markdown, three runs per library per
+    arm, arms X2-0, X2-D, X2-P and X2-F (48 runs). Dispatches go in parallel,
+    four at first and up to eight while 429s stay low; outstanding caps never
+    exceed the remaining balance; runs per dispatch fit the job limit with 20 %
+    margin. X2-0 and X2-D first; X2-P and X2-F once U-portfolio is gated.
+    Dispatch is pre-approved under these rules.
+  - **Fallback:** if U-portfolio is not gated by 2026-11-13 06:00 UTC, X2-F runs
+    with the existing leap prompt on Fable 5.2, X2-P is dropped, and its ceiling
+    goes to extra sqlparse runs of X2-0 and X2-D.
+  - **The reading** is pre-registered in O59 section 5.
+  - **Sprint progress:**
+
+    | Unit        | State          |
+    | ----------- | -------------- |
+    | U-key       | in build       |
+    | U-patch     | in build       |
+    | U-fable52   | in build       |
+    | U-depth     | in build       |
+    | U-portfolio | in build       |
+    | Pilot       | waits on units |
+    | Waves       | wait on pilot  |
+
 - **Environment:** the database tests need Postgres 16 with pgvector and a role
   that may create databases (`TEST_DATABASE_URL`; the Docker Compose database
   works). The profiler and retry-template tests also run `python3.8` to
@@ -836,6 +822,102 @@ blocks it.
     - its own knowledge of public upstream fixes.
   - **Why:** V9 is O19's held-out exam and the charter's K4 rung, and a prior
     built from its keys would contaminate both.
+- **O60. Emergence round 2's rulings (owner, 2026-11-11).**
+  - **Points:** confirmed as computed in `emergence/round-2.md` section 9, with
+    the six flagged rules settled: partial withdrawals do not count; a partly
+    built proposal splits the +3 equally; merges made at synthesis earn no
+    critic +2; credited carry-forwards earn nothing; a self-flagged FIXED
+    proposal that was not built takes no -3; the halving applies to the post-O58
+    totals.
+  - **Round 3:** its seats follow the points; it does not start until the Window
+    2 sprint has reported.
+  - **VER-2:** may run a library's own test suite as an off-shape corpus,
+    record-only; no test input reaches a lane prompt.
+  - **S3's two legs** that need a change to the frozen judges go no further.
+  - **The A/A pool** stays X2-0, X2-0' and X2-C; X2-SV stays out until its
+    timing is shown equal (O59 section 5), which reverses the Lead's 2026-11-07
+    inclusion.
+- **O59. The Window 2 sprint (owner, 2026-11-11). Supersedes round 2's P1 and
+  P2.**
+  - **Keys and windows:**
+    - Key 2 is the `live` secret `ANTHROPIC_API_KEY_2`, beside
+      `ANTHROPIC_API_KEY`. A dispatch input `key_slot` (1 by default, or 2)
+      selects the secret; the missing-secret error names the slot; ledger rows
+      carry the window; a guard test pins it.
+    - Window 2: 200 USD on key 2, expires 2026-11-15; no new dispatch on key 2
+      after 2026-11-14 12:00 UTC.
+    - Window 1: 21.08 USD on key 1 (the console shows 21.06); the key expires
+      2026-11-22, so use it by 2026-11-20.
+    - No ideas-validate smoke: the pilot is the smoke.
+  - **Units, built now** (tests first, a different-model review, the gate, one
+    commit each; default requests stay byte-identical):
+    - **U-key:** the key slot above.
+    - **U-patch:** every X2 run writes each kept change's diff and the delivered
+      combined patch into the results artifact, with the base commit and sha256
+      in the row. Record-only.
+    - **U-fable52:** `claude-fable-5-2`'s price row (8.00 in, 40.00 out,
+      5-minute cache write 10.00, cache read 0.20 per MTok, checked on the
+      pricing page at build time), effort row and retention (with
+      `claude-mythos-5-2`). A request-shape test: no thinking parameter, no
+      `tool_choice`, no sampling parameters, a fallbacks list naming only
+      `claude-opus-4-8`, the refusal checked before the content. A Fable leap
+      sends effort high explicitly, an output cap of 32,000 and X1-1's
+      per-request timeout.
+    - **U-depth:** arm X2-D, X2-0 with three rounds (`PORTFOLIO_ROUNDS=3`,
+      `MAX_TRIAL_ROUNDS=3`), its run cap and minutes re-derived, and gain per
+      round in the report.
+    - **U-portfolio:** the framework portfolio leap, off by default: the
+      catalogue as data in `optimization/idea_frameworks.py` (id, source,
+      evidence grade, numbered steps with each step's product, active flag); a
+      fresh, short leap prompt that diagnoses first (unit of work and count,
+      cost per unit, the least any correct solution must do, the gap, time when
+      the input doubles), then works three procedures dealt by a seeded,
+      balanced rotation over (library, run, round), each step's product then at
+      most one idea or `not_applicable` naming the failed step; each idea
+      carries its framework id and a one-line cost model, and may change several
+      functions when anchored on quoted hot lines. Only the three dealt
+      procedures appear in a call. Ten active procedures (Bentley, per-element,
+      backend, Skiena, Polya, from-spec, IFR, trim, SIT, recall) and eight
+      inactive ones, steps recorded. Rows record framework id, steps present and
+      not_applicable; the report has a table per arm and framework (dealt,
+      ideas, trialled, kept, median gain over floor, adherence rate). Arms: X2-P
+      is X2-0 with the portfolio leap on Opus 5.5; X2-F the same on Fable 5.2.
+  - **Dispatch plan:**
+    - sqlparse, tomli, mistune, markdown; three runs per library per arm; arms
+      X2-0 (the baseline pool), X2-D, X2-P, X2-F: 48 runs.
+    - Ceilings in USD on key 2: pilots 8, X2-0 35, X2-D 45, X2-P 42, X2-F 60.
+      Needs and caps re-derived from measured rates and reported before wave 1.
+    - Pilot first on key 2, on tomli: one X2-0 run, then one X2-F run once its
+      units are gated. Checks: models served, retention accepted, no
+      history-editing 400 on the editor, the 429 count, the patch files in the
+      artifact.
+    - Waves, dispatches in parallel: outstanding caps never exceed the remaining
+      balance; four in parallel at first, eight if 429s stay low; runs per
+      dispatch fit the job limit with 20 % margin. X2-0 and X2-D first, X2-P and
+      X2-F once U-portfolio is gated.
+    - Fallback: if U-portfolio is not gated by 2026-11-13 06:00 UTC, X2-F runs
+      with the existing leap prompt on Fable 5.2, X2-P is dropped, and its
+      ceiling goes to extra sqlparse runs of X2-0 and X2-D.
+    - O46's three conditions apply per dispatch; a failure stops that arm only.
+      A report per wave with run links, spend and balance. Dispatch is
+      pre-approved under these rules.
+  - **The reading, pre-registered (fixed 2026-11-11, before any sprint run):**
+    - Primary measure: delivered combine gain per run, 0 with no held combine.
+    - Each arm against the baseline pool with S1's variance page: per-library
+      rank and the stratified sign test, two-sided. An arm is better only at p
+      <= 0.10 with a higher median on at least 3 of the 4 libraries; otherwise
+      "not distinguishable". O51 and O52 are printed beside it.
+    - Pool: X2-0, X2-0' and X2-C. X2-SV stays out until its timing is shown
+      equal.
+    - Also reported: kept count, cost per delivered point, gain per round, hit
+      rate by lane and by framework, and best-of-pool per library, labelled as
+      best-of.
+    - X2-P against the pool reads the prompt; X2-F against X2-P reads the model.
+  - **Window 1:** P2a (X2-SV on sqlparse, three dispatches) runs on key 1 any
+    time before 2026-11-20.
+  - **Why:** Window 2 expires in four days, so the sprint spends it on the
+    questions it can answer at the variance rule's depth: whether more rounds, a
+    procedure-driven leap or a stronger leap model raise delivered gain.
 - **O58. Emergence round 1's live read, S1's +10 and O55 amended (owner,
   2026-11-07).**
   - **S1 earns the +10 under O55 as written.** Its bars were pre-registered,
@@ -2700,6 +2782,9 @@ what each run measured and decided.
 
 ### Window 1: the credit that expires 2026-11-25 ($200; use by 2026-11-23)
 
+Corrected by O59 (2026-11-11): key 1 expires 2026-11-22, so the balance (21.08
+USD by the ledger, 21.06 on the console) is used by 2026-11-20.
+
 The owner's rule (2026-10-25): plan to have this credit used by 2026-11-23, two
 days before it expires. The table below is the 2026-10-23 plan with stage C
 replaced by Step 3's own live plan (spec section 6, D24's spend rule); the
@@ -2724,7 +2809,10 @@ Total about $180 (stage C was about $30 before Step 3's plan replaced it; about
 $22.5 for C if L2b runs). Stage E is the flex: around Nov 15, check the ledger
 and size E to use what is left before the reset.
 
-### Window 2: 2026-11-24 to 2026-12-24 ($200)
+### Window 2: 2026-11-24 to 2026-12-24 ($200), superseded
+
+Superseded by O59: Window 2 is key 2's 200 USD, expiring 2026-11-15, spent on
+the Window 2 sprint. The plan below is the 2026-10-23 one, kept for the record.
 
 | Stage             | Live work                                                                   | Est. total |
 | ----------------- | --------------------------------------------------------------------------- | ---------- |
