@@ -22,11 +22,16 @@ or reject verdict in a round), round 2's seeds, and the charter's
 path-dependence measure (6, O54: section 1's twin gaps, by the same
 function). A combine's gain counts only when it held: a run with no held
 combine delivers 0 in every difference and mean. Rounds after the second
-count as round 2's (X2 runs two). Refused, nothing written: a malformed
-row, an arm or library
-X2 does not run, a run, round or hypothesis recorded twice, rounds or
-hypotheses with no run row, a run with no round or a gap in its rounds, and
-kept counts that disagree between a run, its rounds and its ideas.
+count as round 2's (X2 runs two). Several runs of an arm on a library (the
+Window 2 sprint's three, O61) are each their own run, identified by (arm,
+library, results file) and never merged: totals, lanes, hit rates (with each
+library's run count) and seeds sum every run of an arm, and the one-run-a-side
+sections (1, 3, 6) read only the libraries where each side has one run, the
+others listed as not read. Refused, nothing written: a malformed row, an arm
+or library X2 does not run, a run recorded twice in one file or the same run
+row in two files, a round or hypothesis recorded twice, rounds or hypotheses
+with no run row in their file, a run with no round or a gap in its rounds,
+and kept counts that disagree between a run, its rounds and its ideas.
 
 ``--variance`` (emergence round 2, S1) writes ``variance.md`` instead: each
 file is loaded alone, so every (arm, library) run of every file is a draw;
@@ -62,6 +67,7 @@ import statistics
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import cached_property
 from itertools import combinations, product
 from pathlib import Path
 from typing import Annotated, Final
@@ -102,6 +108,7 @@ TRIED: Final = frozenset(v.value for v in (VerdictOutcome.keep, VerdictOutcome.i
 Count = Annotated[int, Field(ge=0)]
 Usd = Annotated[float, Field(ge=0)]
 Key = tuple[str, str]  # (arm, library)
+RunKey = tuple[str, str, str]  # (arm, library, results file): one run (O61)
 
 
 class _Row(BaseModel):
@@ -224,15 +231,35 @@ class Run:  # one (arm, library) engine run
 
 @dataclass(frozen=True)
 class Report:
-    runs: dict[Key, Run]  # arm, then library, in X2's order
+    every: dict[RunKey, Run]  # arm, library, then results file, in X2's order
     sources: tuple[tuple[str, str, str], ...]  # (file, sha256 prefix, dispatches)
+
+    @cached_property
+    def counts(self) -> Counter[Key]:  # runs per (arm, library)
+        return Counter((a, n) for a, n, _ in self.every)
+
+    @property
+    def several(self) -> bool:  # an (arm, library) run more than once
+        return any(v > 1 for v in self.counts.values())
+
+    @cached_property
+    def runs(self) -> dict[Key, Run]:  # the (arm, library) pairs run once
+        return {
+            (a, n): x for (a, n, _), x in self.every.items() if self.counts[a, n] == 1
+        }
 
     @property
     def arms(self) -> tuple[str, ...]:
-        return tuple(a for a in ARMS if any(k[0] == a for k in self.runs))
+        return tuple(a for a in ARMS if any(k[0] == a for k in self.every))
 
     def libs(self, arm: str) -> tuple[str, ...]:
-        return tuple(repo for a, repo in self.runs if a == arm)
+        return tuple(dict.fromkeys(n for a, n, _ in self.every if a == arm))
+
+    def of(self, arm: str, repo: str) -> tuple[Run, ...]:
+        return tuple(x for (a, n, _), x in self.every.items() if (a, n) == (arm, repo))
+
+    def own(self, arm: str) -> tuple[Run, ...]:
+        return tuple(x for (a, _, _), x in self.every.items() if a == arm)
 
 
 def _checked(at: str, row: RunLine, rounds: dict[int, RoundLine],
@@ -259,9 +286,9 @@ def _checked(at: str, row: RunLine, rounds: dict[int, RoundLine],
     return Run(row, tuple(rounds[n] for n in got), tuple(ideas))
 
 
-def load(paths: Iterable[Path]) -> Report:
-    files = [(p, _parse(p)) for p in sorted(paths, key=lambda p: (p.name, str(p)))]
-    rows = [r for _, found in files for r in found]
+def _file_runs(rows: Sequence[_Row]) -> dict[Key, Run]:
+    """One file's runs, each (arm, library) once: a recorder writes a run's
+    rows to its dispatch's file, so a run is never read across files."""
     runs: dict[Key, RunLine] = {}
     rounds: dict[Key, dict[int, RoundLine]] = defaultdict(dict)
     ideas: dict[Key, dict[str, IdeaLine]] = defaultdict(dict)
@@ -278,14 +305,31 @@ def load(paths: Iterable[Path]) -> Report:
                                  "recorded twice")  # fmt: skip
     for a, repo in sorted({*rounds, *ideas} - {*runs}):
         raise ValueError(f"{a} {repo}: rounds with no {RUN_EXPERIMENT} row")
-    if not runs:
+    return {k: _checked(" ".join(k), row, rounds.get(k, {}), list(ideas.get(k, {}).values()))
+            for k, row in runs.items()}  # fmt: skip
+
+
+def load(paths: Iterable[Path]) -> Report:
+    """Each file's runs, each (arm, library, file) its own run (O61: several
+    runs of an arm on a library, never merged); the same run row in two
+    files is refused (a run counted twice)."""
+    files = [(p, _parse(p)) for p in sorted(paths, key=lambda p: (p.name, str(p)))]
+    every: dict[RunKey, Run] = {}
+    seen: dict[str, str] = {}  # a run row's JSON: the file that first held it
+    for p, found in files:
+        for (a, repo), x in _file_runs(found).items():
+            if (first := seen.get(sig := x.row.model_dump_json())) is not None:
+                raise ValueError(f"{a} {repo}: recorded twice ({first} and {p.name})")
+            seen[sig] = p.name
+            if every.setdefault((a, repo, p.name), x) is not x:
+                raise ValueError(f"{a} {repo}: two runs in files named {p.name}")
+    if not every:
         raise ValueError(
             f"no {RUN_EXPERIMENT} row in {', '.join(p.name for p, _ in files)}"
         )
-    order = sorted(runs, key=lambda k: (ARMS.index(k[0]), E1_REPOS.index(k[1])))
+    order = sorted(every, key=lambda k: (ARMS.index(k[0]), E1_REPOS.index(k[1]), k[2]))
     return Report(
-        {k: _checked(" ".join(k), runs[k], rounds.get(k, {}),
-                     list(ideas.get(k, {}).values())) for k in order},
+        {k: every[k] for k in order},
         tuple((p.name, hashlib.sha256(p.read_bytes()).hexdigest()[:12],
                ", ".join(sorted({r.dispatch for r in found if isinstance(r, RunLine)})))
               for p, found in files),
@@ -347,7 +391,7 @@ def _on(n: int) -> str:
 
 def twin_gaps(r: Report) -> Gaps:  # each twinned library's (tg, tk): sections 1, 6
     gaps: Gaps = {}
-    for n in (n for n in r.libs(TWIN) if (BASE, n) in r.runs):
+    for n in (n for n in r.libs(TWIN) if (BASE, n) in r.runs and (TWIN, n) in r.runs):
         a, b = r.runs[BASE, n], r.runs[TWIN, n]
         gaps[n] = abs(a.delivered - b.delivered), abs(a.row.kept - b.row.kept)
     return gaps
@@ -372,9 +416,41 @@ def _lane(i: IdeaLine) -> tuple[str, str, bool]:  # lane, model, round 1
     return COMPOUND if i.compound else GROUPS[str(i.lane)], i.model or "-", i.round == 1
 
 
+def _n_runs(k: int) -> str:
+    return f"{k} run{'' if k == 1 else 's'}"
+
+
+def _who_head(r: Report) -> tuple[str, ...]:  # a run's identity: its file with several
+    return ("arm", "library", *(("file",) if r.several else ()))
+
+
+def _who(r: Report, k: RunKey) -> list[object]:
+    return [k[0], k[1], *((k[2],) if r.several else ())]
+
+
+def _not_read(
+    lead: str, head: Sequence[object], rows: Sequence[Sequence[object]]
+) -> list[str]:
+    if not rows:
+        return []
+    return [f"{lead}: several runs on one side or both (read on the variance page, "
+            "``--variance``, against the pool).", "", *_table(head, rows)]  # fmt: skip
+
+
+def _twin_not_read(r: Report) -> list[str]:  # sections 1 and 6: twinned, not one a side
+    rows = [[n, len(r.of(BASE, n)), len(r.of(TWIN, n))] for n in r.libs(TWIN)
+            if r.of(BASE, n) and not ((BASE, n) in r.runs and (TWIN, n) in r.runs)]  # fmt: skip
+    return _not_read("Not read here", ("library", f"{BASE} runs", f"{TWIN} runs"), rows)
+
+
+NO_PAIR: Final = "No twinned library with one run a side"
+
+
 def _path(r: Report, gaps: Gaps) -> list[str]:  # O54's measure, section 1's values
     if not gaps:
-        return ["No twin rows: no path-dependence measure.", ""]
+        skipped = _twin_not_read(r)
+        return [f"{NO_PAIR if skipped else 'No twin rows'}: no path-dependence measure.", "",
+                *skipped]  # fmt: skip
     body = [[n, gain_cell(r.runs[BASE, n]), gain_cell(r.runs[TWIN, n]), f"{tg:.1f}",
              r.runs[BASE, n].row.kept, r.runs[TWIN, n].row.kept, tk]
             for n, (tg, tk) in gaps.items()]  # fmt: skip
@@ -384,13 +460,15 @@ def _path(r: Report, gaps: Gaps) -> list[str]:  # O54's measure, section 1's val
             f"The mean tg over {len(gaps)} {many} is {twin_gap(r):.1f} points.", "",
             "Identical settings, two runs: the gap measures how much the evolution "
             "loop's early keeps shape the outcome (O54), read with only one A/A pair "
-            "per library.", ""]  # fmt: skip
+            "per library.", "", *_twin_not_read(r)]  # fmt: skip
 
 
 def _band(r: Report, gaps: Gaps) -> list[str]:
     if not gaps:
-        return ["No twin rows: every library below takes the fixed band (O51 as "
-                "amended).", ""]  # fmt: skip
+        skipped = _twin_not_read(r)
+        return [f"{NO_PAIR}: every library read below takes the fixed band (O51 as amended)."
+                if skipped else "No twin rows: every library below takes the fixed band (O51 "
+                "as amended).", "", *skipped]  # fmt: skip
     body = [[n, r.runs[BASE, n].row.kept, r.runs[TWIN, n].row.kept, tk,
              gain_cell(r.runs[BASE, n]), gain_cell(r.runs[TWIN, n]), f"{tg:.1f}"]
             for n, (tg, tk) in gaps.items()]  # fmt: skip
@@ -401,14 +479,20 @@ def _band(r: Report, gaps: Gaps) -> list[str]:
             "only beyond its tk; only a library without a twin takes the fixed band of "
             f"{BAND_GAIN:g} points of combine gain and {BAND_KEPT:g} on the kept count.", "",
             f"The twin's mean gap over its {len(gaps)} libraries is {twin_gap(r):.1f} "
-            "points of combine gain (O52's bar for an arm's combine).", ""]  # fmt: skip
+            "points of combine gain (O52's bar for an arm's combine).", "",
+            *_twin_not_read(r)]  # fmt: skip
 
 
-def _sums(runs: Sequence[Run]) -> list[object]:
+def _mean(runs: Sequence[Run]) -> float:  # the mean delivered gain over runs
+    return math.fsum(x.delivered for x in runs) / len(runs)
+
+
+def _sums(runs: Sequence[Run], combine: float | None = None) -> list[object]:
+    """Totals over ``runs``; the combine is their mean unless given."""
     cost, kept = math.fsum(x.row.cost_usd for x in runs), sum(x.row.kept for x in runs)
     rounds = [d for x in runs for d in x.rounds]
-    return [sum(x.trialled for x in runs), kept,
-            f"{math.fsum(x.delivered for x in runs) / len(runs):+.1f}%", f"{cost:.2f}",
+    mean = _mean(runs) if combine is None else combine
+    return [sum(x.trialled for x in runs), kept, f"{mean:+.1f}%", f"{cost:.2f}",
             sum(x.row.seeded_calls for x in runs),
             f"{math.fsum(x.row.seeded_cost_usd for x in runs):.2f}",
             sum(d.compounds for d in rounds), sum(d.compounds_kept for d in rounds),
@@ -426,8 +510,8 @@ def _realised(r: Report) -> list[str]:  # S1, only where a row holds a record
     rows: list[list[object]] = []
     sums: list[list[object]] = []
     for arm in r.arms:
-        recs = [(i.realisation, i.verdict == "keep") for (a, _), x in r.runs.items()
-                if a == arm for i in x.ideas if i.realisation is not None]  # fmt: skip
+        recs = [(i.realisation, i.verdict == "keep") for x in r.own(arm)
+                for i in x.ideas if i.realisation is not None]  # fmt: skip
         by, won = (
             Counter(c.label for c, _ in recs),
             Counter(c.label for c, k in recs if k),
@@ -460,17 +544,18 @@ def _combined(r: Report) -> list[str]:  # S2, only where a row holds a record
     runs: list[list[object]] = []
     why: list[list[object]] = []
     parts: list[list[object]] = []
-    for (arm, lib), x in r.runs.items():
+    for k, x in r.every.items():
         recs = [(i.hypothesis_id, i.combine) for i in x.ideas if i.combine is not None]
         if not recs:
             continue
         lost = [c for _, c in recs if not c.delivered]
-        runs.append([arm, lib, x.row.kept, x.row.kept - sum(c.duplicate_of is not None for _, c in recs),
+        who = _who(r, k)
+        runs.append([*who, x.row.kept, x.row.kept - sum(c.duplicate_of is not None for _, c in recs),
                      len(recs), len(recs) - len(lost), len(lost),
                      sum(c.skip_reason is None for c in lost),
                      sum(c.reconcile == "eligible" for _, c in recs)])  # fmt: skip
         reasons = Counter(c.skip_reason or "(no reason)" for c in lost)
-        why += [[arm, lib, k, reasons[k]] for k in sorted(reasons)]
+        why += [[*who, n, reasons[n]] for n in sorted(reasons)]
         groups: dict[int, list[Combined]] = defaultdict(list)
         for _, c in recs:
             if c.duplicate_of is None:
@@ -480,47 +565,81 @@ def _combined(r: Report) -> list[str]:  # S2, only where a row holds a record
                    for g in hit)  # fmt: skip
         got = math.fsum(c.gain_pct or 0.0 for g in hit for c in g if c.delivered)
         top = math.fsum(c.gain_pct or 0.0 for g in hit for c in g if c.best_subset)
-        parts.append([arm, lib, len(hit), same, f"{got:.1f}", f"{top:.1f}"])
+        parts.append([*who, len(hit), same, f"{got:.1f}", f"{top:.1f}"])
     return [] if not runs else [
         "## 8 Combine record (S2)", "",
         "Each kept change at combine: delivered, or the reason it was not (its skip, "
         "or the combination's); hunk-identical keeps count once; eligible is part 3's "
         "record (the survivor left the blocked keep's counted unit made), no trial.", "",
-        *_table(("arm", "library", "kept", "kept (duplicates once)", "recorded",
+        *_table((*_who_head(r), "kept", "kept (duplicates once)", "recorded",
                  "delivered", "not delivered", "no reason", "eligible pairs"), runs),
-        *_table(("arm", "library", "not delivered because", "keeps"), why),
+        *_table((*_who_head(r), "not delivered because", "keeps"), why),
         "Per run, the conflict components (two or more keeps that are not duplicates): "
         "how many delivered their max-sum conflict-free subset, and the standalone "
         "gains delivered against that subset's. Sums are not combines: only the tip's "
         "re-test is a delivered gain.", "",
-        *_table(("arm", "library", "conflict components", "delivering the max-sum subset",
+        *_table((*_who_head(r), "conflict components", "delivering the max-sum subset",
                  "delivered (standalone points)", "max-sum subset (standalone points)"), parts),
     ]  # fmt: skip
 
 
+def _kept_tried(runs: Iterable[Run]) -> tuple[int, int]:  # 4b's kept and trialled
+    ideas = [i for x in runs for i in x.ideas]
+    return (sum(i.verdict == "keep" for i in ideas),
+            sum(i.verdict in TRIED and i.round is not None for i in ideas))  # fmt: skip
+
+
+def _several(r: Report) -> list[str]:  # O61: the header bullet, several runs only
+    if not r.several:
+        return []
+    many = sum(v > 1 for v in r.counts.values())
+    return ["- **Several runs per arm and library.** "
+            f"{many} (arm, library) {'pair has' if many == 1 else 'pairs have'} more than one "
+            "run: each run is its own row, identified by its arm, library and results file, "
+            "never merged. Sections 1, 3 and 6 read one run a side, so only the libraries "
+            "where each side has one run; the others are listed there as not read, and are "
+            "read on the variance page (``--variance``) against the pool. Totals, wins by "
+            "lane, hit rates and seeds sum every run of an arm, with each library's run "
+            "count beside them (tables below and in 4b)."]  # fmt: skip
+
+
 def render(r: Report) -> str:
     banded = twin_gaps(r)  # each twinned library's (tg, tk), sections 1 and 6
-    common = [n for n in E1_REPOS if all((a, n) in r.runs for a in r.arms)]
-    each = [[a, n, x.trialled, x.row.kept, gain_cell(x),
+    common = [n for n in E1_REPOS if all(r.of(a, n) for a in r.arms)]
+    each = [[*_who(r, k), x.trialled, x.row.kept, gain_cell(x),
              "-" if x.row.floor_pct is None else f"{x.row.floor_pct:.1f}%", flag(x.row.holds),
              f"{x.row.cost_usd:.2f}", x.row.seeded_calls, f"{x.row.seeded_cost_usd:.2f}",
              sum(d.compounds for d in x.rounds), sum(d.compounds_kept for d in x.rounds),
-             per(x.row.cost_usd, x.row.kept)] for (a, n), x in r.runs.items()]  # fmt: skip
+             per(x.row.cost_usd, x.row.kept)] for k, x in r.every.items()]  # fmt: skip
     totals: list[list[object]] = []
     against: list[list[object]] = []
     lanes: list[list[object]] = []
     rates: list[list[object]] = []
     seeds: list[list[object]] = []
     calls: list[list[object]] = []
+    skipped: list[list[object]] = []  # section 3: not one run a side
+    behind: list[list[object]] = []  # 4b with several runs: each library's runs
     gap = twin_gap(r)
     for arm in r.arms:
-        own = [r.runs[arm, n] for n in r.libs(arm)]
-        for scope, runs in ((f"every arm's ({', '.join(common)})", [r.runs[arm, n] for n in common]),
-                            (f"own ({len(own)} libraries)", own)):  # fmt: skip
-            totals += [[arm, scope, *_sums(runs)]] if runs else []
-        both = [
-            n for n in r.libs(arm) if arm not in (BASE, TWIN) and (BASE, n) in r.runs
-        ]
+        own = list(r.own(arm))
+        shared = [x for n in common for x in r.of(arm, n)]
+        if shared and r.several:  # each library weighted once: like for like
+            counted = ", ".join(f"{n} {len(r.of(arm, n))}" for n in common)
+            means = math.fsum(_mean(r.of(arm, n)) for n in common) / len(common)
+            totals.append([arm, f"every arm's ({counted}), {_n_runs(len(shared))}, "
+                           "combine the mean of library means", *_sums(shared, means)])  # fmt: skip
+        elif shared:
+            totals.append([arm, f"every arm's ({', '.join(common)})", *_sums(shared)])
+        label = f"own ({len(r.libs(arm))} libraries)"
+        totals.append([arm, f"{label}, {_n_runs(len(own))}" if r.several else label,
+                       *_sums(own)])  # fmt: skip
+        both: list[str] = []
+        for n in (n for n in r.libs(arm) if arm not in (BASE, TWIN) and r.of(BASE, n)):
+            if (arm, n) in r.runs and (BASE, n) in r.runs and len(r.of(TWIN, n)) < 2:
+                both.append(n)
+            else:
+                skipped.append([arm, n, len(r.of(arm, n)), len(r.of(BASE, n)),
+                                len(r.of(TWIN, n))])  # fmt: skip
         dks: list[int] = []
         dgs: list[float] = []
         for n in both:
@@ -554,8 +673,17 @@ def render(r: Report) -> str:
         one = sum(v for k, v in tried.items() if k[2])
         rates.append([arm, "all lanes", "-",
                       *_hits((first, won.total() - first), (one, tried.total() - one))])  # fmt: skip
-        seeds += [*(_seeds(arm, n, [r.runs[arm, n]]) for n in r.libs(arm)),
-                  _seeds(arm, "all (own libraries)", own)]  # fmt: skip
+        if r.several:
+            for n in r.libs(arm):
+                k, t = _kept_tried(r.of(arm, n))
+                behind.append([arm, n, len(r.of(arm, n)), k, t, hit_rate(k, t)])
+            behind.append([arm, "all libraries", len(own), won.total(), tried.total(),
+                           hit_rate(won.total(), tried.total())])  # fmt: skip
+        named = {n: f"{n} ({_n_runs(len(r.of(arm, n)))})" if r.several else n
+                 for n in r.libs(arm)}  # fmt: skip
+        tag = f", {_n_runs(len(own))}" if r.several else ""
+        seeds += [*(_seeds(arm, named[n], r.of(arm, n)) for n in r.libs(arm)),
+                  _seeds(arm, f"all (own libraries{tag})", own)]  # fmt: skip
     return "\n".join([
         "# X2 report: evolution on the levers X1 kept (spec 9.4, 9.6b)", "",
         "How to read it, before any comparison:", "",
@@ -582,11 +710,15 @@ def render(r: Report) -> str:
         "call says how many libraries it rests on. No single library decides (O52).",
         "- **Delivered gain.** A combine's gain counts only when it held: a run with "
         "no held combine delivers 0 in every difference and mean.",
+        *_several(r),
         "- **Sources:** each results file, its SHA-256 prefix and its dispatches.", "",
         *_table(("file", "sha256", "dispatches"), r.sources),
+        *(["Runs per arm and library:", "",
+           *_table(("arm", "library", "runs"), [[a, n, k] for (a, n), k in r.counts.items()])]
+          if r.several else []),
         f"## 1 The A/A band ({BASE} against {TWIN})", "", *_band(r, banded),
         "## 2 Each arm and library", "",
-        *_table(("arm", "library", "trialled", "kept", "combine", "floor", "held",
+        *_table((*_who_head(r), "trialled", "kept", "combine", "floor", "held",
                  "cost USD", "seeded calls", "seeded USD", "compounds tried",
                  "compounds kept", "USD per win"), each),
         f"Totals over the libraries every arm has ({', '.join(common) or 'none'}), then "
@@ -594,10 +726,17 @@ def render(r: Report) -> str:
         *_table(("arm", "libraries", "trialled", "kept", "combine (mean)", "cost USD",
                  "seeded calls", "seeded USD", "compounds tried", "compounds kept",
                  "USD per win"), totals),
+        *(["Several runs: the every-arm row names each library's runs, sums the counts and "
+           "costs over them, and takes as its combine the mean of the library means (each "
+           "library weighted once, so arms with unequal runs per library compare like for "
+           "like); the own row's combine is the mean over its runs.", ""]
+          if r.several else []),
         f"## 3 Each arm against {BASE}", "",
         f"Differences are the arm less {BASE} on the same library: kept count and "
         "delivered combine gain in points.", "",
         *_table(("arm", "library", "kept", "reading", "combine (points)", "reading"), against),
+        *_not_read("Not read one to one", ("arm", "library", "arm runs", f"{BASE} runs",
+                                           f"{TWIN} runs"), skipped),
         f"Arm-level calls against {BASE} over the libraries both ran: the kept-count "
         f"sign count, and the mean combine difference against the twin's ({TWIN}) "
         "mean gap. "
@@ -617,6 +756,10 @@ def render(r: Report) -> str:
                  "round 1 hit rate", "round 2 kept", "round 2 trialled",
                  "round 2 hit rate", "total kept", "total trialled", "total hit rate"),
                 rates),
+        *(["The runs behind each arm's rates, per library: kept and trialled as above, "
+           "summed over every run of the arm on the library.", "",
+           *_table(("arm", "library", "runs", "kept", "trialled", "hit rate"), behind)]
+          if behind else []),
         "## 5 Seeds (round 2)", "",
         *_table(("arm", "library", "trialled", "kept", "seeds shown", "seeded calls",
                  "seeded USD", "seeded USD per round-2 win"), seeds),
@@ -671,7 +814,7 @@ def draws(paths: Iterable[Path]) -> tuple[Draw, ...]:
         digest = hashlib.sha256(p.read_bytes()).hexdigest()
         if (first := seen.setdefault(digest, p.name)) != p.name:
             raise ValueError(f"{p.name}: the same bytes as {first}")
-        out += [Draw(p.name, x) for x in load([p]).runs.values()]
+        out += [Draw(p.name, x) for x in load([p]).every.values()]
     return tuple(out)
 
 
