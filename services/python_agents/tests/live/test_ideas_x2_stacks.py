@@ -104,7 +104,9 @@ def test_x2_s_rows_carry_each_keeps_combine_record(x2_run: Any) -> None:
 def test_other_arms_rows_carry_no_combine_record(x2_run: Any) -> None:
     _, rows = x2_run()
 
-    assert not any("combine" in r or "conflicts" in r for r in rows)
+    assert not any("combine" in r for r in rows)
+    (run,) = xg._rows(rows, x2.RUN_EXPERIMENT)  # U-fate: the key on every run,
+    assert run["conflicts"] is None  # None where no dry merge ran (SITE_STACKS off)
 
 
 # ---------------------------------------------------------------------------

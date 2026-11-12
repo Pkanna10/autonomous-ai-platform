@@ -29,13 +29,21 @@
   function already anchored adds no function. The diagnosis
   is one ``leap_diagnosis`` event. ``unanswered``: the rows when no reply
   could be read.
+- Fates (O61 item 4, a record only): every row carries ``fate`` and
+  ``fate_id``, the ``IdeaFate.idea_id`` of the idea it held (``None``: it
+  held none), one join key for every row; a dropped idea's row gets its
+  ``read:<code>`` and ``<lane>-read-NN`` at once (and, with ``fates``, its
+  ``IdeaFate`` too, as does an idea beside ``not_applicable`` or in a
+  procedure ignored); an idea row's ``fate_id`` is its ``idea_id`` and its
+  fate is filled by ``with_fates`` once the pipeline knows where the idea
+  ended, as ``with_hypotheses`` fills ``hypothesis_id``.
 """
 
 from __future__ import annotations
 
 import dataclasses
 from collections.abc import Mapping, Sequence
-from typing import Final, cast
+from typing import Final, NamedTuple, cast
 
 from anthropic.types.beta import BetaOutputConfigParam
 from pydantic import Field
@@ -66,10 +74,11 @@ from autonomous_ai_agents.optimization.idea_lanes import (
     MAX_MORPH_CELLS,
     MAX_PATH_CHARS,
     _candidate,
-    _field_problem,
+    _field_issue,
     _ground,
     _hotspot_ids,
     _Idea,
+    read_fate,
     tag_shape,
     title_key,
 )
@@ -79,6 +88,7 @@ from autonomous_ai_agents.optimization.idea_types import (
     CodeContext,
     GenerateEvent,
     IdeaCandidate,
+    IdeaFate,
     Lane,
 )
 
@@ -271,7 +281,7 @@ def _row(deal: Deal, dealt: Dealt, outcome: str, **data: JsonScalar) -> Generate
         "cell": deal.cell, "seed": deal.seed, "steps_required": len(f.steps),
         "steps_present": "", "not_applicable": None, "outcome": outcome,
         "idea_id": None, "title": None, "reason": None, "functions": None,
-        "failure": None, "hypothesis_id": None,
+        "failure": None, "hypothesis_id": None, "fate": None, "fate_id": None,
     }  # fmt: skip
     fields.update(data)
     message = f"portfolio leap procedure {f.id} (place {dealt.position}): {outcome}"
@@ -316,10 +326,25 @@ def with_hypotheses(
     return found
 
 
+def with_fates(
+    events: Sequence[GenerateEvent], fates: Mapping[str, str]
+) -> list[GenerateEvent]:
+    """``events`` with each idea row naming its idea's fate (``fates``: idea
+    id to fate, O61 item 4), the way ``with_hypotheses`` names its
+    hypothesis; a row with no idea id keeps the fate it was written with."""
+    found: list[GenerateEvent] = []
+    for e in events:
+        idea = e.data.get("idea_id") if e.code == PROCEDURE_EVENT else None
+        fate = None if not isinstance(idea, str) else fates.get(idea)
+        found.append(e if fate is None else
+                     e.model_copy(update={"data": {**e.data, "fate": fate}}))  # fmt: skip
+    return found
+
+
 def _problem(
     name: str, value: str, cap: int, one_line: bool, fence: Fence
 ) -> str | None:
-    """``idea_lanes._field_problem``'s checks for one further field."""
+    """``idea_lanes._field_issue``'s checks for one further field."""
     problem = text_problem(value, cap, one_line=one_line)
     if problem is not None and not problem.startswith("holds"):
         problem = f"is {problem}"
@@ -341,25 +366,38 @@ def _present(steps: list[_Step], required: int) -> tuple[int, ...]:
     }))  # fmt: skip
 
 
+class _Drop(NamedTuple):
+    """Why a leap idea is dropped: its fate code (``read:<code>``) and the
+    reason its note, event and row record."""
+
+    code: str
+    why: str
+
+
 def _anchors(
     item: _PortfolioIdea, framework: str, context: CodeContext, fence: Fence
-) -> tuple[Anchor, tuple[Anchor, ...]] | str:
+) -> tuple[Anchor, tuple[Anchor, ...]] | _Drop:
     """The idea's anchor and further anchors, or why it is dropped."""
     if item.framework != framework:
-        return f"its framework {shown(item.framework)} is not its procedure's"
-    problem = _field_problem(item, fence) or _problem(
-        "cost_model", item.cost_model, MAX_COST_MODEL_CHARS, True, fence
-    )
+        named = shown(item.framework)
+        return _Drop(
+            "framework_mismatch", f"its framework {named} is not its procedure's"
+        )
+    issue = _field_issue(item, fence)
+    cost = _problem("cost_model", item.cost_model, MAX_COST_MODEL_CHARS, True, fence)
+    if issue is None and cost is not None:
+        issue = "field_cost_model", cost
     cells = set(item.morph_cells)
-    if problem is None and not 1 <= len(cells) <= MAX_MORPH_CELLS:
-        problem = f"its morph_cells hold {len(cells)} cell(s), not 1 to 3"
-    if problem is None and len(item.more_anchors) > MAX_MORE_ANCHORS:
-        problem = f"its more_anchors hold more than {MAX_MORE_ANCHORS}"
-    if problem is not None:
-        return problem
+    if issue is None and not 1 <= len(cells) <= MAX_MORPH_CELLS:
+        issue = "morph_cells", f"its morph_cells hold {len(cells)} cell(s), not 1 to 3"
+    if issue is None and len(item.more_anchors) > MAX_MORE_ANCHORS:
+        most = f"its more_anchors hold more than {MAX_MORE_ANCHORS}"
+        issue = "more_anchors_count", most
+    if issue is not None:
+        return _Drop(*issue)
     found = _ground(item.depends_on_path, item.depends_on_quote, context)
     if isinstance(found, str):
-        return found
+        return _Drop("ungrounded", found)
     more: list[Anchor] = []
     for i, extra in enumerate(item.more_anchors):
         why = _problem("more_anchors path", extra.depends_on_path, MAX_PATH_CHARS,
@@ -370,7 +408,8 @@ def _anchors(
             extra.depends_on_path, extra.depends_on_quote, context
         )
         if isinstance(grounded, str):
-            return f"an unanchored multi-function idea: more_anchors[{i}]: {grounded}"
+            return _Drop("more_anchors_unanchored", "an unanchored multi-function "
+                         f"idea: more_anchors[{i}]: {grounded}")  # fmt: skip
         if grounded[0] != found[0] and grounded[0] not in more:  # a further function
             more.append(grounded[0])
     return found[0], tuple(more)
@@ -386,36 +425,50 @@ def read_portfolio_reply(
     fence: Fence,
     notes: list[str],
     events: list[GenerateEvent],
+    fates: list[IdeaFate] | None = None,
 ) -> tuple[IdeaCandidate, ...]:
     """At most ``n`` validated leap ideas, in deal order, with a row per dealt
     procedure and the diagnosis in ``events``. ``UnusableReplyError`` when the
-    reply as a whole cannot be used (the caller then writes ``unanswered``)."""
+    reply as a whole cannot be used (the caller then writes ``unanswered``).
+    ``fates`` (when given) gets each written idea that is not kept, its id
+    its procedure's place in the reply (O61 item 4)."""
     n = check_count("n", n, MAX_REPLY_ITEMS)
     reply = read_reply(result, _Reply, what="write the portfolio leap")
     label = "lane leap"
     events.append(_diagnosis(reply.diagnosis, deal))
     dealt_ids = [d.framework.id for d in deal.procedures]
-    given: dict[str, _Procedure] = {}
-    for written in reply.procedures:
+
+    def fate(place: int, item: _PortfolioIdea, code: str) -> dict[str, JsonScalar]:
+        """The idea's read fate, to ``fates`` when given; its row's fields."""
+        found = read_fate(Lane.leap, place, item.title, code)
+        if fates is not None:
+            fates.append(found)
+        return {"fate": found.fate, "fate_id": found.idea_id}
+
+    given: dict[str, tuple[int, _Procedure]] = {}
+    for place, written in enumerate(reply.procedures, 1):
         if written.framework not in dealt_ids or written.framework in given:
             notes.append(f"{label}: ignored a procedure {shown(written.framework)}: "
                          "not dealt, or written twice")  # fmt: skip
+            if written.idea is not None:
+                fate(place, written.idea, "procedure_ignored")
             continue
-        given[written.framework] = written
+        given[written.framework] = place, written
     kept: list[IdeaCandidate] = []
     titles: set[str] = set()
     for dealt in deal.procedures:
         f = dealt.framework
-        proc = given.get(f.id)
-        if proc is None:
+        if f.id not in given:
             events.append(_row(deal, dealt, "missing", reason="no procedure written"))
             continue
+        place, proc = given[f.id]
         numbers = _present(proc.steps, len(f.steps))
         present = ",".join(map(str, numbers))
         step, item = proc.not_applicable_step, proc.idea
         if step is not None and item is not None:
             events.append(_row(deal, dealt, "invalid", steps_present=present,
-                               reason="both an idea and not_applicable"))  # fmt: skip
+                               reason="both an idea and not_applicable",
+                               **fate(place, item, "idea_and_not_applicable")))  # fmt: skip
             continue
         if step is not None:
             outcome = "not_applicable" if 1 <= step <= len(f.steps) else "invalid"
@@ -429,20 +482,22 @@ def read_portfolio_reply(
                                reason="neither an idea nor not_applicable"))  # fmt: skip
             continue
         found = _anchors(item, f.id, context, fence)
-        if not isinstance(found, str) and title_key(item.title) in titles:
-            found = "duplicate title"
-        elif not isinstance(found, str) and len(kept) == n:
-            found = f"beyond the first {n} idea(s)"
+        if not isinstance(found, _Drop) and title_key(item.title) in titles:
+            found = _Drop("duplicate_title", "duplicate title")
+        elif not isinstance(found, _Drop) and len(kept) == n:
+            found = _Drop("beyond_n", f"beyond the first {n} idea(s)")
         title = shorten(item.title)
-        if isinstance(found, str):
-            note = f"{label}: dropped idea {shown(item.title)} ({f.id}): {found}"
+        if isinstance(found, _Drop):
+            code, why = found
+            note = f"{label}: dropped idea {shown(item.title)} ({f.id}): {why}"
             notes.append(note)
             events.append(GenerateEvent(code="idea_dropped", message=note, data={
-                "lane": Lane.leap.value, "reason": found, "title": title,
+                "lane": Lane.leap.value, "reason": why, "title": title,
                 "framework": f.id,
             }))  # fmt: skip
             events.append(_row(deal, dealt, "dropped", steps_present=present,
-                               title=title, reason=found))  # fmt: skip
+                               title=title, reason=why,
+                               **fate(place, item, code)))  # fmt: skip
             continue
         anchor, more = found
         titles.add(title_key(item.title))
@@ -455,7 +510,8 @@ def read_portfolio_reply(
         kept.append(idea)
         functions = ";".join(f"{a.path}::{a.qualname}" for a in (anchor, *more))
         events.append(_row(deal, dealt, "idea", steps_present=present,
-                           idea_id=idea.id, title=title, functions=functions))  # fmt: skip
+                           idea_id=idea.id, title=title, functions=functions,
+                           fate_id=idea.id))  # fmt: skip
     return tuple(kept)
 
 

@@ -55,3 +55,14 @@ procedure row, filled the way `hypothesis_id` is: `s4a:<reason>`,
 version: the idea id on every `idea_dropped` event, and those events recorded.
 Neither changes a request or a selection. This is O61 addendum item 4's fate
 field, built after the last key-2 dispatch.
+
+**Built (U-fate, 2026-11-12).** The fate field is recorded from the next run
+on, with three departures from the vocabulary above:
+- `s4b:not_picked` is replaced by `s4b:quota_several` (all blocking quotas in
+  `quotas`), `s4b:portfolio_full` and `s4b:minimum_reached`.
+- A fate names only a quota still active when the fill ended.
+- Ideas dropped by the reply's checks before they had an id are recorded as
+  `<lane>-read-NN`, joined to procedure rows by `fate_id`.
+
+Every X2 round row carries `idea_fates` and `fate_counts`. The 36 ideas
+counted here predate the field, so they stay as described.

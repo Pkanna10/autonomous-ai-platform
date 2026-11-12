@@ -63,6 +63,7 @@ from autonomous_ai_agents.optimization.idea_types import (
     FunctionSpan,
     GenerateEvent,
     IdeaCandidate,
+    IdeaFate,
     IdeaStats,
     Lane,
     Mechanism,
@@ -71,6 +72,8 @@ from autonomous_ai_agents.optimization.idea_types import (
     ReviewVerdict,
     Tier,
     Typicality,
+    fate_code,
+    stage_fate,
 )
 from autonomous_ai_agents.optimization.sources import (
     GenerateResult,
@@ -663,6 +666,7 @@ def test_generate_result_defaults_carry_no_events_and_no_stats() -> None:
     result = GenerateResult()
     assert (result.hypotheses, result.notes) == ((), ())
     assert (result.events, result.stats) == ((), None)
+    assert result.idea_fates == ()  # O61 item 4: record only, empty by default
 
 
 def _reply(payload: dict[str, object]) -> dict[str, object]:
@@ -973,6 +977,42 @@ def test_idea_stats_default_to_nothing_counted() -> None:
             IdeaStats.model_validate(bad)
 
 
+def test_an_idea_fate_names_one_stage_and_its_reason() -> None:
+    """
+    GIVEN the fate vocabulary (O61 item 4): a stage and a code word, or
+          ``result`` (with the hypothesis id) or ``unrecorded``
+    THEN each validates, and a fate outside it, a ``result`` without a
+         hypothesis id or a hypothesis id on any other fate is refused
+    """
+    for fate in ("read:beyond_n", "s4a:no_anchor", "s3:review_duplicate_of",
+                 "s3:pre_review_tag_shape", "s4b:quota_primary_cell",
+                 "bound:novel", "unrecorded"):  # fmt: skip
+        found = IdeaFate(idea_id="far-01", lane=Lane.far, fate=fate, title="T")
+        assert (found.duplicate_of, found.hypothesis_id) == (None, None)
+    done = IdeaFate(idea_id="far-01", lane=Lane.far, fate="result", title="T",
+                    hypothesis_id="h1")  # fmt: skip
+    assert done.hypothesis_id == "h1"
+    twin = IdeaFate(idea_id="far-02", lane=Lane.far, fate="s4b:mechanism_duplicate",
+                    title="", duplicate_of="T")  # fmt: skip
+    assert twin.duplicate_of == "T" and twin.quotas == ()
+    both = IdeaFate(idea_id="far-03", lane=Lane.far, fate="s4b:quota_several",
+                    title="T", quotas=("lane", "anchor"))  # fmt: skip
+    assert both.quotas == ("lane", "anchor")
+    base = {"idea_id": "far-01", "lane": "far", "title": "T"}
+    for bad in (
+        {"fate": "s5:x"},
+        {"fate": "read:"},
+        {"fate": "s4a:No"},
+        {"fate": "result"},
+        {"fate": "s4a:no_anchor", "hypothesis_id": "h1"},
+        {"fate": "read:" + "x" * 60},
+        {"fate": "result", "hypothesis_id": ""},
+        {"fate": "result", "hypothesis_id": "h1", "idea_id": ""},
+    ):
+        with pytest.raises(ValidationError):
+            IdeaFate.model_validate({**base, **bad})
+
+
 def test_the_idea_types_never_enter_the_checkpoint_allowlist() -> None:
     """They cross one call (D65); the state carries only ``Hypothesis``."""
     from autonomous_ai_agents.common.models import ENGINE_SERDE_ALLOWLIST
@@ -982,3 +1022,20 @@ def test_the_idea_types_never_enter_the_checkpoint_allowlist() -> None:
         if isinstance(obj, type) and obj.__module__ == idea_types.__name__
     }  # fmt: skip
     assert own and not own & set(ENGINE_SERDE_ALLOWLIST)
+
+
+def test_a_fate_code_is_normalised_so_recording_never_raises() -> None:
+    """
+    GIVEN reason codes with capitals, a digit, a hyphen, spaces, nothing at
+          all or too many characters
+    THEN ``stage_fate`` makes each a valid fate: lowercase, any character
+         outside [a-z_] an underscore, cut to the limit, ``unknown`` when
+         empty; every result validates as an ``IdeaFate``
+    """
+    assert fate_code("Quota-1x") == "quota__x"
+    assert fate_code("its quote is: Not found") == "its_quote_is__not_found"
+    assert fate_code("") == "unknown"
+    assert fate_code("x" * 80) == "x" * 48
+    for code in ("Quota-1x", "", "x" * 80, "--", "\u00e9t\u00e9"):
+        fate = stage_fate("s4b", code)
+        assert IdeaFate(idea_id="i", lane=Lane.far, fate=fate, title="").fate == fate

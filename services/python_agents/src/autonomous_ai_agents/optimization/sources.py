@@ -45,19 +45,29 @@ from autonomous_ai_agents.common.models import (
     Workload,
 )
 from autonomous_ai_agents.optimization.idea_dedupe import IdeaKey
-from autonomous_ai_agents.optimization.idea_types import GenerateEvent, IdeaStats
+from autonomous_ai_agents.optimization.idea_types import (
+    GenerateEvent,
+    IdeaFate,
+    IdeaStats,
+)
 
 
 @dataclass(frozen=True)
 class GenerateResult:
     """Validated hypotheses, the model's best first, and what was dropped;
     ``events`` the node emits with their codes and levels after ``generated``,
-    ``stats`` what the idea pipeline counted (D65)."""
+    ``stats`` what the idea pipeline counted (D65); ``idea_fates`` where
+    each idea it read ended (O61 item 4, a record only: no stage, node or
+    request reads it). The no-code-context fallback (today's generator)
+    records no fates. Idea ids are unique within one generator call only
+    (every call numbers its lanes' ideas afresh), so a consumer keys a fate
+    on (call or round, ``idea_id``)."""
 
     hypotheses: tuple[Hypothesis, ...] = ()
     notes: tuple[str, ...] = ()
     events: tuple[GenerateEvent, ...] = ()
     stats: IdeaStats | None = None
+    idea_fates: tuple[IdeaFate, ...] = ()
 
 
 @dataclass(frozen=True)

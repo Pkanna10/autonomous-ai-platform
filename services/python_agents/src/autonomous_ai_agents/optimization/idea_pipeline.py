@@ -96,6 +96,14 @@ portfolio's ``IDEAS_PORTFOLIO_MAX`` and, after them, ``novel`` ideas (parked by
 the node) only while the total stays within ``n + IDEAS_PORTFOLIO_MAX``: a
 model-asserted label cannot let more through. S1 shows no examples (D45:
 today's prompt plus code; the bank is for the lenses and the leap).
+
+Fates (O61 item 4, a record only: no request, pick or stage reads them):
+the result's ``idea_fates`` hold one ``IdeaFate`` per idea a reply gave,
+lane by lane in read order (a lane's kept ideas, then those its reply's
+checks dropped): the stage that removed it (``read:``, ``s4a:``, ``s3:``,
+``s4b:``, ``bound:novel``) or ``result`` with its hypothesis id; an idea
+no stage accounted for is ``unrecorded``, so none is ever missing. With
+the portfolio leap, each procedure row carries its idea's ``fate`` too.
 """
 
 from __future__ import annotations
@@ -203,6 +211,7 @@ from autonomous_ai_agents.optimization.idea_portfolio_leap import (
     reply_failure,
     steps_tag,
     unanswered,
+    with_fates,
     with_hypotheses,
 )
 from autonomous_ai_agents.optimization.idea_prompts import (
@@ -223,15 +232,19 @@ from autonomous_ai_agents.optimization.idea_review import (
 from autonomous_ai_agents.optimization.idea_types import (
     LENS_LANES,
     RELAXING_LANES,
+    RESULT_FATE,
+    UNRECORDED_FATE,
     CodeContext,
     GenerateEvent,
     IdeaCandidate,
+    IdeaFate,
     IdeaStats,
     Lane,
     ReviewReason,
     ReviewVerdict,
     is_proposal,
     proposal_tag,
+    stage_fate,
 )
 from autonomous_ai_agents.optimization.sources import (
     GenerateResult,
@@ -333,6 +346,11 @@ class _Call:
     """The lessons block every lane's data block ends with (W1); ``""``: none."""
     deal: Deal | None = None
     """The portfolio leap's three procedures (U-portfolio); ``None``: today's leap."""
+    fates: list[IdeaFate] = field(default_factory=list)
+    """Each fate as a stage records it (O61 item 4)."""
+    order: list[str] = field(default_factory=list)
+    """The id of every idea read, lane by lane in read order (kept, then
+    dropped at read): each ends with exactly one fate."""
 
 
 class IdeaPipelineGenerator:
@@ -508,7 +526,7 @@ class IdeaPipelineGenerator:
                            minimum=self._cfg.IDEAS_PORTFOLIO_MIN,
                            maximum=self._cfg.IDEAS_PORTFOLIO_MAX,
                            mechanisms=c.keys if self._dedupe else None,
-                           merged=merged)  # fmt: skip
+                           merged=merged, fates=c.fates)  # fmt: skip
         for idea, twin in merged:
             c.events.append(GenerateEvent(
                 code="idea_dropped",
@@ -683,6 +701,7 @@ class IdeaPipelineGenerator:
             avoid=avoid_titles, lesson_titles=lesson_titles(lessons),
             multiplier=self._cfg.IDEAS_AMDAHL_MULTIPLIER, notes=c.notes,
             shown_slugs=frozenset(c.research.by_slug), events=c.events,
+            fates=c.fates,
         )  # fmt: skip
 
     def _s4a(
@@ -699,6 +718,7 @@ class IdeaPipelineGenerator:
             avoid=avoid_titles, lesson_titles=lesson_titles(lessons),
             multiplier=self._cfg.IDEAS_AMDAHL_MULTIPLIER, notes=c.notes,
             shown_slugs=frozenset(c.research.by_slug), events=c.events,
+            fates=c.fates,
         )  # fmt: skip
         gated = [e for e in c.events[before:] if e.data.get("reason") in _GATE_CODES]
         c.gate_passed = len(others) - len(gated)
@@ -728,7 +748,8 @@ class IdeaPipelineGenerator:
             )  # fmt: skip
             kept, why = self._review(c, ideas, request, shown_ids, fences)
         if kept is None:
-            kept = unreviewed(ideas, fences=fences, why=why, notes=c.notes)
+            kept = unreviewed(ideas, fences=fences, why=why, notes=c.notes,
+                              fates=c.fates)  # fmt: skip
             c.verdicts.update(i.review for i in kept if i.review is not None)
         return kept
 
@@ -778,7 +799,7 @@ class IdeaPipelineGenerator:
             return None, f"the reply is unusable: {exc}"
         removed: list[tuple[IdeaCandidate, ReviewReason]] = []
         kept = apply_review(ideas, reply, shown_ids=shown_ids, fences=fences,
-                            notes=c.notes, removed=removed)  # fmt: skip
+                            notes=c.notes, removed=removed, fates=c.fates)  # fmt: skip
         c.verdicts.update(i.review for i in kept if i.review is not None)
         c.verdicts[ReviewVerdict.infeasible] += len(removed)
         for idea, reason in removed:
@@ -903,13 +924,14 @@ class IdeaPipelineGenerator:
             return []
         view = c.views.get(lane)
         context = c.context if view is None else view.context
+        dropped: list[IdeaFate] = []  # O61: the ideas the reply's checks drop
         try:
             ideas = read_lane_reply(
                 job.result, lane=lane, context=context, index=c.index, n=n,
-                fence=c.fence, notes=c.notes, events=c.events,
+                fence=c.fence, notes=c.notes, events=c.events, fates=dropped,
             ) if portfolio is None else read_portfolio_reply(
                 job.result, deal=portfolio, context=context, index=c.index, n=n,
-                fence=c.fence, notes=c.notes, events=c.events,
+                fence=c.fence, notes=c.notes, events=c.events, fates=dropped,
             )  # fmt: skip
         except UnusableReplyError as exc:
             c.notes.append(f"lane {lane.value} failed (UnusableReplyError): {exc}")
@@ -924,6 +946,8 @@ class IdeaPipelineGenerator:
                 c.keys[idea.id] = key
         c.per_lane[lane] = len(found)
         c.read += found
+        c.fates += dropped
+        c.order += [*(i.id for i in found), *(f.idea_id for f in dropped)]
         return found
 
     def _stopped(self, c: _Call, job: _Job) -> None:
@@ -973,12 +997,17 @@ class IdeaPipelineGenerator:
         room = max(0, bound - len(head))
         count_note(c.notes, len(tail[room:]),
                    f"novel idea(s) past the result's bound of {bound} dropped")  # fmt: skip
+        c.fates += (_fate(i, stage_fate("bound", "novel")) for i in tail[room:])
         ideas = (*head, *tail[:room], *proposals)
         hypotheses = tuple(self._hypothesis(c, i) for i in ideas)
+        c.fates += (_fate(i, RESULT_FATE, h.id)
+                    for i, h in zip(ideas, hypotheses, strict=True))  # fmt: skip
+        fates = _fates(c)
         if c.deal is not None:  # U-portfolio: each idea row names its hypothesis
             c.events = with_hypotheses(c.events, {
                 i.id: h.id for i, h in zip(ideas, hypotheses, strict=True)
                 if i.framework is not None})  # fmt: skip
+            c.events = with_fates(c.events, {f.idea_id: f.fate for f in fates})
         if c.seeded:  # the node's own cost line for this call (D64)
             sent = [lane.value for lane in c.per_lane if lane is not Lane.obvious]
             lanes = f"lanes {', '.join(sent)}" if sent else "no lane sent"
@@ -1008,7 +1037,8 @@ class IdeaPipelineGenerator:
             cache_read_tokens=c.cache_reads,
             stop_reasons=c.stops,
         )
-        return GenerateResult(hypotheses, tuple(c.notes), tuple(c.events), stats)
+        return GenerateResult(hypotheses, tuple(c.notes), tuple(c.events), stats,
+                              fates)  # fmt: skip
 
     def _hypothesis(self, c: _Call, idea: IdeaCandidate) -> Hypothesis:
         slug = idea.technique_slug
@@ -1052,6 +1082,21 @@ class IdeaPipelineGenerator:
             risk=idea.risk,
             tags=tuple(tags),
         )  # fmt: skip
+
+
+def _fate(idea: IdeaCandidate, fate: str, hypothesis_id: str | None = None) -> IdeaFate:
+    return IdeaFate(idea_id=idea.id, lane=idea.lane, fate=fate,
+                    title=shorten(idea.title), hypothesis_id=hypothesis_id)  # fmt: skip
+
+
+def _fates(c: _Call) -> tuple[IdeaFate, ...]:
+    """One fate per idea read, in read order (O61 item 4): the first a stage
+    recorded, or ``unrecorded`` when none did."""
+    recorded: dict[str, IdeaFate] = {}
+    for found in c.fates:
+        recorded.setdefault(found.idea_id, found)
+    read = {idea.id: idea for idea in c.read}
+    return tuple(recorded.get(i) or _fate(read[i], UNRECORDED_FATE) for i in c.order)
 
 
 def _spent(job: _Job) -> dict[str, str | int | None]:

@@ -24,6 +24,18 @@ Pure functions: no model, no I/O, nothing random.
 
 No model-written number (``expected_gain``, ``provability``, ``risk``) and no
 reviewer verdict decides anything here (D8 amended).
+
+Fates (O61 item 4, a record only): given a ``fates`` list, each stage also
+appends a fate per idea it removes, the decisions untouched: ``s4a:<reason>``
+(the filter's own code, a duplicate or an obvious twin naming the kept idea)
+and in S4b ``repeated_title``, ``mechanism_duplicate`` (naming its twin),
+``tier_swapped`` (a pick the tier quota replaced) and, for any other idea
+left unpicked, the quotas still active when the fill ended that block it
+against the fill's picks (named in ``IdeaFate.quotas``): one gives
+``quota_lane``, ``quota_anchor`` or ``quota_primary_cell``, several
+``quota_several``; none, ``portfolio_full`` (the maximum was reached) or
+``minimum_reached`` (only a relaxed quota blocked it, and the relaxed fill
+stops at the minimum). A relaxed quota is never named.
 """
 
 from __future__ import annotations
@@ -48,8 +60,10 @@ from autonomous_ai_agents.optimization.idea_dedupe import (
 from autonomous_ai_agents.optimization.idea_types import (
     GenerateEvent,
     IdeaCandidate,
+    IdeaFate,
     Lane,
     Tier,
+    stage_fate,
 )
 
 TIME_OBJECTIVES: Final = frozenset({ObjectiveKind.runtime, ObjectiveKind.throughput})
@@ -66,6 +80,18 @@ Signature = tuple[tuple[str, ...], str, tuple[str, ...]]
 def _title_key(title: str) -> str:
     """A title as ``_title_key`` (``nodes.py``) compares it."""
     return " ".join(title.split()).casefold()
+
+
+def _fate(
+    idea: IdeaCandidate,
+    stage: str,
+    code: str,
+    twin: IdeaCandidate | None = None,
+    quotas: tuple[str, ...] = (),
+) -> IdeaFate:
+    return IdeaFate(idea_id=idea.id, lane=idea.lane, fate=stage_fate(stage, code),
+                    title=shorten(idea.title), quotas=quotas,
+                    duplicate_of=None if twin is None else shorten(twin.title))  # fmt: skip
 
 
 def signature(idea: IdeaCandidate) -> Signature:
@@ -97,12 +123,14 @@ def deterministic_filter(
     notes: list[str],
     shown_slugs: Collection[str] = (),
     events: list[GenerateEvent] | None = None,
+    fates: list[IdeaFate] | None = None,
 ) -> tuple[IdeaCandidate, ...]:
     """``obvious`` unchanged, then the ``others`` that survive, in order.
 
     ``floor`` is the objective's calibrated ``min_relative_gain``; each drop
     is noted and, when ``events`` is given, appended as an ``idea_dropped``
-    event whose ``reason`` is a code word.
+    event whose ``reason`` is a code word; when ``fates`` is given, as its
+    ``s4a:<reason>`` fate.
     """
     if not 0 <= floor <= 1:
         raise ValueError(f"floor must be a share in [0, 1], got {floor}")
@@ -117,16 +145,20 @@ def deterministic_filter(
     for idea in others:
         found = _drop_reason(idea, gated, floor, multiplier)
         mark = signature(idea)
+        twin = None
         if found is None and mark in seen:
-            found = "duplicate", f"duplicate of {shown(seen[mark].title)}"
+            twin = seen[mark]
+            found = "duplicate", f"duplicate of {shown(twin.title)}"
         elif found is None:
             seen[mark] = idea
-            found = _obvious_reason(idea, taken.get(mark), avoided, learnt,
-                                    shown_slugs)  # fmt: skip
+            twin = taken.get(mark)
+            found = _obvious_reason(idea, twin, avoided, learnt, shown_slugs)
         if found is None:
             kept.append(idea)
             continue
         code, why = found
+        if fates is not None:
+            fates.append(_fate(idea, "s4a", code, twin))
         note = f"filter: dropped idea {shown(idea.title)} ({idea.lane.value}): {why}"
         notes.append(note)
         if events is not None:
@@ -198,12 +230,14 @@ def portfolio(
     notes: list[str],
     mechanisms: Mapping[str, MechanismKey] | None = None,
     merged: list[tuple[IdeaCandidate, IdeaCandidate]] | None = None,
+    fates: list[IdeaFate] | None = None,
 ) -> tuple[IdeaCandidate, ...]:
     """The interleaved obvious and picked ideas, then any ``novel`` ones.
 
     ``mechanisms`` (G4) maps idea ids to their mechanism keys: a later idea
     with the same mechanism is dropped (an idea with no key never is), and
-    ``(dropped, kept twin)`` is appended to ``merged`` when it is given."""
+    ``(dropped, kept twin)`` is appended to ``merged`` when it is given.
+    ``fates`` (when given) gets an ``s4b:`` fate per idea not returned."""
     if not 1 <= minimum <= maximum:
         raise ValueError(f"need 1 <= minimum <= maximum, got {minimum}, {maximum}")
     titles: set[str] = set()
@@ -214,6 +248,8 @@ def portfolio(
         key = _title_key(idea.title)
         if key in titles:
             notes.append(f"portfolio: dropped repeated idea {shown(idea.title)}")
+            if fates is not None:
+                fates.append(_fate(idea, "s4b", "repeated_title"))
             return False
         titles.add(key)
         mark = None if mechanisms is None else mechanisms.get(idea.id)
@@ -224,6 +260,8 @@ def portfolio(
                          f"{shown(twin.title)} (mechanism dedupe)")  # fmt: skip
             if merged is not None:
                 merged.append((idea, twin))
+            if fates is not None:
+                fates.append(_fate(idea, "s4b", "mechanism_duplicate", twin))
             return False
         if mark is not None:
             taken.append((mark, idea))
@@ -236,7 +274,11 @@ def portfolio(
 
     olds = [idea for idea in obvious if admitted(idea)]
     pool = [idea for idea in candidates if admitted(idea)]
-    picked = [pool[i] for i in _pick(pool, rotation, minimum, maximum, notes)]
+    why: dict[int, tuple[str, tuple[str, ...]]] = {}
+    picked = [pool[i] for i in _pick(pool, rotation, minimum, maximum, notes, why)]
+    if fates is not None:
+        fates.extend(_fate(pool[i], "s4b", code, quotas=quotas)
+                     for i, (code, quotas) in sorted(why.items()))  # fmt: skip
     rounds: list[IdeaCandidate] = []
     while olds or picked:
         rounds += olds[:OBVIOUS_PER_ROUND] + picked[:NON_OBVIOUS_PER_ROUND]
@@ -250,8 +292,11 @@ def _pick(
     minimum: int,
     maximum: int,
     notes: list[str],
+    why: dict[int, tuple[str, tuple[str, ...]]],
 ) -> list[int]:
-    """Indexes into ``pool`` in pick order (rotation, then model order)."""
+    """Indexes into ``pool`` in pick order (rotation, then model order);
+    ``why`` gets each unpicked index's fate code and blocking quotas (O61
+    item 4)."""
     lanes = dict.fromkeys([*rotation, *(idea.lane for idea in pool)])
     queues = [[i for i, idea in enumerate(pool) if idea.lane is lane] for lane in lanes]
     active = list(_QUOTAS)
@@ -289,8 +334,33 @@ def _pick(
         notes.append(
             f"portfolio: only {len(pool)} non-obvious idea(s) survive; all are taken"
         )
+    filled, held = list(picked), list(active)  # the fill's end, before the tier
     _tier(pool, [i for queue in queues for i in queue], picked, maximum, notes, fits)
+    for i in (i for i in range(len(pool)) if i not in picked):
+        blocked = [name for (name, _), miss in zip(held, misses(i, filled, held),
+                                                   strict=True) if miss]  # fmt: skip
+        why[i] = _unpicked(blocked, swapped=i in filled, full=len(filled) >= maximum)
     return picked
+
+
+def _unpicked(
+    blocked: Sequence[str], *, swapped: bool, full: bool
+) -> tuple[str, tuple[str, ...]]:
+    """An unpicked idea's fate code and the quotas it names: ``tier_swapped``
+    when the tier quota replaced it; else the quotas still active at the
+    fill's end that it misses against the fill's picks (``blocked``, in
+    priority order): one names it, several ``quota_several``; none means it
+    fits them all, so the fill stopped first: at the maximum
+    (``portfolio_full``) or, a relaxed quota having blocked it, at the
+    minimum the relaxation aimed for (``minimum_reached``)."""
+    quotas = tuple(name.replace("-", "_") for name in blocked)
+    if swapped:
+        return "tier_swapped", ()
+    if len(quotas) > 1:
+        return "quota_several", quotas
+    if quotas:
+        return f"quota_{quotas[0]}", quotas
+    return ("portfolio_full" if full else "minimum_reached"), ()
 
 
 def _tier(

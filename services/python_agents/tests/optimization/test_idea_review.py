@@ -41,6 +41,7 @@ from autonomous_ai_agents.optimization.idea_review import (
 from autonomous_ai_agents.optimization.idea_types import (
     Anchor,
     IdeaCandidate,
+    IdeaFate,
     Lane,
     Mechanism,
     MorphCell,
@@ -709,3 +710,62 @@ def test_the_cap_bound_is_the_settings_bound() -> None:
     bounds = [m.le for m in field.metadata if getattr(m, "le", None) is not None]
     assert bounds == [idea_review.MAX_REVIEW_IDEAS] == [48]
     assert isinstance(_reply(_rv("i01")), _ReviewReply)
+
+
+# --------------------------------------------------------------------------
+# Fates (O61 item 4, a record only)
+# --------------------------------------------------------------------------
+
+
+def _fates(fates: Sequence[IdeaFate]) -> list[tuple[str, str, str | None]]:
+    return [(f.idea_id, f.fate, f.duplicate_of) for f in fates]
+
+
+def test_each_removal_and_each_withheld_idea_gets_its_s3_fate() -> None:
+    """
+    GIVEN ideas withheld for a boundary token and a tag shape, removals for
+          every enumerated reason and a duplicate of a shown earlier idea
+    WHEN the review is applied with a fates list
+    THEN each removed or withheld idea gets one ``s3:`` fate (a duplicate
+         names its twin's title) and the kept ideas and notes are unchanged
+    """
+    ideas = [
+        *_pool(1, 9),
+        _idea("w01", change_summary=f"see {REVIEWER.token}"),
+        _idea("w02", title="a <idea> b"),
+    ]
+    reviews = [
+        _rv("s01"), _rv("i01"),
+        *(_rv(f"i{n:02d}", "infeasible", r.value, plan="")
+          for n, r in enumerate(REMOVING, 2)),
+        _rv("i06", "infeasible", "duplicate_of", dup="i01", plan=""),
+    ]  # fmt: skip
+    fates: list[IdeaFate] = []
+    notes: list[str] = []
+    kept = apply_review(ideas, _reply(*reviews), shown_ids=[i.id for i in ideas[:10]],
+                        fences=FENCES, notes=notes, fates=fates)  # fmt: skip
+    again, plain = _apply(ideas, *reviews, shown=[i.id for i in ideas[:10]])
+    assert [i.id for i in kept] == list(again) == ["s01", "i01", "i07", "i08", "i09"]
+    assert notes == plain
+    assert _fates(fates) == [
+        ("w01", "s3:pre_review_boundary_token", None),
+        ("w02", "s3:pre_review_tag_shape", None),
+        *((f"i{n:02d}", f"s3:review_{r.value}", None)
+          for n, r in enumerate(REMOVING, 2)),
+        ("i06", "s3:review_duplicate_of", "Idea i01 on parse_token"),
+    ]  # fmt: skip
+    assert all(f.title == f"Idea {f.idea_id} on parse_token" for f in fates[2:])
+
+
+def test_a_rejected_review_or_no_review_fates_only_the_withheld() -> None:
+    ideas = [_idea("s01", Lane.obvious), _idea("i01", title="<hypothesis")]
+    fates: list[IdeaFate] = []
+    kept = apply_review(
+        ideas, _reply(_rv("s01", "infeasible", "precondition_false", plan="")),
+        shown_ids=["s01"], fences=FENCES, notes=[], fates=fates,
+    )  # fmt: skip
+    assert [i.id for i in kept] == ["s01"]
+    assert _fates(fates) == [("i01", "s3:pre_review_tag_shape", None)]
+    off: list[IdeaFate] = []
+    kept = unreviewed(ideas, fences=FENCES, why="review off", notes=[], fates=off)
+    assert [i.id for i in kept] == ["s01"] and off == fates

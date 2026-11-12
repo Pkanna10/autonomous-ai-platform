@@ -18,7 +18,9 @@ N2; spec amendment 3.4, 4.2b.2, 4.2b.7, D45, D50, D59, D60).
   Hotspots resolve against the shown profile only; ``lane`` comes from the
   request, and so does ``proposal`` (G3: a rule-relaxing lane's rule, set
   here and never read from the reply, whose schema has no such field);
-  numbers are clamped as today's generator clamps them.
+  numbers are clamped as today's generator clamps them. With ``fates``
+  (O61 item 4, a record only), each dropped idea also gets one
+  ``read:<code>`` fate (``read_fate``) at its place in the reply.
 - ``grounded``: the quote, without ``L123:`` prefixes and with whitespace
   collapsed, must occur in the named shown document's grounding text inside
   a hot function, and one of its lines must hold code, not only a comment or
@@ -80,11 +82,13 @@ from autonomous_ai_agents.optimization.idea_types import (
     CodeDocument,
     GenerateEvent,
     IdeaCandidate,
+    IdeaFate,
     Lane,
     Mechanism,
     MorphCell,
     Tier,
     Typicality,
+    stage_fate,
 )
 
 MAX_TABLE_TITLES: Final = 60
@@ -109,6 +113,14 @@ def tag_shape(text: str) -> bool:
 
 def title_key(title: str) -> str:
     return " ".join(title.split()).casefold()
+
+
+def read_fate(lane: Lane, place: int, title: str, code: str) -> IdeaFate:
+    """The fate of the reply's ``place``-th idea (1-based), dropped by the
+    reply's checks before it had a candidate id: ``read:<code>``, its id
+    ``<lane>-read-NN``."""
+    return IdeaFate(idea_id=f"{lane.value}-read-{place:02d}", lane=lane,
+                    fate=stage_fate("read", code), title=shorten(title))  # fmt: skip
 
 
 def lane_request(
@@ -234,18 +246,24 @@ def read_lane_reply(
     fence: Fence,
     notes: list[str],
     events: list[GenerateEvent] | None = None,
+    fates: list[IdeaFate] | None = None,
 ) -> tuple[IdeaCandidate, ...]:
     """At most ``n`` validated ideas of ``lane``, in the model's order.
 
     ``UnusableReplyError`` when the reply as a whole cannot be used; every
     dropped idea is noted and, when ``events`` is given, appended there as
-    an ``idea_dropped`` event (D65). ``fence`` must hold every live token.
+    an ``idea_dropped`` event (D65), and to ``fates`` (when given) as its
+    ``read:<code>`` fate. ``fence`` must hold every live token.
     """
     n = check_count("n", n, MAX_REPLY_ITEMS)
     reply = read_reply(result, _Reply, what=f"write ideas for the {lane.value} lane")
     label = f"lane {lane.value}"
     kept: list[IdeaCandidate] = []
     titles: set[str] = set()
+
+    def fate(place: int, item: _Idea, code: str) -> None:
+        if fates is not None:
+            fates.append(read_fate(lane, place + 1, item.title, code))
 
     def drop(item: _Idea, reason: str, note: str, **where: str) -> None:
         notes.append(note)
@@ -258,18 +276,26 @@ def read_lane_reply(
         if len(kept) == n:
             rest = len(reply.hypotheses) - position
             notes.append(f"{label}: dropped {rest} idea(s) beyond the first {n}")
+            for place, past in enumerate(reply.hypotheses[position:], position):
+                fate(place, past, "beyond_n")
             break
         named = shown(item.title)
         cells = tuple(dict.fromkeys(item.morph_cells))
-        problem = _field_problem(item, fence)
-        if problem is None and not 1 <= len(cells) <= MAX_MORPH_CELLS:
-            problem = f"its morph_cells hold {len(cells)} cell(s), not 1 to 3"
-        if problem is not None:
+        issue = _field_issue(item, fence)
+        if issue is None and not 1 <= len(cells) <= MAX_MORPH_CELLS:
+            issue = (
+                "morph_cells",
+                f"its morph_cells hold {len(cells)} cell(s), not 1 to 3",
+            )
+        if issue is not None:
+            code, problem = issue
+            fate(position, item, code)
             drop(item, problem, f"{label}: dropped idea {named}: {problem}")
             continue
         found = _ground(item.depends_on_path, item.depends_on_quote, context)
         anchor = None
         if isinstance(found, str) and lane is not Lane.obvious:
+            fate(position, item, "ungrounded")
             drop(item, found, f"{label}: dropped idea {named}: {found}",
                  path=item.depends_on_path, quote=item.depends_on_quote[:80])  # fmt: skip
             continue
@@ -278,6 +304,7 @@ def read_lane_reply(
         else:
             anchor = found[0]
         if title_key(item.title) in titles:
+            fate(position, item, "duplicate_title")
             drop(item, "duplicate title", f"{label}: dropped duplicate idea {named}")
             continue
         titles.add(title_key(item.title))
@@ -286,8 +313,9 @@ def read_lane_reply(
     return tuple(kept)
 
 
-def _field_problem(item: _Idea, fence: Fence) -> str | None:
-    """``"its <field> ..."`` for the first unusable text field, else ``None``."""
+def _field_issue(item: _Idea, fence: Fence) -> tuple[str, str] | None:
+    """``("field_<field>", "its <field> ...")`` for the first unusable text
+    field (its fate code and its note), else ``None``."""
     fields = [
         ("title", item.title, MAX_TITLE_CHARS, True),
         ("technique_slug", item.technique_slug, MAX_TITLE_CHARS, True),
@@ -311,7 +339,7 @@ def _field_problem(item: _Idea, fence: Fence) -> str | None:
         elif problem is None and tag_shape(value):
             problem = "holds a tag shape"
         if problem is not None:
-            return f"its {name} {problem}"
+            return f"field_{name}", f"its {name} {problem}"
     return None
 
 

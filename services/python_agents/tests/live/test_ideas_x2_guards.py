@@ -61,10 +61,14 @@ from autonomous_ai_agents.optimization.idea_pipeline import (
 )
 from autonomous_ai_agents.optimization.idea_types import LENS_LANES, Lane
 from autonomous_ai_agents.optimization.judges import OP_COUNT_JUDGE, OpCountJudge
-from autonomous_ai_agents.optimization.sources import GenerateResult
+from autonomous_ai_agents.optimization.sources import (
+    GenerateResult,
+    HypothesisGenerator,
+)
 from autonomous_ai_agents.orchestrator.factory import build_context
 from autonomous_ai_agents.orchestrator.main import EngineRunResult
 from autonomous_ai_agents.orchestrator.nodes import (
+    NodeContext,
     _discovery_cap,
     make_nodes,
     make_router,
@@ -280,6 +284,75 @@ class _Ideas:
         self.calls += 1
         return GenerateResult(hypotheses=tuple(
             _hyp(f"call {self.calls} idea {i}") for i in range(self.count)))  # fmt: skip
+
+
+# ``nodes._generate``'s call: the keywords the hypotheses node sends
+NODE_KEYWORDS = ("project", "understanding", "hotspots", "objective", "techniques",
+                 "lessons", "avoid_titles", "n", "budget", "commit", "run_id",
+                 "call_index", "protected", "read_deny", "workloads", "verdicts")  # fmt: skip
+
+
+def test_the_fate_tap_wraps_the_real_loop_s_generator_alone(
+    upstream: og.Upstream, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    GIVEN the real X2-0 loop ``start_x2_loop`` builds, its generator's
+        ``generate`` stubbed (no request)
+    WHEN ``tap_fates`` taps it and the tap is called with every keyword the
+        hypotheses node sends
+    THEN the context is still a ``NodeContext`` whose every other field is
+        the same object, its generator a ``FateTap`` around the original,
+        and the call reaches it with the same keywords and values; the
+        stub's result comes back as is and its fates are kept
+    """
+    for key, value in x2.arm_env(x2.X2_0).items():
+        monkeypatch.setenv(key, value)
+    built = Settings(_env_file=None)
+    for key in x2.X2_0.update:
+        monkeypatch.setattr(settings, key, getattr(built, key))
+    url, commit = upstream()
+    root = Path(os.path.realpath(tmp_path))
+    (root / "x2").mkdir()
+    monkeypatch.setattr(settings, "WORKTREE_ROOT", root / "wt-root")
+    restore_host_key(monkeypatch, "dry-run-key")
+    run = LiveRun("dry", x2.arm_cap(x2.X2_0), wire=httpx2.MockTransport(_no_wire))
+    loop = x2.start_x2_loop(og._local_repo(url, commit), run, root / "x2", REQUIRED,
+                            policy=og.LOCAL)  # fmt: skip
+    inner = loop.context.generator
+    assert isinstance(inner, IdeaPipelineGenerator)
+    seen: list[dict[str, object]] = []
+    result = GenerateResult(notes=("stub",))
+
+    def stub(**kwargs: object) -> GenerateResult:
+        seen.append(kwargs)
+        return result
+
+    monkeypatch.setattr(inner, "generate", stub)
+    assert set(NODE_KEYWORDS) == set(
+        inspect.signature(HypothesisGenerator.generate).parameters
+    ) - {"self"}
+
+    tapped, tap = x2.tap_fates(loop)
+
+    ctx = tapped.context
+    assert isinstance(ctx, NodeContext) and tap is not None
+    assert (
+        isinstance(ctx.generator, x2.FateTap)
+        and ctx.generator is tap
+        and tap.inner is inner
+    )
+    for f in dataclasses.fields(NodeContext):
+        if f.name != "generator":
+            assert getattr(ctx, f.name) is getattr(loop.context, f.name), f.name
+    for f in dataclasses.fields(type(loop)):
+        if f.name != "context":
+            assert getattr(tapped, f.name) is getattr(loop, f.name), f.name
+    sent = {name: object() for name in NODE_KEYWORDS}
+    assert tap.generate(**sent) is result
+    (got,) = seen
+    assert got.keys() == sent.keys() and all(got[k] is sent[k] for k in sent)
+    assert tap.calls == [()]
+    assert run.capture.exchanges == [] and run.records == []
 
 
 def _second_call(loop: Any, ctx: Any, count: int) -> tuple[bool, int]:
@@ -525,7 +598,7 @@ def _state(*, op: bool = True) -> EngineRunResult:
         "objectives": [sg._objective()], "hypotheses": [s1, lens, comp, leap],
         "candidate_pool": [pool], "parked": [_hyp("parked", "lane:far")],
         "trials": trials, "verdicts": verdicts, "events": events,
-        "combination": combination, "delivery": object(),
+        "combination": combination, "delivery": object(), "approval": None,
         "discovery_cost_usd": 1.4, "seeded_calls": 1, "seeded_cost_usd": 0.31,
     }  # fmt: skip
     return EngineRunResult("run", "done", cast(Any, state), None)

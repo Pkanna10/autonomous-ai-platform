@@ -59,6 +59,7 @@ from autonomous_ai_agents.optimization.idea_lanes import (
     lane_request,
     lane_transports,
     on_the_table,
+    read_fate,
     read_lane_reply,
     tag_shape,
 )
@@ -74,6 +75,7 @@ from autonomous_ai_agents.optimization.idea_types import (
     CodeContext,
     GenerateEvent,
     IdeaCandidate,
+    IdeaFate,
     Lane,
     Mechanism,
     MorphCell,
@@ -918,3 +920,58 @@ def test_a_prefix_no_other_request_reads_is_never_cached() -> None:
         schema=IDEAS_SCHEMA, max_tokens=9, effort=None,
     )  # fmt: skip
     assert json.dumps(shared.messages).count("cache_control") == 1
+
+
+def test_every_idea_the_checks_drop_gets_a_read_fate_at_its_reply_place() -> None:
+    """
+    GIVEN a reply whose ideas fail each of the reply's checks in turn
+    WHEN it is read with a fates list (O61 item 4)
+    THEN each dropped idea gets one ``read:<code>`` fate, its id its place in
+         the reply, and the kept ideas none (their fate comes later); the
+         ideas, notes and events are what they are without the list
+    """
+    items = [
+        _idea(title="Kept first"),
+        _idea(title="A fenced ```title"),
+        _idea(title="Four cells", morph_cells=[c.value for c in list(MorphCell)[:4]]),
+        _idea(title="Nowhere", depends_on_quote="total = compute_nothing_here()"),
+        _idea(title="kept   FIRST"),
+        _idea(title="Kept second"),
+        _idea(title="Past n"),
+        _idea(title="Past n too"),
+    ]
+    fates: list[IdeaFate] = []
+    events: list[GenerateEvent] = []
+    notes: list[str] = []
+    kept = read_lane_reply(_result(items), lane=Lane.far, context=CONTEXT,
+                           index=INDEX, n=2, fence=FENCE, notes=notes,
+                           events=events, fates=fates)  # fmt: skip
+    plain: list[GenerateEvent] = []
+    again = read_lane_reply(_result(items), lane=Lane.far, context=CONTEXT,
+                            index=INDEX, n=2, fence=FENCE, notes=[], events=plain)  # fmt: skip
+    assert again == kept and plain == events
+    assert [i.id for i in kept] == ["far-01", "far-02"]
+    assert [(f.idea_id, f.fate, f.title) for f in fates] == [
+        ("far-read-02", "read:field_title", "A fenced ```title"),
+        ("far-read-03", "read:morph_cells", "Four cells"),
+        ("far-read-04", "read:ungrounded", "Nowhere"),
+        ("far-read-05", "read:duplicate_title", "kept   FIRST"),
+        ("far-read-07", "read:beyond_n", "Past n"),
+        ("far-read-08", "read:beyond_n", "Past n too"),
+    ]
+    assert {f.lane for f in fates} == {Lane.far}
+    assert all(f.hypothesis_id is None and f.duplicate_of is None for f in fates)
+
+
+def test_a_long_dropped_title_is_shortened_in_its_fate() -> None:
+    fates: list[IdeaFate] = []
+    read_lane_reply(_result([_idea(title="x" * 400)]), lane=Lane.far,
+                    context=CONTEXT, index=INDEX, n=2, fence=FENCE, notes=[],
+                    fates=fates)  # fmt: skip
+    assert fates[0].fate == "read:field_title"
+    assert fates[0].title.endswith("...") and len(fates[0].title) < 400
+
+
+def test_a_read_fate_normalises_its_code() -> None:
+    found = read_fate(Lane.far, 3, "T", "Field-2x")
+    assert (found.idea_id, found.fate) == ("far-read-03", "read:field__x")

@@ -11,7 +11,9 @@ reviewed once; enumerated removal reasons; ``duplicate_of`` only an earlier id
 it did not itself mark infeasible; the two-thirds and every-S1 removal limit;
 plans re-validated (a bad plan drops the plan, not the idea). Only ``review``
 and ``plan`` change; notes carry ids, checked titles and counts, never the
-reviewer's own strings.
+reviewer's own strings. With ``fates`` (O61 item 4, a record only), each
+withheld idea gets ``s3:pre_review_<problem>`` and each removal
+``s3:review_<reason>`` (a duplicate with its twin's title).
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ from autonomous_ai_agents.clients.structured import (
     read_reply,
     schema_array,
     schema_object,
+    shorten,
     shown,
     structured_request,
     text_problem,
@@ -41,9 +44,11 @@ from autonomous_ai_agents.common.config import Effort
 from autonomous_ai_agents.optimization.idea_prompts import THINK_LINE
 from autonomous_ai_agents.optimization.idea_types import (
     IdeaCandidate,
+    IdeaFate,
     Lane,
     ReviewReason,
     ReviewVerdict,
+    stage_fate,
 )
 
 MAX_PLAN_CHARS: Final = 500
@@ -56,6 +61,11 @@ MAX_REVIEW_ITEMS: Final = 100
 _TAG_SHAPE: Final = re.compile(r"<\s*/?\s*(?:idea|hypothesis|untrusted_)", re.I)
 _CODE_FENCE: Final = "```"
 _BLOCK: Final = "untrusted_model_content"
+_PROBLEMS: Final = {
+    "boundary_token": "it holds a boundary token",  # nosec B105: a note, not a password
+    "tag_shape": "it holds a tag shape",
+}
+"""Why an idea is withheld from the reviewer: its fate code and its note."""
 _UNKNOWN: Final = ReviewVerdict.unknown
 _INFEASIBLE: Final = ReviewVerdict.infeasible
 
@@ -159,8 +169,8 @@ def review_request(
     for idea in sorted(ideas, key=lambda i: i.lane is not Lane.obvious):  # stable
         line, problem = _rendered(idea, (fence, reviewer_fence))
         if problem is not None:
-            lane = idea.lane.value
-            notes.append(f"idea {idea.id} ({lane}) dropped before review: {problem}")
+            lane, why = idea.lane.value, _PROBLEMS[problem]
+            notes.append(f"idea {idea.id} ({lane}) dropped before review: {why}")
         elif len(lines) == max_ideas:
             over += 1
         else:
@@ -200,11 +210,36 @@ def unreviewed(
     fences: Sequence[Fence],
     why: str,
     notes: list[str],
+    fates: list[IdeaFate] | None = None,
 ) -> tuple[IdeaCandidate, ...]:
     """Every idea ``unknown`` with no plan (review off, unaffordable, failed);
-    one note. Ideas ``review_request`` withholds stay dropped (it notes them)."""
+    one note. Ideas ``review_request`` withholds stay dropped (it notes them;
+    ``fates``, when given, gets theirs)."""
     notes.append(f"ideas not reviewed ({why}): every idea unknown, no plan")
-    return tuple(_unknown(i) for i in ideas if _rendered(i, fences)[1] is None)
+    return tuple(_unknown(i) for i in _safe(ideas, fences, fates))
+
+
+def _safe(
+    ideas: Sequence[IdeaCandidate],
+    fences: Sequence[Fence],
+    fates: list[IdeaFate] | None,
+) -> list[IdeaCandidate]:
+    """The ideas ``review_request`` shows or caps; each withheld one's fate
+    to ``fates`` when given."""
+    safe: list[IdeaCandidate] = []
+    for idea in ideas:
+        problem = _rendered(idea, fences)[1]
+        if problem is None:
+            safe.append(idea)
+        elif fates is not None:
+            fates.append(_fate(idea, f"pre_review_{problem}"))
+    return safe
+
+
+def _fate(idea: IdeaCandidate, code: str, twin: str | None = None) -> IdeaFate:
+    return IdeaFate(idea_id=idea.id, lane=idea.lane, fate=stage_fate("s3", code),
+                    title=shorten(idea.title),
+                    duplicate_of=None if twin is None else shorten(twin))  # fmt: skip
 
 
 def apply_review(
@@ -215,10 +250,12 @@ def apply_review(
     fences: Sequence[Fence],
     notes: list[str],
     removed: list[tuple[IdeaCandidate, ReviewReason]] | None = None,
+    fates: list[IdeaFate] | None = None,
 ) -> tuple[IdeaCandidate, ...]:
     """``ideas`` minus what the reviewer validly removed, in input order, each
     with its accepted verdict and plan; ideas it was not shown are ``unknown``.
-    ``removed`` (when given) collects each removal and its reason."""
+    ``removed`` (when given) collects each removal and its reason, ``fates``
+    each removal's and each withheld idea's fate."""
     position = {idea_id: n for n, idea_id in enumerate(shown_ids)}
     by_id: dict[str, list[_Review]] = {}
     for review in reply.reviews:
@@ -244,7 +281,7 @@ def apply_review(
             accepted[idea_id] = (verdict, plan, review)
         if why is not None:
             notes.append(f"reviewer verdict ignored for {idea_id}: {why}")
-    safe = [i for i in ideas if _rendered(i, fences)[1] is None]
+    safe = _safe(ideas, fences, fates)
     gone = {i for i, (verdict, _, _) in accepted.items() if verdict is _INFEASIBLE}
     s1 = [i.id for i in safe if i.id in position and i.lane is Lane.obvious]
     if 3 * len(gone) > 2 * len(position) or (s1 and gone.issuperset(s1)):
@@ -259,11 +296,16 @@ def apply_review(
         verdict, plan, review = entry
         if verdict is _INFEASIBLE:
             what = review.reason.value
+            twin = None
             if review.reason is ReviewReason.duplicate_of:
                 what += f" {review.duplicate_of}"  # a shown id, checked above
+                twin = next((i.title for i in ideas if i.id == review.duplicate_of),
+                            review.duplicate_of)  # fmt: skip
             notes.append(f"reviewer removed {idea.id} {shown(idea.title)}: {what}")
             if removed is not None:
                 removed.append((idea, review.reason))
+            if fates is not None:
+                fates.append(_fate(idea, f"review_{review.reason.value}", twin))
             continue
         checked = None if plan is None else _plan(idea.id, plan, fences, notes)
         kept.append(idea.model_copy(update={"review": verdict, "plan": checked}))
@@ -271,7 +313,8 @@ def apply_review(
 
 
 def _rendered(idea: IdeaCandidate, fences: Sequence[Fence]) -> tuple[str, str | None]:
-    """The idea's data line and why it may not be embedded, or ``None``."""
+    """The idea's data line and why it may not be embedded (a ``_PROBLEMS``
+    code), or ``None``."""
     anchor = idea.anchor
     fields = {
         "id": idea.id,
@@ -287,9 +330,9 @@ def _rendered(idea: IdeaCandidate, fences: Sequence[Fence]) -> tuple[str, str | 
     }
     line = data_line(fields)  # checked as rendered: an escape cannot hide a token
     if any(fence.holds(line) for fence in fences):
-        return line, "it holds a boundary token"
+        return line, "boundary_token"
     if any(v is not None and _TAG_SHAPE.search(v) for v in fields.values()):
-        return line, "it holds a tag shape"
+        return line, "tag_shape"
     return line, None
 
 

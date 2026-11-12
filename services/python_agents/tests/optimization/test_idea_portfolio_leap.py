@@ -75,12 +75,14 @@ from autonomous_ai_agents.optimization.idea_portfolio_leap import (
     portfolio_schema,
     read_portfolio_reply,
     reply_failure,
+    with_fates,
 )
 from autonomous_ai_agents.optimization.idea_prompts import IDEAS_SCHEMA
 from autonomous_ai_agents.optimization.idea_types import (
     CodeContext,
     GenerateEvent,
     IdeaCandidate,
+    IdeaFate,
 )
 from autonomous_ai_agents.optimization.sources import GenerateResult
 from autonomous_ai_agents.research import playbook as playbook_module
@@ -851,3 +853,151 @@ def test_deal_settings_name_what_is_missing() -> None:
         deal_settings(None, 1)
     with pytest.raises(ValueError, match="deal run"):
         deal_settings("tomli", 0)
+
+
+# --------------------------------------------------------------------------
+# Fates (O61 item 4, a record only)
+# --------------------------------------------------------------------------
+
+
+def _fated(
+    reply: Json, context: CodeContext, *, n: int = 3
+) -> tuple[tuple[IdeaCandidate, ...], list[GenerateEvent], list[IdeaFate]]:
+    message = BetaMessage.model_validate(reply)
+    result = LLMResult(message, 0.0, 10, 0.0, OPUS, False, (), 1)
+    events: list[GenerateEvent] = []
+    fates: list[IdeaFate] = []
+    index = {(PATH, name): [f"h-{name}"] for name in FUNCTIONS}
+    ideas = read_portfolio_reply(result, deal=DEAL, context=context, index=index,
+                                 n=n, fence=FENCE, notes=[], events=events,
+                                 fates=fates)  # fmt: skip
+    plain = _read(reply, context, n=n)
+    assert (plain[0], plain[1]) == (ideas, events)  # the list changes nothing else
+    return ideas, events, fates
+
+
+def _row_fates(events: Sequence[GenerateEvent]) -> list[object]:
+    return [e.data["fate"] for e in events if e.code == PROCEDURE_EVENT]
+
+
+def _row_ids(events: Sequence[GenerateEvent]) -> list[object]:
+    return [e.data["fate_id"] for e in events if e.code == PROCEDURE_EVENT]
+
+
+@pytest.mark.parametrize(
+    ("change", "code"),
+    [
+        ({"framework": "recall_x"}, "framework_mismatch"),
+        ({"cost_model": ""}, "field_cost_model"),
+        ({"title": "x" * 500}, "field_title"),
+        ({"morph_cells": []}, "morph_cells"),
+        ({"depends_on_quote": "not in the file at all, nowhere"}, "ungrounded"),
+        ({"more_anchors": [{"depends_on_path": PATH,
+                            "depends_on_quote": QUOTES["merge_runs"]}] * 4},
+         "more_anchors_count"),
+        ({"more_anchors": [{"depends_on_path": "pkg/\x07text.py",
+                            "depends_on_quote": QUOTES["merge_runs"]}]},
+         "more_anchors_unanchored"),
+        ({"more_anchors": [{"depends_on_path": PATH,
+                            "depends_on_quote": "return sorted(set(items))"}]},
+         "more_anchors_unanchored"),
+    ],
+)  # fmt: skip
+def test_a_dropped_leap_idea_gets_its_read_fate_on_its_row_and_in_the_list(
+    context: CodeContext, change: Mapping[str, object], code: str
+) -> None:
+    """
+    GIVEN a leap idea failing one of the reply's checks, as the second
+          procedure of the reply
+    THEN its row's ``fate`` and its one fate are ``read:<code>``, its id its
+         place in the reply's procedures
+    """
+    idea = {**_pidea("A checked idea", "count_words", IDS[1]), **change}
+    ideas, events, fates = _fated(
+        _leap(_proc(IDS[0], na=1), _proc(IDS[1], idea=idea)), context
+    )
+    assert ideas == ()
+    assert _row_fates(events) == [None, f"read:{code}", None]
+    assert _row_ids(events) == [None, "leap-read-02", None]  # joins its fate
+    assert [(f.idea_id, f.lane.value, f.fate) for f in fates] == [
+        ("leap-read-02", "leap", f"read:{code}")
+    ]
+
+
+def test_a_repeated_title_ideas_past_n_both_and_ignored_ideas_get_fates(
+    context: CodeContext,
+) -> None:
+    """
+    GIVEN a repeated title, an idea past n, an idea beside not_applicable
+          and ideas in a procedure written twice or never dealt
+    THEN each gets one read fate; a kept idea's row waits for its fate
+         (``None`` until ``with_fates``), and a row with no idea has none
+    """
+    reply = _leap(
+        _proc(IDS[0], idea=_pidea("Same title", "count_words", IDS[0])),
+        _proc(IDS[1], idea=_pidea("Same title", "merge_runs", IDS[1])),
+        _proc(IDS[1], idea=_pidea("Written twice", "merge_runs", IDS[1])),
+        _proc("polya_x", idea=_pidea("Never dealt", "merge_runs", IDS[1]), steps=[]),
+        _proc("polya_x", na=1, steps=[]),
+        _proc(IDS[2], na=1, idea=_pidea("Both at once", "parse_tokens", IDS[2])),
+    )
+    ideas, events, fates = _fated(reply, context, n=1)
+    assert [i.id for i in ideas] == ["leap-01"]
+    assert _row_fates(events) == [None, "read:duplicate_title",
+                                  "read:idea_and_not_applicable"]  # fmt: skip
+    assert _row_ids(events) == ["leap-01", "leap-read-02", "leap-read-06"]
+    assert [(f.idea_id, f.fate, f.title) for f in fates] == [
+        ("leap-read-03", "read:procedure_ignored", "Written twice"),
+        ("leap-read-04", "read:procedure_ignored", "Never dealt"),
+        ("leap-read-02", "read:duplicate_title", "Same title"),
+        ("leap-read-06", "read:idea_and_not_applicable", "Both at once"),
+    ]
+    past = _fated(_leap(
+        _proc(IDS[0], idea=_pidea("First", "count_words", IDS[0])),
+        _proc(IDS[1], idea=_pidea("Second", "merge_runs", IDS[1])),
+    ), context, n=1)  # fmt: skip
+    assert _row_fates(past[1]) == [None, "read:beyond_n", None]
+    assert [f.idea_id for f in past[2]] == ["leap-read-02"]
+
+
+def test_with_fates_fills_only_the_idea_rows_it_is_given() -> None:
+    rows = [
+        GenerateEvent(code=PROCEDURE_EVENT, message="m",
+                      data={"idea_id": "leap-01", "fate": None}),
+        GenerateEvent(code=PROCEDURE_EVENT, message="m",
+                      data={"idea_id": "leap-02", "fate": None}),
+        GenerateEvent(code=PROCEDURE_EVENT, message="m",
+                      data={"idea_id": None, "fate": "read:ungrounded"}),
+        GenerateEvent(code="idea_dropped", message="m", data={"idea_id": "leap-01"}),
+    ]  # fmt: skip
+    found = with_fates(rows, {"leap-01": "s4b:quota_lane"})
+    assert [e.data.get("fate") for e in found] == [
+        "s4b:quota_lane",
+        None,
+        "read:ungrounded",
+        None,
+    ]
+    assert found[1:] == rows[1:]
+
+
+def test_each_procedure_row_names_its_ideas_fate_in_the_pipeline() -> None:
+    """
+    GIVEN the whole path on fakes (the portfolio on)
+    THEN the idea row's fate is ``result`` beside its hypothesis id, the
+         not-applicable row has none and the dropped idea's row its read
+         fate; the call's fates hold every idea it read once
+    """
+    _, result = _on()
+    rows = _rows(result)
+    assert [r["fate"] for r in rows] == ["result", None, "read:more_anchors_unanchored"]
+    assert list(rows[0])[-3:] == ["hypothesis_id", "fate", "fate_id"]
+    assert [r["fate_id"] for r in rows] == ["leap-01", None, "leap-read-03"]
+    assert {r["fate_id"] for r in rows} - {None} == {
+        f.idea_id for f in result.idea_fates if f.lane.value == "leap"
+    }  # one join key for every row that held an idea
+    leap = [f for f in result.idea_fates if f.lane.value == "leap"]
+    assert [(f.idea_id, f.fate) for f in leap] == [
+        ("leap-01", "result"),
+        ("leap-read-03", "read:more_anchors_unanchored"),
+    ]
+    assert leap[0].hypothesis_id == rows[0]["hypothesis_id"]

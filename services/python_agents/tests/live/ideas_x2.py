@@ -76,8 +76,45 @@ writes), the anchor its mechanism key's function.
 four libraries with same-site conflicts in X2; no request changed and part
 3 trials none, so the cap and minutes are X2-0's; off the plan. A run whose
 combination holds keep records (``SITE_STACKS`` on or record) writes per
-kept hypothesis ``combine`` (``combine_row``: ids as hypothesis ids) and on
-the run row its ``conflicts``; other runs write neither.
+kept hypothesis ``combine`` (``combine_row``: ids as hypothesis ids); other
+runs write none. Since U-fate the run row's ``conflicts`` key is on every
+run: the dry merge's pairs (ids as hypothesis ids) where it ran (keep
+records), ``None`` where none ran (``SITE_STACKS`` off), never an empty
+list that was not measured.
+
+**Combine fates** (U-fate, O61 addendum 4, record-only, every arm): each
+hypothesis row adds ``combine_fate`` (``combine_fates``), for a keep the run
+combine was offered (``nodes._deliverable``'s run set): ``fate``, and the
+``paths`` of the skip that gave it. ``APPLIED`` is in the held combine's
+tip (delivery is the run row's ``delivered``), ``DROPPED_AT_RETEST``
+applied in a tip that did not hold, else the combine's own greedy skip
+reason (``execution.combine``: ``conflict``, ``nothing left to apply``,
+``not a commit``, ``not a single-parent child of the base commit``). The
+fallback's row is its own re-test's: ``FALLBACK_APPLIED`` (held alone),
+``FALLBACK_FAILED`` (re-tested alone, did not hold) or ``FALLBACK_SKIPPED``
+(could not be applied alone, never measured; that skip's ``reason`` and
+``paths``), with ``greedy``, its greedy skip's ``reason`` and ``paths``
+(``None`` when the greedy merge applied it). ``combine_fate`` is ``None``
+for three reasons: the row was not kept; it was kept but not offered to
+the run combine (the review set, whose combine is not read); or no combine
+ran. The run row adds ``fallback_trial_id``, ``combine_summary``
+(redacted), ``skipped`` (trial and hypothesis id, reason, paths, blocker,
+``stage``: ``GREEDY`` or ``FALLBACK``) and ``baseline_floor_pct`` (the
+baseline's calibrated floor, D41 c; ``None`` uncalibrated).
+
+**Idea fates** (U-fate, record-only): the hypotheses node keeps only a
+generator result's events, so ``run_one`` wraps the loop's generator in
+``FateTap`` (``tap_fates``: each call handed on as made, the result
+returned as is, its ``idea_fates`` kept in call order). Each round row adds
+``idea_fates`` (the calls its ``generated`` events count, one per returned
+call: ``call``, its index in the round, then idea id, lane, fate, quotas,
+duplicate (redacted) and hypothesis id; no title, the hypothesis rows carry
+those), ``fate_counts`` (lane, fate, count) and ``idea_fates_aligned``
+(the tap's calls as many as the run's ``generated`` events; a misaligned
+run's calls may sit under the wrong round); a round no call fed carries
+``[]`` and ``{}``. The run row adds ``fate_calls`` (the tap's calls,
+``None`` untapped) and ``generated_events`` side by side. A loop with no generator is not tapped, and its rows
+carry neither (no X2 arm: each runs the idea pipeline wired).
 
 **Variance** (emergence round 2, S1): an arm's ``aa`` says whether its runs
 are A/A pool draws (``full``: X2-0's requests and delivery; frozen before any
@@ -132,14 +169,15 @@ and minutes are the derivation above with a third round, its call charged:
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import json
 import math
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Final, Literal
+from typing import Any, Final, Literal
 
 from e2e.conftest import Isolation, LaunchLog
 
@@ -154,6 +192,7 @@ from autonomous_ai_agents.common.config import (
 )
 from autonomous_ai_agents.common.models import (
     Combination,
+    CombineSkip,
     Delivery,
     DeliveryKind,
     EngineEvent,
@@ -175,10 +214,16 @@ from autonomous_ai_agents.optimization.evolve import (
 from autonomous_ai_agents.optimization.idea_dedupe import IdeaKey, recorded_keys
 from autonomous_ai_agents.optimization.idea_frameworks import check_run
 from autonomous_ai_agents.optimization.idea_pipeline import LANE_VIEW, SEEDED_CALL
-from autonomous_ai_agents.optimization.idea_types import LENS_LANES, Lane
+from autonomous_ai_agents.optimization.idea_types import LENS_LANES, IdeaFate, Lane
 from autonomous_ai_agents.optimization.shadow_verify import shadow_aa, shadow_reading
+from autonomous_ai_agents.optimization.sources import (
+    GenerateResult,
+    HypothesisGenerator,
+)
+from autonomous_ai_agents.orchestrator import nodes
 from autonomous_ai_agents.orchestrator.factory import build_context
 from autonomous_ai_agents.orchestrator.main import EngineRunResult
+from autonomous_ai_agents.orchestrator.state import EngineState
 
 from . import discovery_oss as dx
 from . import ideas_probe as ip
@@ -196,6 +241,16 @@ DISPATCH_ENV: Final = "LIVE_X2_DISPATCH"
 RUN_EXPERIMENT: Final = "ideas-x2-run"
 ROUND_EXPERIMENT: Final = "ideas-x2-round"
 IDEA_EXPERIMENT: Final = "ideas-x2-hypothesis"
+# O61 addendum 4 (U-fate): a kept change's fate in the run's combine, beside
+# the combine's own skip reasons (``execution.combine``: CONFLICT, ...)
+APPLIED: Final = "applied"  # in the held combine's tip (delivery: the run row's)
+DROPPED_AT_RETEST: Final = "dropped_at_retest"  # applied in a tip that did not hold
+FALLBACK_APPLIED: Final = "fallback_applied"  # the fallback, held alone
+FALLBACK_FAILED: Final = (
+    "fallback_failed"  # the fallback, re-tested alone, did not hold
+)
+FALLBACK_SKIPPED: Final = "fallback_skipped"  # the fallback, not applicable alone
+GREEDY, FALLBACK = "greedy", "fallback"  # which re-test recorded a skip
 X2_FUSE_USD: Final = ip.X1_FUSE_USD  # 80: each dispatch's worst case (spec 9.5)
 JOB_MINUTES: Final = 360  # ci.yml's ideas-x2 timeout (GitHub's ceiling): 4 x 89
 FACTORY_ROUND: Final = 3  # build_context's max_hypotheses_per_round
@@ -576,6 +631,87 @@ def combine_row(keep: KeepRecord | None, owner: Mapping[str, str]) -> dict[str, 
             "reconcile": keep.reconcile}  # fmt: skip
 
 
+def _greedy_skips(comb: Combination) -> int:
+    """How many of ``comb.skipped`` the greedy merge recorded: all but a
+    last one of the fallback's, there when its own re-test could not apply
+    it (``combine_kept`` appends that re-test's skips after the greedy's).
+    Assumes the combiner applies or skips every change it is given, as
+    ``GitCombiner._merge`` does; a combiner that silently dropped the
+    fallback could have its greedy skip read as the fallback's."""
+    fallback, n = comb.fallback_trial_id, len(comb.skipped)
+    own = (fallback is not None and fallback not in comb.applied_trial_ids
+           and n > 0 and comb.skipped[-1].trial_id == fallback)  # fmt: skip
+    return n - own
+
+
+def _reason(skip: CombineSkip | None) -> dict[str, object] | None:
+    return None if skip is None else {"reason": skip.reason, "paths": list(skip.paths)}
+
+
+def combine_fates(comb: Combination, offered: Iterable[str]) -> dict[str, dict[str, object]]:  # fmt: skip
+    """U-fate: each ``offered`` trial's fate in ``comb`` (``combine_kept``)
+    and the paths of the skip that gave it. The fallback's is its own
+    re-test's, its greedy skip beside it (``greedy``); any other's its greedy
+    skip's reason, else ``APPLIED`` in the held tip or ``DROPPED_AT_RETEST``.
+    ``Combination`` keeps only the final re-test's applied ids, so a greedy
+    application is inferred (offered, neither skipped nor the fallback), as
+    ``lessons.combine_marks`` reads it."""
+    fallback, applied, n = comb.fallback_trial_id, set(comb.applied_trial_ids), _greedy_skips(comb)  # fmt: skip
+    own = comb.skipped[n] if n < len(comb.skipped) else None  # the fallback's own skip
+    skips: dict[str, CombineSkip] = {}
+    for one in comb.skipped[:n]:
+        skips.setdefault(one.trial_id, one)
+    out: dict[str, dict[str, object]] = {}
+    for t in offered:
+        skip = skips.get(t)
+        if t == fallback:
+            fate = (FALLBACK_SKIPPED if t not in applied
+                    else FALLBACK_APPLIED if comb.holds else FALLBACK_FAILED)  # fmt: skip
+            out[t] = {"fate": fate, "reason": None if own is None else own.reason,
+                      "paths": [] if own is None else list(own.paths),
+                      "greedy": _reason(skip)}  # fmt: skip
+            continue
+        if skip is not None:
+            fate = skip.reason
+        else:
+            fate = APPLIED if comb.holds and t in applied else DROPPED_AT_RETEST
+        out[t] = {"fate": fate, "paths": [] if skip is None else list(skip.paths)}
+    return out
+
+
+def _hypothesis_fates(st: EngineState, comb: Combination | None) -> dict[str, dict[str, object]]:  # fmt: skip
+    """U-fate: the run combine's fate per hypothesis id, over the verdicts
+    the combine node offered it (``nodes._deliverable``, its run set); none
+    without a combination."""
+    if comb is None:
+        return {}
+    offered = nodes._delivery_sets(nodes._deliverable(st))[0]
+    fates = combine_fates(comb, [v.trial_id for v in offered])
+    out: dict[str, dict[str, object]] = {}
+    for v in offered:
+        out.setdefault(v.hypothesis_id, fates[v.trial_id])
+    return out
+
+
+def _skipped(comb: Combination | None, owner: Mapping[str, str]) -> list[dict[str, object]]:  # fmt: skip
+    """U-fate: each recorded skip, its trial's hypothesis id and the
+    re-test that recorded it (``GREEDY`` or ``FALLBACK``) beside it."""
+    if comb is None:
+        return []
+    n = _greedy_skips(comb)
+    return [{"trial_id": s.trial_id, "hypothesis_id": owner.get(s.trial_id),
+             "reason": s.reason, "paths": list(s.paths), "blocked_by": s.blocked_by,
+             "stage": GREEDY if k < n else FALLBACK}
+            for k, s in enumerate(comb.skipped)]  # fmt: skip
+
+
+def _floor_pct(st: EngineState | None) -> float | None:
+    """U-fate: the baseline's calibrated noise floor (D41 c) in percent."""
+    baseline = None if st is None else st.get("baseline")
+    calibration = None if baseline is None else baseline.calibration
+    return None if calibration is None else dx._pct(calibration.floor)
+
+
 def _delivered_patch(writer: xp.PatchWriter, comb: Combination | None,
                      delivery: Delivery | None) -> tuple[xp.Entry | None, str | None]:  # fmt: skip
     """U-patch: the held combine's delivered patch, or why none is written.
@@ -617,6 +753,48 @@ def _kept_diffs(writer: xp.PatchWriter, hyps: Iterable[Hypothesis],
 
 
 @dataclass
+class FateTap:
+    """U-fate: the loop's generator, each call handed to ``inner`` with the
+    keywords it was made with and its result returned as is (``Any``: a
+    pass-through, so no keyword the node sends is dropped or defaulted);
+    ``calls`` keeps each returned result's ``idea_fates`` in call order."""
+
+    inner: HypothesisGenerator
+    calls: list[tuple[IdeaFate, ...]] = field(default_factory=list)
+
+    def generate(self, **kwargs: Any) -> GenerateResult:
+        result = self.inner.generate(**kwargs)
+        self.calls.append(result.idea_fates)
+        return result
+
+
+def tap_fates(loop: Loop) -> tuple[Loop, FateTap | None]:
+    """``loop`` with its context's generator behind a ``FateTap``, and the
+    tap; ``loop`` itself and ``None`` when it has no generator."""
+    inner = getattr(loop.context, "generator", None)
+    if inner is None:
+        return loop, None
+    tap = FateTap(inner)
+    context = dataclasses.replace(loop.context, generator=tap)
+    return dataclasses.replace(loop, context=context), tap
+
+
+def _fate_row(call: int, fate: IdeaFate) -> dict[str, object]:
+    dup = None if fate.duplicate_of is None else redact_keys(fate.duplicate_of)
+    return {"call": call, "idea_id": fate.idea_id, "lane": fate.lane.value,
+            "fate": fate.fate, "quotas": list(fate.quotas), "duplicate_of": dup,
+            "hypothesis_id": fate.hypothesis_id}  # fmt: skip
+
+
+def _fate_counts(rows: Iterable[Mapping[str, object]]) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for r in rows:
+        lane = counts.setdefault(str(r["lane"]), {})
+        lane[str(r["fate"])] = lane.get(str(r["fate"]), 0) + 1
+    return counts
+
+
+@dataclass
 class X2Recorder:
     plan: X2Plan
     sink: ResultsSink
@@ -633,7 +811,8 @@ class X2Recorder:
     def record(self, arm: X2Arm, repo: str, run: LiveRun, commit: str,
                seen: list[EngineRunResult | None], outcome: CorpusOutcome,
                result: EngineRunResult | None, *, clone: Path | None = None,
-               started: float | None = None) -> None:  # fmt: skip
+               started: float | None = None,
+               idea_fates: Sequence[tuple[IdeaFate, ...]] | None = None) -> None:  # fmt: skip
         seen.append(result)
         st = None if result is None else result.state
         hyps = [] if st is None else [*st["hypotheses"], *st["candidate_pool"]]
@@ -655,6 +834,7 @@ class X2Recorder:
         comb = None if st is None else st["combination"]
         owner = {} if st is None else {t.id: t.hypothesis_id for t in st["trials"]}
         stacked = {owner.get(k.trial_id, k.trial_id): k for k in (() if comb is None else comb.keeps)}  # fmt: skip
+        fates = {} if st is None else _hypothesis_fates(st, comb)
         writer = xp.PatchWriter(xp.patch_root(self.sink), xp.run_dir(arm.key, repo))
         patch, patch_note = _delivered_patch(
             writer, comb, None if st is None else st["delivery"]
@@ -677,10 +857,18 @@ class X2Recorder:
                 **({} if clone is None else {"realisation": realised.get(h.id)}),
                 **({} if not shadowed else {"shadow_verify": shadow.get(h.id)}),
                 **({} if not stacked else {"combine": combine_row(stacked.get(h.id), owner)}),
+                "combine_fate": fates.get(h.id),
                 **({} if h.id not in diffs else {"diff": diffs[h.id]})})  # fmt: skip
         kept = [h for h in hyps if (v := verdicts.get(h.id)) is not None
                 and v.outcome is VerdictOutcome.keep]  # fmt: skip
+        taken = 0  # U-fate: the tap's calls, in order, one per ``generated`` event
+        made_all = sum(e.data.get("code") == "generated" for e in events)
+        aligned = idea_fates is not None and len(idea_fates) == made_all
         for n, data in sorted(_by_round(events).items()):
+            made = sum(d.get("code") == "generated" for d in data)
+            ideas = [_fate_row(c, f) for c, call in enumerate((idea_fates or ())[taken:taken + made])
+                     for f in call]  # fmt: skip
+            taken += made
             seeded = [d for d in data if d.get("code") == SEEDED_CALL]
             costs = [d for d in data if d.get("code") == "seeded_call_cost"]
             self.sink.write({**head, "experiment": ROUND_EXPERIMENT, "round": n,
@@ -697,7 +885,10 @@ class X2Recorder:
                     {k: d.get(k) for k in ("lane", "view_sha", "served_model",
                                            "output_tokens", "max_tokens", "stop_reason",
                                            "attempt_output_tokens")}
-                    for d in data if d.get("code") == LANE_VIEW]})})  # fmt: skip
+                    for d in data if d.get("code") == LANE_VIEW]}),
+                **({} if idea_fates is None else {"idea_fates": ideas,
+                                             "fate_counts": _fate_counts(ideas),
+                                             "idea_fates_aligned": aligned})})  # fmt: skip
         j = isl._primary(result)
         self.sink.write({**head, "experiment": RUN_EXPERIMENT, "dispatch": self.plan.dispatch,
             "commit": commit, "cap_usd": run.cap_usd, "cost_usd": run.spent_usd,
@@ -718,11 +909,16 @@ class X2Recorder:
             "kept_diffs": [{"hypothesis_id": k, **d} for k, d in diffs.items()],
             "kept_diffs_note": None if diffs else xp.NO_KEEP,
             "delivered_patch": patch, "delivered_patch_note": patch_note,
+            "fate_calls": None if idea_fates is None else len(idea_fates),
+            "generated_events": made_all,
             **({} if not shadowed else {"shadow_aa": aa}),
             **({} if not viewed or started is None else {"minutes_planned": run_minutes(cfg),
                "seconds_measured": round(time.monotonic() - started, 1)}),
-            **({} if not stacked else {"conflicts": [[owner.get(t, t) for t in pair]
-                                                     for pair in (() if comb is None else comb.conflicts)]})})  # fmt: skip
+            "fallback_trial_id": None if comb is None else comb.fallback_trial_id,
+            "combine_summary": None if comb is None else redact_keys(comb.summary),
+            "skipped": _skipped(comb, owner), "baseline_floor_pct": _floor_pct(st),
+            "conflicts": None if comb is None or not comb.keeps else  # no dry merge ran
+                [[owner.get(t, t) for t in pair] for pair in comb.conflicts]})  # fmt: skip
 
 
 # ---------------------------------------------------------------------------
@@ -776,11 +972,13 @@ def run_one(arm: X2Arm, repo: OssRepo, *, live: StartLive, root: Path,
             f"{repo.name}: head {loop.user.base} is not E1's recorded {commit}"
         )
     isl.check_judges(loop)
+    loop, tap = tap_fates(loop)  # U-fate: record-only, every call handed on as made
     seen: list[EngineRunResult | None] = []
     counted = arm_settings(arm, recorder.base).IDEAS_COUNT_CONTRACT == "record"
     record = functools.partial(recorder.record, arm, repo.name, run, commit, seen,
                                clone=loop.user.path if counted else None,
-                               started=started)  # fmt: skip
+                               started=started,
+                               idea_fates=None if tap is None else tap.calls)  # fmt: skip
     run_engine(loop, run, isolation, model=recorder.base.ENGINE_MODEL, record=record)
     run.note(ip._fit(f"X2 {arm.key} {repo.name}: {run.spent_usd:.3f} of {cap:.2f} USD"))
     isl.check_op_column(seen[-1])

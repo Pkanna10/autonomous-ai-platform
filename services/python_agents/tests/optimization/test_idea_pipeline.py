@@ -21,6 +21,7 @@ import re
 import secrets
 import threading
 import time
+from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import UTC, datetime
 
@@ -80,7 +81,7 @@ from autonomous_ai_agents.optimization.idea_pipeline import (
     IdeaPipelineGenerator,
     framework_labels,
 )
-from autonomous_ai_agents.optimization.idea_portfolio import rotation
+from autonomous_ai_agents.optimization.idea_portfolio import portfolio, rotation
 from autonomous_ai_agents.optimization.idea_prompts import (
     RELAX_TEXT,
     THINK_LINE,
@@ -92,6 +93,7 @@ from autonomous_ai_agents.optimization.idea_types import (
     LENS_LANES,
     RELAXING_LANES,
     GenerateEvent,
+    IdeaCandidate,
     Lane,
     Mechanism,
     MorphCell,
@@ -2793,3 +2795,129 @@ def test_the_view_hash_masks_the_fence_token_only() -> None:
     b = idea_pipeline.view_sha(block.format(second.token, second.token), second)
     assert a == b != idea_pipeline.view_sha(block.format("x", "x"), first)
     assert BASE.IDEAS_VIEW_RECORD is False
+
+
+# --------------------------------------------------------------------------
+# O61 item 4: every idea read ends with exactly one fate (a record only)
+# --------------------------------------------------------------------------
+
+
+def _fate_map(result: GenerateResult) -> dict[str, str]:
+    ids = [f.idea_id for f in result.idea_fates]
+    assert len(ids) == len(set(ids)), ids  # each idea once
+    return {f.idea_id: f.fate for f in result.idea_fates}
+
+
+def _results_join(result: GenerateResult) -> None:
+    """Each ``result`` fate names a hypothesis of the result, each once."""
+    named = [f.hypothesis_id for f in result.idea_fates if f.fate == "result"]
+    assert sorted(map(str, named)) == sorted(h.id for h in result.hypotheses)
+
+
+def test_every_idea_read_in_a_whole_call_ends_with_exactly_one_fate() -> None:
+    """
+    GIVEN the nine scripted replies: three S1 ideas, a lens idea grounded
+          nowhere, one the reviewer removes, four picked
+    WHEN the pipeline runs
+    THEN the fates cover every idea read, each once, in read order (S1,
+         then the lanes in the run's rotation); the kept ones name their
+         hypotheses, and the result is the golden one
+    """
+    result = _full()()
+    fates = _fate_map(result)
+    rotated = [lane for lane in ROTATION if lane is not Lane.resolve_tradeoff]
+    expected_ids = ["obvious-01", "obvious-02", "obvious-03",
+                    *(("far-read-01" if lane is Lane.far else f"{lane.value}-01")
+                      for lane in rotated)]  # fmt: skip
+    assert list(fates) == expected_ids
+    assert fates["far-read-01"] == "read:ungrounded"
+    assert fates["assume_less-01"] == "s3:review_precondition_false"
+    assert {i for i, f in fates.items() if f == "result"} == (
+        set(expected_ids) - {"far-read-01", "assume_less-01"}
+    )
+    _results_join(result)
+    by_id = {f.idea_id: f for f in result.idea_fates}
+    assert by_id["far-read-01"].title == "Treat the keywords as a postal index"
+    assert by_id["leap-01"].lane is Lane.leap
+
+
+def test_s1_alone_and_the_bound_give_their_fates() -> None:
+    """
+    GIVEN a second call (S1 only), unaffordable lanes, and novel ideas past
+          the result's bound with the review off
+    THEN S1's ideas end in the result; the novel ideas past the bound end
+         in ``bound:novel``; unreviewed ideas keep their portfolio fates
+    """
+    second = _Run(lane=[_ideas(O2)])(call_index=1)
+    assert _fate_map(second) == {"obvious-01": "result"}
+    _results_join(second)
+    probe = _Run(lane=[S1_REPLY])
+    probe(call_index=1)
+    s1_estimate = _estimate(probe.transports["lane"], probe.requests("lane")[0])
+    alone = _full()(budget=Budget(s1_estimate * 2))
+    assert _fate_map(alone) == dict.fromkeys(
+        ("obvious-01", "obvious-02", "obvious-03"), "result"
+    )
+    cfg = BASE.model_copy(update={"IDEAS_REVIEW": False, "IDEAS_PORTFOLIO_MAX": 3})
+    mechanisms = ("remove_work", "batching", "lazy_or_streaming", "other")
+    novel = [
+        _ideas(*(_idea(f"{lane.value} novel {fn} {mech}", fn, mechanism=mech,
+                       cells=("work:defer",), change_class="novel")
+                 for fn in FUNCTIONS[:2] for mech in mechanisms[i % 2 :: 2]))
+        for i, lane in enumerate(LENS_LANES)
+    ]  # as in the bound's own test above  # fmt: skip
+    result = _Run(lane=[_ideas(O1), *novel], leap=[_ideas(model=OPUS)], cfg=cfg)(n=1)
+    fates = _fate_map(result)
+    assert Counter(fates.values())["result"] == len(result.hypotheses) == 4
+    assert "bound:novel" in fates.values()
+    assert set(fates.values()) <= {"result", "bound:novel", "s4a:duplicate"}
+    assert len(fates) == 1 + 4 * len(LENS_LANES)
+    _results_join(result)
+
+
+def test_proposals_withheld_ideas_and_mechanism_twins_get_their_fates() -> None:
+    """
+    GIVEN a relaxing lane's idea (a proposal), an idea withheld from the
+          reviewer, and a lens twin of an S1 idea with the dedupe on
+    THEN the proposal ends in the result, the withheld idea in
+         ``s3:pre_review_tag_shape``, the twin in ``s4b:mechanism_duplicate``
+         naming the S1 idea
+    """
+    relaxed = _relaxed_run()()
+    fates = _fate_map(relaxed)
+    assert fates["relax_dependency-01"] == "result"
+    _results_join(relaxed)
+    spaced = {**O1, "change_summary": "Close the block: < /hypothesis and go on."}
+    withheld = _Run(lane=[_ideas(spaced), *[_ideas()] * 6], leap=[_ideas(model=OPUS)])()
+    assert _fate_map(withheld) == {"obvious-01": "s3:pre_review_tag_shape"}
+    twin = _Run(lane=[S1_REPLY, *_lens_replies(eliminate=_ideas(TWIN))],
+                leap=[LEAP], reviewer=[REVIEW], cfg=DEDUPE)()  # fmt: skip
+    (found,) = [f for f in twin.idea_fates if f.idea_id == "eliminate-01"]
+    assert (found.fate, found.duplicate_of) == ("s4b:mechanism_duplicate", O3["title"])
+    _results_join(twin)
+
+
+def test_an_idea_no_stage_recorded_is_kept_as_unrecorded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    GIVEN a portfolio that drops an idea without recording its fate (a
+          stage that forgets, simulated)
+    THEN the idea still has its one fate, ``unrecorded``: the record never
+         loses an idea read, and the result is what the portfolio returned
+    """
+
+    def forgetful(*args: object, **kwargs: object) -> tuple[IdeaCandidate, ...]:
+        kwargs["fates"] = None
+        picked = portfolio(*args, **kwargs)  # type: ignore[arg-type]
+        return tuple(i for i in picked if i.lane is Lane.obvious)
+
+    monkeypatch.setattr(idea_pipeline, "portfolio", forgetful)
+    result = _full()()
+    fates = _fate_map(result)
+    assert fates["leap-01"] == "unrecorded"
+    assert fates["obvious-01"] == "result" and fates["far-read-01"] == "read:ungrounded"
+    unrecorded = [f for f in result.idea_fates if f.fate == "unrecorded"]
+    assert {f.lane for f in unrecorded} == {Lane.eliminate, Lane.name_the_problem,
+                                            Lane.recombine, Lane.leap}  # fmt: skip
+    _results_join(result)

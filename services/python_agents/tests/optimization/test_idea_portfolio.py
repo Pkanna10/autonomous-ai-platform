@@ -44,6 +44,7 @@ from autonomous_ai_agents.optimization.idea_types import (
     FunctionSpan,
     GenerateEvent,
     IdeaCandidate,
+    IdeaFate,
     Lane,
     Mechanism,
     MorphCell,
@@ -818,3 +819,218 @@ def test_without_mechanisms_twins_stay() -> None:
     obvious = [_idea("O1", Lane.obvious, anchor=None)]
     news = [_distinct("N1", Lane.eliminate, 1), _distinct("N2", Lane.far, 2)]
     assert _pick(news, obvious=obvious) == ("O1", "N1", "N2")
+
+
+# --------------------------------------------------------------------------
+# Fates (O61 item 4, a record only)
+# --------------------------------------------------------------------------
+
+
+def _fates(fates: Sequence[IdeaFate]) -> list[tuple[str, str, str | None]]:
+    return [(f.idea_id, f.fate, f.duplicate_of) for f in fates]
+
+
+def test_each_filter_drop_gets_its_s4a_fate_with_its_twin() -> None:
+    """
+    GIVEN ideas the filter drops for each of its reasons
+    WHEN it runs with a fates list
+    THEN each drop gets ``s4a:<reason>``, a duplicate and an obvious twin
+         name the kept idea's title, and the survivors are unchanged
+    """
+    s1 = _idea("o1", Lane.obvious, anchor="g", title="Obvious g")
+    others = [
+        _idea("a", anchor=None),
+        _idea("b", ceiling=None),
+        _idea("c", ceiling=0.01),
+        _idea("d", anchor="f", title="First f"),
+        _idea("e", anchor="f", lane=Lane.far),
+        _idea("g", anchor="g"),
+        _idea("h", anchor="h", title="Tried"),
+        _idea("i", anchor="i", title="Learnt"),
+        _idea("j", anchor="j", slug="memo"),
+        _idea("k", anchor="k"),
+    ]
+    fates: list[IdeaFate] = []
+
+    def run(given: list[IdeaFate] | None) -> tuple[IdeaCandidate, ...]:
+        return deterministic_filter(
+            [s1], others, floor=FLOOR, objective=_objective(), avoid=["tried"],
+            lesson_titles=["LEARNT"], multiplier=1.0, notes=[],
+            shown_slugs=["memo"], fates=given,
+        )  # fmt: skip
+
+    kept = run(fates)
+    assert kept == run(None)
+    assert [i.id for i in kept] == ["o1", "d", "k"]
+    assert _fates(fates) == [
+        ("a", "s4a:no_anchor", None), ("b", "s4a:ceiling_unknown", None),
+        ("c", "s4a:below_gate", None), ("e", "s4a:duplicate", "First f"),
+        ("g", "s4a:obvious_signature", "Obvious g"),
+        ("h", "s4a:avoided_title", None), ("i", "s4a:lesson_title", None),
+        ("j", "s4a:shown_technique", None),
+    ]  # fmt: skip
+    assert fates[3].lane is Lane.far and fates[3].title == "Idea e"
+
+
+Fated = tuple[str, str, str | None, tuple[str, ...]]
+
+
+def _fated(
+    candidates: Sequence[IdeaCandidate],
+    *,
+    obvious: Sequence[IdeaCandidate] = (),
+    minimum: int = 3,
+    maximum: int = 5,
+    mechanisms: dict[str, MechanismKey] | None = None,
+    notes: list[str] | None = None,
+) -> tuple[tuple[str, ...], list[Fated]]:
+    fates: list[IdeaFate] = []
+    found: list[tuple[str, ...]] = []
+    for given in (fates, None):  # with and without: the same picks and notes
+        said: list[str] = []
+        picked = portfolio(obvious, candidates, rotation=ORDER, minimum=minimum,
+                           maximum=maximum, notes=said, mechanisms=mechanisms,
+                           fates=given)  # fmt: skip
+        found.append((*(i.id for i in picked), *said))
+    assert found[0] == found[1]
+    if notes is not None:
+        notes += [i for i in found[0] if i.startswith("portfolio:")]
+    picked_ids = tuple(i for i in found[0] if not i.startswith("portfolio:"))
+    return picked_ids, [(f.idea_id, f.fate, f.duplicate_of, f.quotas) for f in fates]
+
+
+def test_each_unpicked_idea_names_the_active_quotas_that_block_it() -> None:
+    """
+    GIVEN a pool where one idea shares only a pick's lane, one only its
+          anchor, one only its primary cell and one a lane and an anchor
+    THEN each names the quotas it misses (``quotas``, in priority order):
+         one gives ``s4b:quota_<name>``, two ``s4b:quota_several``
+    """
+    ideas = [
+        _distinct("e1", Lane.eliminate, 0),
+        _distinct("e2", Lane.eliminate, 1),
+        _distinct("a1", Lane.assume_less, 2, anchor="fn0"),
+        _distinct("a2", Lane.assume_less, 3),
+        _distinct("r1", Lane.recombine, 4, cells=(CELLS[0],)),
+        _distinct("f1", Lane.far, 5, anchor="fn0"),
+        _distinct("l1", Lane.leap, 6),
+    ]
+    picked, fates = _fated(ideas)
+    assert picked == ("e1", "a2", "l1")
+    assert fates == [
+        ("e2", "s4b:quota_lane", None, ("lane",)),
+        ("a1", "s4b:quota_several", None, ("lane", "anchor")),
+        ("r1", "s4b:quota_primary_cell", None, ("primary_cell",)),
+        ("f1", "s4b:quota_anchor", None, ("anchor",)),
+    ]
+    blocked = [*ideas[:1], _distinct("t", Lane.eliminate, 0, cells=(CELLS[1],))]
+    assert _fated(blocked, minimum=1)[1] == [
+        ("t", "s4b:quota_several", None, ("lane", "anchor"))
+    ]
+
+
+def test_a_relaxed_quota_is_never_named_the_minimum_was_reached() -> None:
+    """
+    GIVEN pools where the fill relaxes one, two and then all three quotas
+          to reach the minimum, and stops there
+    THEN an idea blocked only by relaxed quotas gets ``s4b:minimum_reached``
+         and no quota; one an active quota still blocks names only it
+    """
+    notes: list[str] = []
+    one = [  # the reviewer's case: all in one primary cell
+        _distinct("e1", Lane.eliminate, 0, anchor="f"),
+        _distinct("a1", Lane.assume_less, 0, anchor="g"),
+        _distinct("r1", Lane.far, 0, anchor="h"),
+    ]
+    assert _fated(one, minimum=2, maximum=4, notes=notes) == (
+        ("e1", "a1"),
+        [("r1", "s4b:minimum_reached", None, ())],
+    )
+    assert notes == [
+        "portfolio: relaxed the one-per-primary-cell quota to reach 2 ideas"
+    ]
+    two = [_distinct(i, lane, 0) for i, lane in
+           (("e1", Lane.eliminate), ("a1", Lane.assume_less), ("f1", Lane.far))]  # fmt: skip
+    assert _fated(two, minimum=2, maximum=4) == (
+        ("e1", "a1"),
+        [("f1", "s4b:minimum_reached", None, ())],
+    )
+    kept_lane = [
+        _distinct("e1", Lane.eliminate, 0),
+        _distinct("a1", Lane.assume_less, 1),
+        _distinct("a2", Lane.assume_less, 2, cells=(CELLS[0],)),
+        _distinct("f1", Lane.far, 3, anchor="fn0", cells=(CELLS[1],)),
+    ]  # cell and anchor relaxed; the lane quota still holds a2 back
+    assert _fated(kept_lane) == (
+        ("e1", "a1", "f1"),
+        [("a2", "s4b:quota_lane", None, ("lane",))],
+    )
+    every = [
+        _distinct("e1", Lane.eliminate, 0),
+        _distinct("e2", Lane.eliminate, 0),
+        _distinct("e3", Lane.eliminate, 1),
+        _distinct("a1", Lane.assume_less, 2),
+    ]  # all three relaxed
+    assert _fated(every) == (
+        ("e1", "a1", "e3"),
+        [("e2", "s4b:minimum_reached", None, ())],
+    )
+
+
+def test_a_full_portfolio_and_the_tier_swap_have_their_own_fates() -> None:
+    ideas = [
+        _distinct("e1", Lane.eliminate, 0),
+        _distinct("a1", Lane.assume_less, 1),
+        _distinct("f1", Lane.far, 2),
+    ]
+    assert _fated(ideas, minimum=1, maximum=2) == (
+        ("e1", "a1"),
+        [("f1", "s4b:portfolio_full", None, ())],
+    )
+    assert _fated(ideas, minimum=2, maximum=2) == (
+        ("e1", "a1"),
+        [("f1", "s4b:portfolio_full", None, ())],
+    )
+    bold = [*ideas, _distinct("leap", Lane.leap, 3, tier=Tier.transformational)]
+    assert _fated(bold, maximum=3) == (
+        ("e1", "a1", "leap"),
+        [("f1", "s4b:tier_swapped", None, ())],
+    )
+    added = [
+        _distinct("e1", Lane.eliminate, 0),
+        _distinct("e2", Lane.eliminate, 1),
+        _distinct("e3", Lane.eliminate, 2, tier=Tier.transformational),
+        _distinct("a1", Lane.assume_less, 3),
+    ]  # the tier quota adds e3 after the relaxed fill: every idea is picked
+    assert _fated(added) == (("e1", "a1", "e2", "e3"), [])
+
+
+def test_repeated_titles_and_mechanism_twins_get_their_s4b_fates() -> None:
+    """
+    GIVEN an obvious and a lens idea repeating a title, a mechanism twin of
+          an obvious idea and of a lens idea, and a novel idea
+    THEN the repeats get ``s4b:repeated_title``, the twins
+         ``s4b:mechanism_duplicate`` naming the kept twin, the novel idea
+         none (it is placed after the portfolio, in the result)
+    """
+    obvious = [
+        _idea("O1", Lane.obvious, anchor=None, title="Hoist the loop"),
+        _idea("O2", Lane.obvious, anchor=None, title="hoist  THE loop"),
+    ]
+    news = [
+        _distinct("N1", Lane.eliminate, 1, title="Skip the loop"),  # twin of O1
+        _distinct("N2", Lane.assume_less, 2),
+        _distinct("N3", Lane.recombine, 3),  # twin of N2
+        _distinct("N4", Lane.far, 4, title="Hoist the loop"),
+        _distinct("N5", Lane.leap, 5, change_class=ChangeClass.novel),
+    ]
+    keys = {"O1": _mkey(3, 4), "N1": _mkey(4, 6), "N2": _mkey(10, 10),
+            "N3": _mkey(10, 12)}  # fmt: skip
+    picked, fates = _fated(news, obvious=obvious, mechanisms=keys)
+    assert picked == ("O1", "N2", "N5")
+    assert fates == [
+        ("O2", "s4b:repeated_title", None, ()),
+        ("N1", "s4b:mechanism_duplicate", "Hoist the loop", ()),
+        ("N3", "s4b:mechanism_duplicate", "Idea N2", ()),
+        ("N4", "s4b:repeated_title", None, ()),
+    ]

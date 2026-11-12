@@ -7,7 +7,7 @@ the code context the generator reads at the base commit (``FunctionSpan``,
 ``CodeDocument``, ``CodeContext``; D44), one validated idea with the facts
 the engine derives for it (``IdeaCandidate``, ``Anchor``; D50-D52) and what
 one pipeline call reports besides its hypotheses (``GenerateEvent``,
-``IdeaStats``; D65).
+``IdeaStats``; D65) and where each idea it read ended (``IdeaFate``, O61).
 
 None of them enters the checkpointed state: they cross one generator call,
 and only the ``Hypothesis`` built from a candidate (with its ``tags``, D57)
@@ -382,6 +382,69 @@ class IdeaStats(EngineModel):
     cache_read_tokens: _Count = 0
     stop_reasons: dict[str, str | None] = Field(default_factory=dict)
     """Each request's ``stop_reason`` by its stage or lane label."""
+
+
+RESULT_FATE: Final = "result"
+"""The fate of an idea that became a hypothesis of the call's result."""
+UNRECORDED_FATE: Final = "unrecorded"
+"""The fate of an idea read whose removal no stage recorded (never expected:
+it keeps every idea read in the record, exactly once)."""
+FATE_CODE_CHARS: Final = 48
+"""The longest code a fate's ``<stage>:<code>`` may carry."""
+_FATE: Final = re.compile(
+    rf"{RESULT_FATE}|{UNRECORDED_FATE}"
+    rf"|(?:read|s4a|s3|s4b|bound):[a-z_]{{1,{FATE_CODE_CHARS}}}"
+)
+_NOT_CODE: Final = re.compile(r"[^a-z_]")
+
+
+def fate_code(code: str) -> str:
+    """A reason code as a fate may carry it, so recording never raises:
+    lowercase, any character outside [a-z_] an underscore, cut to
+    ``FATE_CODE_CHARS``; ``unknown`` when nothing is left."""
+    return _NOT_CODE.sub("_", code.lower())[:FATE_CODE_CHARS] or "unknown"
+
+
+def stage_fate(stage: str, code: str) -> str:
+    """``<stage>:<code>``, the code normalised (``fate_code``)."""
+    return f"{stage}:{fate_code(code)}"
+
+
+class IdeaFate(EngineModel):
+    """Where one idea a pipeline call read ended (O61 item 4): a record only,
+    never read back by a stage.
+
+    ``fate`` is ``<stage>:<code>`` for a removal: ``read`` (the reply's
+    checks), ``s4a`` (the deterministic filter), ``s3`` (the reviewer),
+    ``s4b`` (the portfolio), ``bound`` (the result's bound); or ``result``,
+    then with the ``hypothesis_id`` it became. ``idea_id`` is the
+    candidate's id, or ``<lane>-read-NN`` (its place in the reply) for an
+    idea the reply's checks dropped before it had one. ``title`` and
+    ``duplicate_of`` (the kept twin's title) are shortened as events are.
+    ``quotas``: for an idea the portfolio left unpicked, every quota still
+    active at the fill's end that it misses, in priority order (``lane``,
+    ``anchor``, ``primary_cell``); empty otherwise."""
+
+    idea_id: _Text
+    lane: Lane
+    fate: str
+    title: str
+    duplicate_of: str | None = None
+    hypothesis_id: _Text | None = None
+    quotas: tuple[str, ...] = ()
+
+    @field_validator("fate")
+    @classmethod
+    def _a_known_stage(cls, value: str) -> str:
+        if _FATE.fullmatch(value) is None:
+            raise ValueError(f"fate must match {_FATE.pattern}")
+        return value
+
+    @model_validator(mode="after")
+    def _a_result_names_its_hypothesis(self) -> Self:
+        if (self.fate == RESULT_FATE) is not (self.hypothesis_id is not None):
+            raise ValueError("a hypothesis_id goes with the result fate, and only it")
+        return self
 
 
 class RealisationLabel(StrEnum):

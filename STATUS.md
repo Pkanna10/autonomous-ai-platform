@@ -78,7 +78,7 @@ A new session picks up from this section. Older handoff text is in git history
     | X2-F          | closed at 3 runs (O61)                                         |
     | X2-L          | 12 of 12, 44.54 USD; not distinguishable (`w2-sprint/o61/`)    |
     | Confirmation  | 8 of 8 (6 on key 2, 2 on key 1), 28.30 USD; X2-D not confirmed |
-    | Fate field    | O61 addendum item 4: building (record-only)                    |
+    | Fate field    | O61 addendum item 4: U-fate (record-only), below               |
 
     The report and the reading: `.claude/handoff/step3/idea-lab/w2-sprint/`
     (`report.md`, `reading/`, archives in `live/`).
@@ -890,6 +890,58 @@ blocks it.
       for the combine (re-measuring when its floor is far above the baseline's;
       whether later rounds should trial on top of earlier keeps). Proposal only:
       no judge or combine change during this reading.
+  - **U-fate (built 2026-11-12, record-only; Lead's decisions):**
+    - **Idea fates (engine, recording only).** Each idea a lane reply gives ends
+      with exactly one `IdeaFate` on `GenerateResult.idea_fates`.
+      - Each stage names its own removals at the point it decides. Out-lists
+        default to `None`, so every decision path stays byte-identical. The
+        goldens pass unchanged, and a 12,000-pool fuzz of the portfolio against
+        the base commit gave identical picks and notes.
+      - Why: a count is only trustworthy if the stage that cuts an idea says so.
+        Reading removals back from note text cannot be trusted.
+      - Vocabulary:
+        - `read:<check>`: the reply's own checks.
+        - `s4a:<filter reason>`: the deterministic filter.
+        - `s3:pre_review_<problem>` and `s3:review_<reason>`: the reviewer.
+        - `s4b:` portfolio selection:
+          - `repeated_title`, `mechanism_duplicate`;
+          - `quota_lane`, `quota_anchor`, `quota_primary_cell`, or
+            `quota_several` with every blocking quota in `quotas`;
+          - `portfolio_full`, `minimum_reached`, `tier_swapped`.
+        - `bound:novel`.
+        - `result`, with the hypothesis id.
+      - `s4b:not_picked`, proposed in `ideas-fate/README.md`, is not used. A
+        fate names only a quota still active when the fill ended. An idea that
+        no active quota blocks was cut by the maximum (`portfolio_full`) or by
+        the relaxed fill's minimum (`minimum_reached`).
+      - Ids are unique within one generator call only. The no-context fallback
+        generator records none.
+    - **Combine fates (X2 harness only; combine and judges untouched).**
+      - Hypothesis rows gain `combine_fate`:
+        - `applied`, meaning in the held tip; delivery is the run row's
+          `delivered`;
+        - `dropped_at_retest`;
+        - `fallback_applied`, `fallback_failed` or `fallback_skipped`, each with
+          its greedy history;
+        - the combiner's own skip reasons (`conflict` with its paths,
+          `nothing left to apply`, ...);
+        - `null` when the trial was not kept, kept but not offered (the review
+          set), or no combine ran.
+      - The key is `combine_fate`, not `combine`, because X2-S rows already use
+        `combine`.
+      - Run rows gain `fallback_trial_id`, `combine_summary` (redacted),
+        `skipped` (with `stage`: `greedy` or `fallback`), `baseline_floor_pct`
+        (the calibrated floor) and `conflicts`. `conflicts` is null when no dry
+        merge ran (SITE_STACKS off): an empty list must mean measured and none,
+        never not probed.
+    - **Idea fates in the X2 rows.** The node keeps only the generator's events,
+      so the harness wraps the generator (`FateTap`, a pure pass-through) and
+      writes per round:
+      - `idea_fates`, as (call, idea id, lane, fate, quotas, duplicate_of,
+        hypothesis id), with no titles;
+      - `fate_counts`;
+      - `idea_fates_aligned`. The run row carries `fate_calls` beside
+        `generated_events`, so a call attributed to the wrong round shows.
 - **O60. Emergence round 2's rulings (owner, 2026-11-11).**
   - **Points:** confirmed as computed in `emergence/round-2.md` section 9, with
     the six flagged rules settled: partial withdrawals do not count; a partly
