@@ -1,0 +1,72 @@
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..631105670275054b8d0499ef2863f5505cc8399a 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -17,7 +17,6 @@ from threading import Lock
+ from io import TextIOBase
+ 
+ from sqlparse import tokens, keywords
+-from sqlparse.utils import consume
+ 
+ 
+ class Lexer:
+@@ -134,22 +133,30 @@ class Lexer:
+             raise TypeError("Expected text or file-like object, got {!r}".
+                             format(type(text)))
+ 
+-        iterable = enumerate(text)
+-        for pos, char in iterable:
+-            for rexmatch, action in self._SQL_REGEX:
++        sql_regex = self._SQL_REGEX
++        TokenType = tokens._TokenType
++        PROCESS_AS_KEYWORD = keywords.PROCESS_AS_KEYWORD
++        Error = tokens.Error
++        is_keyword = self.is_keyword
++        pos = 0
++        n = len(text)
++        while pos < n:
++            for rexmatch, action in sql_regex:
+                 m = rexmatch(text, pos)
+ 
+                 if not m:
+                     continue
+-                elif isinstance(action, tokens._TokenType):
++                elif isinstance(action, TokenType):
+                     yield action, m.group()
+-                elif action is keywords.PROCESS_AS_KEYWORD:
+-                    yield self.is_keyword(m.group())
++                elif action is PROCESS_AS_KEYWORD:
++                    yield is_keyword(m.group())
+ 
+-                consume(iterable, m.end() - pos - 1)
++                end = m.end()
++                pos = end if end > pos else pos + 1
+                 break
+             else:
+-                yield tokens.Error, char
++                yield Error, text[pos]
++                pos += 1
+ 
+ 
+ def tokenize(sql, encoding=None):
+diff --git a/sqlparse/sql.py b/sqlparse/sql.py
+index 831dfb96d2b3a282b228bfddac97703a32e608e8..98b996c97aedb817b80b037bbe01f2621c84e832 100644
+--- a/sqlparse/sql.py
++++ b/sqlparse/sql.py
+@@ -230,6 +230,16 @@ class TokenList(Token):
+             return None
+ 
+         if not isinstance(funcs, (list, tuple)):
++            if not reverse:
++                tokens = self.tokens
++                func = funcs
++                if end is None:
++                    end = len(tokens)
++                for idx in range(start, end):
++                    token = tokens[idx]
++                    if func(token):
++                        return idx, token
++                return None, None
+             funcs = (funcs,)
+ 
+         if reverse:

@@ -1,0 +1,122 @@
+diff --git a/sqlparse/engine/statement_splitter.py b/sqlparse/engine/statement_splitter.py
+index 62aa9d9e9b071b4df00d6094424349cafdc11315..9f3b03e2e4e597982e6568131e9f60b90dd26f09 100644
+--- a/sqlparse/engine/statement_splitter.py
++++ b/sqlparse/engine/statement_splitter.py
+@@ -94,7 +94,14 @@ class StatementSplitter:
+ 
+     def process(self, stream):
+         """Process the stream"""
+-        EOS_TTYPE = T.Whitespace, T.Comment.Single
++        Whitespace = T.Whitespace
++        Newline = T.Newline
++        CommentSingle = T.Comment.Single
++        CommentMulti = T.Comment.Multiline
++        Punctuation = T.Punctuation
++        Keyword = T.Keyword
++        Token = sql.Token
++        change_splitlevel = self._change_splitlevel
+ 
+         # Run over all stream tokens
+         for ttype, value in stream:
+@@ -102,17 +109,47 @@ class StatementSplitter:
+             # It will count newline token as a non whitespace. In this context
+             # whitespace ignores newlines.
+             # why don't multi line comments also count?
+-            if self.consume_ws and ttype not in EOS_TTYPE:
++            if self.consume_ws and ttype is not Whitespace \
++                    and ttype is not CommentSingle:
+                 yield sql.Statement(self.tokens)
+ 
+                 # Reset filter and prepare to process next statement
+                 self._reset()
+ 
++            # Fast path: whitespace, newlines and comments never change
++            # the split state.
++            if ttype is Whitespace or ttype is Newline \
++                    or ttype is CommentSingle or ttype is CommentMulti:
++                self.tokens.append(Token(ttype, value))
++                continue
++
+             # Change current split level (increase, decrease or remain equal)
+-            self.level += self._change_splitlevel(ttype, value)
++            if ttype is Punctuation:
++                if value == '(':
++                    self.level += 1
++                elif value == ')':
++                    self.level -= 1
++                self.tokens.append(Token(ttype, value))
++                if value == ';':
++                    if self._seen_begin:
++                        self._begin_depth = max(0, self._begin_depth - 1)
++                    self._seen_begin = False
++                    if self.level <= 0 and self._begin_depth == 0:
++                        self.consume_ws = True
++                else:
++                    self._seen_begin = False
++                continue
++
++            if ttype not in Keyword:
++                # Normal token: level unchanged, resets _seen_begin.
++                self.tokens.append(Token(ttype, value))
++                self._seen_begin = False
++                continue
++
++            self.level += change_splitlevel(ttype, value)
+ 
+             # Append the token to the current statement
+-            self.tokens.append(sql.Token(ttype, value))
++            self.tokens.append(Token(ttype, value))
+ 
+             # Check if we get the end of a statement
+             # Issue762: Allow GO (or "GO 2") as statement splitter.
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..631105670275054b8d0499ef2863f5505cc8399a 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -17,7 +17,6 @@ from threading import Lock
+ from io import TextIOBase
+ 
+ from sqlparse import tokens, keywords
+-from sqlparse.utils import consume
+ 
+ 
+ class Lexer:
+@@ -134,22 +133,30 @@ class Lexer:
+             raise TypeError("Expected text or file-like object, got {!r}".
+                             format(type(text)))
+ 
+-        iterable = enumerate(text)
+-        for pos, char in iterable:
+-            for rexmatch, action in self._SQL_REGEX:
++        sql_regex = self._SQL_REGEX
++        TokenType = tokens._TokenType
++        PROCESS_AS_KEYWORD = keywords.PROCESS_AS_KEYWORD
++        Error = tokens.Error
++        is_keyword = self.is_keyword
++        pos = 0
++        n = len(text)
++        while pos < n:
++            for rexmatch, action in sql_regex:
+                 m = rexmatch(text, pos)
+ 
+                 if not m:
+                     continue
+-                elif isinstance(action, tokens._TokenType):
++                elif isinstance(action, TokenType):
+                     yield action, m.group()
+-                elif action is keywords.PROCESS_AS_KEYWORD:
+-                    yield self.is_keyword(m.group())
++                elif action is PROCESS_AS_KEYWORD:
++                    yield is_keyword(m.group())
+ 
+-                consume(iterable, m.end() - pos - 1)
++                end = m.end()
++                pos = end if end > pos else pos + 1
+                 break
+             else:
+-                yield tokens.Error, char
++                yield Error, text[pos]
++                pos += 1
+ 
+ 
+ def tokenize(sql, encoding=None):

@@ -1,0 +1,64 @@
+diff --git a/src/mistune/_inline/links.py b/src/mistune/_inline/links.py
+index 5ad0ec389dd24859b80a8c62901747c0a3fca1c7..2cd4a888b05652933429420d3dd19af902b26654 100644
+--- a/src/mistune/_inline/links.py
++++ b/src/mistune/_inline/links.py
+@@ -1,5 +1,6 @@
+ from __future__ import annotations
+ 
++import re
+ from bisect import bisect_left
+ from typing import TYPE_CHECKING, Dict, List, Match, Optional, Tuple
+ 
+@@ -233,18 +234,20 @@ def find_link_range_end(src: str, label_start: int, close_pos: int, state: Inlin
+     return None
+ 
+ 
++_BRACKET_SCAN_RE = re.compile(r"\\[\s\S]?|[\[\]]")
++
++
+ def build_closing_bracket_map(src: str) -> Dict[int, int]:
+     pairs: Dict[int, int] = {}
++    if "[" not in src:
++        return pairs
+     stack: List[int] = []
+-    pos = 0
+-    while pos < len(src):
+-        char = src[pos]
+-        if char == "\\":
+-            pos += 2
+-            continue
++    for m in _BRACKET_SCAN_RE.finditer(src):
++        start = m.start()
++        char = src[start]
+         if char == "[":
+-            stack.append(pos + 1)
+-        elif char == "]" and stack:
+-            pairs[stack.pop()] = pos
+-        pos += 1
++            stack.append(start + 1)
++        elif char == "]":
++            if stack:
++                pairs[stack.pop()] = start
+     return pairs
+diff --git a/src/mistune/inline_parser.py b/src/mistune/inline_parser.py
+index abe671654a9d562f3505134e8cf16ec9d59cf3ec..bfc8297b1af866168425332687e20f5c2aeb3f8e 100644
+--- a/src/mistune/inline_parser.py
++++ b/src/mistune/inline_parser.py
+@@ -274,11 +274,12 @@ class InlineParser(Parser[InlineState]):
+         return state.tokens
+ 
+     def _find_fast_text_end(self, src: str, pos: int) -> Optional[int]:
+-        chars = self._get_fast_trigger_chars()
+-        if chars is None:
+-            return None
+-
+-        trigger_re = self._get_fast_trigger_re(chars)
++        trigger_re = self._fast_trigger_re
++        if trigger_re is None or self._fast_trigger_chars is None:
++            chars = self._get_fast_trigger_chars()
++            if chars is None:
++                return None
++            trigger_re = self._get_fast_trigger_re(chars)
+         m = trigger_re.search(src, pos)
+         if m is None:
+             return len(src)

@@ -1,0 +1,162 @@
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..72fe9db5e02bf6f5d117c508840ada80020cefbb 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -85,6 +85,9 @@ class Lexer:
+             (re.compile(rx, FLAGS).match, tt)
+             for rx, tt in SQL_REGEX
+         ]
++        self._master_src = self._SQL_REGEX
++        self._master_len = len(self._SQL_REGEX)
++        self._master = _build_master(SQL_REGEX, FLAGS)
+ 
+     def add_keywords(self, keywords):
+         """Add keyword dictionaries. Keywords are looked up in the same order
+@@ -135,6 +138,26 @@ class Lexer:
+                             format(type(text)))
+ 
+         iterable = enumerate(text)
++        master = getattr(self, '_master', None)
++        if (master is not None
++                and getattr(self, '_master_src', None) is self._SQL_REGEX
++                and self._master_len == len(self._SQL_REGEX)):
++            master_match, actions = master
++            TokenType = tokens._TokenType
++            PROCESS_AS_KEYWORD = keywords.PROCESS_AS_KEYWORD
++            for pos, char in iterable:
++                m = master_match(text, pos)
++                if m is None:
++                    yield tokens.Error, char
++                    continue
++                action = actions[m.lastindex]
++                if isinstance(action, TokenType):
++                    yield action, m.group()
++                elif action is PROCESS_AS_KEYWORD:
++                    yield self.is_keyword(m.group())
++                consume(iterable, m.end() - pos - 1)
++            return
++
+         for pos, char in iterable:
+             for rexmatch, action in self._SQL_REGEX:
+                 m = rexmatch(text, pos)
+@@ -152,6 +175,99 @@ class Lexer:
+                 yield tokens.Error, char
+ 
+ 
++_INLINE_FLAG_CHARS = frozenset('aiLmsux-')
++
++
++def _shift_backrefs(rx, shift):
++    """Return ``rx`` with numeric backreferences shifted by ``shift``.
++
++    Returns None if the pattern contains constructs that cannot be safely
++    combined into an alternation (conditionals, inline global flags,
++    ambiguous escapes)."""
++    if '(?(' in rx:
++        return None
++    if rx.startswith('(?') and len(rx) > 2 and rx[2] in _INLINE_FLAG_CHARS:
++        # Could be a global inline flag group; be conservative.
++        return None
++    out = []
++    i = 0
++    n = len(rx)
++    in_class = False
++    while i < n:
++        c = rx[i]
++        if c == '\\':
++            if i + 1 >= n:
++                return None
++            nxt = rx[i + 1]
++            if nxt in '123456789':
++                if in_class:
++                    return None
++                j = i + 1
++                while j < n and rx[j].isdigit() and j - (i + 1) < 3:
++                    j += 1
++                digits = rx[i + 1:j]
++                if len(digits) > 2:
++                    return None
++                num = int(digits) + shift
++                if num > 99:
++                    return None
++                out.append('(?:\\%d)' % num)
++                i = j
++                continue
++            out.append(rx[i:i + 2])
++            i += 2
++            continue
++        if in_class:
++            if c == ']':
++                in_class = False
++            out.append(c)
++            i += 1
++            continue
++        if c == '[':
++            in_class = True
++            out.append(c)
++            i += 1
++            if i < n and rx[i] == '^':
++                out.append('^')
++                i += 1
++            if i < n and rx[i] == ']':
++                out.append(']')
++                i += 1
++            continue
++        out.append(c)
++        i += 1
++    return ''.join(out)
++
++
++def _build_master(SQL_REGEX, flags):
++    """Build one combined alternation regex from the ordered rules.
++
++    Returns ``(match, actions)`` where ``actions[m.lastindex]`` gives the
++    action of the rule that matched, or None if the rules can't be combined.
++    """
++    try:
++        parts = []
++        actions = [None]
++        base = 0
++        for rx, tt in SQL_REGEX:
++            ngroups = re.compile(rx, flags).groups
++            shifted = _shift_backrefs(rx, base + 1)
++            if shifted is None:
++                return None
++            parts.append('(' + shifted + ')')
++            actions.append(tt)
++            actions.extend([None] * ngroups)
++            base += 1 + ngroups
++        if not parts:
++            return None
++        master = re.compile('|'.join(parts), flags)
++        if master.groups != base:
++            return None
++        return master.match, actions
++    except (re.error, TypeError, ValueError, OverflowError):
++        return None
++
++
+ def tokenize(sql, encoding=None):
+     """Tokenize sql.
+ 
+diff --git a/sqlparse/sql.py b/sqlparse/sql.py
+index 831dfb96d2b3a282b228bfddac97703a32e608e8..6736e96e174c767cbab604f027853553bd7e3796 100644
+--- a/sqlparse/sql.py
++++ b/sqlparse/sql.py
+@@ -263,7 +263,15 @@ class TokenList(Token):
+ 
+     def token_next_by(self, i=None, m=None, t=None, idx=-1, end=None):
+         idx += 1
+-        return self._token_matching(lambda tk: imt(tk, i, m, t), idx, end)
++        tokens = self.tokens
++        if end is None:
++            end = len(tokens)
++        _imt = imt
++        for idx in range(idx, end):
++            token = tokens[idx]
++            if _imt(token, i, m, t):
++                return idx, token
++        return None, None
+ 
+     def token_not_matching(self, funcs, idx):
+         funcs = (funcs,) if not isinstance(funcs, (list, tuple)) else funcs
