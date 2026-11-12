@@ -246,7 +246,8 @@ from autonomous_ai_agents.research.playbook import (
 
 NO_CODE_CONTEXT: Final = "idea pipeline: no code context"
 LANE_VIEW: Final = "lane_view"
-"""``IDEAS_VIEW_RECORD``'s event: a lane request's view hash and served model."""
+"""``IDEAS_VIEW_RECORD``'s event: a lane request's view hash, served model
+and output tokens against its cap (``_spent``)."""
 _ROLES: Final[tuple[Role, ...]] = ("lane", "leap", "reviewer")
 _SOFT: Final = (LLMUnavailable, LLMRequestError, UnusableReplyError, BudgetExceeded)
 """What ends one request without ending the pipeline (D48): noted, charged."""
@@ -887,10 +888,9 @@ class IdeaPipelineGenerator:
         self._stopped(c, job)
         c.per_lane[lane] = 0
         if job.view is not None:  # IDEAS_VIEW_RECORD (S1, emergence round 2)
-            served = None if job.result is None else job.result.served_model
             c.events.append(GenerateEvent(
                 code=LANE_VIEW, message=f"lane {lane.value}: view {job.view}",
-                data={"lane": lane.value, "view_sha": job.view, "served_model": served},
+                data={"lane": lane.value, "view_sha": job.view, **_spent(job)},
             ))  # fmt: skip
         portfolio = c.deal if lane is Lane.leap else None  # U-portfolio
         if job.result is None:
@@ -1052,6 +1052,29 @@ class IdeaPipelineGenerator:
             risk=idea.risk,
             tags=tuple(tags),
         )  # fmt: skip
+
+
+def _spent(job: _Job) -> dict[str, str | int | None]:
+    """What a lane request's reply spent against its cap (X2-L): the served
+    model, its output tokens, the request's ``max_tokens``, the stop reason
+    and, where usage has iterations (a server-side fallback), every
+    attempt's ``model=tokens``; with no reply, the cap and None for the rest."""
+    if job.result is None:
+        return {**dict.fromkeys(("served_model", "output_tokens", "stop_reason",
+                                 "attempt_output_tokens")),
+                "max_tokens": job.request.max_tokens}  # fmt: skip
+    message = job.result.message
+    attempts = ",".join(
+        f"{getattr(i, 'model', None) or message.model}={i.output_tokens}"
+        for i in message.usage.iterations or []
+    )
+    return {
+        "served_model": job.result.served_model,
+        "output_tokens": message.usage.output_tokens,
+        "max_tokens": job.request.max_tokens,
+        "stop_reason": message.stop_reason,
+        "attempt_output_tokens": attempts or None,
+    }
 
 
 def view_sha(prefix: str, fence: Fence) -> str:

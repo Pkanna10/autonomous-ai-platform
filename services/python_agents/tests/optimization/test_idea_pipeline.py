@@ -2737,6 +2737,55 @@ def test_a_failed_lane_request_is_recorded_with_no_served_model() -> None:
     assert views["obvious"]["served_model"] == SONNET
 
 
+_RECORDED = ("served_model", "output_tokens", "max_tokens", "stop_reason",
+             "attempt_output_tokens")  # fmt: skip
+
+
+def test_the_view_record_reports_each_lane_requests_output_tokens_against_its_cap() -> (
+    None
+):
+    """
+    GIVEN IDEAS_VIEW_RECORD on, a lens reply stopped at its cap, a leap reply
+          a server-side fallback served (per-attempt usage in iterations) and
+          a lens request that raised
+    WHEN the pipeline reads them
+    THEN each ``lane_view`` event carries the reply's output tokens, the
+         request's ``max_tokens`` and the stop reason (for the fallback, the
+         served model's tokens, and every attempt's as ``model=tokens``);
+         the request that raised records its cap and None for the rest
+    """
+    cfg = BASE.model_copy(update={"IDEAS_VIEW_RECORD": True,
+                                  "IDEAS_LEAP_MAX_TOKENS": 32_000})  # fmt: skip
+    capped = _message({"hypotheses": LENS[Lane.eliminate]}, stop="max_tokens",
+                      usage={"input_tokens": 10, "output_tokens": 8_000})  # fmt: skip
+    attempt = {"input_tokens": 10, "cache_creation_input_tokens": 0,
+               "cache_read_input_tokens": 0}  # fmt: skip
+    fallback = {**_message({"hypotheses": []}), "usage": {
+        "input_tokens": 10, "output_tokens": 700, "iterations": [
+            {**attempt, "type": "message", "model": OPUS, "output_tokens": 50},
+            {**attempt, "type": "fallback_message", "model": SONNET, "output_tokens": 700},
+        ]}}  # fmt: skip
+    timeout = LLMNoResponseError("Claude API: no answer in time", timed_out=True)
+    run = _Run(lane=[S1_REPLY, *_lens_replies(eliminate=capped, recombine=timeout)],
+               leap=[fallback], reviewer=[REVIEW], cfg=cfg)  # fmt: skip
+
+    views = {v["lane"]: v for v in _views_of(run())}
+
+    lane_cap, leap_cap = cfg.IDEAS_LANE_MAX_TOKENS, run.requests("leap")[0].max_tokens
+    assert {r.max_tokens for r in run.requests("lane")} == {lane_cap}
+    assert leap_cap == 32_000
+    assert {k: views["obvious"][k] for k in _RECORDED} == {
+        "served_model": SONNET, "output_tokens": 900, "max_tokens": lane_cap,
+        "stop_reason": "end_turn", "attempt_output_tokens": None}  # fmt: skip
+    assert views["eliminate"]["output_tokens"] == 8_000
+    assert views["eliminate"]["stop_reason"] == "max_tokens"
+    assert {k: views["leap"][k] for k in _RECORDED} == {
+        "served_model": SONNET, "output_tokens": 700, "max_tokens": leap_cap,
+        "stop_reason": "end_turn", "attempt_output_tokens": f"{OPUS}=50,{SONNET}=700"}  # fmt: skip
+    assert {k: views["recombine"][k] for k in _RECORDED} == {
+        **dict.fromkeys(_RECORDED), "max_tokens": lane_cap}  # fmt: skip
+
+
 def test_the_view_hash_masks_the_fence_token_only() -> None:
     first, second = Fence.new(), Fence.new()
     block = "noise floor: 2 %\n<data boundary={}>rows</data boundary={}>"

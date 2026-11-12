@@ -694,7 +694,9 @@ class X2Recorder:
                 "compounds_kept": sum(rounds.get(h.id) == n and COMPOUND_TAG in h.tags
                                       for h in kept), **fx.round_fields(data),
                 **({} if not viewed else {"lane_views": [
-                    {k: d.get(k) for k in ("lane", "view_sha", "served_model")}
+                    {k: d.get(k) for k in ("lane", "view_sha", "served_model",
+                                           "output_tokens", "max_tokens", "stop_reason",
+                                           "attempt_output_tokens")}
                     for d in data if d.get("code") == LANE_VIEW]})})  # fmt: skip
         j = isl._primary(result)
         self.sink.write({**head, "experiment": RUN_EXPERIMENT, "dispatch": self.plan.dispatch,

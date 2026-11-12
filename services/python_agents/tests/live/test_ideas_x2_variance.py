@@ -141,8 +141,10 @@ class _Viewed(xg._Engine):
         seen = [xg._event(code="lane_view", lane=lane, view_sha=sha, served_model=model)
                 for lane, sha, model in (("obvious", "ab12cd34", SONNET),
                                          ("eliminate", "ff00ee11", None))]  # fmt: skip
-        late = xg._event(code="lane_view", lane="far", view_sha="ab12cd34",
-                         served_model=SONNET)  # fmt: skip
+        late = xg._event(code="lane_view", lane="leap", view_sha="ab12cd34",
+                         served_model=SONNET, output_tokens=31_000, max_tokens=32_000,
+                         stop_reason="max_tokens",
+                         attempt_output_tokens="claude-fable-5-2=31000")  # fmt: skip
         events = list(state["events"])
         state["events"] = [events[0], *seen, *events[1:4], late, *events[4:]]
         record(SimpleNamespace(guard="ok"), EngineRunResult("run", "done", cast(Any, state), None))  # fmt: skip
@@ -154,10 +156,14 @@ def test_round_rows_carry_each_lane_requests_view_and_the_run_its_minutes(
     _, rows = x2_run(engine=_Viewed())
 
     rounds = xg._rows(rows, x2.ROUND_EXPERIMENT)
+    unspent = dict.fromkeys(("output_tokens", "max_tokens", "stop_reason",
+                             "attempt_output_tokens"))  # fmt: skip
     assert [r["lane_views"] for r in rounds] == [
-        [{"lane": "obvious", "view_sha": "ab12cd34", "served_model": SONNET},
-         {"lane": "eliminate", "view_sha": "ff00ee11", "served_model": None}],
-        [{"lane": "far", "view_sha": "ab12cd34", "served_model": SONNET}],
+        [{"lane": "obvious", "view_sha": "ab12cd34", "served_model": SONNET, **unspent},
+         {"lane": "eliminate", "view_sha": "ff00ee11", "served_model": None, **unspent}],
+        [{"lane": "leap", "view_sha": "ab12cd34", "served_model": SONNET,
+          "output_tokens": 31_000, "max_tokens": 32_000, "stop_reason": "max_tokens",
+          "attempt_output_tokens": "claude-fable-5-2=31000"}],
     ]  # fmt: skip
     (run,) = xg._rows(rows, x2.RUN_EXPERIMENT)
     assert run["minutes_planned"] == 89 and 0.0 <= run["seconds_measured"] < 60.0

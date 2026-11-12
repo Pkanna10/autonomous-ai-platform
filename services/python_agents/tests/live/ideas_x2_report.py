@@ -153,6 +153,10 @@ class LaneView(BaseModel):  # IDEAS_VIEW_RECORD's record of one lane request
     lane: str
     view_sha: Annotated[str, Field(pattern="^[0-9a-f]{8}$")]
     served_model: str | None
+    output_tokens: Count | None = None  # U-tokens; rows before it have none
+    max_tokens: Annotated[int, Field(ge=1)] | None = None
+    stop_reason: str | None = None
+    attempt_output_tokens: str | None = None  # "model=tokens,..." on a fallback
 
 
 class RoundLine(_Row):
