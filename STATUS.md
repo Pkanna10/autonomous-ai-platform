@@ -828,6 +828,36 @@ blocks it.
     - its own knowledge of public upstream fixes.
   - **Why:** V9 is O19's held-out exam and the charter's K4 rung, and a prior
     built from its keys would contaminate both.
+- **O61. The sprint read and key 2's remaining credit (owner, 2026-11-12; fixed
+  before any of these runs).**
+  - **The sprint read** (`w2-sprint/report.md`) is accepted as reported. The
+    Lead's four calls are confirmed: X2-D's definition is X2-0 with
+    `PORTFOLIO_ROUNDS=3`, `MAX_TRIAL_ROUNDS=3` and `GENERATOR_MAX_CALLS=3`; a
+    portfolio leap gets 32,000 tokens and the 951 s timeout on either model; the
+    X2-0 pilot counts as one of tomli's three X2-0 runs; X2-F's cap is 21.10 a
+    run.
+  - **X2-F is closed at 3 runs;** no prompt or cap change.
+  - **Key 2's remaining credit, in priority order** (dropped from the bottom if
+    the console balance does not cover them):
+    1. **Re-run the lost X2-D dispatch** (sqlparse, mistune). It completes the
+       original 12 and counts whatever it shows. The ceiling overrun is
+       approved.
+    2. **New arm X2-L:** X2-0 with today's leap prompt and Fable 5.2 as the leap
+       model (U-fable52's shape: effort high, 32,000 tokens, 951 s). Three runs
+       per library on sqlparse, tomli, mistune and markdown; ceiling 48 USD.
+       Read against the pool by O59 section 5's rule. A stop at the cap ends the
+       arm, as for X2-F.
+    3. **X2-D confirmation batch:** two fresh runs per library (8 runs), ceiling
+       30 USD. **Pre-registered:** these 8 runs are read on their own against
+       the pool with the same bar (two-sided p <= 0.10 and a higher median on at
+       least 3 of the 4 libraries). The combined 20-run figure is printed beside
+       it, labelled as not pre-registered.
+  - No new dispatch on key 2 after 2026-11-14 12:00 UTC.
+  - **Report items:** where X2-P's 36 framework ideas that passed the checks but
+    were not trialled went (reviewer, portfolio selection, budget, duplicates),
+    by framework; and the per-lane hit-rate page fixed to accept several runs
+    per library.
+  - **Key 1's 12.20 USD** is held for a confirmation run after this reading.
 - **O60. Emergence round 2's rulings (owner, 2026-11-11).**
   - **Points:** confirmed as computed in `emergence/round-2.md` section 9, with
     the six flagged rules settled: partial withdrawals do not count; a partly
