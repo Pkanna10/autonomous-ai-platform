@@ -1,0 +1,26 @@
+diff --git a/src/mistune/renderers/html.py b/src/mistune/renderers/html.py
+index a62e7c78f8510e9681a41c985da1fe05af4b436a..b16094420e44d37c9a4fafddddc62541686187fb 100644
+--- a/src/mistune/renderers/html.py
++++ b/src/mistune/renderers/html.py
+@@ -36,10 +36,20 @@ class HTMLRenderer(BaseRenderer):
+         super(HTMLRenderer, self).__init__()
+         self._allow_harmful_protocols = allow_harmful_protocols
+         self._escape = escape
++        self._method_cache: Dict[str, Any] = {}
++
++    def register(self, name: str, method: Any) -> None:
++        super(HTMLRenderer, self).register(name, method)
++        self._method_cache.clear()
+ 
+     def render_token(self, token: Dict[str, Any], state: BlockState) -> str:
+         # backward compitable with v2
+-        func = self._get_method(token["type"])
++        cache = self._method_cache
++        type_ = token["type"]
++        func = cache.get(type_)
++        if func is None:
++            func = self._get_method(type_)
++            cache[type_] = func
+         attrs = token.get("attrs")
+ 
+         if "raw" in token:

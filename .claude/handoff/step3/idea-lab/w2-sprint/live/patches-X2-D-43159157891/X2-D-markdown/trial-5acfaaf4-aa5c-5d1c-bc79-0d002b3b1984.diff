@@ -1,0 +1,70 @@
+diff --git a/markdown/inlinepatterns.py b/markdown/inlinepatterns.py
+index 0f3533b2e2ccc0e7ac5d7d3a3034d45c203f32f2..06d14d27133170750f02abf288dc8841002d44c0 100644
+--- a/markdown/inlinepatterns.py
++++ b/markdown/inlinepatterns.py
+@@ -92,6 +92,28 @@ def build_inlinepatterns(md: Markdown, **kwargs: Any) -> util.Registry[InlinePro
+     inlinePatterns.register(SimpleTextInlineProcessor(NOT_STRONG_RE), 'not_strong', 70)
+     inlinePatterns.register(AsteriskProcessor(r'\*'), 'em_strong', 60)
+     inlinePatterns.register(UnderscoreProcessor(r'_'), 'em_strong2', 50)
++    # Literal substrings each built-in regex requires in every match; used to
++    # skip patterns which cannot possibly match the current text.
++    _triggers = {
++        'backtick': ('`',),
++        'escape': ('\\',),
++        'reference': ('[',),
++        'link': ('[',),
++        'image_link': ('![',),
++        'image_reference': ('![',),
++        'short_reference': ('[',),
++        'short_image_ref': ('![',),
++        'autolink': ('<',),
++        'automail': ('<',),
++        'linebreak': ('  \n',),
++        'html': ('<',),
++        'entity': ('&',),
++        'not_strong': ('*', '_'),
++        'em_strong': ('*',),
++        'em_strong2': ('_',),
++    }
++    for _name, _trig in _triggers.items():
++        inlinePatterns[_name].TRIGGERS = _trig
+     return inlinePatterns
+ 
+ 
+@@ -220,6 +242,12 @@ class Pattern:  # pragma: no cover
+     would cause the content to be a descendant of one of the listed tag names.
+     """
+ 
++    TRIGGERS: Collection[str] | None = None
++    """
++    Optional collection of literal substrings, at least one of which must occur in the text for
++    the pattern to possibly match. `None` means the pattern is always run.
++    """
++
+     compiled_re: re.Pattern[str]
+     md: Markdown | None
+ 
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..71809942bed9c5ae2288267f5831f2018d627f9c 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -133,8 +133,18 @@ class InlineProcessor(Treeprocessor):
+             startIndex = 0
+             count = len(self.inlinePatterns)
+             while patternIndex < count:
++                pattern = self.inlinePatterns[patternIndex]
++                triggers = getattr(pattern, 'TRIGGERS', None)
++                if triggers is not None:
++                    for t in triggers:
++                        if t in data:
++                            break
++                    else:
++                        patternIndex += 1
++                        startIndex = 0
++                        continue
+                 data, matched, startIndex = self.__applyPattern(
+-                    self.inlinePatterns[patternIndex], data, patternIndex, startIndex
++                    pattern, data, patternIndex, startIndex
+                 )
+                 if not matched:
+                     patternIndex += 1

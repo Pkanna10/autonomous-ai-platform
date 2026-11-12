@@ -1,0 +1,71 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..67557c643fc166f19a1dc1c073493c24fbe09117 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -8,6 +8,7 @@ from __future__ import annotations
+ # parse_value().
+ __lazy_modules__ = ["tomli._re", "tomllib._re"]
+ 
++import re
+ import sys
+ 
+ from ._re import (
+@@ -66,6 +67,9 @@ TOML_WS_AND_NEWLINE: Final = TOML_WS | frozenset("\n")
+ BARE_KEY_CHARS: Final = frozenset(
+     "abcdefghijklmnopqrstuvwxyz" "ABCDEFGHIJKLMNOPQRSTUVWXYZ" "0123456789" "-_"
+ )
++# Single bare key, optional TOML whitespace, "=", optional TOML whitespace.
++# The character class must equal BARE_KEY_CHARS and whitespace TOML_WS.
++RE_SIMPLE_KEY_EQ: Final = re.compile(r"([A-Za-z0-9_\-]+)[ \t]*=[ \t]*")
+ KEY_INITIAL_CHARS: Final = BARE_KEY_CHARS | frozenset("\"'")
+ HEXDIGIT_CHARS: Final = frozenset("abcdef" "ABCDEF" "0123456789")
+ 
+@@ -199,7 +203,13 @@ def loads(__s: str, *, parse_float: ParseFloat = float) -> dict[str, Any]:
+             pos += 1
+             continue
+         if char in KEY_INITIAL_CHARS:
+-            pos = key_value_rule(src, pos, out, header, parse_float)
++            m = RE_SIMPLE_KEY_EQ.match(src, pos)
++            if m is not None:
++                pos = simple_key_value_rule(
++                    src, m.end(), m.group(1), out, header, parse_float
++                )
++            else:
++                pos = key_value_rule(src, pos, out, header, parse_float)
+             pos = skip_chars(src, pos, TOML_WS)
+         elif char == "[":
+             try:
+@@ -459,6 +469,33 @@ def key_value_rule(
+     return pos
+ 
+ 
++def simple_key_value_rule(
++    src: str,
++    pos: Pos,
++    key_stem: str,
++    out: Output,
++    header: Key,
++    parse_float: ParseFloat,
++) -> Pos:
++    """Fast path of key_value_rule for a single bare key whose '=' and
++    surrounding whitespace have already been consumed."""
++    pos, value = parse_value(src, pos, parse_float, 0)
++
++    if out.flags.is_(header, Flags.FROZEN):
++        raise TOMLDecodeError(f"Cannot mutate immutable namespace {header}", src, pos)
++
++    try:
++        nest = out.data.get_or_create_nest(header)
++    except KeyError:
++        raise TOMLDecodeError("Cannot overwrite a value", src, pos) from None
++    if key_stem in nest:
++        raise TOMLDecodeError("Cannot overwrite a value", src, pos)
++    if isinstance(value, (dict, list)):
++        out.flags.set(header + (key_stem,), Flags.FROZEN, recursive=True)
++    nest[key_stem] = value
++    return pos
++
++
+ def parse_key_value_pair(
+     src: str, pos: Pos, parse_float: ParseFloat, nest_lvl: int
+ ) -> tuple[Pos, Key, Any]:

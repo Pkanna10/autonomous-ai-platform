@@ -1,0 +1,62 @@
+diff --git a/src/mistune/inline_parser.py b/src/mistune/inline_parser.py
+index abe671654a9d562f3505134e8cf16ec9d59cf3ec..befe795b287665fa025b98ea82b463021f03125b 100644
+--- a/src/mistune/inline_parser.py
++++ b/src/mistune/inline_parser.py
+@@ -226,6 +226,13 @@ class InlineParser(Parser[InlineState]):
+             state.append_token(token)
+ 
+     def parse(self, state: InlineState) -> List[Dict[str, Any]]:
++        if not state.tokens:
++            chars = self._get_fast_trigger_chars()
++            if chars is not None and self._get_fast_trigger_re(chars).search(state.src) is None:
++                # pure text: no inline syntax and no emphasis markers
++                self.process_text(state.src, state)
++                return state.tokens
++
+         pos = 0
+         sc = self.compile_sc()
+         while pos < len(state.src):
+diff --git a/src/mistune/renderers/html.py b/src/mistune/renderers/html.py
+index a62e7c78f8510e9681a41c985da1fe05af4b436a..ac544ce6058e01d2159446dd2852a3c35dcf3dfe 100644
+--- a/src/mistune/renderers/html.py
++++ b/src/mistune/renderers/html.py
+@@ -56,6 +56,39 @@ class HTMLRenderer(BaseRenderer):
+         else:
+             return func(text)
+ 
++    def render_tokens(self, tokens: Iterable[Dict[str, Any]], state: BlockState) -> str:
++        cls = type(self)
++        if cls.render_token is not HTMLRenderer.render_token or cls.iter_tokens is not BaseRenderer.iter_tokens:
++            return "".join(self.iter_tokens(tokens, state))
++
++        get_method = self._get_method
++        render_tokens = self.render_tokens
++        methods: Dict[str, Any] = {}
++        out = []
++        append = out.append
++        for token in tokens:
++            tp = token["type"]
++            func = methods.get(tp)
++            if func is None:
++                func = get_method(tp)
++                methods[tp] = func
++            attrs = token.get("attrs")
++            if "raw" in token:
++                text = token["raw"]
++            elif "children" in token:
++                text = render_tokens(token["children"], state)
++            else:
++                if attrs:
++                    append(func(**attrs))
++                else:
++                    append(func())
++                continue
++            if attrs:
++                append(func(text, **attrs))
++            else:
++                append(func(text))
++        return "".join(out)
++
+     def safe_url(self, url: str) -> str:
+         """Ensure the given URL is safe. This method is used for rendering
+         links, images, and etc.

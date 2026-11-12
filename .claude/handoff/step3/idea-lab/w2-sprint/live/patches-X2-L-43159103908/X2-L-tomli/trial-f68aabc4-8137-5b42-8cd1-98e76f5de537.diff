@@ -1,0 +1,63 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..3909e7b57415803a7ec659d5ca75c191cc9f05e4 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -11,7 +11,11 @@ __lazy_modules__ = ["tomli._re", "tomllib._re"]
+ import sys
+ 
+ from ._re import (
++    RE_ARRAY_OF_DEC_INTS,
++    RE_ARRAY_OF_PLAIN_STRS,
+     RE_DATETIME,
++    RE_DEC_INT_TOKEN,
++    RE_PLAIN_STR_CONTENT,
+     RE_LOCALTIME,
+     RE_NUMBER,
+     match_to_datetime,
+@@ -521,6 +525,15 @@ def parse_one_line_basic_str(src: str, pos: Pos) -> tuple[Pos, str]:
+ def parse_array(
+     src: str, pos: Pos, parse_float: ParseFloat, nest_lvl: int
+ ) -> tuple[Pos, list[Any]]:
++    if nest_lvl <= MAX_INLINE_NESTING:
++        m = RE_ARRAY_OF_PLAIN_STRS.match(src, pos)
++        if m:
++            return m.end(), RE_PLAIN_STR_CONTENT.findall(m.group())
++        m = RE_ARRAY_OF_DEC_INTS.match(src, pos)
++        if m:
++            return m.end(), [
++                int(tok, 0) for tok in RE_DEC_INT_TOKEN.findall(m.group())
++            ]
+     pos += 1
+     array: list[Any] = []
+ 
+diff --git a/src/tomli/_re.py b/src/tomli/_re.py
+index fc374ed63d3e3742a97134349fc25b14223ab57b..8c1f20efff8b30c8453b451a9780334cc7ca5baa 100644
+--- a/src/tomli/_re.py
++++ b/src/tomli/_re.py
+@@ -42,6 +42,26 @@ RE_NUMBER: Final = re.compile(
+ """,
+     flags=re.VERBOSE,
+ )
++_DEC_INT_RE_STR: Final = r"[+-]?(?:0|[1-9](?:_?[0-9])*)"
++_PLAIN_BASIC_STR_RE_STR: Final = r'"[^"\\\x00-\x08\x0a-\x1f\x7f]*"'
++# Whole arrays (starting at "[") whose elements are all plain decimal
++# integers, or all escape-free one-line basic strings, with no comments.
++RE_ARRAY_OF_DEC_INTS: Final = re.compile(
++    r"\[[ \t\n]*"
++    + _DEC_INT_RE_STR
++    + r"(?:[ \t\n]*,[ \t\n]*"
++    + _DEC_INT_RE_STR
++    + r")*[ \t\n]*,?[ \t\n]*\]"
++)
++RE_ARRAY_OF_PLAIN_STRS: Final = re.compile(
++    r"\[[ \t\n]*"
++    + _PLAIN_BASIC_STR_RE_STR
++    + r"(?:[ \t\n]*,[ \t\n]*"
++    + _PLAIN_BASIC_STR_RE_STR
++    + r")*[ \t\n]*,?[ \t\n]*\]"
++)
++RE_DEC_INT_TOKEN: Final = re.compile(r"[+-]?[0-9_]+")
++RE_PLAIN_STR_CONTENT: Final = re.compile(r'"([^"]*)"')
+ RE_LOCALTIME: Final = re.compile(_TIME_RE_STR, flags=re.VERBOSE)
+ RE_DATETIME: Final = re.compile(
+     rf"""

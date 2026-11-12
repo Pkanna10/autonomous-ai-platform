@@ -1,0 +1,104 @@
+diff --git a/sqlparse/engine/statement_splitter.py b/sqlparse/engine/statement_splitter.py
+index 62aa9d9e9b071b4df00d6094424349cafdc11315..7e2cef53ff05ea2883fa2b6ab68c07cdf0739d92 100644
+--- a/sqlparse/engine/statement_splitter.py
++++ b/sqlparse/engine/statement_splitter.py
+@@ -7,6 +7,10 @@
+ 
+ from sqlparse import sql, tokens as T
+ 
++_EOS_TTYPES = frozenset((T.Whitespace, T.Comment.Single))
++_NON_RESET_TTYPES = frozenset((T.Whitespace, T.Newline, T.Comment.Single,
++                               T.Comment.Multiline))
++
+ 
+ class StatementSplitter:
+     """Filter that split stream at individual statements"""
+@@ -94,7 +98,11 @@ class StatementSplitter:
+ 
+     def process(self, stream):
+         """Process the stream"""
+-        EOS_TTYPE = T.Whitespace, T.Comment.Single
++        EOS_TTYPE = _EOS_TTYPES
++        Punctuation = T.Punctuation
++        Keyword = T.Keyword
++        Token = sql.Token
++        change_splitlevel = self._change_splitlevel
+ 
+         # Run over all stream tokens
+         for ttype, value in stream:
+@@ -109,10 +117,16 @@ class StatementSplitter:
+                 self._reset()
+ 
+             # Change current split level (increase, decrease or remain equal)
+-            self.level += self._change_splitlevel(ttype, value)
++            if ttype is Punctuation:
++                if value == '(':
++                    self.level += 1
++                elif value == ')':
++                    self.level -= 1
++            elif ttype in Keyword:
++                self.level += change_splitlevel(ttype, value)
+ 
+             # Append the token to the current statement
+-            self.tokens.append(sql.Token(ttype, value))
++            self.tokens.append(Token(ttype, value))
+ 
+             # Check if we get the end of a statement
+             # Issue762: Allow GO (or "GO 2") as statement splitter.
+@@ -121,7 +135,7 @@ class StatementSplitter:
+             # rule.
+             # Issue809: Ignore semicolons inside BEGIN...END blocks, but handle
+             # standalone BEGIN; as a transaction statement
+-            if ttype is T.Punctuation and value == ';':
++            if ttype is Punctuation and value == ';':
+                 # If we just saw BEGIN; then this is a transaction BEGIN,
+                 # not a BEGIN...END block, so decrement depth
+                 if self._seen_begin:
+@@ -130,11 +144,10 @@ class StatementSplitter:
+                 # Split on semicolon if not inside a BEGIN...END block
+                 if self.level <= 0 and self._begin_depth == 0:
+                     self.consume_ws = True
+-            elif ttype is T.Keyword and value.split()[0] == 'GO':
++            elif ttype is Keyword and value.split()[0] == 'GO':
+                 self.consume_ws = True
+-            elif (ttype not in (T.Whitespace, T.Newline, T.Comment.Single,
+-                                T.Comment.Multiline)
+-                  and not (ttype is T.Keyword and value.upper() == 'BEGIN')):
++            elif (ttype not in _NON_RESET_TTYPES
++                  and not (ttype is Keyword and value.upper() == 'BEGIN')):
+                 # Reset _seen_begin if we see a non-whitespace, non-comment
+                 # token but not for BEGIN itself (which just set the flag)
+                 self._seen_begin = False
+diff --git a/sqlparse/sql.py b/sqlparse/sql.py
+index 831dfb96d2b3a282b228bfddac97703a32e608e8..cfadec037589cd083802025c66a5631045ccfd91 100644
+--- a/sqlparse/sql.py
++++ b/sqlparse/sql.py
+@@ -12,6 +12,9 @@ import re
+ from sqlparse import tokens as T
+ from sqlparse.utils import imt, remove_quotes
+ 
++# Maps a tuple of match values to the frozenset of their upper-cased forms.
++_UPPER_VALUES_CACHE = {}
++
+ 
+ class NameAliasMixin:
+     """Implements get_real_name and get_alias."""
+@@ -102,6 +105,18 @@ class Token:
+         if not type_matched or values is None:
+             return type_matched
+ 
++        if not regex:
++            if isinstance(values, str):
++                if self.is_keyword:
++                    return self.normalized == values.upper()
++                return self.normalized == values
++            if self.is_keyword and type(values) is tuple:
++                upper_set = _UPPER_VALUES_CACHE.get(values)
++                if upper_set is None:
++                    upper_set = frozenset(v.upper() for v in values)
++                    _UPPER_VALUES_CACHE[values] = upper_set
++                return self.normalized in upper_set
++
+         if isinstance(values, str):
+             values = (values,)
+ 

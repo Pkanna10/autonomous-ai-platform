@@ -1,0 +1,39 @@
+diff --git a/sqlparse/sql.py b/sqlparse/sql.py
+index 831dfb96d2b3a282b228bfddac97703a32e608e8..a7cba0d92f4e9915a5581e9879841a4272651154 100644
+--- a/sqlparse/sql.py
++++ b/sqlparse/sql.py
+@@ -263,7 +263,33 @@ class TokenList(Token):
+ 
+     def token_next_by(self, i=None, m=None, t=None, idx=-1, end=None):
+         idx += 1
+-        return self._token_matching(lambda tk: imt(tk, i, m, t), idx, end)
++        tokens = self.tokens
++        if end is None:
++            end = len(tokens)
++        # Normalise m and t to lists of patterns once (same semantics as imt).
++        if m:
++            ms = m if isinstance(m, list) else (m,)
++        else:
++            ms = ()
++        if t:
++            ts = t if isinstance(t, list) else (t,)
++        else:
++            ts = ()
++        for j in range(idx, end):
++            token = tokens[j]
++            if token is None:
++                continue
++            if i and isinstance(token, i):
++                return j, token
++            for pattern in ms:
++                if token.match(*pattern):
++                    return j, token
++            if ts:
++                ttype = token.ttype
++                for tt in ts:
++                    if ttype in tt:
++                        return j, token
++        return None, None
+ 
+     def token_not_matching(self, funcs, idx):
+         funcs = (funcs,) if not isinstance(funcs, (list, tuple)) else funcs

@@ -1,0 +1,55 @@
+diff --git a/src/mistune/core.py b/src/mistune/core.py
+index 1f6f0678133458fbcbbf8255c01a1d6046bf7f4f..00465b4d124e8c21ff3ad93174e16b064ae3b6d3 100644
+--- a/src/mistune/core.py
++++ b/src/mistune/core.py
+@@ -241,6 +241,7 @@ class BaseRenderer(object):
+ 
+     def __init__(self) -> None:
+         self.__methods: Dict[str, Callable[..., str]] = {}
++        self._method_cache: Dict[str, Callable[..., str]] = {}
+ 
+     def register(self, name: str, method: Callable[..., str]) -> None:
+         """Register a render method for the named token. For example::
+@@ -252,15 +253,25 @@ class BaseRenderer(object):
+         """
+         # bind self into renderer method
+         self.__methods[name] = lambda *arg, **kwargs: method(self, *arg, **kwargs)
++        cache = self.__dict__.get("_method_cache")
++        if cache is not None:
++            cache.clear()
+ 
+     def _get_method(self, name: str) -> Callable[..., str]:
++        cache = self.__dict__.get("_method_cache")
++        if cache is not None:
++            func = cache.get(name)
++            if func is not None:
++                return func
+         try:
+-            return cast(Callable[..., str], object.__getattribute__(self, name))
++            method = cast(Callable[..., str], object.__getattribute__(self, name))
+         except AttributeError:
+             method = self.__methods.get(name)
+             if not method:
+                 raise AttributeError('No renderer "{!r}"'.format(name))
+-            return method
++        if cache is not None:
++            cache[name] = method
++        return method
+ 
+     def render_token(self, token: Dict[str, Any], state: BlockState) -> str:
+         func = self._get_method(token["type"])
+diff --git a/src/mistune/renderers/html.py b/src/mistune/renderers/html.py
+index a62e7c78f8510e9681a41c985da1fe05af4b436a..4ae38e257d7cfa59708fa89f4819eb4580674a9e 100644
+--- a/src/mistune/renderers/html.py
++++ b/src/mistune/renderers/html.py
+@@ -39,7 +39,9 @@ class HTMLRenderer(BaseRenderer):
+ 
+     def render_token(self, token: Dict[str, Any], state: BlockState) -> str:
+         # backward compitable with v2
+-        func = self._get_method(token["type"])
++        func = self._method_cache.get(token["type"])
++        if func is None:
++            func = self._get_method(token["type"])
+         attrs = token.get("attrs")
+ 
+         if "raw" in token:

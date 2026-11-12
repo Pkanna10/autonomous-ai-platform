@@ -1,0 +1,161 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..5701ffae6fdefc2fa85507cb8d225df0dd78f419 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -52,6 +52,84 @@ def isString(s: object) -> bool:
+     return False
+ 
+ 
++try:  # Python 3.11+
++    from re import _parser as _sre_parse
++except ImportError:  # pragma: no cover
++    import sre_parse as _sre_parse  # type: ignore
++
++_MAX_RANGE = 256
++
++
++def _seq_start_set(items) -> set | None:
++    """
++    Return the exact set of characters a match of the parsed sequence must
++    begin with, or `None` if this cannot be determined with certainty
++    (including when the sequence may match the empty string).
++    """
++    P = _sre_parse
++    for op, av in items:
++        if op is P.AT or op is P.ASSERT or op is P.ASSERT_NOT:
++            # Zero-width: skip.
++            continue
++        if op is P.LITERAL:
++            return {chr(av)}
++        if op is P.IN:
++            result = set()
++            for iop, iav in av:
++                if iop is P.LITERAL:
++                    result.add(chr(iav))
++                elif iop is P.RANGE:
++                    lo, hi = iav
++                    if hi - lo > _MAX_RANGE:
++                        return None
++                    result.update(chr(c) for c in range(lo, hi + 1))
++                else:
++                    return None
++            return result if result else None
++        if op is P.SUBPATTERN:
++            if len(av) != 4:
++                return None
++            group, add_flags, del_flags, sub = av
++            if add_flags or del_flags:
++                return None
++            return _seq_start_set(list(sub))
++        if op is P.BRANCH:
++            result = set()
++            for branch in av[1]:
++                s = _seq_start_set(list(branch))
++                if s is None:
++                    return None
++                result |= s
++            return result if result else None
++        if op is P.MAX_REPEAT or op is P.MIN_REPEAT:
++            lo, hi, sub = av
++            if lo < 1:
++                return None
++            return _seq_start_set(list(sub))
++        return None
++    # Sequence may match empty string.
++    return None
++
++
++def _pattern_start_set(pattern: object) -> frozenset | None:
++    """ Compute the first-character set for an inline pattern, or `None`. """
++    try:
++        if not isinstance(pattern, inlinepatterns.InlineProcessor):
++            return None
++        if type(pattern).getCompiledRegExp is not inlinepatterns.Pattern.getCompiledRegExp:
++            return None
++        regex = pattern.compiled_re
++        if not isinstance(regex, re.Pattern) or not isinstance(regex.pattern, str):
++            return None
++        if regex.flags & re.IGNORECASE:
++            return None
++        parsed = _sre_parse.parse(regex.pattern, regex.flags)
++        s = _seq_start_set(list(parsed))
++        return frozenset(s) if s else None
++    except Exception:  # pragma: no cover
++        return None
++
++
+ class Treeprocessor(util.Processor):
+     """
+     `Treeprocessor`s are run on the `ElementTree` object before serialization.
+@@ -77,6 +155,10 @@ class InlineProcessor(Treeprocessor):
+     A `Treeprocessor` that traverses a tree, applying inline patterns.
+     """
+ 
++    # Class-level defaults in case a subclass skips `__init__`.
++    _InlineProcessor__plan = None
++    _InlineProcessor__start_cache: dict = {}
++
+     def __init__(self, md: Markdown):
+         self.__placeholder_prefix = util.INLINE_PLACEHOLDER_PREFIX
+         self.__placeholder_suffix = util.ETX
+@@ -86,6 +168,8 @@ class InlineProcessor(Treeprocessor):
+         self.md = md
+         self.inlinePatterns = md.inlinePatterns
+         self.ancestors: list[str] = []
++        self.__plan: tuple | None = None
++        self.__start_cache: dict[int, tuple] = {}
+ 
+     def __makePlaceholder(self, type: str) -> tuple[str, str]:
+         """ Generate a placeholder """
+@@ -131,15 +215,48 @@ class InlineProcessor(Treeprocessor):
+         """
+         if not isinstance(data, util.AtomicString):
+             startIndex = 0
+-            count = len(self.inlinePatterns)
++            pats = tuple(self.inlinePatterns)
++            plan = self.__plan
++            if plan is None or plan[0] != pats:
++                plan = self.__plan = self.__buildPlan(pats)
++            starts, union = plan[1], plan[2]
++            if union is not None and union.isdisjoint(data):
++                return data
++            chars = set(data)
++            count = len(pats)
+             while patternIndex < count:
++                s = starts[patternIndex]
++                if s is not None and s.isdisjoint(chars):
++                    patternIndex += 1
++                    startIndex = 0
++                    continue
+                 data, matched, startIndex = self.__applyPattern(
+-                    self.inlinePatterns[patternIndex], data, patternIndex, startIndex
++                    pats[patternIndex], data, patternIndex, startIndex
+                 )
+-                if not matched:
++                if matched:
++                    chars = set(data)
++                else:
+                     patternIndex += 1
+         return data
+ 
++    def __buildPlan(self, pats: tuple) -> tuple:
++        """ Build the per-pattern first-character sets for a pattern tuple. """
++        cache = self.__start_cache
++        starts = []
++        for p in pats:
++            entry = cache.get(id(p))
++            if entry is None or entry[0] is not p:
++                entry = (p, _pattern_start_set(p))
++                cache[id(p)] = entry
++            starts.append(entry[1])
++        union = None
++        if starts and all(s is not None for s in starts):
++            union = set()
++            for s in starts:
++                union |= s
++            union = frozenset(union)
++        return (pats, starts, union)
++
+     def __processElementText(self, node: etree.Element, subnode: etree.Element, isText: bool = True) -> None:
+         """
+         Process placeholders in `Element.text` or `Element.tail`

@@ -1,0 +1,161 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..07e09881bfe9f70d7eaa3256d5d573dd238d95a0 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -8,10 +8,15 @@ from __future__ import annotations
+ # parse_value().
+ __lazy_modules__ = ["tomli._re", "tomllib._re"]
+ 
++import re
+ import sys
+ 
+ from ._re import (
++    RE_ARRAY_OF_DEC_INTS,
++    RE_ARRAY_OF_PLAIN_STRS,
+     RE_DATETIME,
++    RE_DEC_INT_TOKEN,
++    RE_PLAIN_STR_CONTENT,
+     RE_LOCALTIME,
+     RE_NUMBER,
+     match_to_datetime,
+@@ -66,6 +71,9 @@ TOML_WS_AND_NEWLINE: Final = TOML_WS | frozenset("\n")
+ BARE_KEY_CHARS: Final = frozenset(
+     "abcdefghijklmnopqrstuvwxyz" "ABCDEFGHIJKLMNOPQRSTUVWXYZ" "0123456789" "-_"
+ )
++# Single bare key, optional TOML whitespace, "=", optional TOML whitespace.
++# The character class must equal BARE_KEY_CHARS and whitespace TOML_WS.
++RE_SIMPLE_KEY_EQ: Final = re.compile(r"([A-Za-z0-9_\-]+)[ \t]*=[ \t]*")
+ KEY_INITIAL_CHARS: Final = BARE_KEY_CHARS | frozenset("\"'")
+ HEXDIGIT_CHARS: Final = frozenset("abcdef" "ABCDEF" "0123456789")
+ 
+@@ -199,7 +207,13 @@ def loads(__s: str, *, parse_float: ParseFloat = float) -> dict[str, Any]:
+             pos += 1
+             continue
+         if char in KEY_INITIAL_CHARS:
+-            pos = key_value_rule(src, pos, out, header, parse_float)
++            m = RE_SIMPLE_KEY_EQ.match(src, pos)
++            if m is not None:
++                pos = simple_key_value_rule(
++                    src, m.end(), m.group(1), out, header, parse_float
++                )
++            else:
++                pos = key_value_rule(src, pos, out, header, parse_float)
+             pos = skip_chars(src, pos, TOML_WS)
+         elif char == "[":
+             try:
+@@ -429,17 +443,23 @@ def key_value_rule(
+     src: str, pos: Pos, out: Output, header: Key, parse_float: ParseFloat
+ ) -> Pos:
+     pos, key, value = parse_key_value_pair(src, pos, parse_float, nest_lvl=0)
+-    key_parent, key_stem = key[:-1], key[-1]
+-    abs_key_parent = header + key_parent
+-
+-    relative_path_cont_keys = (header + key[:i] for i in range(1, len(key)))
+-    for cont_key in relative_path_cont_keys:
+-        # Check that dotted key syntax does not redefine an existing table
+-        if out.flags.is_(cont_key, Flags.EXPLICIT_NEST):
+-            raise TOMLDecodeError(f"Cannot redefine namespace {cont_key}", src, pos)
+-        # Containers in the relative path can't be opened with the table syntax or
+-        # dotted key/value syntax in following table sections.
+-        out.flags.add_pending(cont_key, Flags.EXPLICIT_NEST)
++    if len(key) == 1:
++        key_stem = key[0]
++        abs_key_parent = header
++    else:
++        key_parent, key_stem = key[:-1], key[-1]
++        abs_key_parent = header + key_parent
++
++        relative_path_cont_keys = (header + key[:i] for i in range(1, len(key)))
++        for cont_key in relative_path_cont_keys:
++            # Check that dotted key syntax does not redefine an existing table
++            if out.flags.is_(cont_key, Flags.EXPLICIT_NEST):
++                raise TOMLDecodeError(
++                    f"Cannot redefine namespace {cont_key}", src, pos
++                )
++            # Containers in the relative path can't be opened with the table
++            # syntax or dotted key/value syntax in following table sections.
++            out.flags.add_pending(cont_key, Flags.EXPLICIT_NEST)
+ 
+     if out.flags.is_(abs_key_parent, Flags.FROZEN):
+         raise TOMLDecodeError(
+@@ -459,6 +479,33 @@ def key_value_rule(
+     return pos
+ 
+ 
++def simple_key_value_rule(
++    src: str,
++    pos: Pos,
++    key_stem: str,
++    out: Output,
++    header: Key,
++    parse_float: ParseFloat,
++) -> Pos:
++    """Fast path of key_value_rule for a single bare key whose '=' and
++    surrounding whitespace have already been consumed."""
++    pos, value = parse_value(src, pos, parse_float, 0)
++
++    if out.flags.is_(header, Flags.FROZEN):
++        raise TOMLDecodeError(f"Cannot mutate immutable namespace {header}", src, pos)
++
++    try:
++        nest = out.data.get_or_create_nest(header)
++    except KeyError:
++        raise TOMLDecodeError("Cannot overwrite a value", src, pos) from None
++    if key_stem in nest:
++        raise TOMLDecodeError("Cannot overwrite a value", src, pos)
++    if isinstance(value, (dict, list)):
++        out.flags.set(header + (key_stem,), Flags.FROZEN, recursive=True)
++    nest[key_stem] = value
++    return pos
++
++
+ def parse_key_value_pair(
+     src: str, pos: Pos, parse_float: ParseFloat, nest_lvl: int
+ ) -> tuple[Pos, Key, Any]:
+@@ -521,6 +568,15 @@ def parse_one_line_basic_str(src: str, pos: Pos) -> tuple[Pos, str]:
+ def parse_array(
+     src: str, pos: Pos, parse_float: ParseFloat, nest_lvl: int
+ ) -> tuple[Pos, list[Any]]:
++    if nest_lvl <= MAX_INLINE_NESTING:
++        m = RE_ARRAY_OF_PLAIN_STRS.match(src, pos)
++        if m:
++            return m.end(), RE_PLAIN_STR_CONTENT.findall(m.group())
++        m = RE_ARRAY_OF_DEC_INTS.match(src, pos)
++        if m:
++            return m.end(), [
++                int(tok, 0) for tok in RE_DEC_INT_TOKEN.findall(m.group())
++            ]
+     pos += 1
+     array: list[Any] = []
+ 
+diff --git a/src/tomli/_re.py b/src/tomli/_re.py
+index fc374ed63d3e3742a97134349fc25b14223ab57b..8c1f20efff8b30c8453b451a9780334cc7ca5baa 100644
+--- a/src/tomli/_re.py
++++ b/src/tomli/_re.py
+@@ -42,6 +42,26 @@ RE_NUMBER: Final = re.compile(
+ """,
+     flags=re.VERBOSE,
+ )
++_DEC_INT_RE_STR: Final = r"[+-]?(?:0|[1-9](?:_?[0-9])*)"
++_PLAIN_BASIC_STR_RE_STR: Final = r'"[^"\\\x00-\x08\x0a-\x1f\x7f]*"'
++# Whole arrays (starting at "[") whose elements are all plain decimal
++# integers, or all escape-free one-line basic strings, with no comments.
++RE_ARRAY_OF_DEC_INTS: Final = re.compile(
++    r"\[[ \t\n]*"
++    + _DEC_INT_RE_STR
++    + r"(?:[ \t\n]*,[ \t\n]*"
++    + _DEC_INT_RE_STR
++    + r")*[ \t\n]*,?[ \t\n]*\]"
++)
++RE_ARRAY_OF_PLAIN_STRS: Final = re.compile(
++    r"\[[ \t\n]*"
++    + _PLAIN_BASIC_STR_RE_STR
++    + r"(?:[ \t\n]*,[ \t\n]*"
++    + _PLAIN_BASIC_STR_RE_STR
++    + r")*[ \t\n]*,?[ \t\n]*\]"
++)
++RE_DEC_INT_TOKEN: Final = re.compile(r"[+-]?[0-9_]+")
++RE_PLAIN_STR_CONTENT: Final = re.compile(r'"([^"]*)"')
+ RE_LOCALTIME: Final = re.compile(_TIME_RE_STR, flags=re.VERBOSE)
+ RE_DATETIME: Final = re.compile(
+     rf"""

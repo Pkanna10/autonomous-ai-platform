@@ -1,0 +1,102 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..d92e79dca0876d961b9e9d077735d7c99d2d008d 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -175,6 +175,7 @@ def loads(__s: str, *, parse_float: ParseFloat = float) -> dict[str, Any]:
+     pos = 0
+     out = Output()
+     header: Key = ()
++    cached_nest: dict[str, Any] | None = None
+     parse_float = make_safe_parse_float(parse_float)
+ 
+     # Parse one statement at a time
+@@ -199,7 +200,9 @@ def loads(__s: str, *, parse_float: ParseFloat = float) -> dict[str, Any]:
+             pos += 1
+             continue
+         if char in KEY_INITIAL_CHARS:
+-            pos = key_value_rule(src, pos, out, header, parse_float)
++            pos, cached_nest = key_value_rule(
++                src, pos, out, header, parse_float, cached_nest
++            )
+             pos = skip_chars(src, pos, TOML_WS)
+         elif char == "[":
+             try:
+@@ -211,6 +214,7 @@ def loads(__s: str, *, parse_float: ParseFloat = float) -> dict[str, Any]:
+                 pos, header = create_list_rule(src, pos, out)
+             else:
+                 pos, header = create_dict_rule(src, pos, out)
++            cached_nest = None
+             pos = skip_chars(src, pos, TOML_WS)
+         elif char != "#":
+             raise TOMLDecodeError("Invalid statement", src, pos)
+@@ -426,37 +430,52 @@ def create_list_rule(src: str, pos: Pos, out: Output) -> tuple[Pos, Key]:
+ 
+ 
+ def key_value_rule(
+-    src: str, pos: Pos, out: Output, header: Key, parse_float: ParseFloat
+-) -> Pos:
++    src: str,
++    pos: Pos,
++    out: Output,
++    header: Key,
++    parse_float: ParseFloat,
++    cached_nest: dict[str, Any] | None = None,
++) -> tuple[Pos, dict[str, Any] | None]:
+     pos, key, value = parse_key_value_pair(src, pos, parse_float, nest_lvl=0)
+-    key_parent, key_stem = key[:-1], key[-1]
+-    abs_key_parent = header + key_parent
+-
+-    relative_path_cont_keys = (header + key[:i] for i in range(1, len(key)))
+-    for cont_key in relative_path_cont_keys:
+-        # Check that dotted key syntax does not redefine an existing table
+-        if out.flags.is_(cont_key, Flags.EXPLICIT_NEST):
+-            raise TOMLDecodeError(f"Cannot redefine namespace {cont_key}", src, pos)
+-        # Containers in the relative path can't be opened with the table syntax or
+-        # dotted key/value syntax in following table sections.
+-        out.flags.add_pending(cont_key, Flags.EXPLICIT_NEST)
++    single = len(key) == 1
++    key_stem = key[-1]
++    if single:
++        abs_key_parent = header
++    else:
++        abs_key_parent = header + key[:-1]
++        relative_path_cont_keys = (header + key[:i] for i in range(1, len(key)))
++        for cont_key in relative_path_cont_keys:
++            # Check that dotted key syntax does not redefine an existing table
++            if out.flags.is_(cont_key, Flags.EXPLICIT_NEST):
++                raise TOMLDecodeError(
++                    f"Cannot redefine namespace {cont_key}", src, pos
++                )
++            # Containers in the relative path can't be opened with the table
++            # syntax or dotted key/value syntax in following table sections.
++            out.flags.add_pending(cont_key, Flags.EXPLICIT_NEST)
+ 
+     if out.flags.is_(abs_key_parent, Flags.FROZEN):
+         raise TOMLDecodeError(
+             f"Cannot mutate immutable namespace {abs_key_parent}", src, pos
+         )
+ 
+-    try:
+-        nest = out.data.get_or_create_nest(abs_key_parent)
+-    except KeyError:
+-        raise TOMLDecodeError("Cannot overwrite a value", src, pos) from None
++    if single and cached_nest is not None:
++        nest = cached_nest
++    else:
++        try:
++            nest = out.data.get_or_create_nest(abs_key_parent)
++        except KeyError:
++            raise TOMLDecodeError("Cannot overwrite a value", src, pos) from None
++        if single:
++            cached_nest = nest
+     if key_stem in nest:
+         raise TOMLDecodeError("Cannot overwrite a value", src, pos)
+     # Mark inline table and array namespaces recursively immutable
+     if isinstance(value, (dict, list)):
+         out.flags.set(header + key, Flags.FROZEN, recursive=True)
+     nest[key_stem] = value
+-    return pos
++    return pos, cached_nest
+ 
+ 
+ def parse_key_value_pair(

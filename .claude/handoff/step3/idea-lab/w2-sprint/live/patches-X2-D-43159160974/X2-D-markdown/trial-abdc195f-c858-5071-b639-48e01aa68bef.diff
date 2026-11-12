@@ -1,0 +1,43 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..c3ba1125ef8d8236634cd63314cebca285278e4b 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -130,6 +130,14 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         if not isinstance(data, util.AtomicString):
++            ancestors = self.ancestors
++            key = (data, patternIndex,
++                   tuple([tag in ancestors for tag in self._exclude_tags]))
++            inert = self._inert
++            if key in inert:
++                return data
++            original = data
++            stashSize = len(self.stashed_nodes)
+             startIndex = 0
+             count = len(self.inlinePatterns)
+             while patternIndex < count:
+@@ -138,6 +146,8 @@ class InlineProcessor(Treeprocessor):
+                 )
+                 if not matched:
+                     patternIndex += 1
++            if len(self.stashed_nodes) == stashSize and data == original:
++                inert.add(key)
+         return data
+ 
+     def __processElementText(self, node: etree.Element, subnode: etree.Element, isText: bool = True) -> None:
+@@ -364,6 +374,14 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         self.stashed_nodes: dict[str, etree.Element | str] = {}
++        self._inert: set = set()
++        excludes: list[str] = []
++        for pattern in self.inlinePatterns:
++            for exclude in pattern.ANCESTOR_EXCLUDES:
++                tag = exclude.lower()
++                if tag not in excludes:
++                    excludes.append(tag)
++        self._exclude_tags = tuple(excludes)
+ 
+         # Ensure a valid parent list, but copy passed in lists
+         # to ensure we don't have the user accidentally change it on us.

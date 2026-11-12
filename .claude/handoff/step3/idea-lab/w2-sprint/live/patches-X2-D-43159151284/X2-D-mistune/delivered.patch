@@ -1,0 +1,205 @@
+diff --git a/src/mistune/_inline/links.py b/src/mistune/_inline/links.py
+index 5ad0ec389dd24859b80a8c62901747c0a3fca1c7..dd350ef0711ced63058359886dd5a7e7b9ee99e3 100644
+--- a/src/mistune/_inline/links.py
++++ b/src/mistune/_inline/links.py
+@@ -1,5 +1,6 @@
+ from __future__ import annotations
+ 
++import re
+ from bisect import bisect_left
+ from typing import TYPE_CHECKING, Dict, List, Match, Optional, Tuple
+ 
+@@ -164,6 +165,8 @@ def find_closing_bracket(state: InlineState, pos: int) -> Optional[int]:
+ def label_contains_link(state: InlineState, start: int, end: int) -> bool:
+     if start >= end:
+         return False
++    if state.src.find("[", start, end) == -1:
++        return False
+ 
+     starts, suffix_min_ends = get_link_range_index(state)
+     index = bisect_left(starts, start)
+@@ -233,18 +236,24 @@ def find_link_range_end(src: str, label_start: int, close_pos: int, state: Inlin
+     return None
+ 
+ 
++_BRACKET_SCAN_RE = re.compile(r"[\\\[\]]")
++
++
+ def build_closing_bracket_map(src: str) -> Dict[int, int]:
+     pairs: Dict[int, int] = {}
++    if "[" not in src:
++        return pairs
+     stack: List[int] = []
+-    pos = 0
+-    while pos < len(src):
++    skip_until = 0
++    for m in _BRACKET_SCAN_RE.finditer(src):
++        pos = m.start()
++        if pos < skip_until:
++            continue
+         char = src[pos]
+         if char == "\\":
+-            pos += 2
+-            continue
+-        if char == "[":
++            skip_until = pos + 2
++        elif char == "[":
+             stack.append(pos + 1)
+-        elif char == "]" and stack:
++        elif stack:
+             pairs[stack.pop()] = pos
+-        pos += 1
+     return pairs
+diff --git a/src/mistune/core.py b/src/mistune/core.py
+index 1f6f0678133458fbcbbf8255c01a1d6046bf7f4f..00465b4d124e8c21ff3ad93174e16b064ae3b6d3 100644
+--- a/src/mistune/core.py
++++ b/src/mistune/core.py
+@@ -241,6 +241,7 @@ class BaseRenderer(object):
+ 
+     def __init__(self) -> None:
+         self.__methods: Dict[str, Callable[..., str]] = {}
++        self._method_cache: Dict[str, Callable[..., str]] = {}
+ 
+     def register(self, name: str, method: Callable[..., str]) -> None:
+         """Register a render method for the named token. For example::
+@@ -252,15 +253,25 @@ class BaseRenderer(object):
+         """
+         # bind self into renderer method
+         self.__methods[name] = lambda *arg, **kwargs: method(self, *arg, **kwargs)
++        cache = self.__dict__.get("_method_cache")
++        if cache is not None:
++            cache.clear()
+ 
+     def _get_method(self, name: str) -> Callable[..., str]:
++        cache = self.__dict__.get("_method_cache")
++        if cache is not None:
++            func = cache.get(name)
++            if func is not None:
++                return func
+         try:
+-            return cast(Callable[..., str], object.__getattribute__(self, name))
++            method = cast(Callable[..., str], object.__getattribute__(self, name))
+         except AttributeError:
+             method = self.__methods.get(name)
+             if not method:
+                 raise AttributeError('No renderer "{!r}"'.format(name))
+-            return method
++        if cache is not None:
++            cache[name] = method
++        return method
+ 
+     def render_token(self, token: Dict[str, Any], state: BlockState) -> str:
+         func = self._get_method(token["type"])
+diff --git a/src/mistune/helpers.py b/src/mistune/helpers.py
+index be5d0cadd12f8cb925f6a14e5f22860bed67db2b..7826780a21188a2c03f7ac58e1eb31ff339f65c9 100644
+--- a/src/mistune/helpers.py
++++ b/src/mistune/helpers.py
+@@ -87,6 +87,8 @@ PRE_TAGS = ("pre", "script", "style", "textarea")
+ _INLINE_LINK_LABEL_RE = re.compile(LINK_LABEL + r"\]")
+ _INLINE_SQUARE_BRACKET_RE = re.compile(PREVENT_BACKSLASH + r"[\[\]]")
+ _ESCAPE_CHAR_RE = re.compile(r"\\(" + PUNCTUATION + r")")
++_HREF_PLAIN_RE = re.compile(r"[^ \t\n\r\f\x00\\()]*")
++_HREF_PLAIN_BLOCK_RE = re.compile(r"[^ \t\n\r\f\x00\\]*")
+ 
+ 
+ def unescape_char(text: str) -> str:
+@@ -154,6 +156,8 @@ def _parse_link_href(
+ 
+     start = pos
+     level = 0
++    plain_re = _HREF_PLAIN_BLOCK_RE if block else _HREF_PLAIN_RE
++    pos = plain_re.match(src, pos).end()
+     while pos < len(src):
+         c = src[pos]
+         if c in ASCII_WHITESPACE:
+diff --git a/src/mistune/inline_parser.py b/src/mistune/inline_parser.py
+index abe671654a9d562f3505134e8cf16ec9d59cf3ec..74bc793df5ad1319eb3eea68c2188b0b350ce02e 100644
+--- a/src/mistune/inline_parser.py
++++ b/src/mistune/inline_parser.py
+@@ -228,8 +228,37 @@ class InlineParser(Parser[InlineState]):
+     def parse(self, state: InlineState) -> List[Dict[str, Any]]:
+         pos = 0
+         sc = self.compile_sc()
++        chars = self._get_fast_trigger_chars()
++        trigger_re = self._get_fast_trigger_re(chars) if chars is not None else None
++        cached_src: Optional[str] = None
++        cached_start = -1  # -1: no cached result; -2: no match beyond cached search pos
++        cached_from = 0
++        cached_char = ""
+         while pos < len(state.src):
+-            fast_end = self._find_fast_text_end(state.src, pos)
++            if trigger_re is None:
++                fast_end = None
++            else:
++                src = state.src
++                if (
++                    src is not cached_src
++                    or cached_start == -1
++                    or pos < cached_from
++                    or (cached_start >= 0 and pos > cached_start)
++                ):
++                    tm = trigger_re.search(src, pos)
++                    cached_src = src
++                    cached_from = pos
++                    if tm is None:
++                        cached_start = -2
++                    else:
++                        cached_start = tm.start()
++                        cached_char = tm.group(0)
++                if cached_start == -2:
++                    fast_end = len(src)
++                elif cached_char == "\n":
++                    fast_end = self._find_linebreak_start(src, pos, cached_start)
++                else:
++                    fast_end = cached_start
+             if fast_end is None:
+                 m = sc.search(state.src, pos)
+             else:
+@@ -274,11 +303,12 @@ class InlineParser(Parser[InlineState]):
+         return state.tokens
+ 
+     def _find_fast_text_end(self, src: str, pos: int) -> Optional[int]:
+-        chars = self._get_fast_trigger_chars()
+-        if chars is None:
+-            return None
+-
+-        trigger_re = self._get_fast_trigger_re(chars)
++        trigger_re = self._fast_trigger_re
++        if trigger_re is None or self._fast_trigger_chars is None:
++            chars = self._get_fast_trigger_chars()
++            if chars is None:
++                return None
++            trigger_re = self._get_fast_trigger_re(chars)
+         m = trigger_re.search(src, pos)
+         if m is None:
+             return len(src)
+diff --git a/src/mistune/renderers/html.py b/src/mistune/renderers/html.py
+index a62e7c78f8510e9681a41c985da1fe05af4b436a..5932b27f5cae5722227924c9b103be754450ee7e 100644
+--- a/src/mistune/renderers/html.py
++++ b/src/mistune/renderers/html.py
+@@ -36,10 +36,24 @@ class HTMLRenderer(BaseRenderer):
+         super(HTMLRenderer, self).__init__()
+         self._allow_harmful_protocols = allow_harmful_protocols
+         self._escape = escape
++        self._plain_text = type(self).text is HTMLRenderer.text
+ 
+     def render_token(self, token: Dict[str, Any], state: BlockState) -> str:
++        # fast path for plain text tokens when ``text`` is not overridden
++        if (
++            token["type"] == "text"
++            and self._plain_text
++            and "raw" in token
++            and not token.get("attrs")
++            and "text" not in self.__dict__
++        ):
++            if self._escape:
++                return escape_text(token["raw"])
++            return safe_entity(token["raw"])
+         # backward compitable with v2
+-        func = self._get_method(token["type"])
++        func = self._method_cache.get(token["type"])
++        if func is None:
++            func = self._get_method(token["type"])
+         attrs = token.get("attrs")
+ 
+         if "raw" in token:

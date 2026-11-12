@@ -1,0 +1,142 @@
+diff --git a/sqlparse/engine/grouping.py b/sqlparse/engine/grouping.py
+index 43ca5b580d5e8499e3fa1ed5275902d7e20ce71b..06e6c5804fb8f74f4766e81daf4927d35a2f68c9 100644
+--- a/sqlparse/engine/grouping.py
++++ b/sqlparse/engine/grouping.py
+@@ -439,38 +439,106 @@ def group_values(tlist):
+         tlist.group_tokens(sql.Values, start_idx, end_idx, extend=True)
+ 
+ 
++_TRIGGER_KEYWORDS = frozenset((
++    'CASE', 'IF', 'FOR', 'FOREACH', 'BEGIN', 'OVER', 'VALUES', 'TIMESTAMP'))
++
++
++def _scan_triggers(stmt):
++    """Record which pass-triggering leaf tokens occur in the statement.
++
++    Leaf values and ttypes (except Wildcard -> Operator) never change during
++    grouping, so passes whose trigger tokens are absent cannot fire.
++    """
++    kws = set()
++    has_bracket = has_typecast = has_assign = has_builtin = False
++    has_comment = has_order = has_tzcast = False
++    T_Keyword = T.Keyword
++    T_Punct = T.Punctuation
++    T_Assign = T.Assignment
++    T_Builtin = T.Name.Builtin
++    T_Comment = T.Comment
++    T_Order = T.Keyword.Order
++    T_TZCast = T.Keyword.TZCast
++    for tok in stmt.flatten():
++        tt = tok.ttype
++        if tt is T_Keyword:
++            v = tok.normalized
++            if v in _TRIGGER_KEYWORDS:
++                kws.add(v)
++        elif tt is T_Punct:
++            v = tok.value
++            if v == '[':
++                has_bracket = True
++            elif v == '::':
++                has_typecast = True
++        elif tt is T_Assign:
++            if tok.value == ':=':
++                has_assign = True
++        elif tt is T_Builtin:
++            has_builtin = True
++        elif tt is None:
++            continue
++        else:
++            if tt in T_Comment:
++                has_comment = True
++            if tt in T_Order:
++                has_order = True
++            if tt == T_TZCast:
++                has_tzcast = True
++    return (kws, has_bracket, has_typecast, has_assign, has_builtin,
++            has_comment, has_order, has_tzcast)
++
++
+ def group(stmt):
+-    for func in [
+-        group_comments,
+-
+-        # _group_matching
+-        group_brackets,
+-        group_parenthesis,
+-        group_case,
+-        group_if,
+-        group_for,
+-        group_begin,
+-
+-        group_over,
+-        group_functions,
+-        group_where,
+-        group_period,
+-        group_arrays,
+-        group_identifier,
+-        group_order,
+-        group_typecasts,
+-        group_tzcasts,
+-        group_typed_literal,
+-        group_operator,
+-        group_comparison,
+-        group_as,
+-        group_aliased,
+-        group_assignment,
+-
+-        align_comments,
+-        group_identifier_list,
+-        group_values,
+-    ]:
++    (kws, has_bracket, has_typecast, has_assign, has_builtin,
++     has_comment, has_order, has_tzcast) = _scan_triggers(stmt)
++    funcs = []
++    if has_comment:
++        funcs.append(group_comments)
++
++    # _group_matching
++    if has_bracket:
++        funcs.append(group_brackets)
++    funcs.append(group_parenthesis)
++    if 'CASE' in kws:
++        funcs.append(group_case)
++    if 'IF' in kws:
++        funcs.append(group_if)
++    if 'FOR' in kws or 'FOREACH' in kws:
++        funcs.append(group_for)
++    if 'BEGIN' in kws:
++        funcs.append(group_begin)
++
++    if 'OVER' in kws:
++        funcs.append(group_over)
++    funcs.append(group_functions)
++    funcs.append(group_where)
++    funcs.append(group_period)
++    if has_bracket:
++        funcs.append(group_arrays)
++    funcs.append(group_identifier)
++    if has_order:
++        funcs.append(group_order)
++    if has_typecast:
++        funcs.append(group_typecasts)
++    if has_tzcast:
++        funcs.append(group_tzcasts)
++    if has_builtin or 'TIMESTAMP' in kws:
++        funcs.append(group_typed_literal)
++    funcs.append(group_operator)
++    funcs.append(group_comparison)
++    funcs.append(group_as)
++    funcs.append(group_aliased)
++    if has_assign:
++        funcs.append(group_assignment)
++
++    if has_comment:
++        funcs.append(align_comments)
++    funcs.append(group_identifier_list)
++    if 'VALUES' in kws:
++        funcs.append(group_values)
++
++    for func in funcs:
+         func(stmt)
+     return stmt
+ 

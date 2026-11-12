@@ -1,0 +1,121 @@
+diff --git a/markdown/extensions/abbr.py b/markdown/extensions/abbr.py
+index 9f609810ad4a7a01403f978b878435b17fef5a0e..479d1e73a18754b6a733e5c8c052819f2308e068 100644
+--- a/markdown/extensions/abbr.py
++++ b/markdown/extensions/abbr.py
+@@ -93,6 +93,7 @@ class AbbrTreeprocessor(Treeprocessor):
+     def __init__(self, md: Markdown | None = None, abbrs: dict | None = None):
+         self.abbrs: dict = abbrs if abbrs is not None else {}
+         self.RE: re.RegexObject | None = None
++        self._keys: tuple = ()
+         super().__init__(md)
+ 
+     def create_element(self, title: str, text: str, tail: str) -> etree.Element:
+@@ -106,8 +107,9 @@ class AbbrTreeprocessor(Treeprocessor):
+         ''' Recursively iterate over elements, run regex on text and wrap matches in `abbr` tags. '''
+         for child in reversed(el):
+             self.iter_element(child, el)
++        keys = self._keys
+         if text := el.text:
+-            if not isinstance(text, AtomicString):
++            if not isinstance(text, AtomicString) and any(k in text for k in keys):
+                 for m in reversed(list(self.RE.finditer(text))):
+                     if self.abbrs[m.group(0)]:
+                         abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), text[m.end():])
+@@ -116,8 +118,8 @@ class AbbrTreeprocessor(Treeprocessor):
+                 el.text = text
+         if parent is not None and el.tail:
+             tail = el.tail
+-            index = list(parent).index(el) + 1
+-            if not isinstance(tail, AtomicString):
++            if not isinstance(tail, AtomicString) and any(k in tail for k in keys):
++                index = list(parent).index(el) + 1
+                 for m in reversed(list(self.RE.finditer(tail))):
+                     abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), tail[m.end():])
+                     parent.insert(index, abbr)
+@@ -133,6 +135,7 @@ class AbbrTreeprocessor(Treeprocessor):
+         abbr_list = list(self.abbrs.keys())
+         abbr_list.sort(key=len, reverse=True)
+         self.RE = re.compile(f"\\b(?:{ '|'.join(re.escape(key) for key in abbr_list) })\\b")
++        self._keys = tuple(abbr_list)
+         # Step through tree and modify on matches
+         self.iter_element(root)
+ 
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..a66b6917464906353dc99c4c003d5e9acf0d4c26 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -86,6 +86,7 @@ class InlineProcessor(Treeprocessor):
+         self.md = md
+         self.inlinePatterns = md.inlinePatterns
+         self.ancestors: list[str] = []
++        self._patterns_snapshot: list | None = None
+ 
+     def __makePlaceholder(self, type: str) -> tuple[str, str]:
+         """ Generate a placeholder """
+@@ -130,14 +131,29 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         if not isinstance(data, util.AtomicString):
++            nomatch = getattr(self, '_nomatch', None)
++            if nomatch is None:
++                nomatch = self._nomatch = set()
++            key = (data, patternIndex, tuple(self.ancestors))
++            if key in nomatch:
++                return data
++            anyMatched = False
+             startIndex = 0
+-            count = len(self.inlinePatterns)
++            patterns = self._patterns_snapshot
++            if patterns is None:
++                patterns = list(self.inlinePatterns)
++            count = len(patterns)
++            applyPattern = self.__applyPattern
+             while patternIndex < count:
+-                data, matched, startIndex = self.__applyPattern(
+-                    self.inlinePatterns[patternIndex], data, patternIndex, startIndex
++                data, matched, startIndex = applyPattern(
++                    patterns[patternIndex], data, patternIndex, startIndex
+                 )
+-                if not matched:
++                if matched:
++                    anyMatched = True
++                else:
+                     patternIndex += 1
++            if not anyMatched:
++                nomatch.add(key)
+         return data
+ 
+     def __processElementText(self, node: etree.Element, subnode: etree.Element, isText: bool = True) -> None:
+@@ -278,11 +294,15 @@ class InlineProcessor(Treeprocessor):
+                 return data, False, 0
+ 
+         if new_style:
++            regex = pattern.getCompiledRegExp()
++            # Fast rejection: most calls find no match at all.
++            if regex.search(data, startIndex) is None:
++                return data, False, 0
+             match = None
+             # Since `handleMatch` may reject our first match,
+             # we iterate over the buffer looking for matches
+             # until we can't find any more.
+-            for match in pattern.getCompiledRegExp().finditer(data, startIndex):
++            for match in regex.finditer(data, startIndex):
+                 node, start, end = pattern.handleMatch(match, data)
+                 if start is None or end is None:
+                     startIndex += match.end(0)
+@@ -364,6 +384,7 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         self.stashed_nodes: dict[str, etree.Element | str] = {}
++        self._nomatch: set = set()
+ 
+         # Ensure a valid parent list, but copy passed in lists
+         # to ensure we don't have the user accidentally change it on us.
+@@ -371,6 +392,7 @@ class InlineProcessor(Treeprocessor):
+ 
+         self.parent_map = {c: p for p in tree.iter() for c in p}
+         stack = [(tree, tree_parents)]
++        self._patterns_snapshot = list(self.inlinePatterns)
+ 
+         while stack:
+             currElement, parents = stack.pop(0)

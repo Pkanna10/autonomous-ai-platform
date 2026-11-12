@@ -1,0 +1,33 @@
+diff --git a/src/mistune/core.py b/src/mistune/core.py
+index 1f6f0678133458fbcbbf8255c01a1d6046bf7f4f..339b992e6c660904125c87c1274cc6589e72e951 100644
+--- a/src/mistune/core.py
++++ b/src/mistune/core.py
+@@ -252,15 +252,26 @@ class BaseRenderer(object):
+         """
+         # bind self into renderer method
+         self.__methods[name] = lambda *arg, **kwargs: method(self, *arg, **kwargs)
++        self.__dict__.pop("_method_cache", None)
+ 
+     def _get_method(self, name: str) -> Callable[..., str]:
+         try:
+-            return cast(Callable[..., str], object.__getattribute__(self, name))
++            cache = self.__dict__["_method_cache"]
++        except KeyError:
++            cache = self.__dict__["_method_cache"] = {}
++        else:
++            func = cache.get(name)
++            if func is not None:
++                return func
++        try:
++            func = cast(Callable[..., str], object.__getattribute__(self, name))
+         except AttributeError:
+             method = self.__methods.get(name)
+             if not method:
+                 raise AttributeError('No renderer "{!r}"'.format(name))
+-            return method
++            func = method
++        cache[name] = func
++        return func
+ 
+     def render_token(self, token: Dict[str, Any], state: BlockState) -> str:
+         func = self._get_method(token["type"])

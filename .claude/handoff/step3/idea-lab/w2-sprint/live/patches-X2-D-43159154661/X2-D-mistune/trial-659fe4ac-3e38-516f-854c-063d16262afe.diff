@@ -1,0 +1,37 @@
+diff --git a/src/mistune/inline_parser.py b/src/mistune/inline_parser.py
+index abe671654a9d562f3505134e8cf16ec9d59cf3ec..d76a94ea10634b177e9bc6a6f7206e7d6d969f05 100644
+--- a/src/mistune/inline_parser.py
++++ b/src/mistune/inline_parser.py
+@@ -228,8 +228,21 @@ class InlineParser(Parser[InlineState]):
+     def parse(self, state: InlineState) -> List[Dict[str, Any]]:
+         pos = 0
+         sc = self.compile_sc()
++        chars = self._get_fast_trigger_chars()
++        trigger_search = None if chars is None else self._get_fast_trigger_re(chars).search
++        find_linebreak_start = self._find_linebreak_start
+         while pos < len(state.src):
+-            fast_end = self._find_fast_text_end(state.src, pos)
++            if trigger_search is None:
++                fast_end = None
++            else:
++                src = state.src
++                tm = trigger_search(src, pos)
++                if tm is None:
++                    fast_end = len(src)
++                else:
++                    fast_end = tm.start()
++                    if tm.group(0) == "\n":
++                        fast_end = find_linebreak_start(src, pos, fast_end)
+             if fast_end is None:
+                 m = sc.search(state.src, pos)
+             else:
+@@ -288,6 +301,9 @@ class InlineParser(Parser[InlineState]):
+         return m.start()
+ 
+     def _get_fast_trigger_re(self, chars: Set[str]) -> re.Pattern[str]:
++        trigger_re = self._fast_trigger_re
++        if trigger_re is not None:
++            return trigger_re
+         key = tuple(sorted(chars))
+         if self._fast_trigger_re is None or self._fast_trigger_re_chars != key:
+             pattern = "[" + re.escape("".join(key)) + "]"

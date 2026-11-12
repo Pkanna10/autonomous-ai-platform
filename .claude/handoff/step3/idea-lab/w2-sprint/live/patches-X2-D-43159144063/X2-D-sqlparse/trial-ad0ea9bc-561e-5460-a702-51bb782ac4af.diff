@@ -1,0 +1,41 @@
+diff --git a/sqlparse/engine/grouping.py b/sqlparse/engine/grouping.py
+index 43ca5b580d5e8499e3fa1ed5275902d7e20ce71b..c8e15fd4f879f4ff869e9a0708189460693cbd13 100644
+--- a/sqlparse/engine/grouping.py
++++ b/sqlparse/engine/grouping.py
+@@ -42,6 +42,16 @@ def _group_matching(tlist, cls, depth=0):
+     tidx_offset = 0
+     token_list = list(tlist)
+ 
++    open_ttype, open_raw = cls.M_OPEN
++    close_ttype, close_raw = cls.M_CLOSE
++    if isinstance(open_raw, str):
++        open_raw = (open_raw,)
++    if isinstance(close_raw, str):
++        close_raw = (close_raw,)
++    open_up = None if open_raw is None else tuple(v.upper() for v in open_raw)
++    close_up = (None if close_raw is None
++                else tuple(v.upper() for v in close_raw))
++
+     for idx, token in enumerate(token_list):
+         tidx = idx - tidx_offset
+ 
+@@ -58,10 +68,17 @@ def _group_matching(tlist, cls, depth=0):
+             _group_matching(token, cls, depth + 1)
+             continue
+ 
+-        if token.match(*cls.M_OPEN):
++        ttype = token.ttype
++        if ttype is open_ttype and (
++                open_raw is None
++                or token.normalized in (open_up if token.is_keyword
++                                        else open_raw)):
+             opens.append(tidx)
+ 
+-        elif token.match(*cls.M_CLOSE):
++        elif ttype is close_ttype and (
++                close_raw is None
++                or token.normalized in (close_up if token.is_keyword
++                                        else close_raw)):
+             try:
+                 open_idx = opens.pop()
+             except IndexError:

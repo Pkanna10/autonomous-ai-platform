@@ -1,0 +1,106 @@
+diff --git a/sqlparse/engine/grouping.py b/sqlparse/engine/grouping.py
+index 43ca5b580d5e8499e3fa1ed5275902d7e20ce71b..e46b32c597b7ee3d18649f8a2a7d74a9b221e6d9 100644
+--- a/sqlparse/engine/grouping.py
++++ b/sqlparse/engine/grouping.py
+@@ -439,39 +439,72 @@ def group_values(tlist):
+         tlist.group_tokens(sql.Values, start_idx, end_idx, extend=True)
+ 
+ 
++def _has_leaf(ttypes, pairs, ttype, values):
++    """Mirror Token.match (non-regex) against a leaf summary."""
++    if values is None:
++        return ttype in ttypes
++    if ttype not in ttypes:
++        return False
++    if isinstance(values, str):
++        values = (values,)
++    if ttype in T.Keyword:
++        return any((ttype, v.upper()) in pairs for v in values)
++    return any((ttype, v) in pairs for v in values)
++
++
+ def group(stmt):
+-    for func in [
+-        group_comments,
++    ttypes = set()
++    pairs = set()
++    for leaf in stmt.flatten():
++        ttypes.add(leaf.ttype)
++        pairs.add((leaf.ttype, leaf.normalized))
++
++    def has(ttype, values):
++        return _has_leaf(ttypes, pairs, ttype, values)
++
++    has_if = has(*sql.If.M_OPEN)
++    has_for = has(*sql.For.M_OPEN)
++    has_begin = has(*sql.Begin.M_OPEN)
++    has_over = has(*sql.Over.M_OPEN)
++    has_arrays = has(*sql.SquareBrackets.M_OPEN)
++    has_typecasts = has(T.Punctuation, '::')
++    has_tzcasts = T.Keyword.TZCast in ttypes
++    has_typed_literal = any(has(*m) for m in sql.TypedLiteral.M_OPEN)
++    has_assignment = has(T.Assignment, ':=')
++
++    for func, enabled in [
++        (group_comments, True),
+ 
+         # _group_matching
+-        group_brackets,
+-        group_parenthesis,
+-        group_case,
+-        group_if,
+-        group_for,
+-        group_begin,
+-
+-        group_over,
+-        group_functions,
+-        group_where,
+-        group_period,
+-        group_arrays,
+-        group_identifier,
+-        group_order,
+-        group_typecasts,
+-        group_tzcasts,
+-        group_typed_literal,
+-        group_operator,
+-        group_comparison,
+-        group_as,
+-        group_aliased,
+-        group_assignment,
+-
+-        align_comments,
+-        group_identifier_list,
+-        group_values,
++        (group_brackets, True),
++        (group_parenthesis, True),
++        (group_case, True),
++        (group_if, has_if),
++        (group_for, has_for),
++        (group_begin, has_begin),
++
++        (group_over, has_over),
++        (group_functions, True),
++        (group_where, True),
++        (group_period, True),
++        (group_arrays, has_arrays),
++        (group_identifier, True),
++        (group_order, True),
++        (group_typecasts, has_typecasts),
++        (group_tzcasts, has_tzcasts),
++        (group_typed_literal, has_typed_literal),
++        (group_operator, True),
++        (group_comparison, True),
++        (group_as, True),
++        (group_aliased, True),
++        (group_assignment, has_assignment),
++
++        (align_comments, True),
++        (group_identifier_list, True),
++        (group_values, True),
+     ]:
+-        func(stmt)
++        if enabled:
++            func(stmt)
+     return stmt
+ 
+ 

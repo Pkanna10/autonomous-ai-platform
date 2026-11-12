@@ -1,0 +1,48 @@
+diff --git a/sqlparse/engine/grouping.py b/sqlparse/engine/grouping.py
+index 43ca5b580d5e8499e3fa1ed5275902d7e20ce71b..f9a8ba140c4aa3388e5973a414f1f1ed436db44b 100644
+--- a/sqlparse/engine/grouping.py
++++ b/sqlparse/engine/grouping.py
+@@ -38,6 +38,23 @@ def _group_matching(tlist, cls, depth=0):
+             f"Maximum number of tokens exceeded ({MAX_GROUPING_TOKENS})."
+         )
+ 
++    open_ttype, open_vals = cls.M_OPEN
++    close_ttype, close_vals = cls.M_CLOSE
++    if isinstance(open_vals, str):
++        open_vals = (open_vals,)
++    if isinstance(close_vals, str):
++        close_vals = (close_vals,)
++    if open_vals is not None:
++        open_vals = tuple(open_vals)
++        open_up = tuple(v.upper() for v in open_vals)
++    else:
++        open_up = None
++    if close_vals is not None:
++        close_vals = tuple(close_vals)
++        close_up = tuple(v.upper() for v in close_vals)
++    else:
++        close_up = None
++
+     opens = []
+     tidx_offset = 0
+     token_list = list(tlist)
+@@ -58,10 +75,17 @@ def _group_matching(tlist, cls, depth=0):
+             _group_matching(token, cls, depth + 1)
+             continue
+ 
+-        if token.match(*cls.M_OPEN):
++        ttype = token.ttype
++        if ttype is open_ttype and (
++                open_vals is None
++                or token.normalized in (open_up if token.is_keyword
++                                        else open_vals)):
+             opens.append(tidx)
+ 
+-        elif token.match(*cls.M_CLOSE):
++        elif ttype is close_ttype and (
++                close_vals is None
++                or token.normalized in (close_up if token.is_keyword
++                                        else close_vals)):
+             try:
+                 open_idx = opens.pop()
+             except IndexError:

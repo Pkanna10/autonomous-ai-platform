@@ -1,0 +1,131 @@
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..9db4ac01c8eb7ba1b9190da7ff63b954dfd05d60 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -77,6 +77,8 @@ class Lexer:
+         to make the lexer functional again."""
+         self._SQL_REGEX = []
+         self._keywords = []
++        self._master_match = None
++        self._master_actions = None
+ 
+     def set_SQL_REGEX(self, SQL_REGEX):
+         """Set the list of regex that will parse the SQL."""
+@@ -85,6 +87,47 @@ class Lexer:
+             (re.compile(rx, FLAGS).match, tt)
+             for rx, tt in SQL_REGEX
+         ]
++        self._build_master(SQL_REGEX, FLAGS)
++
++    _BACKREF_RE = re.compile(r'(?<!\\)((?:\\\\)*)\\([1-9][0-9]?)')
++
++    def _build_master(self, SQL_REGEX, flags):
++        """Combine all rules into one ordered alternation pattern.
++
++        Each rule is wrapped in its own capturing group; numbered
++        backreferences inside rules are renumbered accordingly.  Falls
++        back to the sequential rule loop if combining is not possible.
++        """
++        self._master_match = None
++        self._master_actions = None
++        parts = []
++        actions = {}
++        group_count = 0
++        try:
++            for rx, tt in SQL_REGEX:
++                inner_groups = re.compile(rx, flags).groups
++                # named groups / global inline flags / octal escapes:
++                # keep the safe sequential path
++                if ('(?P' in rx or re.search(r'\(\?[aiLmsux]+\)', rx)
++                        or re.search(r'\\[0-7]{3}', rx)):
++                    return
++                offset = group_count + 1  # wrapper group index
++
++                def _renum(m, offset=offset):
++                    return '{}\\{}(?:)'.format(
++                        m.group(1), int(m.group(2)) + offset)
++
++                rx2 = self._BACKREF_RE.sub(_renum, rx)
++                parts.append('({})'.format(rx2))
++                actions[offset] = tt
++                group_count += 1 + inner_groups
++            master = re.compile('|'.join(parts), flags)
++        except (re.error, RecursionError, OverflowError):
++            return
++        if master.groups != group_count:
++            return
++        self._master_match = master.match
++        self._master_actions = actions
+ 
+     def add_keywords(self, keywords):
+         """Add keyword dictionaries. Keywords are looked up in the same order
+@@ -134,6 +177,34 @@ class Lexer:
+             raise TypeError("Expected text or file-like object, got {!r}".
+                             format(type(text)))
+ 
++        master_match = getattr(self, '_master_match', None)
++        if master_match is not None:
++            actions = self._master_actions
++            TokenType = tokens._TokenType
++            PROCESS_AS_KEYWORD = keywords.PROCESS_AS_KEYWORD
++            is_keyword = self.is_keyword
++            Error = tokens.Error
++            pos = 0
++            end = len(text)
++            while pos < end:
++                m = master_match(text, pos)
++                if m is None:
++                    yield Error, text[pos]
++                    pos += 1
++                    continue
++                action = actions[m.lastindex]
++                if isinstance(action, TokenType):
++                    yield action, m.group()
++                elif action is PROCESS_AS_KEYWORD:
++                    yield is_keyword(m.group())
++                mend = m.end()
++                if mend <= pos:
++                    # mirror the original behaviour for empty matches
++                    consume(iter(()), mend - pos - 1)
++                    mend = pos + 1
++                pos = mend
++            return
++
+         iterable = enumerate(text)
+         for pos, char in iterable:
+             for rexmatch, action in self._SQL_REGEX:
+diff --git a/sqlparse/sql.py b/sqlparse/sql.py
+index 831dfb96d2b3a282b228bfddac97703a32e608e8..0dcf975f87f3610f48ba6d2702d84491ce64aa90 100644
+--- a/sqlparse/sql.py
++++ b/sqlparse/sql.py
+@@ -263,7 +263,29 @@ class TokenList(Token):
+ 
+     def token_next_by(self, i=None, m=None, t=None, idx=-1, end=None):
+         idx += 1
+-        return self._token_matching(lambda tk: imt(tk, i, m, t), idx, end)
++        tokens = self.tokens
++        if end is None:
++            end = len(tokens)
++        m_list = isinstance(m, list)
++        t_list = isinstance(t, list)
++        for n in range(idx, end):
++            token = tokens[n]
++            if i and isinstance(token, i):
++                return n, token
++            if m:
++                if m_list:
++                    if any(token.match(*pattern) for pattern in m):
++                        return n, token
++                elif token.match(*m):
++                    return n, token
++            if t:
++                ttype = token.ttype
++                if t_list:
++                    if any(ttype in x for x in t):
++                        return n, token
++                elif ttype in t:
++                    return n, token
++        return None, None
+ 
+     def token_not_matching(self, funcs, idx):
+         funcs = (funcs,) if not isinstance(funcs, (list, tuple)) else funcs

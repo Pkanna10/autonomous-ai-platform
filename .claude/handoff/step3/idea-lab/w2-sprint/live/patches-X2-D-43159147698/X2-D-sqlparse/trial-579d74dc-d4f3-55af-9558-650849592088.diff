@@ -1,0 +1,169 @@
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..4db9c0fc61e0cfee386ac6c29e9648e7b403fd32 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -19,6 +19,132 @@ from io import TextIOBase
+ from sqlparse import tokens, keywords
+ from sqlparse.utils import consume
+ 
++try:
++    from re import _parser as _sre_parse
++except ImportError:  # pragma: no cover
++    import sre_parse as _sre_parse
++
++_ASCII = [chr(i) for i in range(128)]
++_ALL = None  # marker: any character may start a match (unsure)
++
++
++def _fold_eq(c, code):
++    # c is an ASCII char, code is an ASCII code point; IGNORECASE compare
++    return c.lower() == chr(code).lower()
++
++
++def _in_set(items):
++    """Return set of ASCII chars matched by an IN item list, or _ALL."""
++    negate = False
++    result = set()
++    sp = _sre_parse
++    for op, av in items:
++        if op is sp.NEGATE:
++            negate = True
++        elif op is sp.LITERAL:
++            if av >= 128:
++                return _ALL
++            result.update(c for c in _ASCII if _fold_eq(c, av))
++        elif op is sp.RANGE:
++            lo, hi = av
++            if hi >= 0x100:
++                return _ALL
++            for c in _ASCII:
++                if (lo <= ord(c.lower()) <= hi
++                        or lo <= ord(c.upper()) <= hi):
++                    result.add(c)
++        elif op is sp.CATEGORY:
++            if av is sp.CATEGORY_DIGIT:
++                result.update(c for c in _ASCII if c.isdigit())
++            elif av is sp.CATEGORY_NOT_DIGIT:
++                result.update(c for c in _ASCII if not c.isdigit())
++            elif av is sp.CATEGORY_WORD:
++                result.update(c for c in _ASCII if c.isalnum() or c == '_')
++            elif av is sp.CATEGORY_NOT_WORD:
++                result.update(c for c in _ASCII
++                              if not (c.isalnum() or c == '_'))
++            elif av is sp.CATEGORY_SPACE:
++                result.update(c for c in _ASCII if c.isspace())
++            elif av is sp.CATEGORY_NOT_SPACE:
++                result.update(c for c in _ASCII if not c.isspace())
++            else:
++                return _ALL
++        else:
++            return _ALL
++    if negate:
++        return set(_ASCII) - result
++    return result
++
++
++def _seq_first(seq):
++    """Return (set of possible ASCII first chars or _ALL, nullable)."""
++    result = set()
++    for item in seq:
++        first, nullable = _elem_first(item)
++        if first is _ALL:
++            return _ALL, False
++        result |= first
++        if not nullable:
++            return result, False
++    return result, True
++
++
++def _elem_first(item):
++    sp = _sre_parse
++    op, av = item
++    if op is sp.LITERAL:
++        if av >= 128:
++            return _ALL, False
++        return {c for c in _ASCII if _fold_eq(c, av)}, False
++    if op is sp.NOT_LITERAL:
++        if av >= 128:
++            return _ALL, False
++        return {c for c in _ASCII if not _fold_eq(c, av)}, False
++    if op is sp.IN:
++        s = _in_set(av)
++        return s, False
++    if op is sp.ANY:
++        return _ALL, False
++    if op is sp.SUBPATTERN:
++        group, add_flags, del_flags, p = av
++        if add_flags or del_flags:
++            return _ALL, False
++        return _seq_first(p)
++    if op is sp.BRANCH:
++        result = set()
++        nullable = False
++        for alt in av[1]:
++            first, n = _seq_first(alt)
++            if first is _ALL:
++                return _ALL, False
++            result |= first
++            nullable = nullable or n
++        return result, nullable
++    if op is sp.MAX_REPEAT or op is sp.MIN_REPEAT:
++        mn, mx, p = av
++        first, n = _seq_first(p)
++        if first is _ALL:
++            return _ALL, False
++        return first, n or mn == 0
++    if op is sp.ASSERT or op is sp.ASSERT_NOT or op is sp.AT:
++        # zero-width: ignoring it only widens the candidate set
++        return set(), True
++    return _ALL, False
++
++
++def _first_chars(rx, flags):
++    """Statically derive the ASCII chars a match of rx may start with.
++
++    Returns a frozenset or None when unsure (rule is never filtered)."""
++    try:
++        parsed = _sre_parse.parse(rx, flags)
++        first, nullable = _seq_first(list(parsed))
++    except Exception:
++        return None
++    if first is _ALL or nullable:
++        return None
++    return frozenset(first)
++
+ 
+ class Lexer:
+     """The Lexer supports configurable syntax.
+@@ -85,6 +211,15 @@ class Lexer:
+             (re.compile(rx, FLAGS).match, tt)
+             for rx, tt in SQL_REGEX
+         ]
++        firsts = [_first_chars(rx, FLAGS) for rx, tt in SQL_REGEX]
++        by_char = {}
++        for c in _ASCII:
++            by_char[c] = [
++                rule for rule, first in zip(self._SQL_REGEX, firsts)
++                if first is None or c in first
++            ]
++        self._by_char = by_char
++        self._by_char_src = self._SQL_REGEX
+ 
+     def add_keywords(self, keywords):
+         """Add keyword dictionaries. Keywords are looked up in the same order
+@@ -134,9 +269,14 @@ class Lexer:
+             raise TypeError("Expected text or file-like object, got {!r}".
+                             format(type(text)))
+ 
++        full = self._SQL_REGEX
++        if getattr(self, '_by_char_src', None) is full:
++            by_char = self._by_char
++        else:
++            by_char = {}
+         iterable = enumerate(text)
+         for pos, char in iterable:
+-            for rexmatch, action in self._SQL_REGEX:
++            for rexmatch, action in by_char.get(char, full):
+                 m = rexmatch(text, pos)
+ 
+                 if not m:

@@ -1,0 +1,62 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..99624f26a60e059de35c8a655a513548d02c0b43 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -8,6 +8,7 @@ from __future__ import annotations
+ # parse_value().
+ __lazy_modules__ = ["tomli._re", "tomllib._re"]
+ 
++import re
+ import sys
+ 
+ from ._re import (
+@@ -518,10 +519,49 @@ def parse_one_line_basic_str(src: str, pos: Pos) -> tuple[Pos, str]:
+     return parse_basic_str(src, pos, multiline=False)
+ 
+ 
++def _flat_array_body(elem: str) -> str:
++    ws = r"[ \t\n]*"
++    return f"{ws}{elem}(?:{ws},{ws}{elem})*{ws}(?:,{ws})?"
++
++
++_FLAT_INT: Final = r"[+-]?(?:0|[1-9][0-9]*)"
++_FLAT_BASIC: Final = r'"[^"\\\x00-\x08\x0a-\x1f\x7f]*"'
++_FLAT_LITERAL: Final = r"'[^'\x00-\x08\x0a-\x1f\x7f]*'"
++_FLAT_BOOL: Final = r"(?:true|false)"
++
++# Fast path for flat arrays of plain scalars of a single kind, with no
++# comments. Anything else falls back to the general parsing loop.
++_RE_FLAT_ARRAY: Final = re.compile(
++    f"(?:(?P<i>{_flat_array_body(_FLAT_INT)})"
++    f"|(?P<s>{_flat_array_body(_FLAT_BASIC)})"
++    f"|(?P<l>{_flat_array_body(_FLAT_LITERAL)})"
++    f"|(?P<b>{_flat_array_body(_FLAT_BOOL)}))"
++    r"\]"
++)
++_RE_FLAT_INT: Final = re.compile(r"[+-]?[0-9]+")
++_RE_FLAT_BASIC: Final = re.compile(r'"([^"]*)"')
++_RE_FLAT_LITERAL: Final = re.compile(r"'([^']*)'")
++_RE_FLAT_BOOL: Final = re.compile(r"true|false")
++
++
+ def parse_array(
+     src: str, pos: Pos, parse_float: ParseFloat, nest_lvl: int
+ ) -> tuple[Pos, list[Any]]:
+     pos += 1
++
++    if nest_lvl <= MAX_INLINE_NESTING:
++        m = _RE_FLAT_ARRAY.match(src, pos)
++        if m is not None:
++            kind = m.lastgroup
++            span = m.group(kind)  # type: ignore[arg-type]
++            if kind == "i":
++                return m.end(), [int(s) for s in _RE_FLAT_INT.findall(span)]
++            if kind == "s":
++                return m.end(), _RE_FLAT_BASIC.findall(span)
++            if kind == "l":
++                return m.end(), _RE_FLAT_LITERAL.findall(span)
++            return m.end(), [s == "true" for s in _RE_FLAT_BOOL.findall(span)]
++
+     array: list[Any] = []
+ 
+     pos = skip_comments_and_array_ws(src, pos)

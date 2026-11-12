@@ -1,0 +1,14 @@
+diff --git a/src/mistune/_inline/links.py b/src/mistune/_inline/links.py
+index 5ad0ec389dd24859b80a8c62901747c0a3fca1c7..b475c46fdd7b6391018368003372eb8c9d16d665 100644
+--- a/src/mistune/_inline/links.py
++++ b/src/mistune/_inline/links.py
+@@ -164,6 +164,9 @@ def find_closing_bracket(state: InlineState, pos: int) -> Optional[int]:
+ def label_contains_link(state: InlineState, start: int, end: int) -> bool:
+     if start >= end:
+         return False
++    # every indexed range starts at a literal '[' in state.src
++    if state.src.find("[", start, end) < 0:
++        return False
+ 
+     starts, suffix_min_ends = get_link_range_index(state)
+     index = bisect_left(starts, start)

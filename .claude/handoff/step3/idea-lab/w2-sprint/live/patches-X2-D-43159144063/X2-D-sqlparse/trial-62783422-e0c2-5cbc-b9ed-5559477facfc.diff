@@ -1,0 +1,72 @@
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..aed0535a35d51a3f49d594064fe98e146a1fd179 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -26,6 +26,7 @@ class Lexer:
+ 
+     _default_instance = None
+     _lock = Lock()
++    _memo = None
+ 
+     # Development notes:
+     # - This class is prepared to be able to support additional SQL dialects
+@@ -77,9 +78,11 @@ class Lexer:
+         to make the lexer functional again."""
+         self._SQL_REGEX = []
+         self._keywords = []
++        self._memo = None
+ 
+     def set_SQL_REGEX(self, SQL_REGEX):
+         """Set the list of regex that will parse the SQL."""
++        self._memo = None
+         FLAGS = re.IGNORECASE | re.UNICODE
+         self._SQL_REGEX = [
+             (re.compile(rx, FLAGS).match, tt)
+@@ -89,6 +92,7 @@ class Lexer:
+     def add_keywords(self, keywords):
+         """Add keyword dictionaries. Keywords are looked up in the same order
+         that dictionaries were added."""
++        self._memo = None
+         self._keywords.append(keywords)
+ 
+     def is_keyword(self, value):
+@@ -134,6 +138,13 @@ class Lexer:
+             raise TypeError("Expected text or file-like object, got {!r}".
+                             format(type(text)))
+ 
++        memo = self._memo
++        if memo is not None and memo[0] == text:
++            yield from memo[1]
++            return
++
++        out = []
++        append = out.append
+         iterable = enumerate(text)
+         for pos, char in iterable:
+             for rexmatch, action in self._SQL_REGEX:
+@@ -142,14 +153,22 @@ class Lexer:
+                 if not m:
+                     continue
+                 elif isinstance(action, tokens._TokenType):
+-                    yield action, m.group()
++                    pair = (action, m.group())
++                    append(pair)
++                    yield pair
+                 elif action is keywords.PROCESS_AS_KEYWORD:
+-                    yield self.is_keyword(m.group())
++                    pair = self.is_keyword(m.group())
++                    append(pair)
++                    yield pair
+ 
+                 consume(iterable, m.end() - pos - 1)
+                 break
+             else:
+-                yield tokens.Error, char
++                pair = (tokens.Error, char)
++                append(pair)
++                yield pair
++
++        self._memo = (text, tuple(out))
+ 
+ 
+ def tokenize(sql, encoding=None):

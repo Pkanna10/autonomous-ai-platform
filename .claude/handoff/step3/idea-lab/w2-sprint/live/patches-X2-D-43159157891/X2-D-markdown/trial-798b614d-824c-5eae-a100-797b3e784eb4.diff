@@ -1,0 +1,21 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..8758078c08fc22d7b50053f1bcb1b25a31a8c5e1 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -278,11 +278,15 @@ class InlineProcessor(Treeprocessor):
+                 return data, False, 0
+ 
+         if new_style:
++            regex = pattern.getCompiledRegExp()
++            # Fast rejection: most calls find no match at all.
++            if regex.search(data, startIndex) is None:
++                return data, False, 0
+             match = None
+             # Since `handleMatch` may reject our first match,
+             # we iterate over the buffer looking for matches
+             # until we can't find any more.
+-            for match in pattern.getCompiledRegExp().finditer(data, startIndex):
++            for match in regex.finditer(data, startIndex):
+                 node, start, end = pattern.handleMatch(match, data)
+                 if start is None or end is None:
+                     startIndex += match.end(0)

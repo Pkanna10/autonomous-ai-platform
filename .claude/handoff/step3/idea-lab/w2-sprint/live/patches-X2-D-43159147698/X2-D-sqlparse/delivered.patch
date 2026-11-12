@@ -1,0 +1,484 @@
+diff --git a/sqlparse/engine/grouping.py b/sqlparse/engine/grouping.py
+index 43ca5b580d5e8499e3fa1ed5275902d7e20ce71b..770f486f442dc928a00ee55b0bca877b192800ab 100644
+--- a/sqlparse/engine/grouping.py
++++ b/sqlparse/engine/grouping.py
+@@ -38,6 +38,23 @@ def _group_matching(tlist, cls, depth=0):
+             f"Maximum number of tokens exceeded ({MAX_GROUPING_TOKENS})."
+         )
+ 
++    open_ttype, open_vals = cls.M_OPEN
++    close_ttype, close_vals = cls.M_CLOSE
++    if isinstance(open_vals, str):
++        open_vals = (open_vals,)
++    if isinstance(close_vals, str):
++        close_vals = (close_vals,)
++    if open_vals is not None:
++        open_vals = tuple(open_vals)
++        open_up = tuple(v.upper() for v in open_vals)
++    else:
++        open_up = None
++    if close_vals is not None:
++        close_vals = tuple(close_vals)
++        close_up = tuple(v.upper() for v in close_vals)
++    else:
++        close_up = None
++
+     opens = []
+     tidx_offset = 0
+     token_list = list(tlist)
+@@ -58,10 +75,17 @@ def _group_matching(tlist, cls, depth=0):
+             _group_matching(token, cls, depth + 1)
+             continue
+ 
+-        if token.match(*cls.M_OPEN):
++        ttype = token.ttype
++        if ttype is open_ttype and (
++                open_vals is None
++                or token.normalized in (open_up if token.is_keyword
++                                        else open_vals)):
+             opens.append(tidx)
+ 
+-        elif token.match(*cls.M_CLOSE):
++        elif ttype is close_ttype and (
++                close_vals is None
++                or token.normalized in (close_up if token.is_keyword
++                                        else close_vals)):
+             try:
+                 open_idx = opens.pop()
+             except IndexError:
+@@ -439,39 +463,72 @@ def group_values(tlist):
+         tlist.group_tokens(sql.Values, start_idx, end_idx, extend=True)
+ 
+ 
++def _has_leaf(ttypes, pairs, ttype, values):
++    """Mirror Token.match (non-regex) against a leaf summary."""
++    if values is None:
++        return ttype in ttypes
++    if ttype not in ttypes:
++        return False
++    if isinstance(values, str):
++        values = (values,)
++    if ttype in T.Keyword:
++        return any((ttype, v.upper()) in pairs for v in values)
++    return any((ttype, v) in pairs for v in values)
++
++
+ def group(stmt):
+-    for func in [
+-        group_comments,
++    ttypes = set()
++    pairs = set()
++    for leaf in stmt.flatten():
++        ttypes.add(leaf.ttype)
++        pairs.add((leaf.ttype, leaf.normalized))
++
++    def has(ttype, values):
++        return _has_leaf(ttypes, pairs, ttype, values)
++
++    has_if = has(*sql.If.M_OPEN)
++    has_for = has(*sql.For.M_OPEN)
++    has_begin = has(*sql.Begin.M_OPEN)
++    has_over = has(*sql.Over.M_OPEN)
++    has_arrays = has(*sql.SquareBrackets.M_OPEN)
++    has_typecasts = has(T.Punctuation, '::')
++    has_tzcasts = T.Keyword.TZCast in ttypes
++    has_typed_literal = any(has(*m) for m in sql.TypedLiteral.M_OPEN)
++    has_assignment = has(T.Assignment, ':=')
++
++    for func, enabled in [
++        (group_comments, True),
+ 
+         # _group_matching
+-        group_brackets,
+-        group_parenthesis,
+-        group_case,
+-        group_if,
+-        group_for,
+-        group_begin,
+-
+-        group_over,
+-        group_functions,
+-        group_where,
+-        group_period,
+-        group_arrays,
+-        group_identifier,
+-        group_order,
+-        group_typecasts,
+-        group_tzcasts,
+-        group_typed_literal,
+-        group_operator,
+-        group_comparison,
+-        group_as,
+-        group_aliased,
+-        group_assignment,
+-
+-        align_comments,
+-        group_identifier_list,
+-        group_values,
++        (group_brackets, True),
++        (group_parenthesis, True),
++        (group_case, True),
++        (group_if, has_if),
++        (group_for, has_for),
++        (group_begin, has_begin),
++
++        (group_over, has_over),
++        (group_functions, True),
++        (group_where, True),
++        (group_period, True),
++        (group_arrays, has_arrays),
++        (group_identifier, True),
++        (group_order, True),
++        (group_typecasts, has_typecasts),
++        (group_tzcasts, has_tzcasts),
++        (group_typed_literal, has_typed_literal),
++        (group_operator, True),
++        (group_comparison, True),
++        (group_as, True),
++        (group_aliased, True),
++        (group_assignment, has_assignment),
++
++        (align_comments, True),
++        (group_identifier_list, True),
++        (group_values, True),
+     ]:
+-        func(stmt)
++        if enabled:
++            func(stmt)
+     return stmt
+ 
+ 
+diff --git a/sqlparse/engine/statement_splitter.py b/sqlparse/engine/statement_splitter.py
+index 62aa9d9e9b071b4df00d6094424349cafdc11315..7e2cef53ff05ea2883fa2b6ab68c07cdf0739d92 100644
+--- a/sqlparse/engine/statement_splitter.py
++++ b/sqlparse/engine/statement_splitter.py
+@@ -7,6 +7,10 @@
+ 
+ from sqlparse import sql, tokens as T
+ 
++_EOS_TTYPES = frozenset((T.Whitespace, T.Comment.Single))
++_NON_RESET_TTYPES = frozenset((T.Whitespace, T.Newline, T.Comment.Single,
++                               T.Comment.Multiline))
++
+ 
+ class StatementSplitter:
+     """Filter that split stream at individual statements"""
+@@ -94,7 +98,11 @@ class StatementSplitter:
+ 
+     def process(self, stream):
+         """Process the stream"""
+-        EOS_TTYPE = T.Whitespace, T.Comment.Single
++        EOS_TTYPE = _EOS_TTYPES
++        Punctuation = T.Punctuation
++        Keyword = T.Keyword
++        Token = sql.Token
++        change_splitlevel = self._change_splitlevel
+ 
+         # Run over all stream tokens
+         for ttype, value in stream:
+@@ -109,10 +117,16 @@ class StatementSplitter:
+                 self._reset()
+ 
+             # Change current split level (increase, decrease or remain equal)
+-            self.level += self._change_splitlevel(ttype, value)
++            if ttype is Punctuation:
++                if value == '(':
++                    self.level += 1
++                elif value == ')':
++                    self.level -= 1
++            elif ttype in Keyword:
++                self.level += change_splitlevel(ttype, value)
+ 
+             # Append the token to the current statement
+-            self.tokens.append(sql.Token(ttype, value))
++            self.tokens.append(Token(ttype, value))
+ 
+             # Check if we get the end of a statement
+             # Issue762: Allow GO (or "GO 2") as statement splitter.
+@@ -121,7 +135,7 @@ class StatementSplitter:
+             # rule.
+             # Issue809: Ignore semicolons inside BEGIN...END blocks, but handle
+             # standalone BEGIN; as a transaction statement
+-            if ttype is T.Punctuation and value == ';':
++            if ttype is Punctuation and value == ';':
+                 # If we just saw BEGIN; then this is a transaction BEGIN,
+                 # not a BEGIN...END block, so decrement depth
+                 if self._seen_begin:
+@@ -130,11 +144,10 @@ class StatementSplitter:
+                 # Split on semicolon if not inside a BEGIN...END block
+                 if self.level <= 0 and self._begin_depth == 0:
+                     self.consume_ws = True
+-            elif ttype is T.Keyword and value.split()[0] == 'GO':
++            elif ttype is Keyword and value.split()[0] == 'GO':
+                 self.consume_ws = True
+-            elif (ttype not in (T.Whitespace, T.Newline, T.Comment.Single,
+-                                T.Comment.Multiline)
+-                  and not (ttype is T.Keyword and value.upper() == 'BEGIN')):
++            elif (ttype not in _NON_RESET_TTYPES
++                  and not (ttype is Keyword and value.upper() == 'BEGIN')):
+                 # Reset _seen_begin if we see a non-whitespace, non-comment
+                 # token but not for BEGIN itself (which just set the flag)
+                 self._seen_begin = False
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..4db9c0fc61e0cfee386ac6c29e9648e7b403fd32 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -19,6 +19,132 @@ from io import TextIOBase
+ from sqlparse import tokens, keywords
+ from sqlparse.utils import consume
+ 
++try:
++    from re import _parser as _sre_parse
++except ImportError:  # pragma: no cover
++    import sre_parse as _sre_parse
++
++_ASCII = [chr(i) for i in range(128)]
++_ALL = None  # marker: any character may start a match (unsure)
++
++
++def _fold_eq(c, code):
++    # c is an ASCII char, code is an ASCII code point; IGNORECASE compare
++    return c.lower() == chr(code).lower()
++
++
++def _in_set(items):
++    """Return set of ASCII chars matched by an IN item list, or _ALL."""
++    negate = False
++    result = set()
++    sp = _sre_parse
++    for op, av in items:
++        if op is sp.NEGATE:
++            negate = True
++        elif op is sp.LITERAL:
++            if av >= 128:
++                return _ALL
++            result.update(c for c in _ASCII if _fold_eq(c, av))
++        elif op is sp.RANGE:
++            lo, hi = av
++            if hi >= 0x100:
++                return _ALL
++            for c in _ASCII:
++                if (lo <= ord(c.lower()) <= hi
++                        or lo <= ord(c.upper()) <= hi):
++                    result.add(c)
++        elif op is sp.CATEGORY:
++            if av is sp.CATEGORY_DIGIT:
++                result.update(c for c in _ASCII if c.isdigit())
++            elif av is sp.CATEGORY_NOT_DIGIT:
++                result.update(c for c in _ASCII if not c.isdigit())
++            elif av is sp.CATEGORY_WORD:
++                result.update(c for c in _ASCII if c.isalnum() or c == '_')
++            elif av is sp.CATEGORY_NOT_WORD:
++                result.update(c for c in _ASCII
++                              if not (c.isalnum() or c == '_'))
++            elif av is sp.CATEGORY_SPACE:
++                result.update(c for c in _ASCII if c.isspace())
++            elif av is sp.CATEGORY_NOT_SPACE:
++                result.update(c for c in _ASCII if not c.isspace())
++            else:
++                return _ALL
++        else:
++            return _ALL
++    if negate:
++        return set(_ASCII) - result
++    return result
++
++
++def _seq_first(seq):
++    """Return (set of possible ASCII first chars or _ALL, nullable)."""
++    result = set()
++    for item in seq:
++        first, nullable = _elem_first(item)
++        if first is _ALL:
++            return _ALL, False
++        result |= first
++        if not nullable:
++            return result, False
++    return result, True
++
++
++def _elem_first(item):
++    sp = _sre_parse
++    op, av = item
++    if op is sp.LITERAL:
++        if av >= 128:
++            return _ALL, False
++        return {c for c in _ASCII if _fold_eq(c, av)}, False
++    if op is sp.NOT_LITERAL:
++        if av >= 128:
++            return _ALL, False
++        return {c for c in _ASCII if not _fold_eq(c, av)}, False
++    if op is sp.IN:
++        s = _in_set(av)
++        return s, False
++    if op is sp.ANY:
++        return _ALL, False
++    if op is sp.SUBPATTERN:
++        group, add_flags, del_flags, p = av
++        if add_flags or del_flags:
++            return _ALL, False
++        return _seq_first(p)
++    if op is sp.BRANCH:
++        result = set()
++        nullable = False
++        for alt in av[1]:
++            first, n = _seq_first(alt)
++            if first is _ALL:
++                return _ALL, False
++            result |= first
++            nullable = nullable or n
++        return result, nullable
++    if op is sp.MAX_REPEAT or op is sp.MIN_REPEAT:
++        mn, mx, p = av
++        first, n = _seq_first(p)
++        if first is _ALL:
++            return _ALL, False
++        return first, n or mn == 0
++    if op is sp.ASSERT or op is sp.ASSERT_NOT or op is sp.AT:
++        # zero-width: ignoring it only widens the candidate set
++        return set(), True
++    return _ALL, False
++
++
++def _first_chars(rx, flags):
++    """Statically derive the ASCII chars a match of rx may start with.
++
++    Returns a frozenset or None when unsure (rule is never filtered)."""
++    try:
++        parsed = _sre_parse.parse(rx, flags)
++        first, nullable = _seq_first(list(parsed))
++    except Exception:
++        return None
++    if first is _ALL or nullable:
++        return None
++    return frozenset(first)
++
+ 
+ class Lexer:
+     """The Lexer supports configurable syntax.
+@@ -85,6 +211,15 @@ class Lexer:
+             (re.compile(rx, FLAGS).match, tt)
+             for rx, tt in SQL_REGEX
+         ]
++        firsts = [_first_chars(rx, FLAGS) for rx, tt in SQL_REGEX]
++        by_char = {}
++        for c in _ASCII:
++            by_char[c] = [
++                rule for rule, first in zip(self._SQL_REGEX, firsts)
++                if first is None or c in first
++            ]
++        self._by_char = by_char
++        self._by_char_src = self._SQL_REGEX
+ 
+     def add_keywords(self, keywords):
+         """Add keyword dictionaries. Keywords are looked up in the same order
+@@ -134,9 +269,14 @@ class Lexer:
+             raise TypeError("Expected text or file-like object, got {!r}".
+                             format(type(text)))
+ 
++        full = self._SQL_REGEX
++        if getattr(self, '_by_char_src', None) is full:
++            by_char = self._by_char
++        else:
++            by_char = {}
+         iterable = enumerate(text)
+         for pos, char in iterable:
+-            for rexmatch, action in self._SQL_REGEX:
++            for rexmatch, action in by_char.get(char, full):
+                 m = rexmatch(text, pos)
+ 
+                 if not m:
+diff --git a/sqlparse/sql.py b/sqlparse/sql.py
+index 831dfb96d2b3a282b228bfddac97703a32e608e8..7768807c12b5d5fb3d8cae9111eccbb3b45130c2 100644
+--- a/sqlparse/sql.py
++++ b/sqlparse/sql.py
+@@ -12,6 +12,9 @@ import re
+ from sqlparse import tokens as T
+ from sqlparse.utils import imt, remove_quotes
+ 
++# Maps a tuple of match values to the frozenset of their upper-cased forms.
++_UPPER_VALUES_CACHE = {}
++
+ 
+ class NameAliasMixin:
+     """Implements get_real_name and get_alias."""
+@@ -102,7 +105,23 @@ class Token:
+         if not type_matched or values is None:
+             return type_matched
+ 
++        if not regex:
++            if isinstance(values, str):
++                if self.is_keyword:
++                    return self.normalized == values.upper()
++                return self.normalized == values
++            if self.is_keyword and type(values) is tuple:
++                upper_set = _UPPER_VALUES_CACHE.get(values)
++                if upper_set is None:
++                    upper_set = frozenset(v.upper() for v in values)
++                    _UPPER_VALUES_CACHE[values] = upper_set
++                return self.normalized in upper_set
++
+         if isinstance(values, str):
++            if not regex:
++                if self.is_keyword:
++                    return self.normalized == values.upper()
++                return self.normalized == values
+             values = (values,)
+ 
+         if regex:
+@@ -158,8 +177,9 @@ class TokenList(Token):
+ 
+     def __init__(self, tokens=None):
+         self.tokens = tokens or []
+-        [setattr(token, 'parent', self) for token in self.tokens]
+-        super().__init__(None, str(self))
++        for token in self.tokens:
++            token.parent = self
++        super().__init__(None, ''.join([token.value for token in self.tokens]))
+         self.is_group = True
+ 
+     def __str__(self):
+@@ -263,7 +283,33 @@ class TokenList(Token):
+ 
+     def token_next_by(self, i=None, m=None, t=None, idx=-1, end=None):
+         idx += 1
+-        return self._token_matching(lambda tk: imt(tk, i, m, t), idx, end)
++        tokens = self.tokens
++        if end is None:
++            end = len(tokens)
++        # Normalise m and t to lists of patterns once (same semantics as imt).
++        if m:
++            ms = m if isinstance(m, list) else (m,)
++        else:
++            ms = ()
++        if t:
++            ts = t if isinstance(t, list) else (t,)
++        else:
++            ts = ()
++        for j in range(idx, end):
++            token = tokens[j]
++            if token is None:
++                continue
++            if i and isinstance(token, i):
++                return j, token
++            for pattern in ms:
++                if token.match(*pattern):
++                    return j, token
++            if ts:
++                ttype = token.ttype
++                for tt in ts:
++                    if ttype in tt:
++                        return j, token
++        return None, None
+ 
+     def token_not_matching(self, funcs, idx):
+         funcs = (funcs,) if not isinstance(funcs, (list, tuple)) else funcs
+@@ -322,7 +368,7 @@ class TokenList(Token):
+             grp = start
+             grp.tokens.extend(subtokens)
+             del self.tokens[start_idx + 1:end_idx]
+-            grp.value = str(start)
++            grp.value = ''.join([token.value for token in grp.tokens])
+         else:
+             subtokens = self.tokens[start_idx:end_idx]
+             grp = grp_cls(subtokens)
