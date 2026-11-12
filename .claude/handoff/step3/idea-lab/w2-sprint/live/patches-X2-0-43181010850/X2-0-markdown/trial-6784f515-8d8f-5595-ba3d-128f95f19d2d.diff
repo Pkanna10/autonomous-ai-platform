@@ -1,0 +1,59 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..14da86bdd72a21ebd4f928f627560f8617337399 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -86,6 +86,7 @@ class InlineProcessor(Treeprocessor):
+         self.md = md
+         self.inlinePatterns = md.inlinePatterns
+         self.ancestors: list[str] = []
++        self.__pattern_entries: list | None = None
+ 
+     def __makePlaceholder(self, type: str) -> tuple[str, str]:
+         """ Generate a placeholder """
+@@ -131,15 +132,35 @@ class InlineProcessor(Treeprocessor):
+         """
+         if not isinstance(data, util.AtomicString):
+             startIndex = 0
+-            count = len(self.inlinePatterns)
++            entries = self.__pattern_entries
++            if entries is None:
++                entries = self.__buildPatternEntries()
++            count = len(entries)
++            applyPattern = self.__applyPattern
+             while patternIndex < count:
+-                data, matched, startIndex = self.__applyPattern(
+-                    self.inlinePatterns[patternIndex], data, patternIndex, startIndex
++                pattern, regex, new_style = entries[patternIndex]
++                if new_style and regex.search(data, startIndex) is None:
++                    patternIndex += 1
++                    startIndex = 0
++                    continue
++                data, matched, startIndex = applyPattern(
++                    pattern, data, patternIndex, startIndex
+                 )
+                 if not matched:
+                     patternIndex += 1
+         return data
+ 
++    def __buildPatternEntries(self) -> list:
++        """ Build a list of `(pattern, compiled regex, is_new_style)` tuples. """
++        entries = []
++        for pattern in self.inlinePatterns:
++            entries.append((
++                pattern,
++                pattern.getCompiledRegExp(),
++                isinstance(pattern, inlinepatterns.InlineProcessor),
++            ))
++        return entries
++
+     def __processElementText(self, node: etree.Element, subnode: etree.Element, isText: bool = True) -> None:
+         """
+         Process placeholders in `Element.text` or `Element.tail`
+@@ -364,6 +385,7 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         self.stashed_nodes: dict[str, etree.Element | str] = {}
++        self.__pattern_entries = self.__buildPatternEntries()
+ 
+         # Ensure a valid parent list, but copy passed in lists
+         # to ensure we don't have the user accidentally change it on us.

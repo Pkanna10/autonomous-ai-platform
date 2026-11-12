@@ -1,0 +1,41 @@
+diff --git a/src/mistune/_inline/links.py b/src/mistune/_inline/links.py
+index 5ad0ec389dd24859b80a8c62901747c0a3fca1c7..390156135af8b53bcbf553ddee937d2388058986 100644
+--- a/src/mistune/_inline/links.py
++++ b/src/mistune/_inline/links.py
+@@ -1,5 +1,6 @@
+ from __future__ import annotations
+ 
++import re
+ from bisect import bisect_left
+ from typing import TYPE_CHECKING, Dict, List, Match, Optional, Tuple
+ 
+@@ -237,14 +238,22 @@ def build_closing_bracket_map(src: str) -> Dict[int, int]:
+     pairs: Dict[int, int] = {}
+     stack: List[int] = []
+     pos = 0
+-    while pos < len(src):
+-        char = src[pos]
++    search = _BRACKET_CHARS.search
++    while True:
++        m = search(src, pos)
++        if m is None:
++            break
++        p = m.start()
++        char = src[p]
+         if char == "\\":
+-            pos += 2
++            pos = p + 2
+             continue
+         if char == "[":
+-            stack.append(pos + 1)
+-        elif char == "]" and stack:
+-            pairs[stack.pop()] = pos
+-        pos += 1
++            stack.append(p + 1)
++        elif stack:
++            pairs[stack.pop()] = p
++        pos = p + 1
+     return pairs
++
++
++_BRACKET_CHARS = re.compile(r"[\\\[\]]")

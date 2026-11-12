@@ -1,0 +1,83 @@
+diff --git a/markdown/extensions/abbr.py b/markdown/extensions/abbr.py
+index 9f609810ad4a7a01403f978b878435b17fef5a0e..14723d1a0b1d34ab5169fff8a864f2382aa6df31 100644
+--- a/markdown/extensions/abbr.py
++++ b/markdown/extensions/abbr.py
+@@ -93,6 +93,7 @@ class AbbrTreeprocessor(Treeprocessor):
+     def __init__(self, md: Markdown | None = None, abbrs: dict | None = None):
+         self.abbrs: dict = abbrs if abbrs is not None else {}
+         self.RE: re.RegexObject | None = None
++        self._keys: tuple | None = None
+         super().__init__(md)
+ 
+     def create_element(self, title: str, text: str, tail: str) -> etree.Element:
+@@ -106,8 +107,11 @@ class AbbrTreeprocessor(Treeprocessor):
+         ''' Recursively iterate over elements, run regex on text and wrap matches in `abbr` tags. '''
+         for child in reversed(el):
+             self.iter_element(child, el)
++        keys = self._keys
+         if text := el.text:
+-            if not isinstance(text, AtomicString):
++            if not isinstance(text, AtomicString) and (
++                keys is None or any(k in text for k in keys)
++            ):
+                 for m in reversed(list(self.RE.finditer(text))):
+                     if self.abbrs[m.group(0)]:
+                         abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), text[m.end():])
+@@ -116,8 +120,10 @@ class AbbrTreeprocessor(Treeprocessor):
+                 el.text = text
+         if parent is not None and el.tail:
+             tail = el.tail
+-            index = list(parent).index(el) + 1
+-            if not isinstance(tail, AtomicString):
++            if not isinstance(tail, AtomicString) and (
++                keys is None or any(k in tail for k in keys)
++            ):
++                index = list(parent).index(el) + 1
+                 for m in reversed(list(self.RE.finditer(tail))):
+                     abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), tail[m.end():])
+                     parent.insert(index, abbr)
+@@ -133,6 +139,8 @@ class AbbrTreeprocessor(Treeprocessor):
+         abbr_list = list(self.abbrs.keys())
+         abbr_list.sort(key=len, reverse=True)
+         self.RE = re.compile(f"\\b(?:{ '|'.join(re.escape(key) for key in abbr_list) })\\b")
++        # Cheap substring pre-check; only worthwhile for a small number of keys.
++        self._keys = tuple(abbr_list) if len(abbr_list) <= 8 else None
+         # Step through tree and modify on matches
+         self.iter_element(root)
+ 
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..7768a3cc327be9843f47156410ba72475366a2d4 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -86,6 +86,7 @@ class InlineProcessor(Treeprocessor):
+         self.md = md
+         self.inlinePatterns = md.inlinePatterns
+         self.ancestors: list[str] = []
++        self._pattern_list = None
+ 
+     def __makePlaceholder(self, type: str) -> tuple[str, str]:
+         """ Generate a placeholder """
+@@ -131,10 +132,13 @@ class InlineProcessor(Treeprocessor):
+         """
+         if not isinstance(data, util.AtomicString):
+             startIndex = 0
+-            count = len(self.inlinePatterns)
++            patterns = self._pattern_list
++            if patterns is None:
++                patterns = list(self.inlinePatterns)
++            count = len(patterns)
+             while patternIndex < count:
+                 data, matched, startIndex = self.__applyPattern(
+-                    self.inlinePatterns[patternIndex], data, patternIndex, startIndex
++                    patterns[patternIndex], data, patternIndex, startIndex
+                 )
+                 if not matched:
+                     patternIndex += 1
+@@ -370,6 +374,7 @@ class InlineProcessor(Treeprocessor):
+         tree_parents = [] if ancestors is None else ancestors[:]
+ 
+         self.parent_map = {c: p for p in tree.iter() for c in p}
++        self._pattern_list = list(self.inlinePatterns)
+         stack = [(tree, tree_parents)]
+ 
+         while stack:

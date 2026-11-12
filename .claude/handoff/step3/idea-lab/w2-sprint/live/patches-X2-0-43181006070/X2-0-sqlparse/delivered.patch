@@ -1,0 +1,148 @@
+diff --git a/sqlparse/engine/grouping.py b/sqlparse/engine/grouping.py
+index 43ca5b580d5e8499e3fa1ed5275902d7e20ce71b..95414d1fe27efbfb8e7a00f5ae58d49ef23fc88a 100644
+--- a/sqlparse/engine/grouping.py
++++ b/sqlparse/engine/grouping.py
+@@ -440,38 +440,43 @@ def group_values(tlist):
+ 
+ 
+ def group(stmt):
+-    for func in [
++    # Passes whose opening/middle token cannot occur in the statement text
++    # would change nothing, so they are skipped.
++    up = str(stmt).upper()
++    has_bracket = '[' in up
++    for func in (
+         group_comments,
+ 
+         # _group_matching
+-        group_brackets,
++        group_brackets if has_bracket else None,
+         group_parenthesis,
+         group_case,
+-        group_if,
+-        group_for,
+-        group_begin,
++        group_if if 'IF' in up else None,
++        group_for if 'FOR' in up else None,
++        group_begin if 'BEGIN' in up else None,
+ 
+-        group_over,
++        group_over if 'OVER' in up else None,
+         group_functions,
+         group_where,
+         group_period,
+-        group_arrays,
++        group_arrays if has_bracket else None,
+         group_identifier,
+         group_order,
+-        group_typecasts,
++        group_typecasts if '::' in up else None,
+         group_tzcasts,
+         group_typed_literal,
+         group_operator,
+         group_comparison,
+         group_as,
+         group_aliased,
+-        group_assignment,
++        group_assignment if ':=' in up else None,
+ 
+         align_comments,
+         group_identifier_list,
+         group_values,
+-    ]:
+-        func(stmt)
++    ):
++        if func is not None:
++            func(stmt)
+     return stmt
+ 
+ 
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..f3b6c126b577de879db3be8b20fedb8915b8acdd 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -17,7 +17,6 @@ from threading import Lock
+ from io import TextIOBase
+ 
+ from sqlparse import tokens, keywords
+-from sqlparse.utils import consume
+ 
+ 
+ class Lexer:
+@@ -134,22 +133,29 @@ class Lexer:
+             raise TypeError("Expected text or file-like object, got {!r}".
+                             format(type(text)))
+ 
+-        iterable = enumerate(text)
+-        for pos, char in iterable:
+-            for rexmatch, action in self._SQL_REGEX:
++        regexes = self._SQL_REGEX
++        TokenType = tokens._TokenType
++        PROCESS_AS_KEYWORD = keywords.PROCESS_AS_KEYWORD
++        is_keyword = self.is_keyword
++        pos = 0
++        length = len(text)
++        while pos < length:
++            for rexmatch, action in regexes:
+                 m = rexmatch(text, pos)
+ 
+                 if not m:
+                     continue
+-                elif isinstance(action, tokens._TokenType):
++                elif isinstance(action, TokenType):
+                     yield action, m.group()
+-                elif action is keywords.PROCESS_AS_KEYWORD:
+-                    yield self.is_keyword(m.group())
++                elif action is PROCESS_AS_KEYWORD:
++                    yield is_keyword(m.group())
+ 
+-                consume(iterable, m.end() - pos - 1)
++                end = m.end()
++                pos = end if end > pos else pos + 1
+                 break
+             else:
+-                yield tokens.Error, char
++                yield tokens.Error, text[pos]
++                pos += 1
+ 
+ 
+ def tokenize(sql, encoding=None):
+diff --git a/sqlparse/sql.py b/sqlparse/sql.py
+index 831dfb96d2b3a282b228bfddac97703a32e608e8..6f69dc2579cf76871993a4ca363bad9f5a94750a 100644
+--- a/sqlparse/sql.py
++++ b/sqlparse/sql.py
+@@ -263,7 +263,33 @@ class TokenList(Token):
+ 
+     def token_next_by(self, i=None, m=None, t=None, idx=-1, end=None):
+         idx += 1
+-        return self._token_matching(lambda tk: imt(tk, i, m, t), idx, end)
++        tokens = self.tokens
++        if end is None:
++            end = len(tokens)
++        m_list = isinstance(m, list) if m else False
++        t_list = isinstance(t, list) if t else False
++        for pos in range(idx, end):
++            token = tokens[pos]
++            if token is None:
++                continue
++            if i and isinstance(token, i):
++                return pos, token
++            if m:
++                if m_list:
++                    for pattern in m:
++                        if token.match(*pattern):
++                            return pos, token
++                elif token.match(*m):
++                    return pos, token
++            if t:
++                ttype = token.ttype
++                if t_list:
++                    for tt in t:
++                        if ttype in tt:
++                            return pos, token
++                elif ttype in t:
++                    return pos, token
++        return None, None
+ 
+     def token_not_matching(self, funcs, idx):
+         funcs = (funcs,) if not isinstance(funcs, (list, tuple)) else funcs

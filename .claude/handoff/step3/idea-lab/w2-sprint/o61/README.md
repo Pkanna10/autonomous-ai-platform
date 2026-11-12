@@ -87,10 +87,59 @@ pool is unchanged from the sprint reading: X2-0, X2-0' and X2-C from
   run, 0.165 USD per point. For all 20: kept 4.80, +19.2, 3.50 USD, 0.182 USD
   per point.
 
-## 4 Credit after the last dispatch (measured spend; the console is the truth)
+## 4 Credit (corrected 2026-11-12 after the owner's reconciliation request)
 
-- **Key 2:** 84.85 at the console read, less 12.14 (the last 3 X2-L runs) and
-  21.42 (6 confirmation runs) = **51.29 at most**; **40.75 at least** if the
-  three X2-L runs in flight at the read (10.54) had not been charged yet. No new
-  key-2 dispatch after 2026-11-14 12:00 UTC; the key expires 2026-11-15.
-- **Key 1:** 12.18 less 6.89 = **5.29**, usable until 2026-11-20.
+**The error.** The first version of this section started from the console read
+of 84.85 and took off only the last 3 X2-L runs and the batch. It treated X2-L's
+first nine runs as already in that read. They were not:
+
+- The read came at about 04:21 UTC, while X2-L runs 1-3 were in flight (started
+  04:01, finished 04:16 to 04:27).
+- Runs 4-9 started at 04:22:33, after the read.
+
+**The reconciliation, from the 200 USD start, by run:**
+
+| Key 2 (Window 2, original credit)                                   | USD    |
+| ------------------------------------------------------------------- | ------ |
+| 57 archived runs in 35 dispatches (sum of `cost_usd`, `window` W2)  | 181.24 |
+| dispatch 43093783855 (lost: no artifact, no log), by difference     | 7.79   |
+| spent                                                               | 189.03 |
+| left, by the console now (200 less 189.03)                          | 10.97  |
+
+| Key 1 (Window 1)                           | USD   |
+| ------------------------------------------ | ----- |
+| console at the start of Window 1's plan    | 21.06 |
+| P2a, 3 runs (rows from before U-key carry no window) | 8.88 |
+| X2-D confirmation, markdown x2             | 6.89  |
+| left (the console shows 5.29)              | 5.29  |
+
+- **The ledger and the console agree.** The one charge outside the ledger is
+  the lost dispatch. Its 7.79 by difference matches the sprint report's
+  estimate of about 7.8.
+- **The 84.85 read lagged.** By the ledger, key 2 at 04:21 stood between 65.87
+  and 76.91, depending on how much of X2-L runs 1-3 had been charged. The
+  console showed 84.85, so its balance trailed the spend by 8 to 19 USD; the
+  re-run (7.93, finished 03:47) was likely not yet posted. Later planning reads
+  a balance only after every run before it has finished and the console has
+  settled, and otherwise works from the ledger.
+- **Why each run's cost can be trusted without a usage export.** The engine
+  prices every response from its own `usage`:
+  - Input, output, 5-minute and 1-hour cache writes, cache reads, the
+    long-context tier, and each fallback attempt in `usage.iterations` are all
+    priced.
+  - Thinking tokens are billed as output tokens.
+  - The price table matches Anthropic's current list for Opus 5.5, Sonnet 5.5,
+    Haiku 5.5 and Fable 5.2, checked 2026-11-12.
+  - No request uses server tools, fast mode, Priority Tier or `inference_geo`.
+  - The SDK runs with `max_retries=0`, so no hidden retry exists.
+  - A timed-out or unreadable attempt is charged in the ledger at its
+    pre-flight estimate, which over-counts.
+  - A 429 or 529 is neither billed nor charged.
+- **What the rows cannot do.** They do not keep input or cache tokens per
+  request, so a run's cost cannot be recomputed from the rows alone. The
+  engine's `cost_usd` is that computation, done per response.
+- **No usage export is needed** for this reconciliation. To check each model
+  independently, the Console's usage export for key 2 would do: tokens by model
+  and day (input, cache write, cache read, output), 2026-11-11 to 2026-11-12.
+- **Key 2 now:** 10.97 of the original credit, usable until 2026-11-14 12:00
+  UTC for new dispatches, then the new 200 USD credit to 2026-12-15 (O62).

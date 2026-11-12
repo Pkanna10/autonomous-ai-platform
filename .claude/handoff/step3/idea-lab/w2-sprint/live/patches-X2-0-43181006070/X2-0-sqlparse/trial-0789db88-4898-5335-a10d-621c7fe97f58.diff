@@ -1,0 +1,59 @@
+diff --git a/sqlparse/engine/grouping.py b/sqlparse/engine/grouping.py
+index 43ca5b580d5e8499e3fa1ed5275902d7e20ce71b..95414d1fe27efbfb8e7a00f5ae58d49ef23fc88a 100644
+--- a/sqlparse/engine/grouping.py
++++ b/sqlparse/engine/grouping.py
+@@ -440,38 +440,43 @@ def group_values(tlist):
+ 
+ 
+ def group(stmt):
+-    for func in [
++    # Passes whose opening/middle token cannot occur in the statement text
++    # would change nothing, so they are skipped.
++    up = str(stmt).upper()
++    has_bracket = '[' in up
++    for func in (
+         group_comments,
+ 
+         # _group_matching
+-        group_brackets,
++        group_brackets if has_bracket else None,
+         group_parenthesis,
+         group_case,
+-        group_if,
+-        group_for,
+-        group_begin,
++        group_if if 'IF' in up else None,
++        group_for if 'FOR' in up else None,
++        group_begin if 'BEGIN' in up else None,
+ 
+-        group_over,
++        group_over if 'OVER' in up else None,
+         group_functions,
+         group_where,
+         group_period,
+-        group_arrays,
++        group_arrays if has_bracket else None,
+         group_identifier,
+         group_order,
+-        group_typecasts,
++        group_typecasts if '::' in up else None,
+         group_tzcasts,
+         group_typed_literal,
+         group_operator,
+         group_comparison,
+         group_as,
+         group_aliased,
+-        group_assignment,
++        group_assignment if ':=' in up else None,
+ 
+         align_comments,
+         group_identifier_list,
+         group_values,
+-    ]:
+-        func(stmt)
++    ):
++        if func is not None:
++            func(stmt)
+     return stmt
+ 
+ 

@@ -1,0 +1,91 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..eb64ac4f66d1a95975f54d758944a874c03dbdd4 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -52,6 +52,34 @@ def isString(s: object) -> bool:
+     return False
+ 
+ 
++_KNOWN_TRIGGERS: dict[str, str] | None = None
++
++
++def _known_pattern_triggers() -> dict[str, str]:
++    """
++    Map built-in inline pattern regex strings to the characters at least one of
++    which must be present in the text for the regex to be able to match.
++    """
++    global _KNOWN_TRIGGERS
++    if _KNOWN_TRIGGERS is None:
++        ip = inlinepatterns
++        _KNOWN_TRIGGERS = {
++            ip.BACKTICK_RE: '`',
++            ip.ESCAPE_RE: '\\',
++            ip.LINK_RE: '[',
++            ip.IMAGE_LINK_RE: '[',
++            ip.AUTOLINK_RE: '<',
++            ip.AUTOMAIL_RE: '<',
++            ip.HTML_RE: '<',
++            ip.ENTITY_RE: '&',
++            ip.LINE_BREAK_RE: '\n',
++            ip.NOT_STRONG_RE: '*_',
++            r'\*': '*',
++            r'_': '_',
++        }
++    return _KNOWN_TRIGGERS
++
++
+ class Treeprocessor(util.Processor):
+     """
+     `Treeprocessor`s are run on the `ElementTree` object before serialization.
+@@ -86,6 +114,32 @@ class InlineProcessor(Treeprocessor):
+         self.md = md
+         self.inlinePatterns = md.inlinePatterns
+         self.ancestors: list[str] = []
++        self._trigger_re: re.Pattern[str] | None = None
++
++    def _build_trigger_re(self) -> re.Pattern[str] | None:
++        """
++        Build a regex matching any character required by every registered
++        inline pattern. Returns `None` if any pattern is not a known built-in
++        regex (in which case no prefiltering is done).
++        """
++        known = _known_pattern_triggers()
++        chars: set[str] = set()
++        base_get = inlinepatterns.Pattern.getCompiledRegExp
++        for pattern in self.inlinePatterns:
++            if not isinstance(pattern, inlinepatterns.InlineProcessor):
++                return None
++            if getattr(type(pattern), 'getCompiledRegExp', None) is not base_get:
++                return None
++            compiled = getattr(pattern, 'compiled_re', None)
++            if compiled is None:
++                return None
++            trig = known.get(compiled.pattern)
++            if trig is None:
++                return None
++            chars.update(trig)
++        if not chars:
++            return None
++        return re.compile('[' + ''.join(re.escape(c) for c in sorted(chars)) + ']')
+ 
+     def __makePlaceholder(self, type: str) -> tuple[str, str]:
+         """ Generate a placeholder """
+@@ -130,6 +184,10 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         if not isinstance(data, util.AtomicString):
++            trigger_re = self._trigger_re
++            if trigger_re is not None and trigger_re.search(data) is None:
++                # No registered pattern can possibly match this text.
++                return data
+             startIndex = 0
+             count = len(self.inlinePatterns)
+             while patternIndex < count:
+@@ -364,6 +422,7 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         self.stashed_nodes: dict[str, etree.Element | str] = {}
++        self._trigger_re = self._build_trigger_re()
+ 
+         # Ensure a valid parent list, but copy passed in lists
+         # to ensure we don't have the user accidentally change it on us.
