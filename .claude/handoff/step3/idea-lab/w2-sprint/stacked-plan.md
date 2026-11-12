@@ -145,8 +145,14 @@ the measured CI minutes (section 6). The idea is combine proposal item 2
   archived 1.44 minutes or less per whole trial. Doubled, as the ledger does,
   that gives a declared 38: 171 minutes a run, two runs a dispatch inside the
   360-minute job. This is an estimate, not a measurement.
-- **The measured figures** come from the offline replay (O62 item 5). It times
-  one calibration, three combine re-tests and one profile on GitHub runners for
-  sqlparse, tomli, mistune and markdown, with no API spend. They will be
-  entered here when the replay has run. After the pilot, the measured rider
-  replaces the declared one.
+- **The measured figures** come from the replay (`o62/replay.md`, run
+  43194422719, GitHub runners, no API spend).
+  - One adopted round (combine re-test + baseline with calibration at the tip
+    + profile) took 29 s on tomli, 58 s on mistune and 68 s on sqlparse. The
+    estimate for markdown is about 52 s.
+  - The worst case for a 3-round X2-DT run is two adopted rounds, each with a
+    fallback, plus the final re-test against the original base: under 3
+    minutes.
+  - **Proposed rider:** 10 minutes (more than 3x the measured worst case),
+    so 143 minutes a run and two runs a dispatch (286 of 360).
+  - The pilot's in-run timings replace this rider.
