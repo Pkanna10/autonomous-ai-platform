@@ -1,0 +1,31 @@
+diff --git a/sqlparse/utils.py b/sqlparse/utils.py
+index 58c0245a7566c14102fa921b0fee35d7f8fa061c..b2cf2ab8defd50460560b83b9fc1a03168ad70d3 100644
+--- a/sqlparse/utils.py
++++ b/sqlparse/utils.py
+@@ -90,17 +90,20 @@ def imt(token, i=None, m=None, t=None):
+         return False
+     if i and isinstance(token, i):
+         return True
++    ttype = token.ttype
+     if m:
+         if isinstance(m, list):
+-            if any(token.match(*pattern) for pattern in m):
+-                return True
+-        elif token.match(*m):
++            for pattern in m:
++                if ttype is pattern[0] and token.match(*pattern):
++                    return True
++        elif ttype is m[0] and token.match(*m):
+             return True
+     if t:
+         if isinstance(t, list):
+-            if any(token.ttype in ttype for ttype in t):
+-                return True
+-        elif token.ttype in t:
++            for tt in t:
++                if ttype in tt:
++                    return True
++        elif ttype in t:
+             return True
+     return False
+ 

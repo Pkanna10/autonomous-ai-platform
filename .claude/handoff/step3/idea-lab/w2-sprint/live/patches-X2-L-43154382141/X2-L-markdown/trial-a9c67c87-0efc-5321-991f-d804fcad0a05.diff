@@ -1,0 +1,42 @@
+diff --git a/markdown/extensions/abbr.py b/markdown/extensions/abbr.py
+index 9f609810ad4a7a01403f978b878435b17fef5a0e..7ef8f35f867c43f88928015c815218517966dfea 100644
+--- a/markdown/extensions/abbr.py
++++ b/markdown/extensions/abbr.py
+@@ -93,6 +93,7 @@ class AbbrTreeprocessor(Treeprocessor):
+     def __init__(self, md: Markdown | None = None, abbrs: dict | None = None):
+         self.abbrs: dict = abbrs if abbrs is not None else {}
+         self.RE: re.RegexObject | None = None
++        self._keys: tuple = ()
+         super().__init__(md)
+ 
+     def create_element(self, title: str, text: str, tail: str) -> etree.Element:
+@@ -106,8 +107,9 @@ class AbbrTreeprocessor(Treeprocessor):
+         ''' Recursively iterate over elements, run regex on text and wrap matches in `abbr` tags. '''
+         for child in reversed(el):
+             self.iter_element(child, el)
++        keys = self._keys
+         if text := el.text:
+-            if not isinstance(text, AtomicString):
++            if not isinstance(text, AtomicString) and any(k in text for k in keys):
+                 for m in reversed(list(self.RE.finditer(text))):
+                     if self.abbrs[m.group(0)]:
+                         abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), text[m.end():])
+@@ -116,8 +118,8 @@ class AbbrTreeprocessor(Treeprocessor):
+                 el.text = text
+         if parent is not None and el.tail:
+             tail = el.tail
+-            index = list(parent).index(el) + 1
+-            if not isinstance(tail, AtomicString):
++            if not isinstance(tail, AtomicString) and any(k in tail for k in keys):
++                index = list(parent).index(el) + 1
+                 for m in reversed(list(self.RE.finditer(tail))):
+                     abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), tail[m.end():])
+                     parent.insert(index, abbr)
+@@ -132,6 +134,7 @@ class AbbrTreeprocessor(Treeprocessor):
+         # Build and compile regex
+         abbr_list = list(self.abbrs.keys())
+         abbr_list.sort(key=len, reverse=True)
++        self._keys = tuple(abbr_list)
+         self.RE = re.compile(f"\\b(?:{ '|'.join(re.escape(key) for key in abbr_list) })\\b")
+         # Step through tree and modify on matches
+         self.iter_element(root)

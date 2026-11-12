@@ -1,0 +1,163 @@
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..d5aaf6520bc0587c7eec9a2756f65bb0f11714a1 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -19,6 +19,96 @@ from io import TextIOBase
+ from sqlparse import tokens, keywords
+ from sqlparse.utils import consume
+ 
++try:
++    from re import _parser as _sre_parse
++except ImportError:  # pragma: no cover
++    import sre_parse as _sre_parse
++
++
++class _AnyChar(Exception):
++    """Raised when the first-char set of a pattern can't be bounded."""
++
++
++_CATEGORY_CLASS = {}
++for _name, _cls in (('CATEGORY_DIGIT', '\\d'), ('CATEGORY_NOT_DIGIT', '\\D'),
++                    ('CATEGORY_SPACE', '\\s'), ('CATEGORY_NOT_SPACE', '\\S'),
++                    ('CATEGORY_WORD', '\\w'), ('CATEGORY_NOT_WORD', '\\W')):
++    _c = getattr(_sre_parse, _name, None)
++    if _c is not None:
++        _CATEGORY_CLASS[_c] = _cls
++
++
++def _chr_esc(code):
++    return '\\U%08x' % code
++
++
++def _first_items(seq, out):
++    """Collect char-class items that may start a match of ``seq`` into
++    ``out``. Returns True if ``seq`` may match the empty string.
++    Raises _AnyChar if unsure."""
++    sp = _sre_parse
++    repeats = tuple(getattr(sp, n) for n in
++                    ('MAX_REPEAT', 'MIN_REPEAT', 'POSSESSIVE_REPEAT')
++                    if hasattr(sp, n))
++    atomic = getattr(sp, 'ATOMIC_GROUP', None)
++    for op, av in seq:
++        if op is sp.LITERAL:
++            out.append(_chr_esc(av))
++            return False
++        elif op is sp.IN:
++            for iop, iav in av:
++                if iop is sp.LITERAL:
++                    out.append(_chr_esc(iav))
++                elif iop is sp.RANGE:
++                    out.append(_chr_esc(iav[0]) + '-' + _chr_esc(iav[1]))
++                elif iop is sp.CATEGORY and iav in _CATEGORY_CLASS:
++                    out.append(_CATEGORY_CLASS[iav])
++                else:
++                    raise _AnyChar
++            return False
++        elif op is sp.SUBPATTERN:
++            if len(av) == 4 and (av[1] or av[2]):
++                raise _AnyChar
++            if not _first_items(av[-1], out):
++                return False
++        elif atomic is not None and op is atomic:
++            if not _first_items(av, out):
++                return False
++        elif op is sp.BRANCH:
++            nullable = False
++            for alt in av[1]:
++                if _first_items(alt, out):
++                    nullable = True
++            if not nullable:
++                return False
++        elif op in repeats:
++            lo, _hi, item = av
++            if not _first_items(item, out) and lo > 0:
++                return False
++        elif op is sp.AT or op is sp.ASSERT or op is sp.ASSERT_NOT:
++            # zero-width; ignoring it only enlarges the first-char set
++            continue
++        else:
++            raise _AnyChar
++    return True
++
++
++def _first_char_matcher(rx, flags):
++    """Return a match function telling whether a character could start a
++    match of ``rx``, or None if that can't be determined safely."""
++    if not isinstance(rx, str):
++        return None
++    try:
++        parsed = _sre_parse.parse(rx, flags)
++        if re.compile(rx, flags).flags != re.compile('', flags).flags:
++            return None
++        items = []
++        if _first_items(list(parsed), items) or not items:
++            return None
++        return re.compile('[' + ''.join(items) + ']', flags).match
++    except Exception:
++        return None
++
+ 
+ class Lexer:
+     """The Lexer supports configurable syntax.
+@@ -76,15 +166,42 @@ class Lexer:
+         After this call, regexps and keyword dictionaries need to be loaded
+         to make the lexer functional again."""
+         self._SQL_REGEX = []
++        self._first_char_tests = []
++        self._dispatch = {}
++        self._dispatch_src = None
+         self._keywords = []
+ 
+     def set_SQL_REGEX(self, SQL_REGEX):
+         """Set the list of regex that will parse the SQL."""
+         FLAGS = re.IGNORECASE | re.UNICODE
++        SQL_REGEX = list(SQL_REGEX)
+         self._SQL_REGEX = [
+             (re.compile(rx, FLAGS).match, tt)
+             for rx, tt in SQL_REGEX
+         ]
++        self._first_char_tests = [
++            _first_char_matcher(rx, FLAGS) for rx, tt in SQL_REGEX
++        ]
++        self._dispatch = {}
++        self._dispatch_src = (self._SQL_REGEX, list(self._SQL_REGEX))
++
++    def _get_dispatch(self):
++        """Return the per-char cache, or None if the rule list was changed
++        outside of set_SQL_REGEX (then the full list must be used)."""
++        src = getattr(self, '_dispatch_src', None)
++        rules = self._SQL_REGEX
++        if src is None or src[0] is not rules or len(rules) != len(src[1]) \
++                or any(a is not b for a, b in zip(rules, src[1])):
++            return None
++        return self._dispatch
++
++    def _rules_for_char(self, char):
++        """Ordered sublist of rules that could match starting at ``char``."""
++        sub = [rule for rule, test in zip(self._SQL_REGEX,
++                                          self._first_char_tests)
++               if test is None or test(char)]
++        self._dispatch[char] = sub
++        return sub
+ 
+     def add_keywords(self, keywords):
+         """Add keyword dictionaries. Keywords are looked up in the same order
+@@ -134,9 +251,17 @@ class Lexer:
+             raise TypeError("Expected text or file-like object, got {!r}".
+                             format(type(text)))
+ 
++        dispatch = self._get_dispatch()
++        all_rules = self._SQL_REGEX
+         iterable = enumerate(text)
+         for pos, char in iterable:
+-            for rexmatch, action in self._SQL_REGEX:
++            if dispatch is None:
++                rules = all_rules
++            else:
++                rules = dispatch.get(char)
++                if rules is None:
++                    rules = self._rules_for_char(char)
++            for rexmatch, action in rules:
+                 m = rexmatch(text, pos)
+ 
+                 if not m:

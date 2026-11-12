@@ -1,0 +1,207 @@
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..5b5f7b936dd47df74302c6275a352e99f6d8eec4 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -19,6 +19,144 @@ from io import TextIOBase
+ from sqlparse import tokens, keywords
+ from sqlparse.utils import consume
+ 
++_ASCII_CHARS = [chr(i) for i in range(128)]
++_ASCII_SET = frozenset(_ASCII_CHARS)
++
++
++class _Unknown(Exception):
++    pass
++
++
++def _atom_set(atom, flags):
++    """ASCII characters matched by a single-character atom."""
++    rx = re.compile(atom, flags)
++    return {c for c in _ASCII_CHARS if rx.fullmatch(c)}
++
++
++def _first_chars(pattern, flags):
++    """Return the set of ASCII characters a match of ``pattern`` can start
++    with, or None if this can't be determined safely (or the pattern may
++    match the empty string)."""
++    if flags & re.VERBOSE:
++        return None
++    try:
++        result, nullable, end = _fc_alts(pattern, 0, flags)
++    except (_Unknown, IndexError, re.error):
++        return None
++    if end != len(pattern) or nullable:
++        return None
++    return frozenset(result)
++
++
++def _fc_alts(s, i, flags):
++    """Parse alternatives until ')' or end. Returns (set, nullable, idx)."""
++    total = set()
++    any_nullable = False
++    while True:
++        fs, nullable, i = _fc_seq(s, i, flags)
++        total |= fs
++        any_nullable = any_nullable or nullable
++        if i < len(s) and s[i] == '|':
++            i += 1
++            continue
++        return total, any_nullable, i
++
++
++def _skip_to_alt_end(s, i):
++    """Skip the rest of a sequence, stopping at '|' or ')' at depth 0."""
++    depth = 0
++    n = len(s)
++    while i < n:
++        ch = s[i]
++        if ch == '\\':
++            i += 2
++            continue
++        if ch == '[':
++            i = _class_end(s, i)
++            continue
++        if ch == '(':
++            depth += 1
++        elif ch == ')':
++            if depth == 0:
++                return i
++            depth -= 1
++        elif ch == '|' and depth == 0:
++            return i
++        i += 1
++    if depth:
++        raise _Unknown
++    return i
++
++
++def _class_end(s, i):
++    """Index after the character class starting at s[i] == '['."""
++    j = i + 1
++    if s[j] == '^':
++        j += 1
++    if s[j] == ']':
++        j += 1
++    while s[j] != ']':
++        if s[j] == '\\':
++            j += 2
++        elif s[j] == '[':
++            raise _Unknown
++        else:
++            j += 1
++    return j + 1
++
++
++def _fc_seq(s, i, flags):
++    total = set()
++    n = len(s)
++    while True:
++        if i >= n or s[i] in '|)':
++            return total, True, i
++        ch = s[i]
++        if ch == '(':
++            if i + 1 < n and s[i + 1] == '?':
++                if s[i + 2] != ':':
++                    raise _Unknown
++                start = i + 3
++            else:
++                start = i + 1
++            aset, anull, j = _fc_alts(s, start, flags)
++            if j >= n or s[j] != ')':
++                raise _Unknown
++            j += 1
++        elif ch == '[':
++            j = _class_end(s, i)
++            aset = _atom_set(s[i:j], flags)
++            anull = False
++        elif ch == '\\':
++            nxt = s[i + 1]
++            if nxt.isalnum() and nxt not in 'dDwWsS':
++                raise _Unknown
++            j = i + 2
++            aset = _atom_set(s[i:j], flags)
++            anull = False
++        elif ch in '.^$*+?{}]':
++            raise _Unknown
++        else:
++            j = i + 1
++            aset = _atom_set(re.escape(ch), flags)
++            anull = False
++        # quantifier
++        if j < n:
++            q = s[j]
++            if q in '?*':
++                anull = True
++                j += 1
++            elif q == '+':
++                j += 1
++            elif q == '{':
++                raise _Unknown
++            if j < n and s[j] in '?+' and q in '?*+':
++                j += 1
++        total |= aset
++        if not anull:
++            return total, False, _skip_to_alt_end(s, j)
++        i = j
++
+ 
+ class Lexer:
+     """The Lexer supports configurable syntax.
+@@ -104,6 +242,36 @@ class Lexer:
+         else:
+             return tokens.Name, value
+ 
++    def _build_dispatch(self, sql_regex):
++        """Analyse rules to know, per ASCII first character, which rules
++        can possibly match. Rules that can't be analysed safely are
++        always candidates."""
++        self._dispatch_src = sql_regex
++        self._dispatch_len = len(sql_regex)
++        self._dispatch = {}
++        firsts = []
++        for rexmatch, _ in sql_regex:
++            fs = None
++            try:
++                rx = rexmatch.__self__
++                if isinstance(rx.pattern, str):
++                    fs = _first_chars(rx.pattern, rx.flags)
++            except Exception:
++                fs = None
++            firsts.append(fs)
++        self._dispatch_firsts = firsts
++
++    def _dispatch_rules_for(self, char):
++        sql_regex = self._SQL_REGEX
++        if char not in _ASCII_SET:
++            rules = sql_regex
++        else:
++            rules = [rule for rule, fs in zip(sql_regex,
++                                              self._dispatch_firsts)
++                     if fs is None or char in fs]
++        self._dispatch[char] = rules
++        return rules
++
+     def get_tokens(self, text, encoding=None):
+         """
+         Return an iterable of (tokentype, value) pairs generated from
+@@ -134,9 +302,19 @@ class Lexer:
+             raise TypeError("Expected text or file-like object, got {!r}".
+                             format(type(text)))
+ 
++        sql_regex = self._SQL_REGEX
++        if (self.__dict__.get('_dispatch_src') is not sql_regex
++                or self._dispatch_len != len(sql_regex)):
++            self._build_dispatch(sql_regex)
++        dispatch = self._dispatch
++        get_rules = dispatch.get
++
+         iterable = enumerate(text)
+         for pos, char in iterable:
+-            for rexmatch, action in self._SQL_REGEX:
++            rules = get_rules(char)
++            if rules is None:
++                rules = self._dispatch_rules_for(char)
++            for rexmatch, action in rules:
+                 m = rexmatch(text, pos)
+ 
+                 if not m:

@@ -1,0 +1,97 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..b44e0a2765cb9ac6b3470ff463aa60cf3cf419bd 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -52,6 +52,27 @@ def isString(s: object) -> bool:
+     return False
+ 
+ 
++# Map of known built-in inline regex sources to literal substrings, at least one of
++# which must be present in the text for the regex to possibly match. Patterns whose
++# regex is not listed here are always run.
++_REQUIRED_LITERALS: dict[str, tuple[str, ...]] = {
++    inlinepatterns.BACKTICK_RE: ('`',),
++    inlinepatterns.ESCAPE_RE: ('\\',),
++    inlinepatterns.LINK_RE: ('[',),
++    inlinepatterns.REFERENCE_RE: ('[',),
++    inlinepatterns.IMAGE_LINK_RE: ('![',),
++    inlinepatterns.IMAGE_REFERENCE_RE: ('![',),
++    inlinepatterns.AUTOLINK_RE: ('<',),
++    inlinepatterns.AUTOMAIL_RE: ('<',),
++    inlinepatterns.HTML_RE: ('<',),
++    inlinepatterns.ENTITY_RE: ('&',),
++    inlinepatterns.LINE_BREAK_RE: ('  \n',),
++    inlinepatterns.NOT_STRONG_RE: ('*', '_'),
++    r'\*': ('*',),
++    r'_': ('_',),
++}
++
++
+ class Treeprocessor(util.Processor):
+     """
+     `Treeprocessor`s are run on the `ElementTree` object before serialization.
+@@ -86,6 +107,7 @@ class InlineProcessor(Treeprocessor):
+         self.md = md
+         self.inlinePatterns = md.inlinePatterns
+         self.ancestors: list[str] = []
++        self._gated_patterns: list[tuple[inlinepatterns.Pattern, tuple[str, ...] | None]] | None = None
+ 
+     def __makePlaceholder(self, type: str) -> tuple[str, str]:
+         """ Generate a placeholder """
+@@ -131,15 +153,46 @@ class InlineProcessor(Treeprocessor):
+         """
+         if not isinstance(data, util.AtomicString):
+             startIndex = 0
+-            count = len(self.inlinePatterns)
++            gated = self._gated_patterns
++            if gated is None or len(gated) != len(self.inlinePatterns):
++                gated = self._gated_patterns = self.__buildGatedPatterns()
++            count = len(gated)
+             while patternIndex < count:
++                pattern, literals = gated[patternIndex]
++                if literals is not None:
++                    for lit in literals:
++                        if lit in data:
++                            break
++                    else:
++                        # The pattern cannot possibly match: same as no-match.
++                        patternIndex += 1
++                        startIndex = 0
++                        continue
+                 data, matched, startIndex = self.__applyPattern(
+-                    self.inlinePatterns[patternIndex], data, patternIndex, startIndex
++                    pattern, data, patternIndex, startIndex
+                 )
+                 if not matched:
+                     patternIndex += 1
+         return data
+ 
++    def __buildGatedPatterns(self) -> list[tuple[inlinepatterns.Pattern, tuple[str, ...] | None]]:
++        """ Build a list of `(pattern, required_literals)` in inline pattern order. """
++        default_get = inlinepatterns.Pattern.getCompiledRegExp
++        result = []
++        for i in range(len(self.inlinePatterns)):
++            pattern = self.inlinePatterns[i]
++            literals = None
++            if (
++                isinstance(pattern, inlinepatterns.InlineProcessor) and
++                getattr(type(pattern), 'getCompiledRegExp', None) is default_get
++            ):
++                compiled = getattr(pattern, 'compiled_re', None)
++                source = getattr(compiled, 'pattern', None)
++                if isinstance(source, str):
++                    literals = _REQUIRED_LITERALS.get(source)
++            result.append((pattern, literals))
++        return result
++
+     def __processElementText(self, node: etree.Element, subnode: etree.Element, isText: bool = True) -> None:
+         """
+         Process placeholders in `Element.text` or `Element.tail`
+@@ -364,6 +417,7 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         self.stashed_nodes: dict[str, etree.Element | str] = {}
++        self._gated_patterns = self.__buildGatedPatterns()
+ 
+         # Ensure a valid parent list, but copy passed in lists
+         # to ensure we don't have the user accidentally change it on us.

@@ -1,0 +1,71 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..76c170646c5595d9e765cab700bafce59d7f8402 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -86,6 +86,8 @@ class InlineProcessor(Treeprocessor):
+         self.md = md
+         self.inlinePatterns = md.inlinePatterns
+         self.ancestors: list[str] = []
++        self._miss_memo: dict[str, int] = {}
++        self._clean_miss = False
+ 
+     def __makePlaceholder(self, type: str) -> tuple[str, str]:
+         """ Generate a placeholder """
+@@ -132,6 +134,28 @@ class InlineProcessor(Treeprocessor):
+         if not isinstance(data, util.AtomicString):
+             startIndex = 0
+             count = len(self.inlinePatterns)
++            if patternIndex == 0:
++                memo = self._miss_memo
++                key = data
++                first = memo.get(key)
++                if first is not None:
++                    patternIndex = first
++                else:
++                    # Scan the leading run of clean misses, recording where
++                    # the first pattern that could act lives.
++                    while patternIndex < count:
++                        self._clean_miss = False
++                        data, matched, startIndex = self.__applyPattern(
++                            self.inlinePatterns[patternIndex], data, patternIndex, 0
++                        )
++                        if matched or not self._clean_miss:
++                            memo[key] = patternIndex
++                            if not matched:
++                                patternIndex += 1
++                            break
++                        patternIndex += 1
++                    else:
++                        memo[key] = count
+             while patternIndex < count:
+                 data, matched, startIndex = self.__applyPattern(
+                     self.inlinePatterns[patternIndex], data, patternIndex, startIndex
+@@ -279,10 +303,12 @@ class InlineProcessor(Treeprocessor):
+ 
+         if new_style:
+             match = None
++            any_match = False
+             # Since `handleMatch` may reject our first match,
+             # we iterate over the buffer looking for matches
+             # until we can't find any more.
+             for match in pattern.getCompiledRegExp().finditer(data, startIndex):
++                any_match = True
+                 node, start, end = pattern.handleMatch(match, data)
+                 if start is None or end is None:
+                     startIndex += match.end(0)
+@@ -294,6 +320,7 @@ class InlineProcessor(Treeprocessor):
+             leftData = data[:startIndex]
+ 
+         if not match:
++            self._clean_miss = new_style and not any_match
+             return data, False, 0
+ 
+         if not new_style:  # pragma: no cover
+@@ -364,6 +391,7 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         self.stashed_nodes: dict[str, etree.Element | str] = {}
++        self._miss_memo = {}
+ 
+         # Ensure a valid parent list, but copy passed in lists
+         # to ensure we don't have the user accidentally change it on us.

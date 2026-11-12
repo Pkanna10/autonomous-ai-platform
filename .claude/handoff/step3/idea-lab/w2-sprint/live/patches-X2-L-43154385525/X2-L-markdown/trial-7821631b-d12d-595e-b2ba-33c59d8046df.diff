@@ -1,0 +1,45 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..7626c6c7e6c58f828ed24d5be0c5eb3c805eaeaf 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -131,10 +131,23 @@ class InlineProcessor(Treeprocessor):
+         """
+         if not isinstance(data, util.AtomicString):
+             startIndex = 0
+-            count = len(self.inlinePatterns)
++            table = self.__inline_table
++            count = len(table)
+             while patternIndex < count:
++                pattern, new_style, search, excludes = table[patternIndex]
++                if new_style:
++                    skip = False
++                    ancestors = self.ancestors
++                    for exclude in excludes:
++                        if exclude in ancestors:
++                            skip = True
++                            break
++                    if skip or search(data, startIndex) is None:
++                        patternIndex += 1
++                        startIndex = 0
++                        continue
+                 data, matched, startIndex = self.__applyPattern(
+-                    self.inlinePatterns[patternIndex], data, patternIndex, startIndex
++                    pattern, data, patternIndex, startIndex
+                 )
+                 if not matched:
+                     patternIndex += 1
+@@ -365,6 +378,14 @@ class InlineProcessor(Treeprocessor):
+         """
+         self.stashed_nodes: dict[str, etree.Element | str] = {}
+ 
++        table = []
++        for pattern in self.inlinePatterns:
++            new_style = isinstance(pattern, inlinepatterns.InlineProcessor)
++            search = pattern.getCompiledRegExp().search if new_style else None
++            excludes = tuple(e.lower() for e in pattern.ANCESTOR_EXCLUDES)
++            table.append((pattern, new_style, search, excludes))
++        self.__inline_table = table
++
+         # Ensure a valid parent list, but copy passed in lists
+         # to ensure we don't have the user accidentally change it on us.
+         tree_parents = [] if ancestors is None else ancestors[:]

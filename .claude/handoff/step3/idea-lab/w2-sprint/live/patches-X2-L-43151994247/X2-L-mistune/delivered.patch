@@ -1,0 +1,271 @@
+diff --git a/src/mistune/_inline/links.py b/src/mistune/_inline/links.py
+index 5ad0ec389dd24859b80a8c62901747c0a3fca1c7..2987eeb4c89ac5ca3fed635693a8a0dd05d86119 100644
+--- a/src/mistune/_inline/links.py
++++ b/src/mistune/_inline/links.py
+@@ -1,5 +1,6 @@
+ from __future__ import annotations
+ 
++import re
+ from bisect import bisect_left
+ from typing import TYPE_CHECKING, Dict, List, Match, Optional, Tuple
+ 
+@@ -14,6 +15,8 @@ from ..util import unikey
+ if TYPE_CHECKING:
+     from ..inline_parser import InlineParser
+ 
++_BRACKET_SCAN_RE = re.compile(r"\\[\s\S]?|[\[\]]")
++
+ 
+ def parse_link(inline: "InlineParser", m: Match[str], state: InlineState) -> Optional[int]:
+     pos = m.end()
+@@ -236,15 +239,11 @@ def find_link_range_end(src: str, label_start: int, close_pos: int, state: Inlin
+ def build_closing_bracket_map(src: str) -> Dict[int, int]:
+     pairs: Dict[int, int] = {}
+     stack: List[int] = []
+-    pos = 0
+-    while pos < len(src):
+-        char = src[pos]
+-        if char == "\\":
+-            pos += 2
+-            continue
+-        if char == "[":
+-            stack.append(pos + 1)
+-        elif char == "]" and stack:
+-            pairs[stack.pop()] = pos
+-        pos += 1
++    for m in _BRACKET_SCAN_RE.finditer(src):
++        tok = m.group()
++        if tok == "[":
++            stack.append(m.start() + 1)
++        elif tok == "]":
++            if stack:
++                pairs[stack.pop()] = m.start()
+     return pairs
+diff --git a/src/mistune/core.py b/src/mistune/core.py
+index 1f6f0678133458fbcbbf8255c01a1d6046bf7f4f..2a0eea8185a19c1b8adb74cf80bf96532c6f88e0 100644
+--- a/src/mistune/core.py
++++ b/src/mistune/core.py
+@@ -241,6 +241,7 @@ class BaseRenderer(object):
+ 
+     def __init__(self) -> None:
+         self.__methods: Dict[str, Callable[..., str]] = {}
++        self._method_cache: Dict[str, Callable[..., str]] = {}
+ 
+     def register(self, name: str, method: Callable[..., str]) -> None:
+         """Register a render method for the named token. For example::
+@@ -252,15 +253,21 @@ class BaseRenderer(object):
+         """
+         # bind self into renderer method
+         self.__methods[name] = lambda *arg, **kwargs: method(self, *arg, **kwargs)
++        self._method_cache.clear()
+ 
+     def _get_method(self, name: str) -> Callable[..., str]:
++        cache = self._method_cache
++        method = cache.get(name)
++        if method is not None:
++            return method
+         try:
+-            return cast(Callable[..., str], object.__getattribute__(self, name))
++            method = cast(Callable[..., str], object.__getattribute__(self, name))
+         except AttributeError:
+             method = self.__methods.get(name)
+             if not method:
+                 raise AttributeError('No renderer "{!r}"'.format(name))
+-            return method
++        cache[name] = method
++        return method
+ 
+     def render_token(self, token: Dict[str, Any], state: BlockState) -> str:
+         func = self._get_method(token["type"])
+diff --git a/src/mistune/inline_parser.py b/src/mistune/inline_parser.py
+index abe671654a9d562f3505134e8cf16ec9d59cf3ec..3e35b4bca5ad941e3ae7ee3441de0b687453b5f9 100644
+--- a/src/mistune/inline_parser.py
++++ b/src/mistune/inline_parser.py
+@@ -228,44 +228,67 @@ class InlineParser(Parser[InlineState]):
+     def parse(self, state: InlineState) -> List[Dict[str, Any]]:
+         pos = 0
+         sc = self.compile_sc()
+-        while pos < len(state.src):
+-            fast_end = self._find_fast_text_end(state.src, pos)
+-            if fast_end is None:
+-                m = sc.search(state.src, pos)
+-            else:
++        src = state.src
++        n = len(src)
++        process_text = self.process_text
++        parse_method = self.parse_method
++        chars = self._get_fast_trigger_chars()
++        if chars is not None:
++            trigger_search = self._get_fast_trigger_re(chars).search
++            find_linebreak_start = self._find_linebreak_start
++            sc_match = sc.match
++            while pos < n:
++                tm = trigger_search(src, pos)
++                if tm is None:
++                    fast_end = n
++                else:
++                    fast_end = tm.start()
++                    if tm.group(0) == "\n":
++                        fast_end = find_linebreak_start(src, pos, fast_end)
+                 if fast_end > pos:
+-                    self.process_text(state.src[pos:fast_end], state)
++                    process_text(src[pos:fast_end], state)
+                     pos = fast_end
+-                if pos >= len(state.src):
++                if pos >= n:
+                     break
+-                m = sc.match(state.src, pos)
++                m = sc_match(src, pos)
+ 
+-            if not m:
+-                if fast_end is not None:
+-                    self.process_text(state.src[pos : pos + 1], state)
++                if not m:
++                    process_text(src[pos : pos + 1], state)
+                     pos += 1
+                     continue
+-                break
+-
+-            end_pos = m.start()
+-            if end_pos > pos:
+-                hole = state.src[pos:end_pos]
+-                self.process_text(hole, state)
+-
+-            new_pos = self.parse_method(m, state)
+-            if not new_pos:
+-                # move cursor 1 character forward
+-                pos = end_pos + 1
+-                hole = state.src[end_pos:pos]
+-                self.process_text(hole, state)
+-            else:
+-                pos = new_pos
++
++                end_pos = m.start()
++                new_pos = parse_method(m, state)
++                if not new_pos:
++                    # move cursor 1 character forward
++                    pos = end_pos + 1
++                    process_text(src[end_pos:pos], state)
++                else:
++                    pos = new_pos
++        else:
++            sc_search = sc.search
++            while pos < n:
++                m = sc_search(src, pos)
++                if not m:
++                    break
++
++                end_pos = m.start()
++                if end_pos > pos:
++                    process_text(src[pos:end_pos], state)
++
++                new_pos = parse_method(m, state)
++                if not new_pos:
++                    # move cursor 1 character forward
++                    pos = end_pos + 1
++                    process_text(src[end_pos:pos], state)
++                else:
++                    pos = new_pos
+ 
+         if pos == 0:
+             # special case, just pure text
+-            self.process_text(state.src, state)
+-        elif pos < len(state.src):
+-            self.process_text(state.src[pos:], state)
++            process_text(src, state)
++        elif pos < n:
++            process_text(src[pos:], state)
+         state.tokens = finalize_emphasis_tokens(
+             state.tokens,
+             "emphasis" in self.rules,
+@@ -310,6 +333,7 @@ class InlineParser(Parser[InlineState]):
+             return chars
+ 
+         chars = set()
++        other_chars: Set[str] = set()
+         for name in self.rules:
+             pattern = self.specification.get(name)
+             rule_chars = _get_rule_start_chars(name, pattern)
+@@ -317,6 +341,22 @@ class InlineParser(Parser[InlineState]):
+                 self._fast_trigger_chars = None
+                 return None
+             chars.update(rule_chars)
++            if name != "emphasis":
++                other_chars.update(rule_chars)
++
++        # The built-in emphasis handler only re-emits the marker as text, and
++        # the emphasis finalizer re-splits text tokens at delimiter runs, so
++        # markers can stay inside plain text slices.
++        if "emphasis" in self.rules:
++            method = self._methods.get("emphasis")
++            if (
++                self.specification.get("emphasis") == InlineParser.SPECIFICATION["emphasis"]
++                and getattr(method, "__func__", None) is InlineParser.parse_emphasis
++                and "*" not in other_chars
++                and "_" not in other_chars
++            ):
++                chars.discard("*")
++                chars.discard("_")
+         self._fast_trigger_chars = chars
+         return chars
+ 
+diff --git a/src/mistune/renderers/html.py b/src/mistune/renderers/html.py
+index a62e7c78f8510e9681a41c985da1fe05af4b436a..fc125b1c9cfe15e1f5be80a5cb17a4b0ec117f8d 100644
+--- a/src/mistune/renderers/html.py
++++ b/src/mistune/renderers/html.py
+@@ -56,6 +56,43 @@ class HTMLRenderer(BaseRenderer):
+         else:
+             return func(text)
+ 
++    def render_tokens(self, tokens: Iterable[Dict[str, Any]], state: BlockState) -> str:
++        cls = type(self)
++        if (
++            cls.render_token is not _HTML_RENDER_TOKEN
++            or cls.iter_tokens is not _BASE_ITER_TOKENS
++            or cls._get_method is not _BASE_GET_METHOD
++        ):
++            return super(HTMLRenderer, self).render_tokens(tokens, state)
++
++        getattr_ = object.__getattribute__
++        get_method = self._get_method
++        render_tokens = self.render_tokens
++        out = []
++        append = out.append
++        for token in tokens:
++            name = token["type"]
++            try:
++                func = getattr_(self, name)
++            except AttributeError:
++                func = get_method(name)
++            attrs = token.get("attrs")
++            if "raw" in token:
++                text = token["raw"]
++            elif "children" in token:
++                text = render_tokens(token["children"], state)
++            else:
++                if attrs:
++                    append(func(**attrs))
++                else:
++                    append(func())
++                continue
++            if attrs:
++                append(func(text, **attrs))
++            else:
++                append(func(text))
++        return "".join(out)
++
+     def safe_url(self, url: str) -> str:
+         """Ensure the given URL is safe. This method is used for rendering
+         links, images, and etc.
+@@ -164,6 +201,11 @@ class HTMLRenderer(BaseRenderer):
+         return "<li>" + text + "</li>\n"
+ 
+ 
++_HTML_RENDER_TOKEN = HTMLRenderer.render_token
++_BASE_ITER_TOKENS = BaseRenderer.iter_tokens
++_BASE_GET_METHOD = BaseRenderer._get_method
++
++
+ def _unquote_url(url: str) -> str:
+     for _ in range(3):
+         decoded = unquote(url)

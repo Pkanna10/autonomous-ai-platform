@@ -1,0 +1,30 @@
+diff --git a/markdown/extensions/abbr.py b/markdown/extensions/abbr.py
+index 9f609810ad4a7a01403f978b878435b17fef5a0e..93ed6e64b6751599301ad3a1c96a87b8dc452dff 100644
+--- a/markdown/extensions/abbr.py
++++ b/markdown/extensions/abbr.py
+@@ -106,9 +106,10 @@ class AbbrTreeprocessor(Treeprocessor):
+         ''' Recursively iterate over elements, run regex on text and wrap matches in `abbr` tags. '''
+         for child in reversed(el):
+             self.iter_element(child, el)
++        RE = self.RE
+         if text := el.text:
+-            if not isinstance(text, AtomicString):
+-                for m in reversed(list(self.RE.finditer(text))):
++            if not isinstance(text, AtomicString) and RE.search(text) is not None:
++                for m in reversed(list(RE.finditer(text))):
+                     if self.abbrs[m.group(0)]:
+                         abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), text[m.end():])
+                         el.insert(0, abbr)
+@@ -116,9 +117,9 @@ class AbbrTreeprocessor(Treeprocessor):
+                 el.text = text
+         if parent is not None and el.tail:
+             tail = el.tail
+-            index = list(parent).index(el) + 1
+-            if not isinstance(tail, AtomicString):
+-                for m in reversed(list(self.RE.finditer(tail))):
++            if not isinstance(tail, AtomicString) and RE.search(tail) is not None:
++                index = list(parent).index(el) + 1
++                for m in reversed(list(RE.finditer(tail))):
+                     abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), tail[m.end():])
+                     parent.insert(index, abbr)
+                     tail = tail[:m.start()]

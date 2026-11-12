@@ -1,0 +1,145 @@
+diff --git a/markdown/extensions/abbr.py b/markdown/extensions/abbr.py
+index 9f609810ad4a7a01403f978b878435b17fef5a0e..7ef8f35f867c43f88928015c815218517966dfea 100644
+--- a/markdown/extensions/abbr.py
++++ b/markdown/extensions/abbr.py
+@@ -93,6 +93,7 @@ class AbbrTreeprocessor(Treeprocessor):
+     def __init__(self, md: Markdown | None = None, abbrs: dict | None = None):
+         self.abbrs: dict = abbrs if abbrs is not None else {}
+         self.RE: re.RegexObject | None = None
++        self._keys: tuple = ()
+         super().__init__(md)
+ 
+     def create_element(self, title: str, text: str, tail: str) -> etree.Element:
+@@ -106,8 +107,9 @@ class AbbrTreeprocessor(Treeprocessor):
+         ''' Recursively iterate over elements, run regex on text and wrap matches in `abbr` tags. '''
+         for child in reversed(el):
+             self.iter_element(child, el)
++        keys = self._keys
+         if text := el.text:
+-            if not isinstance(text, AtomicString):
++            if not isinstance(text, AtomicString) and any(k in text for k in keys):
+                 for m in reversed(list(self.RE.finditer(text))):
+                     if self.abbrs[m.group(0)]:
+                         abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), text[m.end():])
+@@ -116,8 +118,8 @@ class AbbrTreeprocessor(Treeprocessor):
+                 el.text = text
+         if parent is not None and el.tail:
+             tail = el.tail
+-            index = list(parent).index(el) + 1
+-            if not isinstance(tail, AtomicString):
++            if not isinstance(tail, AtomicString) and any(k in tail for k in keys):
++                index = list(parent).index(el) + 1
+                 for m in reversed(list(self.RE.finditer(tail))):
+                     abbr = self.create_element(self.abbrs[m.group(0)], m.group(0), tail[m.end():])
+                     parent.insert(index, abbr)
+@@ -132,6 +134,7 @@ class AbbrTreeprocessor(Treeprocessor):
+         # Build and compile regex
+         abbr_list = list(self.abbrs.keys())
+         abbr_list.sort(key=len, reverse=True)
++        self._keys = tuple(abbr_list)
+         self.RE = re.compile(f"\\b(?:{ '|'.join(re.escape(key) for key in abbr_list) })\\b")
+         # Step through tree and modify on matches
+         self.iter_element(root)
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..4f7b98af83400ccb767ae56961f8f4d9b17d65bb 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -131,10 +131,14 @@ class InlineProcessor(Treeprocessor):
+         """
+         if not isinstance(data, util.AtomicString):
+             startIndex = 0
+-            count = len(self.inlinePatterns)
++            patterns = getattr(self, '_patterns_snapshot', None)
++            if patterns is None:
++                patterns = list(self.inlinePatterns)
++            count = len(patterns)
++            applyPattern = self.__applyPattern
+             while patternIndex < count:
+-                data, matched, startIndex = self.__applyPattern(
+-                    self.inlinePatterns[patternIndex], data, patternIndex, startIndex
++                data, matched, startIndex = applyPattern(
++                    patterns[patternIndex], data, patternIndex, startIndex
+                 )
+                 if not matched:
+                     patternIndex += 1
+@@ -364,6 +368,7 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         self.stashed_nodes: dict[str, etree.Element | str] = {}
++        self._patterns_snapshot = list(self.inlinePatterns)
+ 
+         # Ensure a valid parent list, but copy passed in lists
+         # to ensure we don't have the user accidentally change it on us.
+diff --git a/markdown/util.py b/markdown/util.py
+index 29ffa247de8a6432653f26abb235d669093c232f..fb27e82cffae449be947321e49a2151f8795d1f5 100644
+--- a/markdown/util.py
++++ b/markdown/util.py
+@@ -311,6 +311,14 @@ class Registry(Generic[_T]):
+         self._data: dict[str, _T] = {}
+         self._priority: list[_PriorityItem] = []
+         self._is_sorted = False
++        self._cache: list[_T] | None = None
++
++    def _build_cache(self) -> list[_T]:
++        self._sort()
++        data = self._data
++        cache = [data[k] for k, p in self._priority]
++        self._cache = cache
++        return cache
+ 
+     def __contains__(self, item: str | _T) -> bool:
+         if isinstance(item, str):
+@@ -320,8 +328,10 @@ class Registry(Generic[_T]):
+         return item in self._data.values()
+ 
+     def __iter__(self) -> Iterator[_T]:
+-        self._sort()
+-        return iter([self._data[k] for k, p in self._priority])
++        cache = self._cache
++        if cache is None or not self._is_sorted:
++            cache = self._build_cache()
++        return iter(list(cache))
+ 
+     @overload
+     def __getitem__(self, key: str | int) -> _T:  # pragma: no cover
+@@ -332,14 +342,17 @@ class Registry(Generic[_T]):
+         ...
+ 
+     def __getitem__(self, key: str | int | slice) -> _T | Registry[_T]:
++        if isinstance(key, int):
++            cache = self._cache
++            if cache is None or not self._is_sorted:
++                cache = self._build_cache()
++            return cache[key]
+         self._sort()
+         if isinstance(key, slice):
+             data: Registry[_T] = Registry()
+             for k, p in self._priority[key]:
+                 data.register(self._data[k], k, p)
+             return data
+-        if isinstance(key, int):
+-            return self._data[self._priority[key].name]
+         return self._data[key]
+ 
+     def __len__(self) -> int:
+@@ -382,6 +395,7 @@ class Registry(Generic[_T]):
+             # Remove existing item of same name first
+             self.deregister(name)
+         self._is_sorted = False
++        self._cache = None
+         self._data[name] = item
+         self._priority.append(_PriorityItem(name, priority))
+ 
+@@ -393,6 +407,7 @@ class Registry(Generic[_T]):
+         """
+         try:
+             index = self.get_index_for_name(name)
++            self._cache = None
+             del self._priority[index]
+             del self._data[name]
+         except ValueError:
+@@ -408,3 +423,4 @@ class Registry(Generic[_T]):
+         if not self._is_sorted:
+             self._priority.sort(key=lambda item: item.priority, reverse=True)
+             self._is_sorted = True
++            self._cache = None

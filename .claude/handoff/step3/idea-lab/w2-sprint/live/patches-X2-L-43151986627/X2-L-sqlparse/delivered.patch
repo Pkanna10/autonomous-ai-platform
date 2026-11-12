@@ -1,0 +1,311 @@
+diff --git a/sqlparse/engine/grouping.py b/sqlparse/engine/grouping.py
+index 43ca5b580d5e8499e3fa1ed5275902d7e20ce71b..74b663bc391c6a74051795a81a018e547c50e229 100644
+--- a/sqlparse/engine/grouping.py
++++ b/sqlparse/engine/grouping.py
+@@ -24,8 +24,61 @@ T_STRING = (T.String, T.String.Single, T.String.Symbol)
+ T_NAME = (T.Name, T.Name.Placeholder)
+ 
+ 
++def _open_values(cls):
++    """Return (ttype, raw_values, upper_values) for cls.M_OPEN."""
++    cache = _OPEN_CACHE.get(cls)
++    if cache is None:
++        ttype, values = cls.M_OPEN
++        if values is None:
++            cache = (ttype, None, None)
++        else:
++            if isinstance(values, str):
++                values = (values,)
++            cache = (ttype, frozenset(values),
++                     frozenset(v.upper() for v in values))
++        _OPEN_CACHE[cls] = cache
++    return cache
++
++
++_OPEN_CACHE = {}
++
++
++def _has_open(tlist, cls, depth, open_ttype, raw_vals, up_vals):
++    """Walk the tree like _group_matching would (raising the same errors in
++    the same order) and report whether any token matches cls.M_OPEN."""
++    if MAX_GROUPING_DEPTH is not None and depth > MAX_GROUPING_DEPTH:
++        raise SQLParseError(
++            f"Maximum grouping depth exceeded ({MAX_GROUPING_DEPTH})."
++        )
++    tokens = tlist.tokens
++    if MAX_GROUPING_TOKENS is not None and len(tokens) > MAX_GROUPING_TOKENS:
++        raise SQLParseError(
++            f"Maximum number of tokens exceeded ({MAX_GROUPING_TOKENS})."
++        )
++    for token in tokens:
++        if token.is_whitespace:
++            continue
++        if token.is_group:
++            if not isinstance(token, cls):
++                if _has_open(token, cls, depth + 1,
++                             open_ttype, raw_vals, up_vals):
++                    return True
++                continue
++        if token.ttype is open_ttype:
++            if raw_vals is None:
++                return True
++            if token.normalized in (up_vals if token.is_keyword
++                                    else raw_vals):
++                return True
++    return False
++
++
+ def _group_matching(tlist, cls, depth=0):
+     """Groups Tokens that have beginning and end."""
++    if depth == 0:
++        open_ttype, raw_vals, up_vals = _open_values(cls)
++        if not _has_open(tlist, cls, 0, open_ttype, raw_vals, up_vals):
++            return
+     if MAX_GROUPING_DEPTH is not None and depth > MAX_GROUPING_DEPTH:
+         raise SQLParseError(
+             f"Maximum grouping depth exceeded ({MAX_GROUPING_DEPTH})."
+@@ -439,7 +492,102 @@ def group_values(tlist):
+         tlist.group_tokens(sql.Values, start_idx, end_idx, extend=True)
+ 
+ 
++def _check_limits(tlist, depth):
++    if MAX_GROUPING_DEPTH is not None and depth > MAX_GROUPING_DEPTH:
++        raise SQLParseError(
++            f"Maximum grouping depth exceeded ({MAX_GROUPING_DEPTH})."
++        )
++    if MAX_GROUPING_TOKENS is not None \
++       and len(tlist.tokens) > MAX_GROUPING_TOKENS:
++        raise SQLParseError(
++            f"Maximum number of tokens exceeded ({MAX_GROUPING_TOKENS})."
++        )
++
++
++def _limits_descent(tlist, cls, recurse=True, depth=0):
++    """Repeat only the limit checks of a no-op _group/_group_matching walk."""
++    _check_limits(tlist, depth)
++    if not recurse:
++        return
++    for token in tlist.tokens:
++        if token.is_group and not isinstance(token, cls):
++            _limits_descent(token, cls, True, depth + 1)
++
++
++def _gated_passes(stmt):
++    """Return the list of grouping passes, replacing those that provably
++    cannot fire on a flat statement by limit-only descents."""
++    ttypes = set()
++    pairs = set()
++    for token in stmt.tokens:
++        if token.is_group:
++            return None
++        tt = token.ttype
++        ttypes.add(tt)
++        pairs.add((tt, token.normalized))
++
++    has_comment = any(tt in T.Comment for tt in ttypes)
++    has_bracket = (T.Punctuation, '[') in pairs
++
++    def matching_skip(cls):
++        return lambda tlist: _limits_descent(tlist, cls)
++
++    def group_skip(cls, recurse=True):
++        return lambda tlist: _limits_descent(tlist, cls, recurse)
++
++    def noop(tlist):
++        pass
++
++    return [
++        group_comments if has_comment else noop,
++
++        group_brackets if has_bracket
++        else matching_skip(sql.SquareBrackets),
++        group_parenthesis,
++        group_case,
++        group_if if (T.Keyword, 'IF') in pairs
++        else matching_skip(sql.If),
++        group_for if ((T.Keyword, 'FOR') in pairs
++                      or (T.Keyword, 'FOREACH') in pairs)
++        else matching_skip(sql.For),
++        group_begin if (T.Keyword, 'BEGIN') in pairs
++        else matching_skip(sql.Begin),
++
++        group_over if (T.Keyword, 'OVER') in pairs else noop,
++        group_functions,
++        group_where,
++        group_period,
++        group_arrays if has_bracket
++        else group_skip(sql.Identifier, recurse=False),
++        group_identifier,
++        group_order if any(tt in T.Keyword.Order for tt in ttypes)
++        else noop,
++        group_typecasts if (T.Punctuation, '::') in pairs
++        else group_skip(sql.Identifier),
++        group_tzcasts if T.Keyword.TZCast in ttypes
++        else group_skip(sql.Identifier),
++        group_typed_literal if (T.Name.Builtin in ttypes
++                                or (T.Keyword, 'TIMESTAMP') in pairs)
++        else group_skip(sql.TypedLiteral),
++        group_operator,
++        group_comparison,
++        group_as,
++        group_aliased,
++        group_assignment if (T.Assignment, ':=') in pairs
++        else group_skip(sql.Assignment),
++
++        align_comments if has_comment else noop,
++        group_identifier_list,
++        group_values,
++    ]
++
++
+ def group(stmt):
++    passes = _gated_passes(stmt)
++    if passes is not None:
++        for func in passes:
++            func(stmt)
++        return stmt
+     for func in [
+         group_comments,
+ 
+diff --git a/sqlparse/lexer.py b/sqlparse/lexer.py
+index 8f88d1715a6bd3a72c5d1313f40cb4b83da6c836..4b8e3158a349333f3ab9cca1b85e8e5126ca18f1 100644
+--- a/sqlparse/lexer.py
++++ b/sqlparse/lexer.py
+@@ -17,7 +17,6 @@ from threading import Lock
+ from io import TextIOBase
+ 
+ from sqlparse import tokens, keywords
+-from sqlparse.utils import consume
+ 
+ 
+ class Lexer:
+@@ -134,22 +133,28 @@ class Lexer:
+             raise TypeError("Expected text or file-like object, got {!r}".
+                             format(type(text)))
+ 
+-        iterable = enumerate(text)
+-        for pos, char in iterable:
+-            for rexmatch, action in self._SQL_REGEX:
++        pos = 0
++        n = len(text)
++        regexes = self._SQL_REGEX
++        TokenType = tokens._TokenType
++        PROCESS_AS_KEYWORD = keywords.PROCESS_AS_KEYWORD
++        while pos < n:
++            for rexmatch, action in regexes:
+                 m = rexmatch(text, pos)
+ 
+                 if not m:
+                     continue
+-                elif isinstance(action, tokens._TokenType):
++                elif isinstance(action, TokenType):
+                     yield action, m.group()
+-                elif action is keywords.PROCESS_AS_KEYWORD:
++                elif action is PROCESS_AS_KEYWORD:
+                     yield self.is_keyword(m.group())
+ 
+-                consume(iterable, m.end() - pos - 1)
++                end = m.end()
++                pos = end if end > pos else pos + 1
+                 break
+             else:
+-                yield tokens.Error, char
++                yield tokens.Error, text[pos]
++                pos += 1
+ 
+ 
+ def tokenize(sql, encoding=None):
+diff --git a/sqlparse/sql.py b/sqlparse/sql.py
+index 831dfb96d2b3a282b228bfddac97703a32e608e8..e1204072ef7c9fe7ad9b69fcfffb267e0f0958b1 100644
+--- a/sqlparse/sql.py
++++ b/sqlparse/sql.py
+@@ -263,7 +263,32 @@ class TokenList(Token):
+ 
+     def token_next_by(self, i=None, m=None, t=None, idx=-1, end=None):
+         idx += 1
+-        return self._token_matching(lambda tk: imt(tk, i, m, t), idx, end)
++        tokens = self.tokens
++        if end is None:
++            end = len(tokens)
++        if not i:
++            i = None
++        if m:
++            ms = m if isinstance(m, list) else (m,)
++        else:
++            ms = ()
++        if t:
++            ts = t if isinstance(t, list) else (t,)
++        else:
++            ts = ()
++        for n in range(idx, end):
++            token = tokens[n]
++            if i is not None and isinstance(token, i):
++                return n, token
++            for pattern in ms:
++                if token.match(*pattern):
++                    return n, token
++            if ts:
++                ttype = token.ttype
++                for tt in ts:
++                    if ttype in tt:
++                        return n, token
++        return None, None
+ 
+     def token_not_matching(self, funcs, idx):
+         funcs = (funcs,) if not isinstance(funcs, (list, tuple)) else funcs
+@@ -294,10 +319,20 @@ class TokenList(Token):
+             return None, None
+         idx += 1  # alot of code usage current pre-compensates for this
+ 
+-        def matcher(tk):
+-            return not ((skip_ws and tk.is_whitespace)
+-                        or (skip_cm and imt(tk, t=T.Comment, i=Comment)))
+-        return self._token_matching(matcher, idx, reverse=_reverse)
++        tokens = self.tokens
++        if _reverse:
++            indexes = range(idx - 2, -1, -1)
++        else:
++            indexes = range(idx, len(tokens))
++        comment = T.Comment
++        for n in indexes:
++            tk = tokens[n]
++            if skip_ws and tk.is_whitespace:
++                continue
++            if skip_cm and (isinstance(tk, Comment) or tk.ttype in comment):
++                continue
++            return n, tk
++        return None, None
+ 
+     def token_index(self, token, start=0):
+         """Return list index of token."""
+diff --git a/sqlparse/utils.py b/sqlparse/utils.py
+index 58c0245a7566c14102fa921b0fee35d7f8fa061c..b2cf2ab8defd50460560b83b9fc1a03168ad70d3 100644
+--- a/sqlparse/utils.py
++++ b/sqlparse/utils.py
+@@ -90,17 +90,20 @@ def imt(token, i=None, m=None, t=None):
+         return False
+     if i and isinstance(token, i):
+         return True
++    ttype = token.ttype
+     if m:
+         if isinstance(m, list):
+-            if any(token.match(*pattern) for pattern in m):
+-                return True
+-        elif token.match(*m):
++            for pattern in m:
++                if ttype is pattern[0] and token.match(*pattern):
++                    return True
++        elif ttype is m[0] and token.match(*m):
+             return True
+     if t:
+         if isinstance(t, list):
+-            if any(token.ttype in ttype for ttype in t):
+-                return True
+-        elif token.ttype in t:
++            for tt in t:
++                if ttype in tt:
++                    return True
++        elif ttype in t:
+             return True
+     return False
+ 

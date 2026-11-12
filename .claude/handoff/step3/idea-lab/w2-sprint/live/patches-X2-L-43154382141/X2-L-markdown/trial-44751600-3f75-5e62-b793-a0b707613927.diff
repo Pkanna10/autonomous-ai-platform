@@ -1,0 +1,55 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..c6e9408d90dea2f011042a9c34b49e2650095730 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -131,15 +131,39 @@ class InlineProcessor(Treeprocessor):
+         """
+         if not isinstance(data, util.AtomicString):
+             startIndex = 0
+-            count = len(self.inlinePatterns)
++            plan = self._plan
++            count = len(plan)
++            ancestors = self.ancestors
++            applyPattern = self.__applyPattern
+             while patternIndex < count:
+-                data, matched, startIndex = self.__applyPattern(
+-                    self.inlinePatterns[patternIndex], data, patternIndex, startIndex
++                pattern, search, new_style, excludes = plan[patternIndex]
++                if new_style:
++                    skip = False
++                    for exclude in excludes:
++                        if exclude in ancestors:
++                            skip = True
++                            break
++                    if skip or search(data, startIndex) is None:
++                        patternIndex += 1
++                        startIndex = 0
++                        continue
++                data, matched, startIndex = applyPattern(
++                    pattern, data, patternIndex, startIndex
+                 )
+                 if not matched:
+                     patternIndex += 1
+         return data
+ 
++    def _build_plan(self) -> None:
++        """ Build a per-run list of pattern entries for `__handleInline`. """
++        plan = []
++        for pattern in self.inlinePatterns:
++            new_style = isinstance(pattern, inlinepatterns.InlineProcessor)
++            search = pattern.getCompiledRegExp().search if new_style else None
++            excludes = tuple(e.lower() for e in pattern.ANCESTOR_EXCLUDES)
++            plan.append((pattern, search, new_style, excludes))
++        self._plan = plan
++
+     def __processElementText(self, node: etree.Element, subnode: etree.Element, isText: bool = True) -> None:
+         """
+         Process placeholders in `Element.text` or `Element.tail`
+@@ -364,6 +388,7 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         self.stashed_nodes: dict[str, etree.Element | str] = {}
++        self._build_plan()
+ 
+         # Ensure a valid parent list, but copy passed in lists
+         # to ensure we don't have the user accidentally change it on us.

@@ -1,0 +1,73 @@
+diff --git a/markdown/util.py b/markdown/util.py
+index 29ffa247de8a6432653f26abb235d669093c232f..fb27e82cffae449be947321e49a2151f8795d1f5 100644
+--- a/markdown/util.py
++++ b/markdown/util.py
+@@ -311,6 +311,14 @@ class Registry(Generic[_T]):
+         self._data: dict[str, _T] = {}
+         self._priority: list[_PriorityItem] = []
+         self._is_sorted = False
++        self._cache: list[_T] | None = None
++
++    def _build_cache(self) -> list[_T]:
++        self._sort()
++        data = self._data
++        cache = [data[k] for k, p in self._priority]
++        self._cache = cache
++        return cache
+ 
+     def __contains__(self, item: str | _T) -> bool:
+         if isinstance(item, str):
+@@ -320,8 +328,10 @@ class Registry(Generic[_T]):
+         return item in self._data.values()
+ 
+     def __iter__(self) -> Iterator[_T]:
+-        self._sort()
+-        return iter([self._data[k] for k, p in self._priority])
++        cache = self._cache
++        if cache is None or not self._is_sorted:
++            cache = self._build_cache()
++        return iter(list(cache))
+ 
+     @overload
+     def __getitem__(self, key: str | int) -> _T:  # pragma: no cover
+@@ -332,14 +342,17 @@ class Registry(Generic[_T]):
+         ...
+ 
+     def __getitem__(self, key: str | int | slice) -> _T | Registry[_T]:
++        if isinstance(key, int):
++            cache = self._cache
++            if cache is None or not self._is_sorted:
++                cache = self._build_cache()
++            return cache[key]
+         self._sort()
+         if isinstance(key, slice):
+             data: Registry[_T] = Registry()
+             for k, p in self._priority[key]:
+                 data.register(self._data[k], k, p)
+             return data
+-        if isinstance(key, int):
+-            return self._data[self._priority[key].name]
+         return self._data[key]
+ 
+     def __len__(self) -> int:
+@@ -382,6 +395,7 @@ class Registry(Generic[_T]):
+             # Remove existing item of same name first
+             self.deregister(name)
+         self._is_sorted = False
++        self._cache = None
+         self._data[name] = item
+         self._priority.append(_PriorityItem(name, priority))
+ 
+@@ -393,6 +407,7 @@ class Registry(Generic[_T]):
+         """
+         try:
+             index = self.get_index_for_name(name)
++            self._cache = None
+             del self._priority[index]
+             del self._data[name]
+         except ValueError:
+@@ -408,3 +423,4 @@ class Registry(Generic[_T]):
+         if not self._is_sorted:
+             self._priority.sort(key=lambda item: item.priority, reverse=True)
+             self._is_sorted = True
++            self._cache = None

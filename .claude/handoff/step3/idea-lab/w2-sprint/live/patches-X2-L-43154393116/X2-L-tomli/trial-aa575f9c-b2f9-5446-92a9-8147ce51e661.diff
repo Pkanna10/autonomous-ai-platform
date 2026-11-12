@@ -1,0 +1,81 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..b22281f3632d759bf6cf6c0062779024610528d6 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -175,6 +175,7 @@ def loads(__s: str, *, parse_float: ParseFloat = float) -> dict[str, Any]:
+     pos = 0
+     out = Output()
+     header: Key = ()
++    header_frozen: bool | None = None
+     parse_float = make_safe_parse_float(parse_float)
+ 
+     # Parse one statement at a time
+@@ -199,7 +200,9 @@ def loads(__s: str, *, parse_float: ParseFloat = float) -> dict[str, Any]:
+             pos += 1
+             continue
+         if char in KEY_INITIAL_CHARS:
+-            pos = key_value_rule(src, pos, out, header, parse_float)
++            if header_frozen is None:
++                header_frozen = out.flags.is_(header, Flags.FROZEN)
++            pos = key_value_rule(src, pos, out, header, parse_float, header_frozen)
+             pos = skip_chars(src, pos, TOML_WS)
+         elif char == "[":
+             try:
+@@ -211,6 +214,7 @@ def loads(__s: str, *, parse_float: ParseFloat = float) -> dict[str, Any]:
+                 pos, header = create_list_rule(src, pos, out)
+             else:
+                 pos, header = create_dict_rule(src, pos, out)
++            header_frozen = None
+             pos = skip_chars(src, pos, TOML_WS)
+         elif char != "#":
+             raise TOMLDecodeError("Invalid statement", src, pos)
+@@ -426,22 +430,35 @@ def create_list_rule(src: str, pos: Pos, out: Output) -> tuple[Pos, Key]:
+ 
+ 
+ def key_value_rule(
+-    src: str, pos: Pos, out: Output, header: Key, parse_float: ParseFloat
++    src: str,
++    pos: Pos,
++    out: Output,
++    header: Key,
++    parse_float: ParseFloat,
++    header_frozen: bool | None = None,
+ ) -> Pos:
+     pos, key, value = parse_key_value_pair(src, pos, parse_float, nest_lvl=0)
+-    key_parent, key_stem = key[:-1], key[-1]
+-    abs_key_parent = header + key_parent
+-
+-    relative_path_cont_keys = (header + key[:i] for i in range(1, len(key)))
+-    for cont_key in relative_path_cont_keys:
+-        # Check that dotted key syntax does not redefine an existing table
+-        if out.flags.is_(cont_key, Flags.EXPLICIT_NEST):
+-            raise TOMLDecodeError(f"Cannot redefine namespace {cont_key}", src, pos)
+-        # Containers in the relative path can't be opened with the table syntax or
+-        # dotted key/value syntax in following table sections.
+-        out.flags.add_pending(cont_key, Flags.EXPLICIT_NEST)
+-
+-    if out.flags.is_(abs_key_parent, Flags.FROZEN):
++    key_stem = key[-1]
++    if len(key) == 1 and header_frozen is not None:
++        abs_key_parent = header
++        parent_frozen = header_frozen
++    else:
++        key_parent = key[:-1]
++        abs_key_parent = header + key_parent
++
++        relative_path_cont_keys = (header + key[:i] for i in range(1, len(key)))
++        for cont_key in relative_path_cont_keys:
++            # Check that dotted key syntax does not redefine an existing table
++            if out.flags.is_(cont_key, Flags.EXPLICIT_NEST):
++                raise TOMLDecodeError(
++                    f"Cannot redefine namespace {cont_key}", src, pos
++                )
++            # Containers in the relative path can't be opened with the table
++            # syntax or dotted key/value syntax in following table sections.
++            out.flags.add_pending(cont_key, Flags.EXPLICIT_NEST)
++        parent_frozen = out.flags.is_(abs_key_parent, Flags.FROZEN)
++
++    if parent_frozen:
+         raise TOMLDecodeError(
+             f"Cannot mutate immutable namespace {abs_key_parent}", src, pos
+         )

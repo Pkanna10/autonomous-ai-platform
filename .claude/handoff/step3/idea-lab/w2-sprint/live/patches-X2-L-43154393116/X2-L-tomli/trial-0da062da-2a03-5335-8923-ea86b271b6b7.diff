@@ -1,0 +1,53 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..d6a91e4499d160cb787978a6114c72b190202d84 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -175,6 +175,7 @@ def loads(__s: str, *, parse_float: ParseFloat = float) -> dict[str, Any]:
+     pos = 0
+     out = Output()
+     header: Key = ()
++    header_nest: dict[str, Any] | None = out.data.dict
+     parse_float = make_safe_parse_float(parse_float)
+ 
+     # Parse one statement at a time
+@@ -199,7 +200,7 @@ def loads(__s: str, *, parse_float: ParseFloat = float) -> dict[str, Any]:
+             pos += 1
+             continue
+         if char in KEY_INITIAL_CHARS:
+-            pos = key_value_rule(src, pos, out, header, parse_float)
++            pos = key_value_rule(src, pos, out, header, parse_float, header_nest)
+             pos = skip_chars(src, pos, TOML_WS)
+         elif char == "[":
+             try:
+@@ -211,6 +212,7 @@ def loads(__s: str, *, parse_float: ParseFloat = float) -> dict[str, Any]:
+                 pos, header = create_list_rule(src, pos, out)
+             else:
+                 pos, header = create_dict_rule(src, pos, out)
++            header_nest = out.data.get_or_create_nest(header)
+             pos = skip_chars(src, pos, TOML_WS)
+         elif char != "#":
+             raise TOMLDecodeError("Invalid statement", src, pos)
+@@ -426,9 +428,22 @@ def create_list_rule(src: str, pos: Pos, out: Output) -> tuple[Pos, Key]:
+ 
+ 
+ def key_value_rule(
+-    src: str, pos: Pos, out: Output, header: Key, parse_float: ParseFloat
++    src: str,
++    pos: Pos,
++    out: Output,
++    header: Key,
++    parse_float: ParseFloat,
++    header_nest: dict[str, Any] | None = None,
+ ) -> Pos:
+     pos, key, value = parse_key_value_pair(src, pos, parse_float, nest_lvl=0)
++    if header_nest is not None and len(key) == 1:
++        key_stem = key[0]
++        if key_stem in header_nest:
++            raise TOMLDecodeError("Cannot overwrite a value", src, pos)
++        if isinstance(value, (dict, list)):
++            out.flags.set(header + key, Flags.FROZEN, recursive=True)
++        header_nest[key_stem] = value
++        return pos
+     key_parent, key_stem = key[:-1], key[-1]
+     abs_key_parent = header + key_parent
+ 

@@ -1,0 +1,68 @@
+diff --git a/markdown/treeprocessors.py b/markdown/treeprocessors.py
+index 4d2f318d13b490ad644aecc73539eb71ca7da701..3b7593f04b7dbc1301035509c91c2b965a6d904f 100644
+--- a/markdown/treeprocessors.py
++++ b/markdown/treeprocessors.py
+@@ -45,6 +45,45 @@ def build_treeprocessors(md: Markdown, **kwargs: Any) -> util.Registry[Treeproce
+     return treeprocessors
+ 
+ 
++# Characters at least one of which every default inline pattern requires.
++_INLINE_TRIGGER_RE = re.compile('[`\\\\*_\\[\\]!<>&\n~' + util.STX + util.ETX + ']')
++
++_DEFAULT_INLINE_SPEC = {
++    'backtick': (inlinepatterns.BacktickInlineProcessor, inlinepatterns.BACKTICK_RE),
++    'escape': (inlinepatterns.EscapeInlineProcessor, inlinepatterns.ESCAPE_RE),
++    'reference': (inlinepatterns.ReferenceInlineProcessor, inlinepatterns.REFERENCE_RE),
++    'link': (inlinepatterns.LinkInlineProcessor, inlinepatterns.LINK_RE),
++    'image_link': (inlinepatterns.ImageInlineProcessor, inlinepatterns.IMAGE_LINK_RE),
++    'image_reference': (inlinepatterns.ImageReferenceInlineProcessor, inlinepatterns.IMAGE_REFERENCE_RE),
++    'short_reference': (inlinepatterns.ShortReferenceInlineProcessor, inlinepatterns.REFERENCE_RE),
++    'short_image_ref': (inlinepatterns.ShortImageReferenceInlineProcessor, inlinepatterns.IMAGE_REFERENCE_RE),
++    'autolink': (inlinepatterns.AutolinkInlineProcessor, inlinepatterns.AUTOLINK_RE),
++    'automail': (inlinepatterns.AutomailInlineProcessor, inlinepatterns.AUTOMAIL_RE),
++    'linebreak': (inlinepatterns.SubstituteTagInlineProcessor, inlinepatterns.LINE_BREAK_RE),
++    'html': (inlinepatterns.HtmlInlineProcessor, inlinepatterns.HTML_RE),
++    'entity': (inlinepatterns.HtmlInlineProcessor, inlinepatterns.ENTITY_RE),
++    'not_strong': (inlinepatterns.SimpleTextInlineProcessor, inlinepatterns.NOT_STRONG_RE),
++    'em_strong': (inlinepatterns.AsteriskProcessor, r'\*'),
++    'em_strong2': (inlinepatterns.UnderscoreProcessor, r'_'),
++}
++
++
++def _is_default_inline_set(registry: Any) -> bool:
++    """ Return `True` if `registry` holds only the unmodified default inline patterns. """
++    try:
++        names = list(registry._data.keys())
++        if len(names) != len(registry) or set(names) - set(_DEFAULT_INLINE_SPEC):
++            return False
++        for name in names:
++            pattern = registry[name]
++            cls, regex = _DEFAULT_INLINE_SPEC[name]
++            if type(pattern) is not cls or getattr(pattern, 'pattern', None) != regex:
++                return False
++        return True
++    except Exception:  # pragma: no cover
++        return False
++
++
+ def isString(s: object) -> bool:
+     """ Return `True` if object is a string but not an  [`AtomicString`][markdown.util.AtomicString]. """
+     if not isinstance(s, util.AtomicString):
+@@ -130,6 +169,9 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         if not isinstance(data, util.AtomicString):
++            if (patternIndex == 0 and getattr(self, '_fast_reject', False)
++                    and _INLINE_TRIGGER_RE.search(data) is None):
++                return data
+             startIndex = 0
+             count = len(self.inlinePatterns)
+             while patternIndex < count:
+@@ -364,6 +406,7 @@ class InlineProcessor(Treeprocessor):
+ 
+         """
+         self.stashed_nodes: dict[str, etree.Element | str] = {}
++        self._fast_reject = _is_default_inline_set(self.inlinePatterns)
+ 
+         # Ensure a valid parent list, but copy passed in lists
+         # to ensure we don't have the user accidentally change it on us.

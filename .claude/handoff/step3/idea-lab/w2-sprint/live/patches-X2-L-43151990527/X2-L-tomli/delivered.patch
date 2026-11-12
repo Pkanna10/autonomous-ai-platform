@@ -1,0 +1,29 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..a0fee59f23398912e3f077fa11fea284cb2041cb 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -429,6 +429,24 @@ def key_value_rule(
+     src: str, pos: Pos, out: Output, header: Key, parse_float: ParseFloat
+ ) -> Pos:
+     pos, key, value = parse_key_value_pair(src, pos, parse_float, nest_lvl=0)
++    if len(key) == 1:
++        key_stem = key[0]
++        flags = out.flags
++        if flags.is_(header, Flags.FROZEN):
++            raise TOMLDecodeError(
++                f"Cannot mutate immutable namespace {header}", src, pos
++            )
++        try:
++            nest = out.data.get_or_create_nest(header)
++        except KeyError:
++            raise TOMLDecodeError("Cannot overwrite a value", src, pos) from None
++        if key_stem in nest:
++            raise TOMLDecodeError("Cannot overwrite a value", src, pos)
++        if isinstance(value, (dict, list)):
++            flags.set(header + key, Flags.FROZEN, recursive=True)
++        nest[key_stem] = value
++        return pos
++
+     key_parent, key_stem = key[:-1], key[-1]
+     abs_key_parent = header + key_parent
+ 

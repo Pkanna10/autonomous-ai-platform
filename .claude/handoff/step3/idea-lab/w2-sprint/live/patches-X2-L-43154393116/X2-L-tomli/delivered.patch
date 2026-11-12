@@ -1,0 +1,95 @@
+diff --git a/src/tomli/_parser.py b/src/tomli/_parser.py
+index 515ed72d1acfd52b0b950ebd03e27fe886f72ad3..8310abfe99455957faee9da71aa6db8c871fbd50 100644
+--- a/src/tomli/_parser.py
++++ b/src/tomli/_parser.py
+@@ -11,6 +11,7 @@ __lazy_modules__ = ["tomli._re", "tomllib._re"]
+ import sys
+ 
+ from ._re import (
++    RE_BARE_KEY_EQ,
+     RE_DATETIME,
+     RE_LOCALTIME,
+     RE_NUMBER,
+@@ -199,7 +200,32 @@ def loads(__s: str, *, parse_float: ParseFloat = float) -> dict[str, Any]:
+             pos += 1
+             continue
+         if char in KEY_INITIAL_CHARS:
+-            pos = key_value_rule(src, pos, out, header, parse_float)
++            m = RE_BARE_KEY_EQ.match(src, pos)
++            if m is None:
++                pos = key_value_rule(src, pos, out, header, parse_float)
++            else:
++                # Fast path for an undotted bare key: equivalent to
++                # key_value_rule with a one-part key.
++                key_stem = m.group(1)
++                pos, value = parse_value(src, m.end(), parse_float, 0)
++                if out.flags.is_(header, Flags.FROZEN):
++                    raise TOMLDecodeError(
++                        f"Cannot mutate immutable namespace {header}", src, pos
++                    )
++                try:
++                    nest = out.data.get_or_create_nest(header)
++                except KeyError:
++                    raise TOMLDecodeError(
++                        "Cannot overwrite a value", src, pos
++                    ) from None
++                if key_stem in nest:
++                    raise TOMLDecodeError("Cannot overwrite a value", src, pos)
++                if isinstance(value, (dict, list)):
++                    out.flags.set(header + (key_stem,), Flags.FROZEN, recursive=True)
++                nest[key_stem] = value
++                if src.startswith("\n", pos):
++                    pos += 1
++                    continue
+             pos = skip_chars(src, pos, TOML_WS)
+         elif char == "[":
+             try:
+@@ -429,17 +455,23 @@ def key_value_rule(
+     src: str, pos: Pos, out: Output, header: Key, parse_float: ParseFloat
+ ) -> Pos:
+     pos, key, value = parse_key_value_pair(src, pos, parse_float, nest_lvl=0)
+-    key_parent, key_stem = key[:-1], key[-1]
+-    abs_key_parent = header + key_parent
+-
+-    relative_path_cont_keys = (header + key[:i] for i in range(1, len(key)))
+-    for cont_key in relative_path_cont_keys:
+-        # Check that dotted key syntax does not redefine an existing table
+-        if out.flags.is_(cont_key, Flags.EXPLICIT_NEST):
+-            raise TOMLDecodeError(f"Cannot redefine namespace {cont_key}", src, pos)
+-        # Containers in the relative path can't be opened with the table syntax or
+-        # dotted key/value syntax in following table sections.
+-        out.flags.add_pending(cont_key, Flags.EXPLICIT_NEST)
++    if len(key) == 1:
++        key_stem = key[0]
++        abs_key_parent = header
++    else:
++        key_parent, key_stem = key[:-1], key[-1]
++        abs_key_parent = header + key_parent
++
++        relative_path_cont_keys = (header + key[:i] for i in range(1, len(key)))
++        for cont_key in relative_path_cont_keys:
++            # Check that dotted key syntax does not redefine an existing table
++            if out.flags.is_(cont_key, Flags.EXPLICIT_NEST):
++                raise TOMLDecodeError(
++                    f"Cannot redefine namespace {cont_key}", src, pos
++                )
++            # Containers in the relative path can't be opened with the table syntax
++            # or dotted key/value syntax in following table sections.
++            out.flags.add_pending(cont_key, Flags.EXPLICIT_NEST)
+ 
+     if out.flags.is_(abs_key_parent, Flags.FROZEN):
+         raise TOMLDecodeError(
+diff --git a/src/tomli/_re.py b/src/tomli/_re.py
+index fc374ed63d3e3742a97134349fc25b14223ab57b..55ff73b0cd88d5b00fc1fdbeaf286e95e1dff272 100644
+--- a/src/tomli/_re.py
++++ b/src/tomli/_re.py
+@@ -23,6 +23,9 @@ _TIME_RE_STR: Final = r"""
+ )?
+ """
+ 
++# An undotted bare key followed by "=" (with optional surrounding spaces/tabs)
++RE_BARE_KEY_EQ: Final = re.compile(r"([A-Za-z0-9_\-]+)[ \t]*=[ \t]*")
++
+ RE_NUMBER: Final = re.compile(
+     r"""
+ 0

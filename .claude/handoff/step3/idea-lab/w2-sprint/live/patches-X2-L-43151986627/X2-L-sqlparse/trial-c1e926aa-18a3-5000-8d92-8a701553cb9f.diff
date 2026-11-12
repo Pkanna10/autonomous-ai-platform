@@ -1,0 +1,66 @@
+diff --git a/sqlparse/engine/grouping.py b/sqlparse/engine/grouping.py
+index 43ca5b580d5e8499e3fa1ed5275902d7e20ce71b..4168fde1d9318aee5083a8e35a910b63593dd7b9 100644
+--- a/sqlparse/engine/grouping.py
++++ b/sqlparse/engine/grouping.py
+@@ -24,8 +24,61 @@ T_STRING = (T.String, T.String.Single, T.String.Symbol)
+ T_NAME = (T.Name, T.Name.Placeholder)
+ 
+ 
++def _open_values(cls):
++    """Return (ttype, raw_values, upper_values) for cls.M_OPEN."""
++    cache = _OPEN_CACHE.get(cls)
++    if cache is None:
++        ttype, values = cls.M_OPEN
++        if values is None:
++            cache = (ttype, None, None)
++        else:
++            if isinstance(values, str):
++                values = (values,)
++            cache = (ttype, frozenset(values),
++                     frozenset(v.upper() for v in values))
++        _OPEN_CACHE[cls] = cache
++    return cache
++
++
++_OPEN_CACHE = {}
++
++
++def _has_open(tlist, cls, depth, open_ttype, raw_vals, up_vals):
++    """Walk the tree like _group_matching would (raising the same errors in
++    the same order) and report whether any token matches cls.M_OPEN."""
++    if MAX_GROUPING_DEPTH is not None and depth > MAX_GROUPING_DEPTH:
++        raise SQLParseError(
++            f"Maximum grouping depth exceeded ({MAX_GROUPING_DEPTH})."
++        )
++    tokens = tlist.tokens
++    if MAX_GROUPING_TOKENS is not None and len(tokens) > MAX_GROUPING_TOKENS:
++        raise SQLParseError(
++            f"Maximum number of tokens exceeded ({MAX_GROUPING_TOKENS})."
++        )
++    for token in tokens:
++        if token.is_whitespace:
++            continue
++        if token.is_group:
++            if not isinstance(token, cls):
++                if _has_open(token, cls, depth + 1,
++                             open_ttype, raw_vals, up_vals):
++                    return True
++                continue
++        if token.ttype is open_ttype:
++            if raw_vals is None:
++                return True
++            if token.normalized in (up_vals if token.is_keyword
++                                    else raw_vals):
++                return True
++    return False
++
++
+ def _group_matching(tlist, cls, depth=0):
+     """Groups Tokens that have beginning and end."""
++    if depth == 0:
++        open_ttype, raw_vals, up_vals = _open_values(cls)
++        if not _has_open(tlist, cls, 0, open_ttype, raw_vals, up_vals):
++            return
+     if MAX_GROUPING_DEPTH is not None and depth > MAX_GROUPING_DEPTH:
+         raise SQLParseError(
+             f"Maximum grouping depth exceeded ({MAX_GROUPING_DEPTH})."

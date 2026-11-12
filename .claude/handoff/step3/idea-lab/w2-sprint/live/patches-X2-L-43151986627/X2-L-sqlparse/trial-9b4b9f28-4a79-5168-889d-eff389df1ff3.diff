@@ -1,0 +1,63 @@
+diff --git a/sqlparse/sql.py b/sqlparse/sql.py
+index 831dfb96d2b3a282b228bfddac97703a32e608e8..e1204072ef7c9fe7ad9b69fcfffb267e0f0958b1 100644
+--- a/sqlparse/sql.py
++++ b/sqlparse/sql.py
+@@ -263,7 +263,32 @@ class TokenList(Token):
+ 
+     def token_next_by(self, i=None, m=None, t=None, idx=-1, end=None):
+         idx += 1
+-        return self._token_matching(lambda tk: imt(tk, i, m, t), idx, end)
++        tokens = self.tokens
++        if end is None:
++            end = len(tokens)
++        if not i:
++            i = None
++        if m:
++            ms = m if isinstance(m, list) else (m,)
++        else:
++            ms = ()
++        if t:
++            ts = t if isinstance(t, list) else (t,)
++        else:
++            ts = ()
++        for n in range(idx, end):
++            token = tokens[n]
++            if i is not None and isinstance(token, i):
++                return n, token
++            for pattern in ms:
++                if token.match(*pattern):
++                    return n, token
++            if ts:
++                ttype = token.ttype
++                for tt in ts:
++                    if ttype in tt:
++                        return n, token
++        return None, None
+ 
+     def token_not_matching(self, funcs, idx):
+         funcs = (funcs,) if not isinstance(funcs, (list, tuple)) else funcs
+@@ -294,10 +319,20 @@ class TokenList(Token):
+             return None, None
+         idx += 1  # alot of code usage current pre-compensates for this
+ 
+-        def matcher(tk):
+-            return not ((skip_ws and tk.is_whitespace)
+-                        or (skip_cm and imt(tk, t=T.Comment, i=Comment)))
+-        return self._token_matching(matcher, idx, reverse=_reverse)
++        tokens = self.tokens
++        if _reverse:
++            indexes = range(idx - 2, -1, -1)
++        else:
++            indexes = range(idx, len(tokens))
++        comment = T.Comment
++        for n in indexes:
++            tk = tokens[n]
++            if skip_ws and tk.is_whitespace:
++                continue
++            if skip_cm and (isinstance(tk, Comment) or tk.ttype in comment):
++                continue
++            return n, tk
++        return None, None
+ 
+     def token_index(self, token, start=0):
+         """Return list index of token."""

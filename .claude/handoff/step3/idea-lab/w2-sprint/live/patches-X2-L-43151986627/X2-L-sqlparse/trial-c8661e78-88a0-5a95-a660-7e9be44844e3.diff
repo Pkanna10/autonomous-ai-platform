@@ -1,0 +1,107 @@
+diff --git a/sqlparse/engine/grouping.py b/sqlparse/engine/grouping.py
+index 43ca5b580d5e8499e3fa1ed5275902d7e20ce71b..910e63918a5bf1e3df07367baf503955a7d0ee4b 100644
+--- a/sqlparse/engine/grouping.py
++++ b/sqlparse/engine/grouping.py
+@@ -439,7 +439,102 @@ def group_values(tlist):
+         tlist.group_tokens(sql.Values, start_idx, end_idx, extend=True)
+ 
+ 
++def _check_limits(tlist, depth):
++    if MAX_GROUPING_DEPTH is not None and depth > MAX_GROUPING_DEPTH:
++        raise SQLParseError(
++            f"Maximum grouping depth exceeded ({MAX_GROUPING_DEPTH})."
++        )
++    if MAX_GROUPING_TOKENS is not None \
++       and len(tlist.tokens) > MAX_GROUPING_TOKENS:
++        raise SQLParseError(
++            f"Maximum number of tokens exceeded ({MAX_GROUPING_TOKENS})."
++        )
++
++
++def _limits_descent(tlist, cls, recurse=True, depth=0):
++    """Repeat only the limit checks of a no-op _group/_group_matching walk."""
++    _check_limits(tlist, depth)
++    if not recurse:
++        return
++    for token in tlist.tokens:
++        if token.is_group and not isinstance(token, cls):
++            _limits_descent(token, cls, True, depth + 1)
++
++
++def _gated_passes(stmt):
++    """Return the list of grouping passes, replacing those that provably
++    cannot fire on a flat statement by limit-only descents."""
++    ttypes = set()
++    pairs = set()
++    for token in stmt.tokens:
++        if token.is_group:
++            return None
++        tt = token.ttype
++        ttypes.add(tt)
++        pairs.add((tt, token.normalized))
++
++    has_comment = any(tt in T.Comment for tt in ttypes)
++    has_bracket = (T.Punctuation, '[') in pairs
++
++    def matching_skip(cls):
++        return lambda tlist: _limits_descent(tlist, cls)
++
++    def group_skip(cls, recurse=True):
++        return lambda tlist: _limits_descent(tlist, cls, recurse)
++
++    def noop(tlist):
++        pass
++
++    return [
++        group_comments if has_comment else noop,
++
++        group_brackets if has_bracket
++        else matching_skip(sql.SquareBrackets),
++        group_parenthesis,
++        group_case,
++        group_if if (T.Keyword, 'IF') in pairs
++        else matching_skip(sql.If),
++        group_for if ((T.Keyword, 'FOR') in pairs
++                      or (T.Keyword, 'FOREACH') in pairs)
++        else matching_skip(sql.For),
++        group_begin if (T.Keyword, 'BEGIN') in pairs
++        else matching_skip(sql.Begin),
++
++        group_over if (T.Keyword, 'OVER') in pairs else noop,
++        group_functions,
++        group_where,
++        group_period,
++        group_arrays if has_bracket
++        else group_skip(sql.Identifier, recurse=False),
++        group_identifier,
++        group_order if any(tt in T.Keyword.Order for tt in ttypes)
++        else noop,
++        group_typecasts if (T.Punctuation, '::') in pairs
++        else group_skip(sql.Identifier),
++        group_tzcasts if T.Keyword.TZCast in ttypes
++        else group_skip(sql.Identifier),
++        group_typed_literal if (T.Name.Builtin in ttypes
++                                or (T.Keyword, 'TIMESTAMP') in pairs)
++        else group_skip(sql.TypedLiteral),
++        group_operator,
++        group_comparison,
++        group_as,
++        group_aliased,
++        group_assignment if (T.Assignment, ':=') in pairs
++        else group_skip(sql.Assignment),
++
++        align_comments if has_comment else noop,
++        group_identifier_list,
++        group_values,
++    ]
++
++
+ def group(stmt):
++    passes = _gated_passes(stmt)
++    if passes is not None:
++        for func in passes:
++            func(stmt)
++        return stmt
+     for func in [
+         group_comments,
+ 
