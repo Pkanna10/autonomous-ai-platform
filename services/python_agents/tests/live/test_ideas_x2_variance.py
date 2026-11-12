@@ -55,6 +55,7 @@ def test_only_arms_with_x2_0s_requests_and_delivery_are_pool_draws() -> None:
     assert {a.key: a.aa for a in x2.EVERY_ARM} == {
         "X2-0": "full", "X2-0'": "full", "X2-V": "none", "X2-D": "none", "X2-S": "none",
         "X2-C": "full", "X2-SV": "none", "X2-P": "none", "X2-F": "none",
+        "X2-L": "none",
     }  # fmt: skip
     assert xr.POOL == frozenset({"X2-0", "X2-0'", "X2-C"})
 

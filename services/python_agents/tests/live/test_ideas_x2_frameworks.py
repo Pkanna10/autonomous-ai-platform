@@ -270,7 +270,7 @@ def test_the_portfolio_arms_are_x2_0_with_the_leap_dealt_off_the_plan() -> None:
     assert x2.X2_P.repos == x2.X2_F.repos == FOUR == DEAL_LIBRARIES
     assert (x2.X2_P.aa, x2.X2_F.aa) == ("none", "none")
     keys = [a.key for a in x2.EVERY_ARM]
-    assert keys[keys.index("X2-D") + 1 : keys.index("X2-S")] == ["X2-P", "X2-F"]
+    assert keys[keys.index("X2-D") + 1 : keys.index("X2-S")] == ["X2-P", "X2-F", "X2-L"]
     assert not any(d.startswith(("X2-P", "X2-F")) for d in x2.dispatches())
     assert {"X2-P", "X2-F"} <= set(xr.ARMS) and not {"X2-P", "X2-F"} & xr.POOL
 
@@ -280,8 +280,8 @@ def test_the_portfolio_arms_caps_and_minutes() -> None:
     its leap beyond X2-0's (``leap_extra_usd``): X2-P 10.55 USD, X2-F 21.10
     (its share at S2's check binds); both 113 minutes (the portfolio leap's
     951 s timeout); two runs a dispatch at a 20 % margin under the 360-minute
-    job, three without. Every other arm's leap is X2-0's: no extra, its caps
-    as pinned."""
+    job, three without. Every other arm's leap but X2-L's (the Fable leap,
+    test_fable_leap_caps_guards) is X2-0's: no extra, its caps as pinned."""
     for arm, cap, minutes in ((x2.X2_P, 10.55, 113), (x2.X2_F, 21.10, 113)):
         cfg = x2.arm_settings(arm)
         shape = leap_shape(cfg)
@@ -291,7 +291,7 @@ def test_the_portfolio_arms_caps_and_minutes() -> None:
         assert int(x2.JOB_MINUTES * 0.8) // minutes == 2
         assert x2.JOB_MINUTES // minutes == 3
     for arm in x2.EVERY_ARM:
-        if arm not in x2.PORTFOLIO_ARMS:
+        if arm not in (*x2.PORTFOLIO_ARMS, x2.X2_L):  # O61: X2-L's Fable leap
             assert x2.leap_extra_usd(x2.arm_settings(arm)) == 0.0, arm.key
     assert (
         x2.arm_cap(x2.X2_0) == 9.35 and x2.run_minutes(x2.arm_settings(x2.X2_0)) == 89

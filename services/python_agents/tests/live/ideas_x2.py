@@ -112,6 +112,13 @@ dearest plus the arm's leap beyond X2-0's at its static worst
 (``leap_extra_usd``, 0 for every other arm): X2-P's cap 10.55, X2-F's 21.10
 (its share binds), both 113 minutes (the portfolio leap's 951 s timeout, ``leap_shape``).
 
+**Fable leap** (O61): X2-L is X2-0 with ``IDEAS_LEAP_MODEL`` Fable 5.2 (and
+``ALLOW_RETENTION_MODELS``, D63), the leap's prompt X2-0's (no portfolio, so
+no deal run), on the sprint's four libraries, off the plan, ``aa`` none:
+``leap_shape`` sends a Fable leap effort high, 32,000 tokens and 951 s, so
+its cap and minutes are X2-F's, 21.10 USD and 113 minutes, two runs a
+dispatch at a 20 % margin under the job's minutes.
+
 **Depth** (Window 2): X2-D is X2-0 with three rounds (``PORTFOLIO_ROUNDS``
 and ``MAX_TRIAL_ROUNDS`` 3) and a third generator call
 (``GENERATOR_MAX_CALLS`` 3, the default 2: without it the router reaches
@@ -202,7 +209,7 @@ X1_CALL_USD: Final = 0.9138
 X1_S1_USD: Final = 0.1066
 X1_S1_S2_USD: Final = 0.6073
 X1_LOOP_USD: Final = 0.7213
-FABLE_52: Final = "claude-fable-5-2"  # X2-F's leap (U-portfolio)
+FABLE_52: Final = "claude-fable-5-2"  # X2-F's (U-portfolio) and X2-L's leap
 
 
 @dataclass(frozen=True)
@@ -253,9 +260,12 @@ X2_F: Final = X2Arm("X2-F", X2_P.repos,
 PORTFOLIO_ARMS: Final = (X2_P, X2_F)
 """Their deal's run is ``IDEAS_LEAP_DEAL_RUN`` (ci.yml's ``x2_replicate``,
 never in the mapping), its library each case's (``fx.deal_library``)."""
-# the plan's arms, then those off it (X2-D, X2-P, X2-F first, so the older
-# tails stand)
-EVERY_ARM: Final = (*X2_ARMS, X2_D, *PORTFOLIO_ARMS, X2_S, X2_C, X2_SV)
+X2_L: Final = X2Arm("X2-L", X2_P.repos,
+                    {**SHARED, "IDEAS_LEAP_MODEL": FABLE_52, "ALLOW_RETENTION_MODELS": True},
+                    "Fable leap (O61): X2-0 with the leap on Fable 5.2, its prompt as X2-0's")  # fmt: skip
+# the plan's arms, then those off it (X2-D, X2-P, X2-F, X2-L first, so the
+# older tails stand)
+EVERY_ARM: Final = (*X2_ARMS, X2_D, *PORTFOLIO_ARMS, X2_L, X2_S, X2_C, X2_SV)
 LIBRARIES: Final = {r.name: r for r in dx.OSS_SELECTABLE if r.name in ip.E1_REPOS}
 Run = tuple[X2Arm, OssRepo]
 ALL_RUNS: Final[tuple[Run, ...]] = tuple(

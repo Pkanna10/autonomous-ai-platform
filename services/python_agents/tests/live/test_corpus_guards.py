@@ -2200,6 +2200,7 @@ def test_the_picks_suite_exports_the_op_count_judge_alone(tmp_path: Path) -> Non
         "X2-D:tomli,markdown",
         "X2-P:sqlparse",  # U-portfolio, x2_replicate 2
         "X2-F:tomli,markdown",
+        "X2-L:sqlparse,mistune",  # O61: the Fable 5.2 leap, no portfolio
     ],
 )
 def test_the_x2_suite_exports_its_arms_settings_exactly(

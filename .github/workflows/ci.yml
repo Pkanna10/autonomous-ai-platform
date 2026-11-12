@@ -130,7 +130,7 @@ on:
         type: string
         default: ''
       x2_dispatch:
-        description: "ideas-x2 only, and required there: LIVE_X2_DISPATCH, one arm and its libraries as ARM:lib,lib (X2-0, its A/A twin X2-0' on sqlparse, pyparsing, tomli and sortedcontainers only, X2-V, X2-C, X2-0 with IDEAS_COUNT_CONTRACT=record, emergence round 1 S1, off the plan, X2-S, X2-C with SITE_STACKS=on on more_itertools, tomli, mistune and sqlparse, emergence round 1 S2, off the plan, X2-SV, X2-C with SHADOW_VERIFY=record on sqlparse, tomli and mistune, emergence round 2 S4, off the plan, or X2-D, X2-0 with three rounds and three generator calls on sqlparse, tomli, mistune and markdown, Window 2, off the plan, 12.90 and 133 minutes a run, two a dispatch, X2-P, X2-0 with the portfolio leap (U-portfolio) on sqlparse, tomli, mistune and markdown, off the plan, 10.55 and 113 minutes a run, or X2-F, X2-P with the leap on Fable 5.2, off the plan, 21.10 and 113 minutes a run, two a dispatch each and x2_replicate required), the arm's settings exported from ideas_x2.arm_env; the plan (ideas_x2.dispatches) is five dispatches of four: X2-0:more_itertools,pyparsing,tomli,sortedcontainers then X2-0:mistune,sqlparse,markdown,idna, X2-0':sqlparse,pyparsing,tomli,sortedcontainers, and X2-V on the same two fours; the need is the libraries x 9.35 (X2-V 9.45), rounded up: 38 for four"
+        description: "ideas-x2 only, and required there: LIVE_X2_DISPATCH, one arm and its libraries as ARM:lib,lib (X2-0, its A/A twin X2-0' on sqlparse, pyparsing, tomli and sortedcontainers only, X2-V, X2-C, X2-0 with IDEAS_COUNT_CONTRACT=record, emergence round 1 S1, off the plan, X2-S, X2-C with SITE_STACKS=on on more_itertools, tomli, mistune and sqlparse, emergence round 1 S2, off the plan, X2-SV, X2-C with SHADOW_VERIFY=record on sqlparse, tomli and mistune, emergence round 2 S4, off the plan, or X2-D, X2-0 with three rounds and three generator calls on sqlparse, tomli, mistune and markdown, Window 2, off the plan, 12.90 and 133 minutes a run, two a dispatch, X2-P, X2-0 with the portfolio leap (U-portfolio) on sqlparse, tomli, mistune and markdown, off the plan, 10.55 and 113 minutes a run, X2-F, X2-P with the leap on Fable 5.2, off the plan, 21.10 and 113 minutes a run, two a dispatch each and x2_replicate required, or X2-L, X2-0 with the leap on Fable 5.2 (O61) on sqlparse, tomli, mistune and markdown, off the plan, 21.10 and 113 minutes a run, two a dispatch, no x2_replicate), the arm's settings exported from ideas_x2.arm_env; the plan (ideas_x2.dispatches) is five dispatches of four: X2-0:more_itertools,pyparsing,tomli,sortedcontainers then X2-0:mistune,sqlparse,markdown,idna, X2-0':sqlparse,pyparsing,tomli,sortedcontainers, and X2-V on the same two fours; the need is the libraries x 9.35 (X2-V 9.45), rounded up: 38 for four"
         type: string
         default: ''
       x2_replicate:
@@ -1113,7 +1113,9 @@ jobs:
           # compounds, the op-count judge, the eliminate lens on Haiku 5.5,
           # X2-V's views X1-3's map; X2-D three rounds (PORTFOLIO_ROUNDS and
           # MAX_TRIAL_ROUNDS 3) and a third generator call (GENERATOR_MAX_CALLS
-          # 3, every other arm the default 2), run_cap 12.90. Normal engine runs, so the
+          # 3, every other arm the default 2), run_cap 12.90; X2-L (O61) X2-0's
+          # requests with the leap on Fable 5.2 (ALLOW_RETENTION_MODELS, D63,
+          # as X2-F), run_cap 21.10. Normal engine runs, so the
           # Step 3 noise rule; the need is the libraries x ideas_x2.run_cap,
           # rounded up.
           x2_dispatch="${INPUT_X2_DISPATCH-}"
@@ -1135,18 +1137,19 @@ jobs:
               X2-D) x2_rounds=3 x2_gen_calls=3 x2_cents=1290 ;;
               X2-P) x2_portfolio=true x2_cents=1055 ;;  # U-portfolio: the portfolio leap on Opus 5.5
               X2-F) x2_portfolio=true x2_leap=claude-fable-5-2 x2_cents=2110 ;;  # the same on Fable 5.2
+              X2-L) x2_leap=claude-fable-5-2 x2_cents=2110 ;;  # O61: X2-0 with the leap on Fable 5.2
               X2-V)
                 x2_cents=945
                 x2_views='{"eliminate":"callers","assume_less":"input_shape","name_the_problem":"data_structures","recombine":"whole_module","resolve_tradeoff":"next_hotspots","far":"history"}'
                 ;;
               *)
-                echo "::error::ideas-x2 needs x2_dispatch, an arm (X2-0, X2-0', X2-V, X2-C, X2-S, X2-SV, X2-D, X2-P or X2-F), ':' and its libraries"
+                echo "::error::ideas-x2 needs x2_dispatch, an arm (X2-0, X2-0', X2-V, X2-C, X2-S, X2-SV, X2-D, X2-P, X2-F or X2-L), ':' and its libraries"
                 exit 1
                 ;;
             esac
             x2_repos="${x2_dispatch#*:}"
             if [[ "${x2_dispatch}" != *:* ]] || ! [[ "${x2_repos}" =~ ^[a-z][a-z0-9_]{0,39}(,[a-z][a-z0-9_]{0,39}){0,7}$ ]]; then
-              echo "::error::ideas-x2 needs x2_dispatch, an arm (X2-0, X2-0', X2-V, X2-C, X2-S, X2-SV, X2-D, X2-P or X2-F), ':' and its libraries"
+              echo "::error::ideas-x2 needs x2_dispatch, an arm (X2-0, X2-0', X2-V, X2-C, X2-S, X2-SV, X2-D, X2-P, X2-F or X2-L), ':' and its libraries"
               exit 1
             fi
             x2_replicate="${INPUT_X2_REPLICATE-}"
