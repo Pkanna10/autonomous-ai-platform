@@ -27,8 +27,18 @@ from . import test_ideas_x2_report_guards as rg
 
 X2_FILES = tuple(sorted(rg.X2_DIR.glob("ideas-x2-d*.jsonl")))
 SPRINT = rg.X2_DIR.parent / "w2-sprint/live"
+# The O59 sprint's own dispatches (2026-11-11): the archive grows after it
+# (O61's X2-D re-run, X2-L), so the test reads this fixed set, not the folder.
+SPRINT_RUNS = frozenset({
+    "43080309535", "43085609944", "43085616371", "43093762527", "43093767768",
+    "43085621843", "43085626757", "43093773731", "43093779047", "43093788927",
+    "43100253551", "43104071793", "43100257776", "43104077245", "43107418692",
+    "43111359647", "43114988674", "43114992515",
+})  # fmt: skip
 SPRINT_FILES = tuple(
-    p for p in sorted(SPRINT.glob("ideas-x2-*.jsonl")) if "-X2-SV-" not in p.name
+    p
+    for p in sorted(SPRINT.glob("ideas-x2-*.jsonl"))
+    if "-X2-SV-" not in p.name and p.stem.rsplit("-", 1)[-1] in SPRINT_RUNS
 )
 
 
