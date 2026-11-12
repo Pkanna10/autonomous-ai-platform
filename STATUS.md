@@ -858,6 +858,35 @@ blocks it.
     by framework; and the per-lane hit-rate page fixed to accept several runs
     per library.
   - **Key 1's 12.20 USD** is held for a confirmation run after this reading.
+  - **Addendum (owner, 2026-11-12; none of it touches the reading):**
+    - **Budget:** fit is decided from measured spend with a margin, planning 6
+      USD per X2-L run and 5 per X2-D run, not from the sum of caps; each run's
+      own cap still applies. Console balances read 2026-11-12: key 2 84.85 USD
+      (an upper bound: three X2-L runs were in flight), key 1 12.18 USD.
+    - **Sequencing, O61's order unchanged:**
+      1. X2-L in full: 12 runs, three per library, each remaining run dispatched
+         as soon as it fits at 6 USD planned.
+      2. The X2-D confirmation stays at 8 runs, two per library (four runs
+         cannot reach p <= 0.10). As many as fit on key 2 at 5 USD planned after
+         X2-L's measured spend, in whole-library pairs where possible; the
+         remainder (expected two) on key 1 with `key_slot`. The key is not part
+         of the arm; the ledger records which key paid for each run.
+      3. If key 2 cannot cover at least six confirmation runs after X2-L, the
+         Lead stops and asks the owner before dispatching any of the batch.
+    - **Deadlines:** every key-2 dispatch starts before 2026-11-14 12:00 UTC;
+      key-1 runs of the batch may start up to 2026-11-20.
+    - **Reports:** per Fable leap, output tokens used against the 32,000 cap
+      (record-only; runs dispatched before the record lands show "not
+      recorded"); and a zero-credit analysis of the sprint archive (kept against
+      applied and why each left-out keep was left out, repeat keeps across
+      rounds with a de-duplicated kept-per-round per arm, and the combine's
+      floor against the run's baseline floor). The X2-D re-run's mistune run
+      stays 0 on the primary measure.
+    - **After the last key-2 dispatch:** extend the record-only fate field to
+      the combine (applied, conflict, dropped at re-test) and bring a proposal
+      for the combine (re-measuring when its floor is far above the baseline's;
+      whether later rounds should trial on top of earlier keeps). Proposal only:
+      no judge or combine change during this reading.
 - **O60. Emergence round 2's rulings (owner, 2026-11-11).**
   - **Points:** confirmed as computed in `emergence/round-2.md` section 9, with
     the six flagged rules settled: partial withdrawals do not count; a partly
