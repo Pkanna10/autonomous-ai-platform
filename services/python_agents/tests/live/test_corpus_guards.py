@@ -1085,6 +1085,7 @@ SUITES = (
     "ideas-reaudit",  # V-reaudit: the pooled re-audit of the X1-1 re-run (O44)
     "ideas-picks",  # V-picks (O48): the blind reader's would-try ideas, trialled
     "ideas-x2",  # X2a: evolution on the levers X1 kept (O48)
+    "combine-replay",  # O62 item 5: the combine re-measure replay, no request
 )
 DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_sweep_live.py",
@@ -1106,6 +1107,7 @@ DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_ideas_reaudit_live.py",  # V-reaudit: the pooled re-audit
     "tests/live/test_ideas_picks_live.py",  # V-picks: the reader dispatch
     "tests/live/test_ideas_x2_live.py",  # X2a: the X2 engine runs
+    "tests/live/test_combine_replay_live.py",  # O62 item 5: the combine replay
 )
 EXPERIMENT_MINUTES = {
     # the sweeps on 37 repositories (v1 + hard + v2), from the Window 0 jobs on
@@ -1140,6 +1142,7 @@ EXPERIMENT_MINUTES = {
     "ideas-reaudit": 30,  # ideas_reaudit.JOB_MINUTES: four clones, 4 requests
     "ideas-picks": 45,  # ideas_picks.JOB_MINUTES: four engine loops, 7 trials
     "ideas-x2": 360,  # ideas_x2.JOB_MINUTES: 4 whole engine runs at 89
+    "combine-replay": 105,  # combine_replay.REPLAY_JOB_MINUTES: 15 + 2 x 45
 }  # batch wait; 5 papers; 18 web runs
 SWEEP_FABLE_ENV = {  # Fable 5.1 beside the one arm whose run phase 1 shares
     "LIVE_SWEEP_ARMS": "sonnet-5-5-medium",
@@ -1860,6 +1863,7 @@ def _suite_needs() -> dict[str, float]:
     reaudit = importlib.import_module(f"{__package__}.ideas_reaudit")
     picks = importlib.import_module(f"{__package__}.ideas_picks")
     x2 = importlib.import_module(f"{__package__}.ideas_x2")
+    replay = importlib.import_module(f"{__package__}.combine_replay")
     one_library = {oss_ab.REPOS_ENV: OSS_AB_DISPATCH_REPO}
     return {
         "noise": noise.noise_need(noise.noise_plan({})),
@@ -1892,6 +1896,7 @@ def _suite_needs() -> dict[str, float]:
             reaudit.ReauditPlan(reaudit.REAUDIT_LIBRARIES, Path(), Path())
         ),
         "ideas-x2": x2.x2_need(x2.x2_plan(X2_DISPATCH)),
+        "combine-replay": replay.replay_need(),
         "ideas-picks": picks.picks_need(picks.picks_plan({})),  # committed files
         "sweep": sweep.sweep_need(sweep.sweep_plan({})),
         "sweep-fable": sweep.sweep_need(sweep.sweep_plan(SWEEP_FABLE_ENV)),

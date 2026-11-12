@@ -89,6 +89,7 @@ STEP3_SUITES = frozenset(  # L0, L1a/b, L2a/b; V9's upstream verify and live
         "ideas-slice",
         "ideas-picks",
         "ideas-x2",  # X2a: normal engine runs (spec-idea-lab 9.3)
+        "combine-replay",  # O62 item 5: the X2 combine re-test, measured again
     }
 )
 RULES = {  # PAIRED_TRIALS, CONFIRM_WINNERS, NOISE_CALIBRATION_BLOCKS
