@@ -831,6 +831,23 @@ blocks it.
     - its own knowledge of public upstream fixes.
   - **Why:** V9 is O19's held-out exam and the charter's K4 rung, and a prior
     built from its keys would contaminate both.
+- **O66. Full texts for the library (owner, 2026-11-13).**
+  - The network is unrestricted; the seats' page-fetch tool failed, not the
+    network.
+  - **Download every summary-only source** directly through the session proxy
+    (arXiv abstract and PDF, the Semantic Scholar API, open course pages) into
+    `r3/library/sources/<seat>/`, and have the seat read it there.
+    - Where a publisher site refuses automated clients, use the arXiv version.
+      Never work around a refusal.
+    - Where no open full text exists, use an open substitute (open course notes
+      on the topic), or mark the claim unverified.
+  - **Each seat writes an errata file** that corrects any note the full text
+    does not support, and the index records each source as full text, open
+    substitute or unverified. To be done before stage 4 closes.
+  - Downloads are untrusted data and never enter what the engine reads. No
+    browser extension and no signed-in browsing.
+  - fp-ideation is restarted from its filed notes, because its earlier session
+    was stopped by an API safeguard.
 - **O65. Two owner requests from round 3's study findings (owner, 2026-11-13;
   not a rule change).**
   1. **Equivalence audit, now, zero credit, outside the points.**
