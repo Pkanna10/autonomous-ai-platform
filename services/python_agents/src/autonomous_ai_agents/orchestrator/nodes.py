@@ -143,6 +143,7 @@ from autonomous_ai_agents.execution.protocols import (
     PreflightReport,
     Profiler,
     ProjectUnderstander,
+    Stacker,
     TrialBrief,
     UnderstandResult,
 )
@@ -152,6 +153,7 @@ from autonomous_ai_agents.optimization.anticheat import (
     DEFAULT_PROTECTED_PATTERNS,
     check_diff_all,
     check_run_count,
+    compare_fingerprints,
 )
 from autonomous_ai_agents.optimization.evolve import (
     CompoundPair,
@@ -163,7 +165,6 @@ from autonomous_ai_agents.optimization.evolve import (
     primary_gain_floor,
     used_pairs,
 )
-from autonomous_ai_agents.optimization.idea_dedupe import recorded_keys
 from autonomous_ai_agents.optimization.idea_pipeline import (
     SEEDED_CALL,
     seeded_failure,
@@ -179,6 +180,7 @@ from autonomous_ai_agents.optimization.judges import (
     primary_metric,
 )
 from autonomous_ai_agents.optimization.ranking import rank_generated, rank_hypotheses
+from autonomous_ai_agents.optimization.rekey import current_keys
 from autonomous_ai_agents.optimization.sources import (
     HypothesisGenerator,
     RunVerdicts,
@@ -337,6 +339,11 @@ class NodeContext:
     pair of near misses as a compound trial (``evolve``); it needs a
     ``ReplayRunner``.
 
+    X2-DT: ``stack_rounds`` (``STACKED_ROUNDS``, off) stacks each round on
+    the last held tip through ``stacker``; it needs a combiner, a stacker
+    and the default output check, and refuses quality mode and SITE_STACKS
+    (O63). Off, neither field changes anything.
+
     Construction refuses duplicate or refname-unsafe candidate ids (each id
     names a trial branch), knobs below 1, a negative or non-finite
     ``min_trial_budget_usd`` and discovery or retry knobs outside their
@@ -381,6 +388,8 @@ class NodeContext:
     confirm_winners: bool = False
     portfolio_rounds: int = 0
     near_miss_compounds: bool = False
+    stack_rounds: bool = False
+    stacker: Stacker | None = None
 
     def __post_init__(self) -> None:
         counts = Counter(candidate.id for candidate in self.candidates)
@@ -415,6 +424,28 @@ class NodeContext:
                 "near_miss_compounds needs a runner that can replay trials"
                 f" (GitTrialRunner), got {type(self.runner).__name__}"
             )
+        self._check_stack_knobs()
+
+    def _check_stack_knobs(self) -> None:
+        """What stacked rounds need (X2-DT, O63), checked here so a context
+        that cannot stack never reaches a node, let alone a request: each
+        round's combine and the squash need a combiner and a stacker; the
+        tip is adopted only on outputs equal to the original base's, so the
+        exact default output check; quality mode and SITE_STACKS are refused."""
+        if not self.stack_rounds:
+            return
+        combiner = self.combiner
+        stacks = combiner.site_stacks if isinstance(combiner, ConflictProbe) else "off"
+        refused = (
+            (combiner is None, "needs a combiner"),
+            (self.stacker is None, "needs a stacker"),
+            (self.quality is not None, "refuses a quality check"),
+            (not self.default_output_check, "needs default_output_check"),
+            (stacks != "off", f"refuses SITE_STACKS={stacks!r}"),
+        )
+        for broken, reason in refused:
+            if broken:
+                raise ValueError(f"stack_rounds {reason}")
 
     def _check_discovery_knobs(self) -> None:
         """The ranges of the matching settings (``common/config.py``)."""
@@ -767,6 +798,30 @@ def _dedupe(violations: Iterable[Violation]) -> tuple[Violation, ...]:
     return tuple(unique)
 
 
+def _origin_violations(
+    state: EngineState, measured: Baseline, trial: Trial
+) -> tuple[Violation, ...]:
+    """X2-DT: a round measured at a tip checks a trial's outputs against the
+    original base too (the frozen judge compared them with the tip's), each
+    difference labelled ``original base:`` so rule 1 rejects. None without
+    a stack ledger (a checkpoint written before the key reads as none), at
+    the original base itself (the judge did) or for a failed trial (rule 2
+    rejects it; its missing rows prove nothing)."""
+    ledger = state.get("stack")
+    if (
+        ledger is None
+        or measured.commit == ledger.origin_commit
+        or trial.status is TrialStatus.failed
+    ):
+        return ()
+    found = compare_fingerprints(
+        ledger.origin_baseline.measurements, trial.measurements
+    )
+    return tuple(
+        v.model_copy(update={"message": f"original base: {v.message}"}) for v in found
+    )
+
+
 def _active_judges(
     judges: Iterable[Judge], objectives: Sequence[Objective]
 ) -> tuple[Judge, ...]:
@@ -967,8 +1022,11 @@ def _next_compound(ctx: NodeContext, state: EngineState) -> CompoundPair | None:
         return None
     primary = primary_metric(_require_baseline(state).objectives)
     known = (*state["hypotheses"], *state["parked"])
+    trials: Sequence[Trial] = state["trials"]
+    if ctx.stack_rounds:  # a replay's parents must be children of the round base
+        trials = [t for t in trials if t.base_commit == state["base_commit"]]
     return find_pair(
-        state["verdicts"], state["trials"], state["hypotheses"], primary=primary,
+        state["verdicts"], trials, state["hypotheses"], primary=primary,
         parked=frozenset(h.id for h in state["parked"]), used=used_pairs(known),
     )  # fmt: skip
 
@@ -1135,13 +1193,15 @@ def _sift(
 
 def _run_verdicts(state: EngineState) -> RunVerdicts | None:
     """This run's verdicts so far, each with its hypothesis and the mechanism
-    key the idea pipeline recorded for it (its ``KEY_EVENT`` events), and the
-    run's noise floor (the worst workload's smallest provable gain), for the
-    round seeds (G5b); ``None`` before the first verdict (round 1)."""
+    key the idea pipeline recorded for it (its ``KEY_EVENT`` events, with
+    any re-key onto an adopted tip laid over them, X2-DT; none: exactly
+    ``recorded_keys``), and the run's noise floor (the worst workload's
+    smallest provable gain), for the round seeds (G5b); ``None`` before the
+    first verdict (round 1)."""
     if not state["verdicts"]:
         return None
     hypotheses = {h.id: h for h in state["hypotheses"]}
-    keys = recorded_keys(event.data for event in state["events"])
+    keys = current_keys(event.data for event in state["events"])
     measured = state["baseline"]
     floor = (
         None
@@ -3270,12 +3330,17 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
             )
             # The node's own path check, the runner's capture violations, then
             # completeness; a rule found twice for one path is reported once.
-            violations = _dedupe(
-                (
-                    *check_diff_all(trial.touched_paths, protected),
-                    *trial.violations,
-                    *completeness,
-                )
+            # Stacked, the original base's output differences follow, one per
+            # workload (never deduped: they carry no path).
+            violations = (
+                *_dedupe(
+                    (
+                        *check_diff_all(trial.touched_paths, protected),
+                        *trial.violations,
+                        *completeness,
+                    )
+                ),
+                *_origin_violations(state, measured, trial),
             )
             verdict = derive_verdict(
                 trial,

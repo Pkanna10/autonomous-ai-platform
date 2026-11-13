@@ -98,7 +98,7 @@ STEP2 = {f.name for f in dataclasses.fields(NodeContext)} - {
     "generator_max_calls", "matcher_k", "discovery_max_share",
     "fix_retries_per_run", "playbook", "quality", "default_output_check",
     "calibrator", "calibration_blocks", "confirm_winners", "portfolio_rounds",
-    "near_miss_compounds",
+    "near_miss_compounds", "stack_rounds", "stacker",
 }  # fmt: skip
 
 
