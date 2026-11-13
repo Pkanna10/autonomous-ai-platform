@@ -407,3 +407,37 @@ reproduce. An honest, pre-registered claim that fails carries no penalty.
 **Parallel stages.** The study, the exams and the offline experiments run in
 parallel; see the execution note above. The Lead drives the conversation
 rounds.
+
+## Addendum O64-3: measurement records and offline scoring (owner, 2026-11-13)
+
+Recorded before stage 4 closes. The owner makes no further rule changes while
+round 3 runs.
+
+1. **Extra measurement fields in the 20 X2-DT runs: approved as record-only.**
+   - **The fields approved,** from `w2-sprint/floors/README.md` s5:
+     - item 1: the start and end time of every look;
+     - item 2: per-side wall and CPU samples, and the warm-up;
+     - item 3: `/proc/loadavg`, `/proc/pressure/cpu` and `/proc/stat` deltas;
+     - item 5: per run, the CPU model, the CPU count, the memory,
+       `RUNNER_NAME` and `ImageVersion`;
+     - item 6: each calibration block's gap and per-side sd.
+   - **Item 4 (other processes)** is recorded only as tick deltas, from
+     snapshots taken before and after each look. Nothing samples during a timed
+     interval.
+   - **No field feeds any decision,** and the stacked-off golden stays
+     byte-identical.
+   - **Undecided until these records are read:** floor fixes A, B and C, and
+     the combine re-measure threshold.
+2. **Offline scoring.** This replaces O64-2's held-back-archive rule.
+   - **New measurements may use the archive.** An experiment that produces new
+     measurements (a replay, or a new combination of archived diffs) may run on
+     the archive, because its outcome does not exist before its bar is
+     registered.
+   - **Re-analyses are scored only on rows that arrive after registration.** An
+     experiment that re-analyses existing records (a new floor rule, or a new
+     selection rule recomputed on archived rows) is scored on the 20 X2-DT
+     runs, or on new pool runs the owner approves.
+   - **The statistician labels each proposal** as one kind or the other when
+     setting its bar.
+   - **Floor or judge changes also report their false-keep rate** on A/A data,
+     under the same rule.

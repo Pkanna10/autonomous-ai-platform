@@ -852,6 +852,15 @@ blocks it.
       dissenter.
     - **Timing:** it arrived after stages 0-1 and the paper build had started.
       No point was affected.
+  - **Addendum O64-3 (owner, 2026-11-13).**
+    - The X2-DT runs record measurement fields, record-only: items 1, 2, 3, 5
+      and 6, plus item 4 as before-and-after tick deltas only. No field feeds a
+      decision, and the stacked-off golden stays byte-identical.
+    - Offline scoring: an experiment producing new measurements may use the
+      archive. A re-analysis of existing records is scored only on rows that
+      arrive after its registration.
+    - Floor or judge changes also report their false-keep rate on A/A data.
+    - Floor fixes A, B and C and the combine threshold wait for the records.
 - **O63. Replay accepted; X2-DT approved (owner, 2026-11-13).**
   1. **The X2-DT plan (`w2-sprint/stacked-plan.md`) is approved.**
      - The round combine offers every keep still on the current base.
