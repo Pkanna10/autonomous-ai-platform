@@ -1,0 +1,9 @@
+library,position,runs,trials,share_gt_1.5,share_gt_2,median_floor_pct,p90_floor_pct,median_base_pct
+sqlparse,first,13,220,0.323,0.145,2.65,8.36,2.15
+sqlparse,later,3,40,0.0,0.0,2.0,2.15,2.0
+tomli,first,9,114,0.211,0.114,2.74,6.57,2.0
+tomli,later,7,108,0.176,0.111,3.76,7.26,2.58
+mistune,first,12,192,0.141,0.094,2.0,6.84,2.0
+mistune,later,4,63,0.206,0.032,2.21,6.59,2.0
+markdown,first,5,82,0.122,0.073,2.63,5.76,2.0
+markdown,later,10,153,0.072,0.02,2.28,8.02,2.0
