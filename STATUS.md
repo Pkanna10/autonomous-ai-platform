@@ -831,6 +831,17 @@ blocks it.
     - its own knowledge of public upstream fixes.
   - **Why:** V9 is O19's held-out exam and the charter's K4 rung, and a prior
     built from its keys would contaminate both.
+- **O64. Emergence round 3, the academy round (owner, 2026-11-13).** Recorded in
+  full as an addendum to the charter (O54) in
+  `.claude/handoff/step3/idea-lab/emergence/charter.md`, with the owner's exam
+  addendum.
+  - The stages: a loss ledger, a university of 14 seats, an exam (Fable 5.2
+    examiner, planted and proven slowdowns, the key sealed by hash), a seminar,
+    proposals with offline kill tests, then critics and proof.
+  - It runs on the Lead's agents, with no API key. Stages 1-4 run beside X2-DT;
+    stage 5 follows the noise report (O63 item 4, in).
+  - The engine sits the exam papers only with the owner's approval of the spend.
+  - Papers and keys never enter anything the engine reads.
 - **O63. Replay accepted; X2-DT approved (owner, 2026-11-13).**
   1. **The X2-DT plan (`w2-sprint/stacked-plan.md`) is approved.**
      - The round combine offers every keep still on the current base.
