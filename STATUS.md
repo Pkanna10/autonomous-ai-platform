@@ -892,6 +892,14 @@ blocks it.
      - Every reading already made stands.
      - Bring a proposal to strengthen the equivalence judge: strengthening only,
        proposal only.
+     - **Done (`w2-sprint/equivalence-audit/`):** 309 unique diffs (284 keep
+       uses, 61 delivered patches) over 63 runs, two seeds, 5,000 to 120,000
+       inputs per diff: **no output difference**, so 0 delivered gain rests on a
+       non-equivalent keep in any library. The harness caught 17 of 17 planted
+       rare-input faults where the frozen checks caught 8. Proposal: a
+       record-only seeded API differential gate beside the frozen judges (about
+       5 to 25 s a trial), a type-aware fingerprint, and a counterexample
+       corpus.
   2. **Combine-order replay, before the 20 X2-DT runs are dispatched.** The
      build and the pilot proceed meanwhile.
      - An offline replay of the archived held combines, comparing today's score
