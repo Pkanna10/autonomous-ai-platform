@@ -165,6 +165,19 @@ plan and no A/A draw (a third round changes what is trialled and
 delivered); dispatchable, in ``EVERY_ARM`` with its ci.yml case. Its cap
 and minutes are the derivation above with a third round, its call charged:
 12.90 USD and 133 minutes, two runs a dispatch.
+
+**Inconclusive diffs** (X2-DT U8a, O63, record-only, every arm): each
+hypothesis whose verdict is inconclusive with a first-look gain above the
+run's calibrated baseline floor has its trial's diff written as a kept one's
+is (``_inconclusive_diffs``); its row adds ``inconclusive_diff``, the run
+row ``inconclusive_diffs`` and a note when none is written.
+
+**Looks** (X2-DT U8a, O64-3, record-only, every arm): ``run_one`` puts the
+loop's runner, calibrator and combiner behind ``x2_looks.tap_looks``, and
+``start_x2_loop`` its launches in ``x2_looks.LookLaunches``; the run row
+adds ``machine`` (``x2_proc``), ``looks`` (``x2_looks.look_rows``: per look
+its kind, span, samples, ABBA window and warm-ups, calibration blocks and
+``/proc`` deltas) and ``looks_proc_seconds``, each ``None`` untapped.
 """
 
 from __future__ import annotations
@@ -179,7 +192,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Literal
 
-from e2e.conftest import Isolation, LaunchLog
+from e2e.conftest import Isolation
 
 from autonomous_ai_agents.clients.transport import LLMTransport
 from autonomous_ai_agents.common.config import (
@@ -230,12 +243,14 @@ from . import ideas_probe as ip
 from . import ideas_slice as isl
 from . import ideas_x2_frameworks as fx
 from . import oss
+from . import x2_looks as xl
 from . import x2_patches as xp
 from .conftest import LiveRun, StartLive, key_window, redact_keys, suite_cap
 from .corpus import CorpusOutcome, Loop, role_wiring, settings_trial_budget
 from .discovery import OPUS, SONNET, ceil_usd, run_engine
 from .discovery_io import ResultsSink
 from .oss import PRODUCTION, GitPolicy, OssRepo
+from .x2_proc import ProcReader
 
 DISPATCH_ENV: Final = "LIVE_X2_DISPATCH"
 RUN_EXPERIMENT: Final = "ideas-x2-run"
@@ -265,6 +280,14 @@ X1_S1_USD: Final = 0.1066
 X1_S1_S2_USD: Final = 0.6073
 X1_LOOP_USD: Final = 0.7213
 FABLE_52: Final = "claude-fable-5-2"  # X2-F's (U-portfolio) and X2-L's leap
+NO_FLOOR: Final = "no calibrated baseline floor: no inconclusive diff written"
+NO_STATE: Final = "no engine state: no inconclusive diff written"
+INCONCLUSIVE_ORPHAN: Final = (
+    "the inconclusive verdict's trial is not recorded: no diff written"
+)
+NONE_ABOVE: Final = (
+    "no inconclusive trial gained above the baseline floor: no diff written"
+)
 
 
 @dataclass(frozen=True)
@@ -752,6 +775,28 @@ def _kept_diffs(writer: xp.PatchWriter, hyps: Iterable[Hypothesis],
     return out
 
 
+def _inconclusive_diffs(writer: xp.PatchWriter, hyps: Iterable[Hypothesis],
+                        verdicts: Mapping[str, Verdict], trials: Iterable[Trial],
+                        floor: float | None) -> dict[str, xp.Entry]:  # fmt: skip
+    """U8a (O63): per hypothesis whose verdict is inconclusive with a
+    first-look gain above ``floor`` (the baseline's calibrated floor, none
+    uncalibrated), its trial's recorded diff, one file, as ``_kept_diffs``."""
+    if floor is None:
+        return {}
+    by_id, out = {t.id: t for t in trials}, {}
+    for h in hyps:
+        v = verdicts.get(h.id)
+        if (v is None or v.outcome is not VerdictOutcome.inconclusive or v.gain is None
+                or not v.gain > floor):  # fmt: skip
+            continue
+        t = by_id.get(v.trial_id)
+        entry = xp.missing(INCONCLUSIVE_ORPHAN) if t is None else {
+            **writer.write(xp.trial_file(t.id), t.diff),
+            "commit": t.commit, "base_commit": t.base_commit}  # fmt: skip
+        out[h.id] = {"trial_id": v.trial_id, **entry, "gain_pct": dx._pct(v.gain)}
+    return out
+
+
 @dataclass
 class FateTap:
     """U-fate: the loop's generator, each call handed to ``inner`` with the
@@ -800,6 +845,7 @@ class X2Recorder:
     sink: ResultsSink
     base: Settings = field(default_factory=lambda: settings)
     commits: Mapping[str, str] | None = None  # E1's recorded head per library
+    proc: ProcReader = field(default_factory=ProcReader)  # U8a: the looks' /proc
 
     def __post_init__(self) -> None:
         for arm in {a.key: a for a, _ in self.plan.runs}.values():
@@ -812,7 +858,8 @@ class X2Recorder:
                seen: list[EngineRunResult | None], outcome: CorpusOutcome,
                result: EngineRunResult | None, *, clone: Path | None = None,
                started: float | None = None,
-               idea_fates: Sequence[tuple[IdeaFate, ...]] | None = None) -> None:  # fmt: skip
+               idea_fates: Sequence[tuple[IdeaFate, ...]] | None = None,
+               looks: xl.LookLog | None = None) -> None:  # fmt: skip
         seen.append(result)
         st = None if result is None else result.state
         hyps = [] if st is None else [*st["hypotheses"], *st["candidate_pool"]]
@@ -843,6 +890,10 @@ class X2Recorder:
         diffs = _kept_diffs(
             writer, hyps, verdicts, [] if st is None else st["trials"], applied
         )
+        measured = None if st is None else st.get("baseline")
+        calibrated = None if measured is None else measured.calibration
+        odd = _inconclusive_diffs(writer, hyps, verdicts, [] if st is None else st["trials"],
+                                  None if calibrated is None else calibrated.floor)  # fmt: skip
         for h, r in zip(hyps, ranks, strict=True):
             key, lane, parents = keys.get(h.id), _tag(h, "lane"), compound_parents(h)
             self.sink.write({**head, "experiment": IDEA_EXPERIMENT, "round": rounds.get(h.id),
@@ -858,7 +909,8 @@ class X2Recorder:
                 **({} if not shadowed else {"shadow_verify": shadow.get(h.id)}),
                 **({} if not stacked else {"combine": combine_row(stacked.get(h.id), owner)}),
                 "combine_fate": fates.get(h.id),
-                **({} if h.id not in diffs else {"diff": diffs[h.id]})})  # fmt: skip
+                **({} if h.id not in diffs else {"diff": diffs[h.id]}),
+                **({} if h.id not in odd else {"inconclusive_diff": odd[h.id]})})  # fmt: skip
         kept = [h for h in hyps if (v := verdicts.get(h.id)) is not None
                 and v.outcome is VerdictOutcome.keep]  # fmt: skip
         taken = 0  # U-fate: the tap's calls, in order, one per ``generated`` event
@@ -918,7 +970,13 @@ class X2Recorder:
             "combine_summary": None if comb is None else redact_keys(comb.summary),
             "skipped": _skipped(comb, owner), "baseline_floor_pct": _floor_pct(st),
             "conflicts": None if comb is None or not comb.keeps else  # no dry merge ran
-                [[owner.get(t, t) for t in pair] for pair in comb.conflicts]})  # fmt: skip
+                [[owner.get(t, t) for t in pair] for pair in comb.conflicts],
+            "inconclusive_diffs": [{"hypothesis_id": k, **d} for k, d in odd.items()],
+            "inconclusive_diffs_note": None if odd else NO_STATE if st is None
+                else NO_FLOOR if calibrated is None else NONE_ABOVE,
+            "machine": None if looks is None else looks.machine,
+            "looks": None if looks is None else xl.look_rows(looks, st),
+            "looks_proc_seconds": None if looks is None else looks.proc_seconds()})  # fmt: skip
 
 
 # ---------------------------------------------------------------------------
@@ -941,7 +999,7 @@ def start_x2_loop(repo: OssRepo, run: LiveRun, root: Path, isolation: Isolation,
     ``round_trials`` a round."""
     user = oss.prepare_repo(repo, root / "user", policy=policy)
     before, project = user.snapshot(), repo.project(user.path)
-    launches = LaunchLog()
+    launches = xl.LookLaunches()  # U8a: a LaunchLog with each launch's span
     context = build_context(project, candidates=(), transport=run.transport(settings),
                             max_hypotheses_per_round=round_trials(settings),
                             role_transports=role_wiring(run, "wired"),
@@ -973,12 +1031,14 @@ def run_one(arm: X2Arm, repo: OssRepo, *, live: StartLive, root: Path,
         )
     isl.check_judges(loop)
     loop, tap = tap_fates(loop)  # U-fate: record-only, every call handed on as made
+    loop, looks = xl.tap_looks(loop, recorder.proc, recorder.sink.environ)  # U8a
     seen: list[EngineRunResult | None] = []
     counted = arm_settings(arm, recorder.base).IDEAS_COUNT_CONTRACT == "record"
     record = functools.partial(recorder.record, arm, repo.name, run, commit, seen,
                                clone=loop.user.path if counted else None,
                                started=started,
-                               idea_fates=None if tap is None else tap.calls)  # fmt: skip
+                               idea_fates=None if tap is None else tap.calls,
+                               looks=looks)  # fmt: skip
     run_engine(loop, run, isolation, model=recorder.base.ENGINE_MODEL, record=record)
     run.note(ip._fit(f"X2 {arm.key} {repo.name}: {run.spent_usd:.3f} of {cap:.2f} USD"))
     isl.check_op_column(seen[-1])
