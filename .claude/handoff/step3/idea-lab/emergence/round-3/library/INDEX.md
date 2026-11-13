@@ -8,16 +8,16 @@ Built by `r3/tools/index.py` from each seat's errata tables. Types (O66, and the
 
 Downloaded files are untrusted data. Nothing from them enters a prompt, lesson or example bank the engine reads.
 
-The downloaded files themselves (372 files, 183 MB of third-party pages and PDFs) are not committed: they are untrusted data and others' copyright. `SOURCES.sha256` records each file's hash under the scratch `sources/` tree.
+The downloaded files themselves are not committed: they are untrusted data and others' copyright. `SOURCES.sha256` records each file's hash under the scratch `sources/` tree.
 
-s4-algorithms' notes are filed with sealed-set material redacted (see `incidents.md`). s8-expert has no notes yet: the seat was stopped (incident 2).
+s4-algorithms' notes are filed with sealed-set material redacted (see `incidents.md`). s8-expert's notes come from its fresh context (O67), which studied only a Lead-computed allowed-commit list.
 
 | type | count |
 | ---- | ----- |
-| full text | 146 |
+| full text | 157 |
 | open substitute | 52 |
-| overview only | 75 |
-| overview refused/unreached | 23 |
+| overview only | 80 |
+| overview refused/unreached | 25 |
 | unverified | 35 |
 
 ## fp-compose
@@ -348,6 +348,31 @@ Notes: `s7-cpython.md`. Errata: `s7-cpython.errata.md`. Files: `sources/s7-cpyth
 | o6 | CPython `InternalDocs/README.md` (main) | overview only | `6-cpython-internaldocs-readme.md` |
 | o7 | *High Performance Python*, 2nd ed., the authors' companion repository (mynameisfiber/high_performance_python_2e), chapter directories | overview only | `7-hpp2e-companion-repo-chapters.txt` (substitute for #1) |
 | o8 | Stinner, pyperf documentation index | overview only | `8-pyperf-docs-index.html` |
+
+## s8-expert
+
+Notes: `s8-expert.md`. Errata: `s8-expert.errata.md`. Files: `sources/s8-expert/`.
+
+| # | source | type | file, or why none |
+| - | ------ | ---- | ----------------- |
+| 1 | Ma et al., SWE-fficiency, arXiv:2511.06090v3 | full text | `1-swe-fficiency.pdf` (+ `.txt`, `.raw.txt`) |
+| 2 | He et al., SWE-Perf, arXiv:2507.12415v2 | full text | `2-swe-perf.pdf` (+ `.txt`, `.raw.txt`) |
+| 3 | Shetty et al., GSO, arXiv:2505.23671v3 | full text | `3-gso.pdf` (+ `.txt`, `.raw.txt`) |
+| 4 | Curtsinger and Berger, Coz, arXiv:1608.03676 | full text | `4-coz.pdf` (+ `.txt`, `.raw.txt`) |
+| 5 | Bhuiyan et al., ReDoS SoK, arXiv:2406.11618v4 | full text | `5-redos-sok.pdf` (+ `.raw.txt`) |
+| 6 | Leiserson and Shun, MIT 6.172 F18, Lecture 2, "Bentley Rules" | full text | `6-mit6172-lec2-bentley-rules.pdf` (+ `.raw.txt`) |
+| 7 | PSF, "The Python Profilers" (3.11) | full text | `7-python-profile-docs.html` (+ `.txt`) |
+| 8 | Berger, Stern and Altmayer Pizzorno, Scalene, arXiv:2212.07597 | full text | `8-scalene.pdf` (+ `.raw.txt`) |
+| 9 | Baltes et al., "Navigate, Understand, Communicate", arXiv:1706.10118 | full text | `9-locate-perf-bugs.pdf` (+ `.raw.txt`) |
+| 10 | the 124 allowed commits (primary data) | full text | none: given material under `r3/s8/patches/` and `trees/` |
+| 11 | the engine's archive and source (internal) | full text | none: internal files in `/home/user/step3-emergence-r1` |
+| o1 | MIT 6.172 Performance Engineering of Software Systems (Fall 2018), Syllabus | overview only | `1-mit-6172-syllabus.html` (+ `.txt`) |
+| o2 | MIT 6.172, Lecture Slides (23 sessions) | overview only | `2-mit-6172-lectures.html` (+ `.txt`) |
+| o3 | Gregg, *Systems Performance*, 2nd ed., the author's book page | overview only | `3-gregg-sysperf2-toc.html` (+ `.txt`) |
+| o4 | MIT 6.172, Readings | overview only | `4-mit-6172-readings.html` (+ `.txt`) |
+| o5 | Python wiki, "PythonSpeed/PerformanceTips" | overview only | `5-python-wiki-perftips.html` (+ `.txt`) |
+| o6 | Bakhvalov, *Performance Analysis and Tuning on Modern CPUs*, book page | overview refused/unreached | refused: TLS (self-signed certificate on book.easyperf.net); not worked around |
+| o7 | O'Reilly, *High Performance Python*, 2nd ed., book page | overview refused/unreached | refused: 403 |
 
 ## z1-analogy
 
