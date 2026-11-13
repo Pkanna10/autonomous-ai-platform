@@ -855,7 +855,18 @@ blocks it.
        one-run or two-run dispatch and by position in the run;
      - the inconclusive trials whose gain was above the baseline floor but below
        their own floor, per arm and library. Then propose the fix that removes
-       the cause. Proposal only: no judge or floor change.
+       the cause. Proposal only: no judge or floor change. **Reported 2026-11-13
+       (`w2-sprint/floors/`).**
+     - Nothing runs concurrently with a measurement.
+     - 175 of 972 trials (18 %) sit above 1.5x the run's calibrated floor.
+     - The causes, ranked:
+       1. The runner VM and its time since the job started (strong): 27 % in
+          minutes 0-5 against 10 % after minute 30, clustered by run.
+       2. The two floors use different statistics (certain; it amplifies the
+          first).
+     - The proposals, none applied: a paired floor (a judge change), a settle
+       step, a robust spread. Record-only measurement fields would confirm which
+       applies.
   5. **Record-only, with X2-DT's harness unit:** archive the diff of each
      inconclusive trial whose gain is above the baseline floor, as kept diffs
      are archived, so that it can be replayed offline.
