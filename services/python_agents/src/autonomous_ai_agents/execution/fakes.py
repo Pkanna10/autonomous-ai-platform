@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from autonomous_ai_agents.clients.budget import Budget
+from autonomous_ai_agents.common.errors import EngineError
 from autonomous_ai_agents.common.models import (
     FrozenFile,
     Guardrail,
@@ -37,10 +38,13 @@ from autonomous_ai_agents.execution.protocols import (
     PreflightReport,
     ProfileResult,
     UnderstandResult,
+    require_stack_label,
 )
 
 FAKE_COMMIT = "0123456789abcdef0123456789abcdef01234567"
 """The commit ``FakePreflight`` pins when it echoes its inputs."""
+FAKE_SQUASH = "fedcba9876543210fedcba9876543210fedcba98"
+"""The commit ``FakeStacker.squash`` returns unless scripted otherwise."""
 
 
 class PreflightCall(NamedTuple):
@@ -85,6 +89,14 @@ class EditCall(NamedTuple):
     task: EditTask
     cap_usd: float
     spent_usd: float
+
+
+class StackCall(NamedTuple):
+    method: str  # "squash" | "diff" | "changed_paths"
+    project: Project
+    base: str
+    tip: str
+    label: str | None = None
 
 
 class FakePreflight:
@@ -242,6 +254,58 @@ class FakePublisher:
         if self._error is not None:
             raise self._error
         return self._diff
+
+
+class FakeStacker:
+    """Scripted ``Stacker``: one squash outcome for every call, and a diff and
+    changed paths per ``(base, tip)`` (``default_diff`` and ``default_paths``
+    for an unscripted pair); an ``Exception`` in any slot is raised. Like
+    the real one, ``squash`` refuses a bad label or ``base == tip``
+    (``EngineError``) before its script; every call is recorded first."""
+
+    def __init__(
+        self,
+        *,
+        squash: str | Exception = FAKE_SQUASH,
+        diffs: Mapping[tuple[str, str], str | Exception] | None = None,
+        default_diff: str = "",
+        paths: Mapping[tuple[str, str], Sequence[str] | Exception] | None = None,
+        default_paths: Sequence[str] = (),
+    ) -> None:
+        scripted = dict(paths or {})
+        if any(isinstance(v, str) for v in (*scripted.values(), default_paths)):
+            raise TypeError("paths must be sequences of paths, not one str")
+        self._squash, self._diffs = squash, dict(diffs or {})
+        self._default_diff = default_diff
+        self._paths = {
+            pair: v if isinstance(v, Exception) else tuple(v)
+            for pair, v in scripted.items()
+        }
+        self._default_paths = tuple(default_paths)
+        self.calls: list[StackCall] = []
+
+    def squash(self, project: Project, base: str, tip: str, label: str) -> str:
+        self.calls.append(StackCall("squash", project, base, tip, label))
+        require_stack_label(label)
+        if base == tip:
+            raise EngineError(f"tip {tip} is the base: nothing to squash")
+        if isinstance(self._squash, Exception):
+            raise self._squash
+        return self._squash
+
+    def diff(self, project: Project, base: str, tip: str) -> str:
+        self.calls.append(StackCall("diff", project, base, tip))
+        outcome = self._diffs.get((base, tip), self._default_diff)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    def changed_paths(self, project: Project, base: str, tip: str) -> tuple[str, ...]:
+        self.calls.append(StackCall("changed_paths", project, base, tip))
+        outcome = self._paths.get((base, tip), self._default_paths)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
 
 
 class FakeEditor:

@@ -24,6 +24,7 @@ from typing import Protocol, TypedDict, runtime_checkable
 
 from autonomous_ai_agents.clients.budget import Budget
 from autonomous_ai_agents.common.config import IsolationMode
+from autonomous_ai_agents.common.errors import EngineError
 from autonomous_ai_agents.common.models import (
     CombineSkip,
     FrozenFile,
@@ -41,6 +42,8 @@ CHANGE_STATUSES: frozenset[str] = frozenset({"A", "M", "D", "T"})
 """``git diff --raw --no-renames`` letters: added, modified, deleted, type change."""
 
 _GIT_MODE = re.compile(r"[0-7]{6}")
+STACK_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+"""A ``Stacker.squash`` label: one token (a run id), at most 64 characters."""
 
 
 def _require_money(usd: float, tokens: int) -> None:
@@ -48,6 +51,15 @@ def _require_money(usd: float, tokens: int) -> None:
         raise ValueError(f"cost_usd must be finite and at least 0, got {usd}")
     if tokens < 0:
         raise ValueError(f"tokens_used must be at least 0, got {tokens}")
+
+
+def require_stack_label(label: str) -> str:
+    """``label`` when it is one ``STACK_LABEL`` token, else ``EngineError``
+    (it comes from the run, so a bad one fails the run, never a bug path)."""
+    if STACK_LABEL.fullmatch(label) is None:
+        shown = "".join(ch if ch.isprintable() else "?" for ch in label[:100])
+        raise EngineError(f"label {shown!r} is not one safe token")
+    return label
 
 
 def _require_clean_path(what: str, path: str) -> None:
@@ -339,3 +351,25 @@ class BranchPublisher(Protocol):
     """Creates ``branch`` at ``tip`` and returns the capped ``base..tip`` diff."""
 
     def publish(self, project: Project, branch: str, tip: str, base: str) -> str: ...
+
+
+@runtime_checkable
+class Stacker(Protocol):
+    """Stacked rounds' git seam (X2-DT): objects only, never a ref or worktree.
+
+    ``squash`` is one commit with ``tip``'s tree and ``base`` its only
+    parent, the same SHA for the same inputs; ``label`` (the run id) goes
+    into its message and must be one ``STACK_LABEL`` token
+    (``require_stack_label``). A bad label, a ``tip`` equal to ``base`` or
+    one that does not descend from it is an ``EngineError``. ``diff`` is the
+    capped ``base..tip`` patch; ``changed_paths`` the paths it changes, an
+    ``EngineError`` when it is truncated or any line does not parse (fail
+    closed)."""
+
+    def squash(self, project: Project, base: str, tip: str, label: str) -> str: ...
+
+    def diff(self, project: Project, base: str, tip: str) -> str: ...
+
+    def changed_paths(
+        self, project: Project, base: str, tip: str
+    ) -> tuple[str, ...]: ...
