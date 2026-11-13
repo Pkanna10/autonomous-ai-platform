@@ -853,16 +853,16 @@ blocks it.
     syllabi, reading lists), skipping any site that refuses automated clients.
     They are a map of the field, never evidence for a claim. Each seat adds a
     "not yet covered" list, and the index gains the type "overview only".
-  - **Done (`c8a4a9c`):** 13 seats filed errata and overview sections. The
-    index lists 146 full text, 52 open substitute, 35 unverified and 75
-    overview-only sources; 23 overview pages were refused or unreached.
+  - **Done (`c8a4a9c`):** 13 seats filed errata and overview sections. The index
+    lists 146 full text, 52 open substitute, 35 unverified and 75 overview-only
+    sources; 23 overview pages were refused or unreached.
 - **O67. The V9 exposure rulings (owner, 2026-11-13).** Five seats reached the
   sealed V9 corpus while studying; none read its keys or notes. s8-expert
   checked out and timed 7 of the retired fixes, and s4-algorithms read 6 of
   their diffs. The log is `emergence/round-3/incidents.md`.
-  - **No penalty.** The O64 brief sent the expert seat to the libraries'
-    commits without excluding V9's. s8's case is recorded as the more serious,
-    because it read that V9 was sealed and then used the manifest.
+  - **No penalty.** The O64 brief sent the expert seat to the libraries' commits
+    without excluding V9's. s8's case is recorded as the more serious, because
+    it read that V9 was sealed and then used the manifest.
   - **Fresh contexts.** s4 restarts from its redacted notes; s8 restarts from
     its brief and a Lead-computed allowed-commit list (124 commits, every V9 fix
     and its equivalents excluded, no V9 id shown).
@@ -870,8 +870,8 @@ blocks it.
     markdown-it-py (the Lead's miscount made it a ninth), are retired from every
     claim and labelled "exposed" if ever run.
   - **The quarantine stays sealed and uncommitted**, listed by hash only.
-  - **A technical lock.** A PreToolUse hook denies every agent call that names
-    a sealed path, or that lists or recursively searches above one. Sparse
+  - **A technical lock.** A PreToolUse hook denies every agent call that names a
+    sealed path, or that lists or recursively searches above one. Sparse
     checkout removes those files from every worktree but the gate's.
   - **Stage 4 is screened** by script from salted slow hashes of the retired
     fixes' commit ids and touched function names; flags go to the owner before
