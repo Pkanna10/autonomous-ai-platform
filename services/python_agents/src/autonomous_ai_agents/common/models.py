@@ -1168,6 +1168,174 @@ class Combination(EngineModel):
     """S2: the dry merge's conflicting trial pairs, each sorted."""
 
 
+STACK_SECONDS_KEYS: Final = frozenset(
+    {"combine", "fallback", "baseline", "calibration", "profile"}
+)
+"""The timed steps of one stacked round (``RoundBase.seconds``, X2-DT)."""
+
+
+class RoundBase(EngineModel):
+    """X2-DT: one round's end under ``STACKED_ROUNDS`` (O63).
+
+    ``base_commit`` is the base the round's trials started from;
+    ``offered_trial_ids`` the run-set keeps still on it, offered to the round
+    combine; ``combination`` that combine, ``None`` exactly when nothing was
+    offered (no combiner call). ``adopted``: the combine held and its tip
+    passed adoption (the baseline at the tip, its outputs against the
+    original base's, the profile), so ``tip_commit`` is the next round's
+    base. ``tip_commit``, when set, is the combine's tip, also for a held tip
+    that was refused. ``floor`` is the adopted tip's calibrated noise floor
+    (``None`` without adoption). ``reason`` is the round's fate (held,
+    nothing kept, did not hold, why adoption was refused); ``seconds`` the
+    wall seconds of each timed step (``STACK_SECONDS_KEYS``).
+    """
+
+    round: int = Field(ge=1)
+    base_commit: str = Field(min_length=1)
+    offered_trial_ids: tuple[str, ...] = ()
+    combination: Combination | None = None
+    adopted: bool = False
+    tip_commit: str | None = None
+    floor: float | None = Field(default=None, ge=0)
+    reason: str = Field(min_length=1)
+    seconds: dict[str, float] = Field(default_factory=dict)
+
+    @field_validator("seconds")
+    @classmethod
+    def _known_steps(cls, value: dict[str, float]) -> dict[str, float]:
+        unknown = sorted(value.keys() - STACK_SECONDS_KEYS)
+        if unknown:
+            raise ValueError(f"round seconds name unknown steps {unknown}")
+        if any(seconds < 0 for seconds in value.values()):
+            raise ValueError(f"round seconds must be at least 0, got {value}")
+        return value
+
+    @model_validator(mode="after")
+    def _one_consistent_fate(self) -> Self:
+        combination = self.combination
+        if (combination is None) != (not self.offered_trial_ids):
+            raise ValueError("a round combines exactly when keeps are offered")
+        if len(set(self.offered_trial_ids)) != len(self.offered_trial_ids):
+            raise ValueError("a round offers each kept trial once")
+        if combination is not None and combination.base_commit != self.base_commit:
+            raise ValueError("the round combine runs on the round base")
+        if self.adopted and (combination is None or not combination.holds):
+            raise ValueError("only a held round combine's tip is adopted")
+        if self.adopted and self.tip_commit is None:
+            raise ValueError("an adopted round names its tip")
+        if self.tip_commit is not None and (
+            combination is None or self.tip_commit != combination.tip_commit
+        ):
+            raise ValueError("a round's tip is the combine's tip")
+        if self.floor is not None and not self.adopted:
+            raise ValueError("a floor is the adopted tip's")
+        return self
+
+    @property
+    def next_base(self) -> str:
+        """The base the next round starts from: the tip if adopted, else this one."""
+        if self.adopted and self.tip_commit is not None:
+            return self.tip_commit
+        return self.base_commit
+
+
+def rounds_held(rounds: Sequence[RoundBase]) -> bool | None:
+    """Whether every round with keeps held its combine (O63's secondary).
+
+    ``None`` when no round had keeps. A held tip refused at adoption still held.
+    """
+    combined = [r.combination for r in rounds if r.combination is not None]
+    if not combined:
+        return None
+    return all(combination.holds for combination in combined)
+
+
+class StackLedger(EngineModel):
+    """X2-DT: the stacked run's original base and its rounds (O63).
+
+    ``origin_commit`` and ``origin_baseline`` are what the tail restores, so
+    deliver and learn see the original base; ``rounds`` chain from it, each
+    starting from the previous round's ``next_base``. ``delivery`` is the raw
+    re-test of the squashed last tip against the original base (``None``
+    when none ran) and ``delivery_seconds`` its wall time.
+    ``all_rounds_held`` is ``rounds_held(rounds)`` once the tail sets it
+    (``None`` before, or when no round had keeps): with a failed delivery it
+    says the re-test failed although every round's combine held.
+
+    A ledger is never changed with ``model_copy``: it skips the validators,
+    and LangGraph's checkpointer silently falls back to ``model_construct``
+    when a stored model fails them on load. ``with_round`` and ``closed``
+    build a new ledger through ``model_validate`` instead, every nested
+    model included, so each step is checked again.
+    """
+
+    origin_commit: str = Field(min_length=1)
+    origin_baseline: Baseline
+    rounds: tuple[RoundBase, ...] = ()
+    delivery: Combination | None = None
+    delivery_seconds: float | None = Field(default=None, ge=0)
+    all_rounds_held: bool | None = None
+
+    @model_validator(mode="after")
+    def _chained_from_the_origin(self) -> Self:
+        if self.origin_baseline.commit not in (None, self.origin_commit):
+            raise ValueError("the origin baseline is measured at the original base")
+        expected, previous = self.origin_commit, 0
+        for record in self.rounds:
+            if record.round <= previous:
+                raise ValueError("stacked rounds must be in order, each once")
+            if record.base_commit != expected:
+                raise ValueError(
+                    f"round {record.round} must start from {expected}, "
+                    f"got {record.base_commit}"
+                )
+            expected, previous = record.next_base, record.round
+        if (
+            self.delivery is not None
+            and self.delivery.base_commit != self.origin_commit
+        ):
+            raise ValueError("the delivery is re-tested on the original base")
+        if self.delivery_seconds is not None and self.delivery is None:
+            raise ValueError("a delivery time needs a delivery")
+        held = rounds_held(self.rounds)
+        if self.all_rounds_held is not None and self.all_rounds_held is not held:
+            raise ValueError(
+                f"all_rounds_held must be {held} for these rounds, "
+                f"got {self.all_rounds_held}"
+            )
+        return self
+
+    @property
+    def current_base(self) -> str:
+        """The base the next round starts from (the origin before any round)."""
+        return self.rounds[-1].next_base if self.rounds else self.origin_commit
+
+    def with_round(self, record: RoundBase) -> StackLedger:
+        """This ledger with ``record`` appended, validated again.
+
+        Raises ``ValueError`` when the ledger is closed (``closed`` set its
+        ``delivery`` or ``all_rounds_held``), and ``ValidationError`` when
+        ``record`` breaks the chain (out of order, not on ``current_base``)
+        or contradicts itself.
+        """
+        if self.delivery is not None or self.all_rounds_held is not None:
+            raise ValueError("the ledger is closed: no round follows its delivery")
+        data = self.model_dump()
+        data["rounds"] = (*data["rounds"], record.model_dump())
+        return StackLedger.model_validate(data)
+
+    def closed(
+        self, delivery: Combination | None, delivery_seconds: float | None
+    ) -> StackLedger:
+        """This ledger with the delivery re-test set (``None``: none ran) and
+        ``all_rounds_held`` computed from the rounds, validated again."""
+        data = self.model_dump()
+        data["delivery"] = None if delivery is None else delivery.model_dump()
+        data["delivery_seconds"] = delivery_seconds
+        data["all_rounds_held"] = rounds_held(self.rounds)
+        return StackLedger.model_validate(data)
+
+
 class TechniqueMatchRecord(EngineModel):
     """A playbook technique the matcher found fitting (Step 3, matched mode).
 
@@ -1220,6 +1388,8 @@ ENGINE_MODEL_CLASSES: tuple[type[EngineModel], ...] = (
     FrozenFile,
     NoiseCalibration,
     ScaleSetting,
+    RoundBase,
+    StackLedger,
 )
 """Every model that may appear in checkpointed state (checkpointer allowlist)."""
 

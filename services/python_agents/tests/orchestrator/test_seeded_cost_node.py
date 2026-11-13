@@ -162,8 +162,8 @@ def _scrub(value: object) -> object:
 def _fingerprint(
     state: EngineState, turns: Sequence[_Spender], ctx: NodeContext
 ) -> str:
-    """Each turn's delta and events, then the final state (D64's keys left
-    out) and its report, hashed."""
+    """Each turn's delta and events, then the final state (D64's keys and
+    X2-DT's ``stack``, newer than GOLDEN, left out) and its report, hashed."""
     record: list[object] = []
     for generator in turns:
         delta, events = _turn(ctx, state, generator)
@@ -171,7 +171,7 @@ def _fingerprint(
         state = _merged(state, delta, events)
         record.append([e.model_dump(mode="json") for e in events])
     dumped = dump_state(state)
-    for key in NEW_KEYS:
+    for key in (*NEW_KEYS, "stack"):
         dumped.pop(key, None)
     record.append(dumped)
     now = min(e.at for e in state["events"])

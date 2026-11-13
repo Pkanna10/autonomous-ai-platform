@@ -34,6 +34,10 @@ review branch's ``review_combination`` and ``review_delivery`` (D10); and
 D64's own cost line for seeded second generator calls, ``seeded_calls`` and
 ``seeded_cost_usd`` (also counted in ``discovery_cost_usd``).
 
+X2-DT (O63) adds ``stack``, the stacked-rounds ledger (``StackLedger``): the
+original base and its baseline, and each round's end. It stays ``None``
+unless ``STACKED_ROUNDS`` is on.
+
 ``AgentState`` is a transitional alias for the placeholder nodes and tests
 that still import the old name; it goes away with the node rewrite.
 """
@@ -60,6 +64,7 @@ from autonomous_ai_agents.common.models import (
     Project,
     ProjectUnderstanding,
     RunPhase,
+    StackLedger,
     Technique,
     TechniqueMatchRecord,
     Trial,
@@ -139,6 +144,7 @@ class EngineState(TypedDict):
     review_delivery: Delivery | None
     seeded_calls: int
     seeded_cost_usd: float
+    stack: StackLedger | None
 
 
 AgentState = EngineState
@@ -212,4 +218,5 @@ def initial_state(
         review_delivery=None,
         seeded_calls=0,
         seeded_cost_usd=0.0,
+        stack=None,
     )

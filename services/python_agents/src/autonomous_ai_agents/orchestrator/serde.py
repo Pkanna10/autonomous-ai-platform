@@ -22,11 +22,11 @@ as a plain ``str`` (Step 4 re-types those through ``load_state``). The
 LangGraph checkpointer keeps its own ``JsonPlusSerializer``; this module is
 for the repository and for re-typing.
 
-Keys added after states were first stored (``ADDED_KEYS``, D64's counters)
-take their initial value when a state has none, both on load (stored data
-saved before them) and on dump (a run paused before them and resumed after,
-whose LangGraph checkpoint has no channel for them); every other missing key
-is refused.
+Keys added after states were first stored (``ADDED_KEYS``: D64's counters
+and X2-DT's ``stack`` ledger) take their initial value when a state has
+none, both on load (stored data saved before them) and on dump (a run paused
+before them and resumed after, whose LangGraph checkpoint has no channel for
+them); every other missing key is refused.
 """
 
 from __future__ import annotations
@@ -40,7 +40,11 @@ from pydantic import TypeAdapter, ValidationError
 
 from autonomous_ai_agents.orchestrator.state import EngineState
 
-ADDED_KEYS: Mapping[str, object] = {"seeded_calls": 0, "seeded_cost_usd": 0.0}
+ADDED_KEYS: Mapping[str, object] = {
+    "seeded_calls": 0,
+    "seeded_cost_usd": 0.0,
+    "stack": None,
+}
 """Keys newer than stored states, each with the value an older one loads with."""
 
 

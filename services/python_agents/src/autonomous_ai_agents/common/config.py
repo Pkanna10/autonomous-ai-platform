@@ -654,6 +654,14 @@ class Settings(BaseSettings):
     today's score order; ``on`` also offers each conflict component's
     max-sum conflict-free subset first, by confirmed gain. ``off`` is
     today's combine byte for byte. Read by ``GitCombiner``."""
+    STACKED_ROUNDS: bool = False
+    """X2-DT, stacked rounds (O63): at each round's end the keeps still on
+    the current base are combined; a held tip that passes adoption (its
+    baseline and calibration, outputs equal to the original base's, a new
+    profile) becomes the next round's base, and the last held tip is
+    squashed onto the original base and re-tested there for delivery. Only
+    the factory reads it; it refuses quality mode and ``SITE_STACKS`` beside
+    it. Off keeps today's graph, every request and every decision."""
     IDEAS_VIEW_RECORD: bool = False
     """Emergence round 2, S1: ``True`` adds a ``lane_view`` event per lane
     request sent (the lane, ``view_sha``: 8 hex of its data block's sha256

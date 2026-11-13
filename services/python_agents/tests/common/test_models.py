@@ -1301,3 +1301,55 @@ def test_checkpoint_serde_round_trips_the_new_state_models() -> None:
     assert restored["understanding"] == understanding
     assert restored["combination"] == combination
     assert isinstance(restored["combination"].skipped[0], CombineSkip)
+
+
+def test_checkpoint_serde_round_trips_a_stack_ledger(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    GIVEN a StackLedger with an adopted, a refused and a not-held round and a
+          delivery (X2-DT)
+    WHEN the checkpoint serializer built with the engine allowlist dumps and
+         loads it
+    THEN it comes back equal, every nested model typed, with no blocked
+         deserialization warning
+    """
+    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+    origin, tip_1, tip_2, tip_3 = "0" * 40, "1" * 40, "2" * 40, "3" * 40
+
+    def combined(base: str, tip: str, *, holds: bool) -> Combination:
+        return Combination(base_commit=base, tip_commit=tip, holds=holds,
+                           applied_trial_ids=("t-1",), summary="t-1 applied",
+                           skipped=(CombineSkip(trial_id="t-2", reason="conflict"),))  # fmt: skip
+
+    adopted = m.RoundBase(round=1, base_commit=origin, offered_trial_ids=("t-1",),
+                          combination=combined(origin, tip_1, holds=True),
+                          adopted=True, tip_commit=tip_1, floor=0.025,
+                          reason="held", seconds={"combine": 3.5})  # fmt: skip
+    refused = m.RoundBase(round=2, base_commit=tip_1, offered_trial_ids=("t-1",),
+                          combination=combined(tip_1, tip_2, holds=True),
+                          tip_commit=tip_2,
+                          reason="tip outputs differ from the original base")  # fmt: skip
+    missed = m.RoundBase(round=3, base_commit=tip_1, offered_trial_ids=("t-1",),
+                         combination=combined(tip_1, tip_3, holds=False),
+                         reason="did not hold")  # fmt: skip
+    ledger = m.StackLedger(
+        origin_commit=origin,
+        origin_baseline=m.Baseline(commit=origin),
+        rounds=(adopted, refused, missed),
+    ).closed(combined(origin, tip_2, holds=True), 30.0)
+    serde = JsonPlusSerializer(allowed_msgpack_modules=m.ENGINE_SERDE_ALLOWLIST)
+
+    with caplog.at_level(logging.WARNING):
+        restored = serde.loads_typed(serde.dumps_typed({"stack": ledger}))["stack"]
+
+    assert restored == ledger
+    assert type(restored) is m.StackLedger
+    assert [type(r) for r in restored.rounds] == [m.RoundBase] * 3
+    assert type(restored.rounds[0].combination) is Combination
+    assert type(restored.rounds[0].combination.skipped[0]) is CombineSkip
+    assert type(restored.delivery) is Combination
+    assert type(restored.origin_baseline) is m.Baseline
+    assert restored.all_rounds_held is False
+    assert "blocked" not in caplog.text.lower()
