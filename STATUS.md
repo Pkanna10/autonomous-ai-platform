@@ -848,6 +848,37 @@ blocks it.
     browser extension and no signed-in browsing.
   - fp-ideation is restarted from its filed notes, because its earlier session
     was stopped by an API safeguard.
+  - **Owner's addition, the same day:** each seat also files the open overview
+    pages of its field's standard texts and courses (tables of contents,
+    syllabi, reading lists), skipping any site that refuses automated clients.
+    They are a map of the field, never evidence for a claim. Each seat adds a
+    "not yet covered" list, and the index gains the type "overview only".
+  - **Done (`c8a4a9c`):** 13 seats filed errata and overview sections. The
+    index lists 146 full text, 52 open substitute, 35 unverified and 75
+    overview-only sources; 23 overview pages were refused or unreached.
+- **O67. The V9 exposure rulings (owner, 2026-11-13).** Five seats reached the
+  sealed V9 corpus while studying; none read its keys or notes. s8-expert
+  checked out and timed 7 of the retired fixes, and s4-algorithms read 6 of
+  their diffs. The log is `emergence/round-3/incidents.md`.
+  - **No penalty.** The O64 brief sent the expert seat to the libraries'
+    commits without excluding V9's. s8's case is recorded as the more serious,
+    because it read that V9 was sealed and then used the manifest.
+  - **Fresh contexts.** s4 restarts from its redacted notes; s8 restarts from
+    its brief and a Lead-computed allowed-commit list (124 commits, every V9 fix
+    and its equivalents excluded, no V9 id shown).
+  - **K4 is 21 tasks.** The 8 tasks on the development libraries, plus
+    markdown-it-py (the Lead's miscount made it a ninth), are retired from every
+    claim and labelled "exposed" if ever run.
+  - **The quarantine stays sealed and uncommitted**, listed by hash only.
+  - **A technical lock.** A PreToolUse hook denies every agent call that names
+    a sealed path, or that lists or recursively searches above one. Sparse
+    checkout removes those files from every worktree but the gate's.
+  - **Stage 4 is screened** by script from salted slow hashes of the retired
+    fixes' commit ids and touched function names; flags go to the owner before
+    scoring.
+  - **Why:** an instruction is not a boundary. Three of the five exposures
+    happened through ordinary searches, so the files must be unreachable, not
+    merely forbidden.
 - **O65. Two owner requests from round 3's study findings (owner, 2026-11-13;
   not a rule change).**
   1. **Equivalence audit, now, zero credit, outside the points.**
