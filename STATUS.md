@@ -831,6 +831,35 @@ blocks it.
     - its own knowledge of public upstream fixes.
   - **Why:** V9 is O19's held-out exam and the charter's K4 rung, and a prior
     built from its keys would contaminate both.
+- **O63. Replay accepted; X2-DT approved (owner, 2026-11-13).**
+  1. **The X2-DT plan (`w2-sprint/stacked-plan.md`) is approved.**
+     - The round combine offers every keep still on the current base.
+     - The delivered branch is the squash.
+     - Decision 3 stands as written.
+     - The rider is 10 minutes.
+     - The pilot runs on key 1 with its cap lowered to 5.00 for that one run,
+       recorded. If it stops at the cap, it is repeated on key 2.
+     - One added recorded secondary: how often the final re-test against the
+       original base fails after every round's combine held.
+     - Build may start.
+  2. **The Opus leap cap of 24,000 tokens with a 951 s timeout** is approved as
+     the next labelled baseline, after X2-DT has been read. X2-DT keeps 12,000.
+  3. **No fifth replay case:** the inferred order is a guess. The fate field
+     records it from now on.
+  4. **The combine re-measure threshold is not decided yet.** First find why
+     live floors are higher than quiet ones (replay 2.0 to 3.6 against 5.9 to
+     9.8 live, same tips, same runner type). The analysis is zero-credit, from
+     the archives and the workflow:
+     - what else runs on the runner while a trial or a combine is measured;
+     - each trial's floor against the run's calibrated baseline floor, by
+       one-run or two-run dispatch and by position in the run;
+     - the inconclusive trials whose gain was above the baseline floor but below
+       their own floor, per arm and library. Then propose the fix that removes
+       the cause. Proposal only: no judge or floor change.
+  5. **Record-only, with X2-DT's harness unit:** archive the diff of each
+     inconclusive trial whose gain is above the baseline floor, as kept diffs
+     are archived, so that it can be replayed offline.
+  - No spend beyond the pilot and the 20 X2-DT runs.
 - **O62. O61 read accepted; credit reconciled; next steps (owner, 2026-11-12).**
   1. Both confirmation runs whose Opus leap stopped at 12,000 stay in the
      pre-registered reading: the pool ran under the same cap.
