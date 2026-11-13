@@ -295,3 +295,115 @@ The statistician keeps the table.
 - the proposals with their critics' verdicts;
 - each offline result against its stated bar;
 - the points table.
+
+## Addendum O64-2: Round 3 points and communication (owner, 2026-11-13)
+
+**Replaces every earlier round-3 points figure,** including the exam tier
+points.
+
+**Timing.** The addendum arrived after stage 0, after the study seats started
+(stage 1), and after the examiner began building papers. No post, mark or
+point existed yet, so nothing scored is affected. The examiner was told at once
+to drop tier points and to build re-sit papers.
+
+**Execution note.** The study seats were launched as 14 persistent background
+agents before this addendum. They are kept as they are, because persistent
+seats must be resumable with their own context, and workflow agents are not.
+- Workflows run the stateless parallel stages: the exam sittings, marking, and
+  the offline experiments. Each workflow agent loads its seat's own memo, its
+  notes and mistake log.
+- The Lead drives the conversation rounds by resuming the persistent seats.
+
+### Points
+
+**Exam.**
+- The exam is a gate only (70 % on tiers 1 and 2) and earns no points.
+- A re-sit uses a fresh paper, hash-committed separately.
+- The board and the library are closed during exams.
+- The exam is valid only if its pass rate is between 40 and 80 % and every
+  plant reproduces from the key.
+
+**Proposals and experiments.**
+
+| Event | Points |
+| --- | ---: |
+| A proposal is built | +1 |
+| Its offline experiment passes | +3 |
+| A well-run failed experiment is written into the library | +1 |
+| A live run passes its pre-registered bar | +20 |
+
+- **The offline bar is set by the statistician before the run.** It states a
+  minimum effect above the measured noise and a fixed N, and allows one
+  attempt.
+- **It is scored on held-back data.** The run is scored on a part of the
+  archive the statistician holds back from students. Stage-1 seats could read
+  the whole archive, so the statistician records which held-back rows were
+  read or cited in stage 1, from the seats' own notes. Where none can be held
+  back cleanly, the experiment is scored on data that arrives after its
+  pre-registration, such as the X2-DT runs.
+
+**Admissibility.**
+- A proposal is admissible only with a numeric predicted gain, the archive
+  rows it will be tested on, and a deadline.
+- Near-duplicate proposals share one payout.
+
+**Authors and teaching.**
+- Outcome points are split equally among at most three named authors,
+  declared at submission.
+- Teaching earns +1 only when:
+  - the citing proposal passed its offline experiment, and the lesson is
+    load-bearing;
+  - it is at most one per teacher per round;
+  - it is never between co-authors.
+
+**Critics.**
+- +2 for a refutation confirmed by the experiment or the examiner; -2 for one
+  that is overturned.
+- +1 when a proposal they cleared passes offline.
+- Proposals reach critics anonymised.
+- The examiner or the statistician accepts refutations, never the critic or
+  the proposer.
+
+**Misconduct (-3).** Changing a bar or a kill criterion after the fact; an
+experiment not run or not reported by its deadline; a result that does not
+reproduce. An honest, pre-registered claim that fails carries no penalty.
+
+**Scoring and the bench.**
+- The examiner and the statistician earn no points.
+- The points table is recomputed by a script from the append-only board and
+  must match the statistician's table.
+- A seat goes to the bench after two consecutive rounds with no outcome
+  points.
+
+### Communication
+
+**Posts.**
+- Every post carries an id, author, to, reply_to, thread, round and status
+  (open, revised, withdrawn, closed).
+- Agents return posts as text. The Lead is the only writer to the board, an
+  append-only `round-3/board.jsonl`.
+
+**Seats.**
+- Seats are persistent. Each is resumed with its own context, and only when
+  its inbox holds a post addressed to it, an exam mark or an experiment
+  result.
+- A conversation round ends when every inbox is empty or the turn budget is
+  spent.
+- Each seat receives its inbox and a short digest of closed threads, never the
+  whole board.
+- After a fixed number of resumes, a seat is restarted from its own written
+  memo.
+
+**Threads.**
+- A thread has at most three turns: claim, challenge, reply. The last turn
+  ends "concede", "revise" or "stand, because".
+- A reply to a superseded post is returned once for a re-answer.
+- Blind first: each seat commits its position and prediction privately before
+  the thread's other posts are shown to it.
+- A change of view must cite the post that caused it.
+- Each thread has one assigned dissenter.
+- The examiner and one critic run on a different model from the students.
+
+**Parallel stages.** The study, the exams and the offline experiments run in
+parallel; see the execution note above. The Lead drives the conversation
+rounds.

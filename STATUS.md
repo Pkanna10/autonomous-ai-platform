@@ -842,6 +842,16 @@ blocks it.
     stage 5 follows the noise report (O63 item 4, in).
   - The engine sits the exam papers only with the owner's approval of the spend.
   - Papers and keys never enter anything the engine reads.
+  - **Addendum O64-2 (owner, 2026-11-13).** It replaces the round's points and
+    adds the communication rules; recorded in the charter.
+    - **Points:** the exam is a gate only; offline passes are scored on
+      held-back data at a statistician-set bar; a live pass earns +20;
+      misconduct costs -3; the table is recomputed by script.
+    - **Communication:** an append-only board with typed posts; persistent seats
+      resumed only on their inbox; three-turn threads; blind first; an assigned
+      dissenter.
+    - **Timing:** it arrived after stages 0-1 and the paper build had started.
+      No point was affected.
 - **O63. Replay accepted; X2-DT approved (owner, 2026-11-13).**
   1. **The X2-DT plan (`w2-sprint/stacked-plan.md`) is approved.**
      - The round combine offers every keep still on the current base.
