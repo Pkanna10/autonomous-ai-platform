@@ -831,6 +831,29 @@ blocks it.
     - its own knowledge of public upstream fixes.
   - **Why:** V9 is O19's held-out exam and the charter's K4 rung, and a prior
     built from its keys would contaminate both.
+- **O65. Two owner requests from round 3's study findings (owner, 2026-11-13;
+  not a rule change).**
+  1. **Equivalence audit, now, zero credit, outside the points.**
+     - Run s3-equivalence's grammar fuzzer, and an equivalent input generator
+       for sqlparse, mistune and markdown, over every archived kept diff and
+       delivered patch, each against its base commit.
+     - Report per library: the keeps checked, the keeps with any output
+       difference, the delivered gains that rest on them, and the kind of fault.
+     - Every reading already made stands.
+     - Bring a proposal to strengthen the equivalence judge: strengthening only,
+       proposal only.
+  2. **Combine-order replay, before the 20 X2-DT runs are dispatched.** The
+     build and the pilot proceed meanwhile.
+     - An offline replay of the archived held combines, comparing today's score
+       order with the conflict choice made by measured gain (the existing
+       `SITE_STACKS="on"` selection).
+     - New measurements on archived diffs, with no API spend.
+     - Report the delivered gain both ways per run, and how often each order
+       picks the stronger side.
+     - The owner then decides whether X2-DT runs as defined, or whether the
+       gain-ordered choice becomes the baseline first.
+  3. **The library index** notes which sources were read in full text and which
+     only from summaries.
 - **O64. Emergence round 3, the academy round (owner, 2026-11-13).** Recorded in
   full as an addendum to the charter (O54) in
   `.claude/handoff/step3/idea-lab/emergence/charter.md`, with the owner's exam
