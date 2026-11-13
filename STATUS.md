@@ -866,9 +866,11 @@ blocks it.
   - **Fresh contexts.** s4 restarts from its redacted notes; s8 restarts from
     its brief and a Lead-computed allowed-commit list (124 commits, every V9 fix
     and its equivalents excluded, no V9 id shown).
-  - **K4 is 21 tasks.** The 8 tasks on the development libraries, plus
-    markdown-it-py (the Lead's miscount made it a ninth), are retired from every
-    claim and labelled "exposed" if ever run.
+  - **K4 is 21 tasks (O68).** The 8 tasks on sqlparse, mistune and
+    Python-Markdown are retired. markdown-it-py is not: no seat saw it. idna's
+    task is also exposed, because the lab's idna pin descends from its fix and
+    X1's history view named the fix. Retired tasks are labelled "exposed" if
+    ever run.
   - **The quarantine stays sealed and uncommitted**, listed by hash only.
   - **A technical lock.** A PreToolUse hook denies every agent call that names a
     sealed path, or that lists or recursively searches above one. Sparse

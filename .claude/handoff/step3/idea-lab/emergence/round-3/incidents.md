@@ -62,3 +62,30 @@ Also sealed by the guard, not copied: the agents' own transcripts and saved tool
 - **Residual:**
   - a deliberately obfuscated path, for example one built by string concatenation inside a script the agent writes, is not caught by text matching;
   - 50 stale copies of V9 remain on disk: 49 in old scratch folders and the untracked leftovers of one in the `step3-research` worktree. The guard covers them, but they were not deleted: the deletion was refused by the session's safety classifier, and the owner decides.
+
+## O68: K4 and the idna check (owner, 2026-11-13)
+
+1. **K4 starts at 22, not 21.** Only the 8 tasks on sqlparse, mistune and Python-Markdown are retired. markdown-it-py is not retired: no seat saw it. The screen's data was rebuilt without it.
+2. **The idna check, before 22 is final.** The check was a Lead-only script, `k4check.py` in the sealed folder. It printed counts and paths only, never a subject or a line.
+   - **How the subject got into `tests/fixtures/ideas_probe/views.jsonl`.**
+     - The file is the 48 rows of the X1 views pass, run 41642031575 on `e3743e5`, committed in `c9aa3fd` (2026-11-03). It holds 8 libraries × 6 views and sent no request.
+     - Row 41 is idna's **history** view (`idea_context.py`'s `LaneView("history", ...)`). It lists recent commits at the lab's idna pin, `d55e65e`.
+     - **The idna K4 fix is an ancestor of that pin.** So the lab's idna runs started from code that already contains the fix, and the history view names the fix by id and subject.
+     - X1 read these views from the fixture (`ideas_probe.VIEWS_FIXTURE`, "Va's rows, for X1"), so X1's lane requests on idna carried that history view.
+   - **The other K4 tasks on libraries the lab ran.**
+
+| library (lab pin) | V9 task | fix in the pin's history | id found | subject found | changed lines found |
+| ----------------- | ------- | ------------------------ | -------- | ------------- | ------------------- |
+| idna (`d55e65e`) | idna-uts46-ascii-fastpath | **yes** | 2 files (the views fixture and one stale scratch copy of it) | the same 2 | 0 |
+| pyparsing (`d90d38b`) | pyparsing-results-copy | no | 0 | 0 | 0 |
+| more_itertools (`64be96c`) | more_itertools-nth-permutation | no | 0 | 0 | 0 |
+| sortedcontainers (`a1f52d6`) | no V9 task | - | - | - | - |
+
+   - **Scope searched:** 16,370 files: the repository's `services/` at HEAD, the gate copy's views fixture, the whole handoff folder (run, idea, lesson and patch archives), and the scratch downloads of CI artifacts.
+   - **What each row means:** "changed lines" means at least a quarter of the fix's distinctive added lines (30 characters or more) appear in one file. Lane request texts and the database's lessons table are not archived locally, so the history view in the fixture stands in for what X1 sent.
+   - **Result: idna is labelled exposed, so K4 is 21:** the 22 less idna. The idna task joins the retired set, is added to the stage-4 screen, and is reported separately if ever run.
+   - **A general consequence, for the owner:** a lab pin that descends from a held-out fix makes the history view name that fix. Any future held-out task on a library the engine runs needs its fix checked against the pin before sealing.
+3. **The stale V9 copies were deleted** (owner's permission).
+   - **Removed:** 49 `upstream_corpus` directories inside old scratch folders, listed before deletion. Nothing else in those folders was touched.
+   - **The `step3-research` worktree** was not deleted from. Its sparse checkout is applied and re-applied. It still holds 13 untracked `.pyc` files, bytecode of the V9 workloads that git leaves alone; the guard covers them.
+   - **The confirming search** of the whole disk found V9 only in the gate copy (65 files) and in those 13 bytecode files in `step3-research`. It also sits in the repository's object store, as the owner allowed.
