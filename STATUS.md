@@ -926,6 +926,17 @@ blocks it.
        picks the stronger side.
      - The owner then decides whether X2-DT runs as defined, or whether the
        gain-ordered choice becomes the baseline first.
+     - **Done (`w2-sprint/o65/combine-order.md`):** 58 runs measured on
+       `2aa8bed`, with no spend; 2 were excluded, both where today's set had
+       failed. Both choices go through the engine's own hold and fallback rules.
+       - **Delivered gain:** today's order 19.06 %, gain order 21.35 %; the sum
+         of delivered gains is 12 % higher under gain order.
+       - **Where they differ (27 runs):** gain order is better in 22 (12
+         clearly) and worse in 5 (1 clearly).
+       - **Stronger side of a conflict pair, past the floor:** gain order keeps
+         it 39 of 40 times, today's order 16 of 37.
+       - **No set failed to hold** under either choice.
+       - **Awaiting the owner's decision.**
   3. **The library index** notes which sources were read in full text and which
      only from summaries.
 - **O64. Emergence round 3, the academy round (owner, 2026-11-13).** Recorded in
