@@ -102,5 +102,6 @@ The owner holds the passphrase. It is in no file in the repository, STATUS, the 
 | version | when | answers from | sha256 of `exam-bundle.enc` |
 | --- | --- | --- | --- |
 | 1 | 2026-11-14, during the sittings | 12 seats (8 finished, 4 partial) | `1c12891c9d1c3da0b108c870f91c10d7ec4c8593f9ba5e1eae3f1fbee0caf050` |
+| 2 | 2026-11-14, after the last seat sat | all 14 seats (213 files), plus the sitting record | `adb231d38c96d85bc1e1836a7abeedaea25f29399f2f64f2582d3b51f5d230bd` |
 
 It is refreshed and re-committed once when the last seat has sat, and once more after marking with the marks included.
