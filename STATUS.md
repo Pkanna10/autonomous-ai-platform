@@ -881,6 +881,22 @@ blocks it.
   - **Why:** an instruction is not a boundary. Three of the five exposures
     happened through ordinary searches, so the files must be unreachable, not
     merely forbidden.
+- **O69. Exam marking and validity (owner, 2026-11-14; no rule change).**
+  - **Marks are measured on a quiet machine.** The examiner's measurements run
+    one at a time, either with no sitting, gate or build running or on a CI
+    runner. The load average is recorded beside each mark. Students' own timings
+    taken under load are never used for marks.
+  - **Validity is checked before any mark counts.** When the marks are in, the
+    Lead reports the pass rate and the plants found per tier. A pass rate above
+    80 % makes the exam invalid under O64-2: the examiner then builds a harder
+    gate paper, and the Lead waits for the owner's go.
+  - **Done the same day:** the 13 untracked V9 bytecode files in
+    `step3-research` were deleted with the owner's permission. A whole-disk
+    search now finds V9 only in the Lead's gate copy, apart from the git object
+    stores.
+  - **U8a's look windows stand as labelled.** No snapshot is taken between an
+    ABBA and its suite, the engine source stays untouched, and the wide window
+    is accepted.
 - **O65. Two owner requests from round 3's study findings (owner, 2026-11-13;
   not a rule change).**
   1. **Equivalence audit, now, zero credit, outside the points.**
