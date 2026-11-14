@@ -10,6 +10,11 @@
                                                                            |
          END <- watch <- learn <- deliver <- combine <- approval_gate <----+
 
+With stacked rounds (``NodeContext.stack_rounds``, X2-DT) another round goes
+through ``restack`` first (``verdicts -> restack -> hypotheses``), the
+router is ``stacking.stacked_router`` and ``combine`` runs
+``stacking.stacked_combine``; off, the graph is the one drawn above.
+
 ``Orchestrator`` always compiles with a checkpointer: without one the
 approval gate's ``interrupt()`` ends the run silently and ``Command(resume)``
 raises. The checkpointer's serializer is restricted to the engine's own
@@ -58,6 +63,7 @@ from autonomous_ai_agents.common.models import (
     Objective,
     Project,
     RunPhase,
+    StackLedger,
     Workload,
 )
 from autonomous_ai_agents.execution.runner import (
@@ -76,6 +82,11 @@ from autonomous_ai_agents.orchestrator.nodes import (
     make_router,
     progress_of,
     trial_refs_left,
+)
+from autonomous_ai_agents.orchestrator.stacking import (
+    STACK_NODE,
+    stacked_nodes,
+    stacked_router,
 )
 from autonomous_ai_agents.orchestrator.state import (
     REDUCER_KEYS,
@@ -128,16 +139,23 @@ def _driving(run_id: str, refusal: str) -> Iterator[None]:
             _DRIVEN.discard(run_id)
 
 
-def run_config(run_id: str, max_rounds: int) -> RunnableConfig:
+def run_config(
+    run_id: str, max_rounds: int, *, stacked: bool = False
+) -> RunnableConfig:
     """The config that binds a run to its checkpoint thread.
 
     The recursion limit is the longest path a run with ``max_rounds`` rounds
-    can take (``11 + 4 * max_rounds`` node visits) plus five spare steps, so
-    a bounded loop never trips LangGraph's recursion guard.
+    can take (``11 + 4 * max_rounds`` node visits, plus one ``restack`` visit
+    before each round after the first when ``stacked``) plus five spare
+    steps, so a bounded loop never trips LangGraph's recursion guard.
     """
+    restacks = max(0, max_rounds - 1) if stacked else 0
     return {
         "configurable": {"thread_id": run_id},
-        "recursion_limit": _FIXED_STEPS + len(_ROUND_NODES) * max_rounds + _SPARE_STEPS,
+        "recursion_limit": _FIXED_STEPS
+        + len(_ROUND_NODES) * max_rounds
+        + restacks
+        + _SPARE_STEPS,
     }
 
 
@@ -184,20 +202,31 @@ def create_graph(
     graph: StateGraph[EngineState, None, EngineState, EngineState] = StateGraph(
         EngineState
     )
-    for name, node in make_nodes(ctx).items():
+    nodes = make_nodes(ctx)
+    router = make_router(ctx)
+    again = "hypotheses"
+    if ctx.stack_rounds:  # X2-DT: each further round starts at restack
+        nodes, router, again = (
+            stacked_nodes(ctx, nodes),
+            stacked_router(ctx),
+            STACK_NODE,
+        )
+    for name, node in nodes.items():
         graph.add_node(name, node)
     graph.add_edge(START, LOOP_NODES[0])
     for source, target in pairwise(LOOP_NODES):
         graph.add_edge(source, target)
     graph.add_conditional_edges(
         LOOP_NODES[-1],
-        make_router(ctx),
+        router,
         {
             "approval_gate": "approval_gate",
             "combine": "combine",
-            "hypotheses": "hypotheses",
+            "hypotheses": again,
         },
     )
+    if ctx.stack_rounds:
+        graph.add_edge(STACK_NODE, "hypotheses")
     for source, target in pairwise(TAIL_NODES):
         graph.add_edge(source, target)
     graph.add_edge(TAIL_NODES[-1], END)
@@ -233,7 +262,9 @@ class Orchestrator:
     ``settings.MAX_COST_USD``; ``initial_state`` refuses a negative or
     non-finite one with ``ValueError``). ``run`` and ``stream`` raise
     ``ValueError`` for a run id whose thread already exists; ``resume``
-    raises ``ValueError`` unless the run is paused at the approval gate.
+    raises ``ValueError`` unless the run is paused at the approval gate, and
+    ``EngineError`` when the run has an open stack ledger (X2-DT) and this
+    context does not stack rounds.
     One call at a time drives a run id in this process: a ``run``,
     ``stream`` or ``resume`` of a run id another call is driving is refused
     the same way (``_driving``), so of two concurrent resumes one continues
@@ -273,7 +304,7 @@ class Orchestrator:
             max_cost_usd=max_cost_usd,
         )
         run = state["run_id"]
-        cfg = run_config(run, state["max_rounds"])
+        cfg = self._config(run, state["max_rounds"])
         with _driving(run, _exists(run)):
             self._refuse_existing(run)
             self.context.repository.save_run(state)
@@ -292,7 +323,8 @@ class Orchestrator:
                 raise ValueError(f"run {run_id!r} is unknown")
             if snapshot.next != _PAUSED_AT_GATE:
                 raise ValueError(f"run {run_id!r} is not waiting for approval")
-            cfg = run_config(run_id, snapshot.values["max_rounds"])
+            self._refuse_unstacked(run_id, snapshot.values.get("stack"))
+            cfg = self._config(run_id, snapshot.values["max_rounds"])
             return self._invoke(
                 run_id, cfg, Command(resume=decision.model_dump(mode="json"))
             )
@@ -330,7 +362,7 @@ class Orchestrator:
             max_cost_usd=max_cost_usd,
         )
         run = state["run_id"]
-        cfg = run_config(run, state["max_rounds"])
+        cfg = self._config(run, state["max_rounds"])
         with _driving(run, _exists(run)):
             self._refuse_existing(run)
             self.context.repository.save_run(state)
@@ -372,6 +404,27 @@ class Orchestrator:
             )
         emit(event)
         return event
+
+    def _config(self, run_id: str, max_rounds: int) -> RunnableConfig:
+        """``run_config`` for this context: the ``stacked`` keyword only when
+        stacking, so a run with stacking off makes exactly today's call."""
+        if self.context.stack_rounds:
+            return run_config(run_id, max_rounds, stacked=True)
+        return run_config(run_id, max_rounds)
+
+    def _refuse_unstacked(self, run_id: str, ledger: StackLedger | None) -> None:
+        """``EngineError`` when a run paused with an open stack ledger (its
+        base may be a round tip) is resumed by a context that does not
+        stack: today's combine would deliver from that tip, with no squash
+        and no re-test from the original base (X2-DT, U5b review S5)."""
+        closed = ledger is None or (
+            ledger.delivery is not None or ledger.all_rounds_held is not None
+        )
+        if not closed and not self.context.stack_rounds:
+            raise EngineError(
+                f"run {run_id!r} has an open stack ledger: resume it with a "
+                "context that stacks rounds (STACKED_ROUNDS)"
+            )
 
     def _refuse_existing(self, run_id: str) -> None:
         """Raise ``ValueError`` when ``run_id`` already has a checkpoint thread."""
