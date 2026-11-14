@@ -89,3 +89,18 @@ Also sealed by the guard, not copied: the agents' own transcripts and saved tool
    - **Removed:** 49 `upstream_corpus` directories inside old scratch folders, listed before deletion. Nothing else in those folders was touched.
    - **The `step3-research` worktree** was not deleted from. Its sparse checkout is applied and re-applied. It still holds 13 untracked `.pyc` files, bytecode of the V9 workloads that git leaves alone; the guard covers them.
    - **The confirming search** of the whole disk found V9 only in the gate copy (65 files) and in those 13 bytecode files in `step3-research`. It also sits in the repository's object store, as the owner allowed.
+
+## O70: the encrypted exam bundle (owner, 2026-11-14)
+
+The bundle is one encrypted file committed to the branch at `emergence/round-3/exam-bundle.enc` (AES-256-CBC, PBKDF2, 300,000 iterations). It holds:
+- the sealed key archive with its own passphrase and seal hashes;
+- the papers and the re-sit papers;
+- every answer, `NOTES.md`, `speciality.md`/`answers.md` and `log.md` handed in so far.
+
+The owner holds the passphrase. It is in no file in the repository, STATUS, the board or anywhere a seat can read. The guard denies every agent any path naming the bundle, in every worktree; tested with 56 calls across 14 worktrees, all denied.
+
+| version | when | answers from | sha256 of `exam-bundle.enc` |
+| --- | --- | --- | --- |
+| 1 | 2026-11-14, during the sittings | 12 seats (8 finished, 4 partial) | `1c12891c9d1c3da0b108c870f91c10d7ec4c8593f9ba5e1eae3f1fbee0caf050` |
+
+It is refreshed and re-committed once when the last seat has sat, and once more after marking with the marks included.
