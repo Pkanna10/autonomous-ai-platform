@@ -45,6 +45,8 @@ from autonomous_ai_agents.execution.protocols import KeptChange
 
 from . import combine_replay as cr
 from . import ideas_x2
+from . import replay_archive as ra
+from . import replay_engine as rx
 from .conftest import TESTS_DIR, LiveRun, make_repo
 from .discovery_io import ResultsSink
 from .oss import CloneRefusedError, OssRepo
@@ -56,8 +58,8 @@ from .test_corpus_guards import (
     _run_script,
 )
 
-ARCHIVE = cr.ARCHIVE
-TIPS = [c for c in cr.CASES if c.tip != cr.NO_TIP]
+ARCHIVE = ra.ARCHIVE
+TIPS = [c for c in cr.CASES if c.tip != ra.NO_TIP]
 SHA = "0" * 64
 
 
@@ -78,7 +80,7 @@ def test_the_tip_cases_are_the_four_rows_at_twice_the_baseline_floor() -> None:
     }
     assert {(c.arm, c.dispatch, c.library) for c in TIPS} == wide
     assert len(TIPS) == 4 and len(cr.CASES) == 5
-    assert [c.tip for c in TIPS].count(cr.FALLBACK) == 1
+    assert [c.tip for c in TIPS].count(ra.FALLBACK) == 1
 
 
 def test_each_library_is_profiled_once_and_markdown_has_no_tip() -> None:
@@ -87,7 +89,7 @@ def test_each_library_is_profiled_once_and_markdown_has_no_tip() -> None:
     profiled = [c.library for c in cr.CASES if c.profile]
     assert sorted(profiled) == sorted({*libraries})
     (markdown,) = [c for c in cr.CASES if c.library == "markdown"]
-    assert (markdown.tip, markdown.patch, markdown.trial_id) == (cr.NO_TIP, None, None)
+    assert (markdown.tip, markdown.patch, markdown.trial_id) == (ra.NO_TIP, None, None)
     assert markdown.base_commit.startswith("afd7a2f908")
     prefixes = {
         "sqlparse": "ddf10ae7de",
@@ -102,7 +104,7 @@ def test_each_library_is_profiled_once_and_markdown_has_no_tip() -> None:
 
 def test_every_case_passes_integrity_on_the_committed_archive() -> None:
     """Paths inside the archive, the archived sha256s, the archived base."""
-    found = {c.id: cr.load_archived(c) for c in cr.CASES}
+    found = {c.id: ra.load_archived(c) for c in cr.CASES}
     tomli = found["X2-D-43093773731-tomli"]
     assert tomli.patch is not None and tomli.patch.name == "delivered.patch"
     assert tomli.sha256 == (
@@ -185,15 +187,15 @@ class Scratch:
         text = "".join(json.dumps(r) + "\n" for r in (*hyps, *rows))
         (self.root / "live" / "ideas-x2-X2-D-123456789.jsonl").write_text(text)
 
-    def case(self, **changes: object) -> cr.ReplayCase:
+    def case(self, **changes: object) -> ra.ReplayCase:
         fields: dict[str, object] = {
             "id": "X2-D-123456789-tomli", "arm": "X2-D", "dispatch": "123456789",
-            "library": "tomli", "base_commit": BASE, "tip": cr.DELIVERED,
+            "library": "tomli", "base_commit": BASE, "tip": ra.DELIVERED,
             "patch": "live/patches-X2-D-123456789/X2-D-tomli/delivered.patch",
             "trial_id": None, "profile": True,
         }  # fmt: skip
         fields.update(changes)
-        return cr.ReplayCase(**fields)  # type: ignore[arg-type]
+        return ra.ReplayCase(**fields)  # type: ignore[arg-type]
 
 
 @pytest.fixture
@@ -203,22 +205,22 @@ def scratch(tmp_path: Path) -> Scratch:
 
 def test_the_scratch_archive_passes_as_is(scratch: Scratch) -> None:
     scratch.write(scratch.row())
-    found = cr.load_archived(scratch.case(), scratch.root)
+    found = ra.load_archived(scratch.case(), scratch.root)
     assert found.patch == scratch.folder / "delivered.patch"
     assert found.sha256 == hashlib.sha256(scratch.patch).hexdigest()
     assert (found.baseline_floor_pct, found.ratio) == (2.5, 6.0 / 2.5)
     assert (found.trial_id, found.hypothesis_id, found.seconds) == (None, None, 700.0)
     fallback = scratch.case(
-        tip=cr.FALLBACK, trial_id="t1",
+        tip=ra.FALLBACK, trial_id="t1",
         patch="live/patches-X2-D-123456789/X2-D-tomli/trial-t1.diff",
     )  # fmt: skip
-    kept = cr.load_archived(fallback, scratch.root)
+    kept = ra.load_archived(fallback, scratch.root)
     assert (kept.trial_id, kept.hypothesis_id) == ("t1", "h1")
     assert kept.sha256 == hashlib.sha256(scratch.kept).hexdigest()
-    none = cr.load_archived(scratch.case(tip=cr.NO_TIP, patch=None), scratch.root)
+    none = ra.load_archived(scratch.case(tip=ra.NO_TIP, patch=None), scratch.root)
     assert (none.patch, none.sha256, none.trial_id) == (None, None, None)
     scratch.write(scratch.row(gain_pct=None, floor_pct=None, holds=None), floors=())
-    bare = cr.load_archived(scratch.case(), scratch.root)
+    bare = ra.load_archived(scratch.case(), scratch.root)
     assert (bare.gain_pct, bare.floor_pct, bare.baseline_floor_pct, bare.ratio) == (
         None, None, None, None,
     )  # fmt: skip
@@ -247,8 +249,8 @@ def test_a_malformed_run_row_is_refused(
     scratch: Scratch, row: dict[str, object], match: str
 ) -> None:
     scratch.write(scratch.row(**row))
-    with pytest.raises(cr.IntegrityError, match=match):
-        cr.load_archived(scratch.case(), scratch.root)
+    with pytest.raises(ra.IntegrityError, match=match):
+        ra.load_archived(scratch.case(), scratch.root)
 
 
 def test_a_patch_whose_sha256_is_not_the_archived_one_is_refused(
@@ -256,25 +258,25 @@ def test_a_patch_whose_sha256_is_not_the_archived_one_is_refused(
 ) -> None:
     entry = {**scratch.row()["delivered_patch"], "sha256": SHA}  # type: ignore[dict-item]
     scratch.write(scratch.row(delivered_patch=entry))
-    with pytest.raises(cr.IntegrityError, match="sha256"):
-        cr.load_archived(scratch.case(), scratch.root)
+    with pytest.raises(ra.IntegrityError, match="sha256"):
+        ra.load_archived(scratch.case(), scratch.root)
     (scratch.folder / "delivered.patch").write_bytes(b"changed\n")
     scratch.write(scratch.row())
-    with pytest.raises(cr.IntegrityError, match="sha256"):
-        cr.load_archived(scratch.case(), scratch.root)
+    with pytest.raises(ra.IntegrityError, match="sha256"):
+        ra.load_archived(scratch.case(), scratch.root)
 
 
 def test_a_kept_diff_whose_sha256_is_not_its_entry_is_refused(scratch: Scratch) -> None:
     case = scratch.case(
-        tip=cr.FALLBACK, trial_id="t1",
+        tip=ra.FALLBACK, trial_id="t1",
         patch="live/patches-X2-D-123456789/X2-D-tomli/trial-t1.diff",
     )  # fmt: skip
     (scratch.folder / "trial-t1.diff").write_bytes(b"tampered\n")
     scratch.write(scratch.row())
-    with pytest.raises(cr.IntegrityError, match="sha256"):
-        cr.load_archived(case, scratch.root)
-    with pytest.raises(cr.IntegrityError, match="no kept diff"):
-        cr.load_archived(replace(case, trial_id="t9"), scratch.root)
+    with pytest.raises(ra.IntegrityError, match="sha256"):
+        ra.load_archived(case, scratch.root)
+    with pytest.raises(ra.IntegrityError, match="no kept diff"):
+        ra.load_archived(replace(case, trial_id="t9"), scratch.root)
 
 
 @pytest.mark.parametrize(
@@ -292,33 +294,33 @@ def test_a_patch_entry_that_is_not_whole_is_refused(
     whole = scratch.row()["delivered_patch"]
     assert isinstance(whole, dict)
     scratch.write(scratch.row(delivered_patch={**whole, **entry}))
-    with pytest.raises(cr.IntegrityError, match=match):
-        cr.load_archived(scratch.case(), scratch.root)
+    with pytest.raises(ra.IntegrityError, match=match):
+        ra.load_archived(scratch.case(), scratch.root)
 
 
 def test_the_run_row_must_be_there_once(scratch: Scratch) -> None:
     scratch.write()
-    with pytest.raises(cr.IntegrityError, match="0 run rows"):
-        cr.load_archived(scratch.case(), scratch.root)
+    with pytest.raises(ra.IntegrityError, match="0 run rows"):
+        ra.load_archived(scratch.case(), scratch.root)
     scratch.write(scratch.row(), scratch.row())
-    with pytest.raises(cr.IntegrityError, match="2 run rows"):
-        cr.load_archived(scratch.case(), scratch.root)
-    with pytest.raises(cr.IntegrityError, match="archive"):
-        cr.load_archived(scratch.case(dispatch="999999999"), scratch.root)
+    with pytest.raises(ra.IntegrityError, match="2 run rows"):
+        ra.load_archived(scratch.case(), scratch.root)
+    with pytest.raises(ra.IntegrityError, match="archive"):
+        ra.load_archived(scratch.case(dispatch="999999999"), scratch.root)
 
 
 def test_a_run_file_line_that_is_not_an_object_is_refused(scratch: Scratch) -> None:
     scratch.write(scratch.row())
     path = scratch.root / "live" / "ideas-x2-X2-D-123456789.jsonl"
     path.write_text(path.read_text() + "[1, 2]\n")
-    with pytest.raises(cr.IntegrityError, match="not a JSON object"):
-        cr.load_archived(scratch.case(), scratch.root)
+    with pytest.raises(ra.IntegrityError, match="not a JSON object"):
+        ra.load_archived(scratch.case(), scratch.root)
 
 
 def test_the_replay_context_runs_no_trial() -> None:
     nothing: Any = None
     with pytest.raises(AssertionError, match="runs no trial"):
-        cr._NoTrials().run(
+        rx._NoTrials().run(
             nothing, (), nothing, round=1, branch="b", budget_usd=0.0, brief=nothing
         )
 
@@ -340,8 +342,8 @@ def test_the_replay_context_runs_no_trial() -> None:
 def test_a_patch_path_outside_its_run_directory_is_refused(
     scratch: Scratch, file: str
 ) -> None:
-    with pytest.raises(cr.IntegrityError):
-        cr.patch_file(scratch.root, scratch.case(), file)
+    with pytest.raises(ra.IntegrityError):
+        ra.patch_file(scratch.root, scratch.case(), file)
 
 
 def test_a_link_out_of_the_archive_is_refused(scratch: Scratch, tmp_path: Path) -> None:
@@ -349,28 +351,28 @@ def test_a_link_out_of_the_archive_is_refused(scratch: Scratch, tmp_path: Path) 
     outside.write_bytes(scratch.patch)
     link = scratch.folder / "linked.patch"
     link.symlink_to(outside)
-    with pytest.raises(cr.IntegrityError, match="outside the archive"):
-        cr.patch_file(
+    with pytest.raises(ra.IntegrityError, match="outside the archive"):
+        ra.patch_file(
             scratch.root, scratch.case(), "live-patches/X2-D-tomli/linked.patch"
         )
-    with pytest.raises(cr.IntegrityError, match="outside the archive"):
-        cr.archive_path(
+    with pytest.raises(ra.IntegrityError, match="outside the archive"):
+        ra.archive_path(
             scratch.root, "live/patches-X2-D-123456789/X2-D-tomli/linked.patch"
         )
-    with pytest.raises(cr.IntegrityError, match="not a regular file"):
-        cr.archive_path(scratch.root, "live/patches-X2-D-123456789/X2-D-tomli")
+    with pytest.raises(ra.IntegrityError, match="not a regular file"):
+        ra.archive_path(scratch.root, "live/patches-X2-D-123456789/X2-D-tomli")
     for bad in ("../outside.patch", "/etc/passwd", "live/../../outside.patch", ""):
-        with pytest.raises(cr.IntegrityError):
-            cr.archive_path(scratch.root, bad)
+        with pytest.raises(ra.IntegrityError):
+            ra.archive_path(scratch.root, bad)
 
 
 def test_the_declared_patch_must_be_the_rows_patch(scratch: Scratch) -> None:
     scratch.write(scratch.row())
     other = scratch.case(patch="live/patches-X2-D-123456789/X2-D-tomli/trial-t1.diff")
-    with pytest.raises(cr.IntegrityError, match="declares"):
-        cr.load_archived(other, scratch.root)
-    with pytest.raises(cr.IntegrityError, match="declares no patch"):
-        cr.load_archived(scratch.case(patch=None), scratch.root)
+    with pytest.raises(ra.IntegrityError, match="declares"):
+        ra.load_archived(other, scratch.root)
+    with pytest.raises(ra.IntegrityError, match="declares no patch"):
+        ra.load_archived(scratch.case(patch=None), scratch.root)
 
 
 def test_a_case_with_unsafe_names_is_refused_before_any_file_is_read() -> None:
@@ -378,7 +380,7 @@ def test_a_case_with_unsafe_names_is_refused_before_any_file_is_read() -> None:
     for bad in (
         {"arm": "X2-D/../x"}, {"dispatch": "1;id"}, {"library": "Tomli"},
         {"tip": "both"}, {"trial_id": "t1"}, {"base_commit": "abc"},
-        {"tip": cr.FALLBACK, "trial_id": None},
+        {"tip": ra.FALLBACK, "trial_id": None},
     ):  # fmt: skip
         with pytest.raises(ValueError):
             replace(good, **bad)
@@ -406,8 +408,8 @@ def _retest(
     *,
     applied: int = 1,
     rows: bool = True,
-) -> cr.RetestLook:
-    return cr.RetestLook(
+) -> rx.RetestLook:
+    return rx.RetestLook(
         applied=applied, gain=gain, floor=floor, outcome="keep" if holds else "reject",
         holds=holds, reason="r", tests="passed", tests_counted=3, tests_s=1.0, notes=(),
         rows=rows,
@@ -418,10 +420,10 @@ SKIPPED = _retest(None, None, False, applied=0, rows=False)  # the combiner skip
 NO_ROWS = _retest(None, None, False, rows=False)  # a RunFailure: applied, no rows
 
 
-def _result(*looks: cr.RetestLook, base: float | None = 0.03) -> cr.CaseResult:
-    archived = cr.Archived(None, None, None, None, None, None, None, None, None)
+def _result(*looks: rx.RetestLook, base: float | None = 0.03) -> cr.CaseResult:
+    archived = ra.Archived(None, None, None, None, None, None, None, None, None)
     found = cr.CaseResult(cr.CASES[0], archived)
-    found.baseline = cr.BaselineLook(base, base, 0.01, 1.0, 3)
+    found.baseline = rx.BaselineLook(base, base, 0.01, 1.0, 3)
     found.looks = [
         cr.Look(name, r, 2.0) for name, r in zip(cr.LOOKS, looks, strict=False)
     ]
@@ -491,7 +493,7 @@ class FakeMeasurer:
     """Canned looks in order; each call recorded; ``fail`` raises at a step."""
 
     base: str
-    looks: list[cr.RetestLook] = field(default_factory=list)
+    looks: list[rx.RetestLook] = field(default_factory=list)
     fail: dict[str, BaseException] = field(default_factory=dict)
     calls: list[str] = field(default_factory=list)
     changes: list[KeptChange] = field(default_factory=list)
@@ -512,15 +514,15 @@ class FakeMeasurer:
     def connect(self) -> None:
         self._step("connect")
 
-    def baseline(self) -> cr.BaselineLook:
+    def baseline(self) -> rx.BaselineLook:
         self._step("baseline")
-        return cr.BaselineLook(0.0298, 0.0298, 0.0149, 41.5, 12)
+        return rx.BaselineLook(0.0298, 0.0298, 0.0149, 41.5, 12)
 
-    def profile(self) -> cr.ProfileLook:
+    def profile(self) -> rx.ProfileLook:
         self._step("profile")
-        return cr.ProfileLook(True, 7, 0, None)
+        return rx.ProfileLook(True, 7, 0, None)
 
-    def retest(self, look: str, change: KeptChange) -> cr.RetestLook:
+    def retest(self, look: str, change: KeptChange) -> rx.RetestLook:
         self._step(look)
         self.changes.append(change)
         return self.looks.pop(0)
@@ -580,7 +582,7 @@ def test_a_whole_case_records_three_looks_the_rule_and_every_timing(
     )
     assert m1["over_k_baseline"] is True and rows[1]["over_k_baseline"] is False
     row = rows[-1]
-    assert row["id"] == case.id and row["tip"] == cr.DELIVERED
+    assert row["id"] == case.id and row["tip"] == ra.DELIVERED
     assert (row["archived_gain_pct"], row["archived_floor_pct"]) == (
         pytest.approx(18.751, abs=1e-3), pytest.approx(6.448, abs=1e-3),
     )  # fmt: skip
@@ -617,7 +619,7 @@ def test_a_whole_case_records_three_looks_the_rule_and_every_timing(
         [1.0] * 3,
     )
     assert (row["setup_s"], row["wall_s"], row["stopped"]) == (1.0, 14.0, None)
-    assert row["patch_sha256"] == cr.load_archived(case).sha256
+    assert row["patch_sha256"] == ra.load_archived(case).sha256
     assert run.notes == [cr.note(found)] and "fires on m1" in run.notes[0]
     table = recorder.markdown()
     assert case.id in table and "19.0 / 7.01 / yes" in table and "41.5" in table
@@ -631,7 +633,7 @@ def test_a_whole_case_records_three_looks_the_rule_and_every_timing(
 def test_markdown_runs_the_calibration_and_the_profile_with_no_tip(
     sink: ResultsSink, tmp_path: Path
 ) -> None:
-    (case,) = [c for c in cr.CASES if c.tip == cr.NO_TIP]
+    (case,) = [c for c in cr.CASES if c.tip == ra.NO_TIP]
     measurer = FakeMeasurer(case.base_commit)
     recorder = cr.ReplayRecorder(sink)
     found = cr.replay_case(
@@ -640,7 +642,7 @@ def test_markdown_runs_the_calibration_and_the_profile_with_no_tip(
     assert measurer.calls == ["prepare", "connect", "baseline", "profile", "guards"]
     assert found.looks == [] and found.profile_s == 0.5 and found.wall_s == 4.0
     (row,) = _lines(tmp_path / "results.jsonl")
-    assert row["tip"] == cr.NO_TIP and row["patch"] is None and row["gains_pct"] == []
+    assert row["tip"] == ra.NO_TIP and row["patch"] is None and row["gains_pct"] == []
     assert (row["rule_triggered_m1"], row["rule_verdict"]) == (None, None)
     assert "no tip" in cr.note(found)
 
@@ -715,7 +717,7 @@ def test_a_mismatch_or_a_crash_writes_the_error_row_then_fails(
     ids=["skipped", "no-rows"],
 )
 def test_a_look_that_did_not_measure_the_tip_fails_after_its_rows(
-    sink: ResultsSink, tmp_path: Path, lost: cr.RetestLook, looks: list[str]
+    sink: ResultsSink, tmp_path: Path, lost: rx.RetestLook, looks: list[str]
 ) -> None:
     """The combiner skipped the change (deterministic: the looks stop), or a
     RunFailure left no rows (m3 still runs): not a "holds: false" but an
@@ -724,7 +726,7 @@ def test_a_look_that_did_not_measure_the_tip_fails_after_its_rows(
     canned = [_retest(0.2, 0.02, True), lost, _retest(0.2, 0.03, True)]
     measurer = FakeMeasurer(case.base_commit, looks=canned)
     recorder = cr.ReplayRecorder(sink)
-    with pytest.raises(cr.IntegrityError, match="m2 did not measure the tip"):
+    with pytest.raises(ra.IntegrityError, match="m2 did not measure the tip"):
         cr.replay_case(case, measurer, recorder, LiveRun("x", 0.0), clock=Clock())
     assert measurer.calls[-len(looks) - 1 :] == [*looks, "guards"]
     rows = _lines(tmp_path / "results.jsonl")
@@ -744,7 +746,7 @@ def test_an_integrity_failure_measures_nothing(
 ) -> None:
     case = replace(TIPS[0], patch=str(TIPS[1].patch))  # declares another run's patch
     measurer = FakeMeasurer(case.base_commit)
-    with pytest.raises(cr.IntegrityError, match="declares"):
+    with pytest.raises(ra.IntegrityError, match="declares"):
         cr.replay_case(case, measurer, cr.ReplayRecorder(sink), LiveRun("x", 0.0))
     assert measurer.calls == []
     assert _lines(tmp_path / "results.jsonl")[0]["kind"] == "error"
@@ -787,7 +789,7 @@ def test_a_tip_case_short_of_three_measured_looks_fails_the_job_at_the_end(
     good = [_retest(0.2, 0.02, True)] * 3
     cr.replay_case(whole, FakeMeasurer(whole.base_commit, looks=list(good)), recorder,
                    LiveRun("x", 0.0), clock=Clock())  # fmt: skip
-    (markdown,) = [c for c in cr.CASES if c.tip == cr.NO_TIP]
+    (markdown,) = [c for c in cr.CASES if c.tip == ra.NO_TIP]
     cr.replay_case(markdown, FakeMeasurer(markdown.base_commit), recorder,
                    LiveRun("x", 0.0), clock=Clock())  # fmt: skip
     named = [f"{stopped.id} (0 of 3)", f"{partial.id} (2 of 3)"]
@@ -813,7 +815,7 @@ def test_the_recorder_writes_its_table_to_the_job_summary(tmp_path: Path) -> Non
         _retest(0.2, 0.02, True),
         base=None,
     )  # three measured looks: the job may pass
-    found.profile = cr.ProfileLook(False, 0, 1, "EngineError: the profiler crashed")
+    found.profile = rx.ProfileLook(False, 0, 1, "EngineError: the profiler crashed")
     recorder.record(found, LiveRun("x", 0.0))
     recorder.record_error("X2-P-1-sqlparse", LiveRun("x", 0.0), "boom")
     echoed: list[str] = []
@@ -856,7 +858,7 @@ class FakeRun:
 
 def test_timed_run_times_each_launch_and_tells_the_suite_apart() -> None:
     inner = FakeRun()
-    timed = cr.TimedRun(inner, clock=Clock(0.25))
+    timed = rx.TimedRun(inner, clock=Clock(0.25))
     workload = ["/usr/bin/python3", "bench/bench_tomli.py"]
     pytest_argv = ["/usr/bin/python3", "-m", "pytest", "--junitxml=x", "-q", "tests"]
     unittest_argv = ["/usr/bin/python3", "-m", "unittest", "discover", "-s", "tests"]
@@ -870,7 +872,7 @@ def test_timed_run_times_each_launch_and_tells_the_suite_apart() -> None:
     inner.failure = RunFailure("the suite timed out")
     with pytest.raises(RunFailure):
         timed(pytest_argv, Path("/w"), {}, None, 1.0, None)  # type: ignore[arg-type]
-    assert timed.spans[-1] == cr.Span(True, 0.25)  # a failed launch is timed too
+    assert timed.spans[-1] == rx.Span(True, 0.25)  # a failed launch is timed too
     assert len(inner.argv) == 5
 
 
@@ -889,8 +891,8 @@ class FakeCalibrator:
 
 def test_timed_calibrator_hands_the_call_on_and_times_it() -> None:
     inner = FakeCalibrator()
-    assert cr.TimedCalibrator(inner).seconds is None
-    timed = cr.TimedCalibrator(inner, Clock(2.0))
+    assert rx.TimedCalibrator(inner).seconds is None
+    timed = rx.TimedCalibrator(inner, Clock(2.0))
     found = timed.calibrate((), run_id="r", commit="c", blocks=3)
     assert (
         found.floor == 0.02 and inner.calls == [("r", "c", 3)] and timed.seconds == 2.0
@@ -939,7 +941,7 @@ BENCH = """import hashlib
 
 import pkg
 
-found = pkg.unique([i % 1500 for i in range(6000)])
+found = pkg.unique([i % 3000 for i in range(12000)])
 print(f"unique={len(found)} sha256={hashlib.sha256(repr(found).encode()).hexdigest()}")
 """
 
@@ -959,12 +961,12 @@ def local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     root = Path(os.path.realpath(tmp_path))
     (root / "wt-root").mkdir()
     monkeypatch.setattr(settings, "WORKTREE_ROOT", root / "wt-root")
-    for key, value in {**cr.REPLAY_SETTINGS, "NOISE_CALIBRATION_BLOCKS": 1}.items():
+    for key, value in {**rx.REPLAY_SETTINGS, "NOISE_CALIBRATION_BLOCKS": 1}.items():
         monkeypatch.setattr(settings, key, value)
     yield root
 
 
-def _library(source: Path) -> tuple[OssRepo, cr.Prepare]:
+def _library(source: Path) -> tuple[OssRepo, rx.Prepare]:
     repo = replace(
         ideas_x2.LIBRARIES["tomli"], name="pkg", package="pkg", module_root="pkg",
         test_command=("python", "-m", "unittest", "discover", "-s", "tests"),
@@ -999,7 +1001,7 @@ def test_the_engine_measurer_replays_a_tip_through_the_engines_own_steps(
     patch.write_text(_fast_patch(local), encoding="utf-8")
     clock = Clock(0.0)  # time stands still: the spans are 0, but recorded
     case_root = local / "X2-D-1-pkg"  # not there yet: prepare makes it
-    measurer = cr.EngineMeasurer(repo, case_root, Isolation("required", None),
+    measurer = rx.EngineMeasurer(repo, case_root, Isolation("required", None),
                                  run_id="replay-0", prepare=prepare, clock=clock)  # fmt: skip
     assert not case_root.exists()
     assert measurer.prepare() == measurer.user.base
@@ -1019,13 +1021,15 @@ def test_the_engine_measurer_replays_a_tip_through_the_engines_own_steps(
     for look in looks:
         assert look.measured_tip and look.rows
         assert look.applied == 1 and look.tests == "passed" and look.tests_counted == 1
+        # the quadratic part dominates the launch (12,000 items, 3,000 unique),
+        # so the set-based fix stays far past 30 % under the gate's load
         assert look.gain is not None and look.gain > 0.3, look.reason
         assert look.floor is not None and look.tests_s == 0.0
         assert look.holds is (look.outcome == "keep")
     run = LiveRun("offline", cr.REPLAY_RUN_CAP_USD)
     measurer.check_guards(run)
     phases = measurer.launches.phases()
-    assert phases <= cr.REPLAY_PHASES
+    assert phases <= rx.REPLAY_PHASES
     assert {"preflight", "baseline", "calibrate", "profile", "combine"} <= phases
     assert run.capture.exchanges == [] and run.records == []
 
@@ -1039,7 +1043,7 @@ def test_the_engine_measurer_marks_a_tip_that_crashes_as_not_measured(
     crash = _fast_patch(local).replace("+    seen = set()", "+    raise SystemExit(3)")
     patch = local / "crash.patch"
     patch.write_text(crash, encoding="utf-8")
-    measurer = cr.EngineMeasurer(repo, local / "crash", Isolation("required", None),
+    measurer = rx.EngineMeasurer(repo, local / "crash", Isolation("required", None),
                                  run_id="replay-6", prepare=prepare)  # fmt: skip
     measurer.prepare()
     tip = measurer.commit_tip(patch, "pkg-crash")
@@ -1056,10 +1060,10 @@ def test_the_engine_measurer_refuses_a_patch_that_does_not_apply(local: Path) ->
     bad.write_text(
         _fast_patch(local).replace("-    seen = []", "-    seen = {}"), encoding="utf-8"
     )
-    measurer = cr.EngineMeasurer(repo, local, Isolation("required", None),
+    measurer = rx.EngineMeasurer(repo, local, Isolation("required", None),
                                  run_id="replay-1", prepare=prepare)  # fmt: skip
     measurer.prepare()
-    with pytest.raises(cr.IntegrityError, match="does not apply"):
+    with pytest.raises(ra.IntegrityError, match="does not apply"):
         measurer.commit_tip(bad, "pkg-bad")
 
 
@@ -1067,7 +1071,7 @@ def test_the_engine_measurer_records_a_profile_that_fails(
     local: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo, prepare = _library(local / "source")
-    measurer = cr.EngineMeasurer(repo, local, Isolation("required", None),
+    measurer = rx.EngineMeasurer(repo, local, Isolation("required", None),
                                  run_id="replay-2", prepare=prepare)  # fmt: skip
     measurer.prepare()
     measurer.connect()
@@ -1086,7 +1090,7 @@ def test_the_engine_measurer_records_a_profile_that_fails(
 
 def test_the_engine_measurer_guards_name_each_breach(local: Path) -> None:
     repo, prepare = _library(local / "source")
-    measurer = cr.EngineMeasurer(repo, local, Isolation("required", None),
+    measurer = rx.EngineMeasurer(repo, local, Isolation("required", None),
                                  run_id="replay-3", prepare=prepare)  # fmt: skip
     with pytest.raises(AssertionError, match="not prepared"):
         _ = measurer.user
@@ -1099,11 +1103,11 @@ def test_the_engine_measurer_guards_name_each_breach(local: Path) -> None:
     (measurer.user.path / "stray.txt").write_text("x", encoding="utf-8")
     with pytest.raises(AssertionError, match="user repository changed"):
         measurer.check_guards(run)
-    loose = cr.EngineMeasurer(repo, local, Isolation("best_effort", "no unshare"),
+    loose = rx.EngineMeasurer(repo, local, Isolation("best_effort", "no unshare"),
                               run_id="replay-4", prepare=prepare)  # fmt: skip
     with pytest.raises(AssertionError, match="isolation not required"):
         loose.check_guards(run)
-    idle = cr.EngineMeasurer(repo, local / "idle", Isolation("required", None),
+    idle = rx.EngineMeasurer(repo, local / "idle", Isolation("required", None),
                              run_id="replay-5", prepare=prepare)  # fmt: skip
     with pytest.raises(AssertionError, match="no launch"):
         idle.check_guards(run)
@@ -1146,18 +1150,18 @@ def test_the_replay_settings_are_the_x2_arms_measurement_settings() -> None:
     pinned = {"MIN_RUNS", "NOISE_MULTIPLIER", "NOISE_GAP_MULTIPLIER", "MIN_RELATIVE_GAIN",
               "DEFAULT_OUTPUT_CHECK", "SHADOW_VERIFY", "TEST_TIMEOUT_S",
               "SCALING_JUDGE", "SITE_STACKS"}  # fmt: skip
-    assert pinned <= set(cr.REPLAY_SETTINGS)
+    assert pinned <= set(rx.REPLAY_SETTINGS)
     defaults = {k: Settings.model_fields[k].default for k in pinned}
-    assert {k: cr.REPLAY_SETTINGS[k] for k in pinned} == defaults  # as the arms ran
-    assert cr.REPLAY_SETTINGS["SHADOW_VERIFY"] == "off"
+    assert {k: rx.REPLAY_SETTINGS[k] for k in pinned} == defaults  # as the arms ran
+    assert rx.REPLAY_SETTINGS["SHADOW_VERIFY"] == "off"
     step3 = step3.model_copy(update=defaults)
     for arm in (ideas_x2.X2_D, ideas_x2.X2_P):
         assert not pinned & set(arm.update), arm.key  # neither arm moves one
-        cr.check_settings(ideas_x2.arm_settings(arm, step3))
+        rx.check_settings(ideas_x2.arm_settings(arm, step3))
     assert {c.arm for c in cr.CASES} == {"X2-D", "X2-P"}
-    for key, value in cr.REPLAY_SETTINGS.items():
+    for key, value in rx.REPLAY_SETTINGS.items():
         with pytest.raises(ValueError, match=key):
-            cr.check_settings(
+            rx.check_settings(
                 step3.model_copy(update={key: "x" if value is True else 9})
             )
 
