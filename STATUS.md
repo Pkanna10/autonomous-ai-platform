@@ -894,6 +894,14 @@ blocks it.
     `step3-research` were deleted with the owner's permission. A whole-disk
     search now finds V9 only in the Lead's gate copy, apart from the git object
     stores.
+  - **Result (2026-11-14): the exam is invalid; waiting on the owner.** The gate
+    pass rate is 14 of 14 seats (100 %), above the 80 % ceiling, so no mark
+    counts and no re-sit is needed. Every reproduction script ended "OVERALL
+    REPRODUCED". All 56 practical answers were marked one at a time, with the
+    1-minute load average between 0.61 and 1.10 beside each mark. Aggregate
+    figures are in `emergence/round-3/exam-seal.md` (Marking); per-seat marks
+    are in bundle v3 only. The examiner builds a harder gate paper only after
+    the owner's go.
   - **U8a's look windows stand as labelled.** No snapshot is taken between an
     ABBA and its suite, the engine source stays untouched, and the wide window
     is accepted.
