@@ -4,10 +4,11 @@
 Four guards, each without effect while stacking is off:
 
 - ``NodeContext`` refuses ``stack_rounds`` without a combiner or a stacker,
-  with a quality check, with ``default_output_check`` off, or with a
-  dry-merging combiner whose ``site_stacks`` is not ``"off"`` (O63: quality
-  mode and SITE_STACKS are refused under stacking), at construction, so a
-  misconfigured context never reaches a node, let alone a request;
+  with a quality check or with ``default_output_check`` off (O63: quality
+  mode is refused under stacking), at construction, so a misconfigured
+  context never reaches a node, let alone a request; a dry-merging combiner
+  in any ``site_stacks`` mode is accepted (O71 item 1: gain order is the
+  stacked runs' combine baseline, U5c);
 - ``_run_verdicts`` reads the seeds' keys through ``rekey.current_keys``, so
   a key re-keyed onto an adopted tip seeds at the tip's lines; with no
   re-key record the result is today's (``recorded_keys``) exactly;
@@ -220,16 +221,12 @@ def _through(ctx: NodeContext, state: EngineState, names: Sequence[str]) -> Engi
         ({"stacker": None}, "stack_rounds needs a stacker"),
         ({"quality": ACC}, "stack_rounds refuses a quality check"),
         ({"default_output_check": False}, "stack_rounds needs default_output_check"),
-        ({"combiner": _Probing("record")}, "stack_rounds refuses SITE_STACKS='record'"),
-        ({"combiner": _Probing("on")}, "stack_rounds refuses SITE_STACKS='on'"),
     ],
     ids=[
         "no combiner",
         "no stacker",
         "quality",
         "no output check",
-        "site stacks record",
-        "site stacks on",
     ],
 )
 def test_a_context_that_cannot_stack_is_refused_at_construction(
@@ -260,6 +257,31 @@ def test_a_context_that_can_stack_is_built_and_off_refuses_nothing(
     assert (default.stack_rounds, default.stacker) == (False, None)
     off = make_context(quality=ACC, combiner=_Probing("on"))
     assert off.quality == ACC
+
+
+@pytest.mark.parametrize("mode", ["record", "on"])
+def test_stacking_accepts_every_site_stacks_mode(
+    make_context: ContextFactory, mode: SiteStacks
+) -> None:
+    """
+    GIVEN stacking on and a dry-merging combiner whose ``site_stacks`` is
+          ``record`` or ``on`` (the pins this replaced refused both, O63)
+    WHEN the context is built
+    THEN it builds: O71 item 1 makes gain order the stacked runs' combine
+         baseline, so the round combines and the tail order by it (U5c)
+    """
+    probing = _Probing(mode)
+    ctx = make_context(**_stacking(combiner=probing))
+    assert ctx.stack_rounds is True and ctx.combiner is probing
+    assert probing.site_stacks == mode
+
+
+def test_stacking_still_refuses_quality_mode_with_gain_order(
+    make_context: ContextFactory,
+) -> None:
+    """Lifting the SITE_STACKS refusal leaves quality mode refused (O71)."""
+    with pytest.raises(ValueError, match="stack_rounds refuses a quality check"):
+        make_context(**_stacking(combiner=_Probing("on"), quality=ACC))
 
 
 # ---------------------------------------------------------------------------

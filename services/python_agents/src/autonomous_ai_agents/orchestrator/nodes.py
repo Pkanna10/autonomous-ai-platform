@@ -64,6 +64,7 @@ from autonomous_ai_agents.common.config import (
     MATCHER_K_MAX,
     PORTFOLIO_ROUNDS_MAX,
     Retrieval,
+    SiteStacks,
     settings,
 )
 from autonomous_ai_agents.common.errors import (
@@ -91,6 +92,7 @@ from autonomous_ai_agents.common.models import (
     ApprovalRequest,
     Baseline,
     ChangeClass,
+    Combination,
     CombineSkip,
     Delivery,
     DeliveryKind,
@@ -139,6 +141,7 @@ from autonomous_ai_agents.execution.measure import (
 from autonomous_ai_agents.execution.protocols import (
     BranchPublisher,
     Combiner,
+    KeptChange,
     Preflight,
     PreflightReport,
     Profiler,
@@ -341,8 +344,11 @@ class NodeContext:
 
     X2-DT: ``stack_rounds`` (``STACKED_ROUNDS``, off) stacks each round on
     the last held tip through ``stacker``; it needs a combiner, a stacker
-    and the default output check, and refuses quality mode and SITE_STACKS
-    (O63). Off, neither field changes anything.
+    and the default output check, and refuses quality mode (O63). Any
+    SITE_STACKS mode is accepted: every round combine (the tail's last one
+    included) and the tail's review set order and record by it as the
+    combine node does (O71 item 1, U5c); the squash's delivery re-test is
+    one change and makes no choice. Off, neither field changes anything.
 
     Construction refuses duplicate or refname-unsafe candidate ids (each id
     names a trial branch), knobs below 1, a negative or non-finite
@@ -431,17 +437,18 @@ class NodeContext:
         that cannot stack never reaches a node, let alone a request: each
         round's combine and the squash need a combiner and a stacker; the
         tip is adopted only on outputs equal to the original base's, so the
-        exact default output check; quality mode and SITE_STACKS are refused."""
+        exact default output check; quality mode is refused (O63). Every
+        SITE_STACKS mode is accepted (O71 item 1: gain order is the stacked
+        runs' combine baseline): each round combine and the tail's review set
+        go through ``_ordered_combine``, as the combine node's sets do; the
+        squash's delivery re-test makes no choice."""
         if not self.stack_rounds:
             return
-        combiner = self.combiner
-        stacks = combiner.site_stacks if isinstance(combiner, ConflictProbe) else "off"
         refused = (
-            (combiner is None, "needs a combiner"),
+            (self.combiner is None, "needs a combiner"),
             (self.stacker is None, "needs a stacker"),
             (self.quality is not None, "refuses a quality check"),
             (not self.default_output_check, "needs default_output_check"),
-            (stacks != "off", f"refuses SITE_STACKS={stacks!r}"),
         )
         for broken, reason in refused:
             if broken:
@@ -2691,6 +2698,52 @@ def _skip_line(skip: CombineSkip) -> str:
     return f"{skip.trial_id[:8]}: {skip.reason}{by}"
 
 
+def _site_stacks(combiner: Combiner) -> SiteStacks:
+    """S2's mode: a dry-merging combiner's ``site_stacks``, else ``off``."""
+    return combiner.site_stacks if isinstance(combiner, ConflictProbe) else "off"
+
+
+def _ordered_combine(
+    combiner: Combiner,
+    verdicts: Sequence[Verdict],
+    changes: Sequence[KeptChange],
+    trials: Mapping[str, Trial],
+    rules: CombineRules,
+    target: CombineTarget,
+    *,
+    via: Combiner | None = None,
+) -> tuple[CombineOutcome, tuple[KeptChange, ...]]:
+    """One set's combine (``changes``, score order, from ``verdicts``) under
+    ``combiner``'s S2 mode, and the order it was offered in. ``off``: the
+    FIXED ``combine_kept`` on ``changes`` as given. ``record`` or ``on``: the
+    dry merge on the target's base, ``plan_delivery`` over the order gains
+    (``on`` offers by gain, ``record`` as given), the blockers named and one
+    ``KeepRecord`` per keep. ``via`` (default ``combiner``) makes the
+    re-tests, for a proxy that times them; the mode and the dry merge are
+    ``combiner``'s own. The combine node's run and review sets and every
+    stacked round combine and review set call this, so both paths plan alike."""
+    measure = combiner if via is None else via
+    stacks = _site_stacks(combiner)
+    if isinstance(combiner, ConflictProbe) and stacks != "off":  # S2
+        gains = {v.trial_id: order_gain(v) for v in verdicts}
+        dry = combiner.dry_merge(target.project, target.base_commit, changes)
+        plan = plan_delivery(changes, gains, dry, by_gain=stacks == "on")
+        outcome = combine_kept(
+            measure, plan.order, rules, target, conflicts=plan.conflicts
+        )
+        return keep_records(plan, outcome, trials), plan.order
+    return combine_kept(measure, changes, rules, target), tuple(changes)
+
+
+def _stacks_data(stacks: SiteStacks, combination: Combination) -> ScalarDict:
+    """S2's fields of a combine event: none ``off``; else the mode and the
+    skips, each with its blocker."""
+    if stacks == "off":
+        return {}
+    skips = _capped("; ".join(map(_skip_line, combination.skipped)))
+    return {"site_stacks": stacks, "skips": skips}
+
+
 def _combine_rules(ctx: NodeContext, baseline: Baseline) -> CombineRules:
     """The verdicts node's judges, primary metric and completeness rule."""
     objective_metrics = _objective_metrics(baseline.objectives)
@@ -3514,27 +3567,12 @@ def make_nodes(ctx: NodeContext) -> dict[str, NodeFn]:
         rules = _combine_rules(ctx, measured)
         if kind == "review":
             rules = replace(rules, accept=CONFIRMABLE)
-        stacks = combiner.site_stacks if isinstance(combiner, ConflictProbe) else "off"
-        if isinstance(combiner, ConflictProbe) and stacks != "off":  # S2
-            gains = {v.trial_id: order_gain(v) for v in verdicts}
-            dry = combiner.dry_merge(target.project, target.base_commit, changes)
-            plan = plan_delivery(changes, gains, dry, by_gain=stacks == "on")
-            outcome = combine_kept(
-                combiner, plan.order, rules, target, conflicts=plan.conflicts
-            )
-            outcome = keep_records(plan, outcome, trials)
-            changes = list(plan.order)
-        else:
-            outcome = combine_kept(combiner, changes, rules, target)
-        combination = outcome.combination
-        stacked: ScalarDict = (
-            {}
-            if stacks == "off"
-            else {
-                "site_stacks": stacks,
-                "skips": _capped("; ".join(map(_skip_line, combination.skipped))),
-            }  # fmt: skip
+        outcome, offered = _ordered_combine(
+            combiner, verdicts, changes, trials, rules, target
         )
+        combination = outcome.combination
+        stacked = _stacks_data(_site_stacks(combiner), combination)
+        changes = list(offered)
         held = "held" if combination.holds else "did not hold"
         events.append(
             _announce(

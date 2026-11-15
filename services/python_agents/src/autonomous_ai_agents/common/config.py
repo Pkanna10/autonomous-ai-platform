@@ -660,8 +660,11 @@ class Settings(BaseSettings):
     baseline and calibration, outputs equal to the original base's, a new
     profile) becomes the next round's base, and the last held tip is
     squashed onto the original base and re-tested there for delivery. Only
-    the factory reads it; it refuses quality mode and ``SITE_STACKS`` beside
-    it. Off keeps today's graph, every request and every decision."""
+    the factory reads it; it refuses quality mode beside it. ``SITE_STACKS``
+    may be combined with it (O71 item 1): every round's combine and the
+    tail's review set order and record by it as today's combine does; the
+    squash's delivery re-test is one change and makes no choice. Off keeps
+    today's graph, every request and every decision."""
     IDEAS_VIEW_RECORD: bool = False
     """Emergence round 2, S1: ``True`` adds a ``lane_view`` event per lane
     request sent (the lane, ``view_sha``: 8 hex of its data block's sha256

@@ -10,7 +10,18 @@ after the first (U5b wires it; it is unreachable with stacking off). It:
    keep whose trial has no base cannot be placed: ``EngineError``;
 2. combines them on the round base through the FIXED ``combine_kept``,
    judged against the round base's baseline (``nodes._combine_rules``);
-   with nothing offered the round is "nothing kept" and no combiner runs;
+   with nothing offered the round is "nothing kept" and no combiner runs.
+   The set goes through ``nodes._ordered_combine``, the combine node's own
+   S2 step (O71 item 1, U5c): with the combiner's ``site_stacks`` ``on`` the
+   round base is dry-merged and the keeps are offered by gain
+   (``plan_delivery(..., by_gain=True)`` over ``order_gain``), with
+   ``record`` in score order with the blockers and keep records written, and
+   with ``off`` as before. A conflict pair's loser started from the round
+   base, so once a held tip is adopted ``offered_keeps`` never offers it
+   again: it is dropped, as the unstacked combine drops it, and its fate is
+   that round's skip (``blocked_by`` its winner) and, with ``record`` or
+   ``on``, its ``KeepRecord``. While the base does not move it is offered
+   again with the next round's keeps;
 3. if that combine held, tries to adopt its tip, the cheapest check first:
 
    - the old-base..tip diff (``Stacker.diff``), which the seeds' re-key
@@ -40,7 +51,9 @@ after the first (U5b wires it; it is unreachable with stacking off). It:
    latest call left notes, set ``stack``, as the combine node writes them;
    ``stack_refused`` when a held tip was refused; on adoption the tip's
    baseline and profile events and the re-key batch; then ``stack_round``,
-   one per round); on adoption also ``base_commit``, ``baseline`` and
+   one per round, with the combine event's ``site_stacks`` and ``skips``
+   fields under ``record`` or ``on``); on adoption also ``base_commit``,
+   ``baseline`` and
    ``hotspots`` at the tip. A refused tip's baseline events stay out of the
    delta, so the state never shows a base that did not move, but the
    unchanged baseline node has already sent them to the live log
@@ -67,7 +80,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Final, TypeVar, cast
 
 from autonomous_ai_agents.common.errors import EngineError
@@ -108,7 +121,6 @@ from autonomous_ai_agents.optimization.rekey import (
 from autonomous_ai_agents.orchestrator.combine_node import (
     CombineOutcome,
     CombineTarget,
-    combine_kept,
     kept_changes,
 )
 from autonomous_ai_agents.orchestrator.nodes import (
@@ -123,8 +135,11 @@ from autonomous_ai_agents.orchestrator.nodes import (
     _delivery_sets,
     _Freezing,
     _note,
+    _ordered_combine,
     _require_baseline,
     _require_commit,
+    _site_stacks,
+    _stacks_data,
     make_nodes,
 )
 from autonomous_ai_agents.orchestrator.state import EngineState
@@ -252,16 +267,21 @@ class _TimedProfiler:
 
 @dataclass(frozen=True)
 class RoundCombine:
-    """One round's combine on its base: the trial ids offered, the FIXED
-    combine's outcome (``None``: nothing offered, no combiner call), the
-    wall seconds of its re-tests (``combine``, ``fallback``) and the
-    combiner's notes of its latest call (``GitCombiner.last_notes``)."""
+    """One round's combine on its base: the trial ids offered (verdict
+    order), the FIXED combine's outcome (``None``: nothing offered, no
+    combiner call), the wall seconds of its re-tests (``combine``,
+    ``fallback``; the dry merge is not timed), the combiner's notes of its
+    latest call (``GitCombiner.last_notes``) and the S2 event fields."""
 
     base_commit: str
     offered_trial_ids: tuple[str, ...]
     outcome: CombineOutcome | None
     seconds: Mapping[str, float]
     notes: tuple[str, ...] = ()
+    stacked: ScalarDict = field(default_factory=dict)
+    """S2's fields of the combine event (``nodes._stacks_data``): the mode
+    and the skips under ``record`` or ``on``, none ``off`` or with nothing
+    offered; ``stack_round`` carries them."""
 
     @property
     def combination(self) -> Combination | None:
@@ -341,12 +361,14 @@ def combine_round(
     )
     trials = {trial.id: trial for trial in state["trials"]}
     changes = kept_changes(offered, trials, _by_id(state["hypotheses"]))
-    outcome = combine_kept(
-        _TimedCombiner(combiner, timer), changes, _combine_rules(ctx, measured), target
-    )
+    outcome, _ = _ordered_combine(  # the combine node's S2 step (U5c)
+        combiner, offered, changes, trials, _combine_rules(ctx, measured), target,
+        via=_TimedCombiner(combiner, timer),
+    )  # fmt: skip
     ids = tuple(verdict.trial_id for verdict in offered)
     notes = _combiner_notes(ctx)  # the real combiner's, after its last call
-    return RoundCombine(base, ids, outcome, dict(timer.seconds), notes)
+    stacked = _stacks_data(_site_stacks(combiner), outcome.combination)
+    return RoundCombine(base, ids, outcome, dict(timer.seconds), notes, stacked)
 
 
 @dataclass(frozen=True)
@@ -423,7 +445,10 @@ def _adopt(
 
 
 def _round_event(
-    state: EngineState, record: RoundBase, adopted: _Adopted | None
+    state: EngineState,
+    record: RoundBase,
+    adopted: _Adopted | None,
+    stacked: ScalarDict,
 ) -> EngineEvent:
     """``stack_round``: the round's fate, info when adopted or nothing was
     kept, a warning when the combine did not hold or its tip was refused."""
@@ -443,6 +468,7 @@ def _round_event(
         "adopted": record.adopted,
         "tip": record.tip_commit,
         "reason": record.reason,
+        **stacked,
     }
     if adopted is not None:
         data["rekeyed"], data["dropped"] = adopted.rekeyed, adopted.dropped
@@ -501,7 +527,7 @@ def restack(
         record = RoundBase.model_validate(
             {**fields, "reason": combined.reason, "seconds": dict(combined.seconds)}
         )
-        event = _round_event(state, record, None)
+        event = _round_event(state, record, None, combined.stacked)
         return {"stack": ledger.with_round(record), "events": [*noted, event]}
     timer = StepTimer(clock)
     adopted = _adopt(ctx, state, stacker, ledger.origin_baseline, tip, timer)
@@ -518,7 +544,7 @@ def restack(
             level=EventLevel.warning,
             data={"round": record.round, "tip": tip, "reason": adopted},
         )
-        events = [*noted, refused, _round_event(state, record, None)]
+        events = [*noted, refused, _round_event(state, record, None, combined.stacked)]
         return {"stack": ledger.with_round(record), "events": events}
     calibration = adopted.baseline.calibration
     record = RoundBase.model_validate(
@@ -536,5 +562,9 @@ def restack(
         "baseline": adopted.baseline,
         "hotspots": adopted.hotspots,
         "stack": ledger.with_round(record),
-        "events": [*noted, *adopted.events, _round_event(state, record, adopted)],
+        "events": [
+            *noted,
+            *adopted.events,
+            _round_event(state, record, adopted, combined.stacked),
+        ],
     }

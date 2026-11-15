@@ -9,11 +9,12 @@ Nothing here runs with stacking off.
 ``stacked_combine`` (the tail) runs where today's combine runs:
 
 1. the last round's combine on the round base (``stack_round.combine_round``,
-   the same as ``restack``'s), appended to the ledger with ``with_round``
-   after the ledger's chain is checked (the round base is its current base,
-   the ledger not closed yet). The last round's held tip is not adopted, so
-   its record names no ``tip_commit`` (it carries no "refused"): the tip is
-   in its ``combination``;
+   the same as ``restack``'s, so ordered by the combiner's ``site_stacks``
+   as the combine node orders its sets: O71 item 1, U5c), appended to the
+   ledger with ``with_round`` after the ledger's chain is checked (the round
+   base is its current base, the ledger not closed yet). The last round's
+   held tip is not adopted, so its record names no ``tip_commit`` (it
+   carries no "refused"): the tip is in its ``combination``;
 2. the last tip: this round's held tip, else the current base when a round
    moved it, else none;
 3. when the round base is the origin, that round combine already is today's
@@ -33,15 +34,30 @@ Nothing here runs with stacking off.
    and skipped trials of the delivered rounds (every adopted round and a
    held last round) when the re-test applied the squash, none when it did
    not, and no fallback (one change has none worth naming: a fallback can
-   only have re-tried the squash itself). ``holds``, the tip and the judge
-   results stay the re-test's. ``kept_verdict_ids`` are the run-set
+   only have re-tried the squash itself). With ``record`` or ``on`` it also
+   carries, whether or not the squash was applied, one keep record per keep
+   offered in any round, with its final fate, and every conflicting pair:
+   the records of every adopted round and of the last round, held or not
+   (``_recorded`` says why that is each keep exactly once). When the
+   delivery did not hold, a keep its round delivered is recorded as lost to
+   it (``LOST_AT_DELIVERY``, or ``NOT_APPLIED_AT_DELIVERY`` when the squash
+   was skipped); a keep its round did not deliver keeps that round's reason
+   and blocker. With ``off`` both stay empty. ``holds``, the tip and the
+   judge results stay the re-test's. The squash re-test makes no combine
+   choice (U5c), whatever ``SITE_STACKS`` says: it is one change,
+   ``combine_kept(combiner, [change], rules, target)`` in ``_deliver``, no
+   dry merge or plan; ``SITE_STACKS`` acts only in the round combines and
+   the review set, and the order each round's set was offered in is already
+   in its tip. ``kept_verdict_ids`` are the run-set
    verdicts of those trials when it held, else none: there is no fallback
    to an earlier tip (a second chance);
 5. ``ledger.closed`` records the delivery and its wall seconds and sets
    ``all_rounds_held``;
 6. the review set: only review verdicts whose trial started at the origin
    are combined, from the origin, on the review branch (``accept`` widened
-   to ``CONFIRMABLE``, as today); every other one gets a
+   to ``CONFIRMABLE``, as today), through ``nodes._ordered_combine`` as the
+   combine node's review set (ordered by gain with ``on``, recorded with
+   ``record``, its event carrying the same S2 fields); every other one gets a
    ``stack_review_skipped`` note (its diff is against a tip);
 7. the delta restores ``base_commit`` and ``baseline`` to the origin's, so
    ``deliver`` and ``learn`` run unchanged.
@@ -79,6 +95,7 @@ from autonomous_ai_agents.common.models import (
     Combination,
     EngineEvent,
     EventLevel,
+    KeepRecord,
     RoundBase,
     RunPhase,
     ScalarDict,
@@ -109,8 +126,11 @@ from autonomous_ai_agents.orchestrator.nodes import (
     _live_generator,
     _next_compound,
     _note,
+    _ordered_combine,
     _require_baseline,
     _require_commit,
+    _site_stacks,
+    _stacks_data,
     _untried,
     make_router,
 )
@@ -131,6 +151,13 @@ STACK_NODE: Final = "restack"
 
 STACKED_TIP: Final = "stacked-tip"
 """The trial, hypothesis and verdict id of the squashed tip's ``KeptChange``."""
+
+LOST_AT_DELIVERY: Final = "the stacked delivery re-test did not hold"
+"""A delivered round keep's ``skip_reason`` when the squash's re-test failed."""
+
+NOT_APPLIED_AT_DELIVERY: Final = "the stacked delivery did not apply the squash"
+"""A delivered round keep's ``skip_reason`` when the combiner skipped the
+squash (U2: an empty commit is "nothing left to apply")."""
 
 
 def stacked_nodes(ctx: NodeContext, nodes: Mapping[str, NodeFn]) -> dict[str, NodeFn]:
@@ -204,7 +231,9 @@ def _last_round(state: EngineState, combined: RoundCombine) -> RoundBase:
     )
 
 
-def _round_event(state: EngineState, record: RoundBase) -> EngineEvent:
+def _round_event(
+    state: EngineState, record: RoundBase, stacked: ScalarDict
+) -> EngineEvent:
     """``stack_round`` for the last round, in ``restack``'s shape."""
     combination = record.combination
     data: ScalarDict = {
@@ -217,6 +246,7 @@ def _round_event(state: EngineState, record: RoundBase) -> EngineEvent:
         "tip": None if combination is None else combination.tip_commit,
         "reason": record.reason,
         "last": True,
+        **stacked,
     }
     calm = combination is None or combination.holds
     return _note(
@@ -271,12 +301,59 @@ def _delivered_ids(state: EngineState, applied: Sequence[str]) -> list[str]:
     return [by_trial[trial_id].id for trial_id in applied]
 
 
-def _stated(raw: Combination, delivered: Sequence[Combination]) -> Combination:
+def _recorded(ledger: StackLedger) -> list[Combination]:
+    """The round combines whose keep records reach ``state["combination"]``:
+    every adopted round's and the last round's, held or not. Why exactly
+    these: a round that was not adopted left its base where it was, so every
+    keep it offered is offered again by the next round (``offered_keeps``),
+    and the last time a keep was offered is in one of these; an adopted
+    round's keeps are never offered again. So each keep offered in any
+    round has its final record here exactly once."""
+    last = ledger.rounds[-1]
+    return [
+        r.combination
+        for r in ledger.rounds
+        if r.combination is not None and (r.adopted or r is last)
+    ]
+
+
+def _carried(
+    raw: Combination, recorded: Sequence[Combination]
+) -> tuple[KeepRecord, ...]:
+    """The keep records of ``recorded`` (S2, empty with ``SITE_STACKS`` off),
+    each with its final fate: as its round recorded it when the delivery
+    held; else a keep its round delivered is lost to the delivery
+    (``LOST_AT_DELIVERY`` when the squash was re-tested and failed,
+    ``NOT_APPLIED_AT_DELIVERY`` when the combiner did not apply it). A
+    keep its round did not deliver (a conflict's loser, a last round that
+    did not hold) keeps its round's reason and blocker."""
+    keeps = (k for c in recorded for k in c.keeps)
+    if raw.holds:
+        return tuple(keeps)
+    took = STACKED_TIP in raw.applied_trial_ids
+    why = LOST_AT_DELIVERY if took else NOT_APPLIED_AT_DELIVERY
+    lost = {"delivered": False, "skip_reason": why}
+    return tuple(
+        KeepRecord.model_validate({**k.model_dump(), **lost}) if k.delivered else k
+        for k in keeps
+    )
+
+
+def _stated(
+    raw: Combination,
+    delivered: Sequence[Combination],
+    recorded: Sequence[Combination],
+) -> Combination:
     """``state["combination"]``: the delivery re-test with the delivered
-    rounds' trials (module docstring, item 4)."""
+    rounds' trials when it applied the squash, and every offered keep's
+    final record and every conflicting pair of ``recorded`` (module
+    docstring, item 4)."""
     took = STACKED_TIP in raw.applied_trial_ids
     applied = tuple(t for c in delivered for t in c.applied_trial_ids) if took else ()
+    pairs = sorted({p for c in recorded for p in c.conflicts})
     return Combination(
+        keeps=_carried(raw, recorded),
+        conflicts=tuple(pairs),
         base_commit=raw.base_commit,
         tip_commit=raw.tip_commit,
         applied_trial_ids=applied,
@@ -309,7 +386,10 @@ def stacked_combine(
     combined = combine_round(ctx, state, clock=clock)
     record = _last_round(state, combined)
     ledger = ledger.with_round(record)
-    events = [*_notes_events(state, combined.notes), _round_event(state, record)]
+    events = [
+        *_notes_events(state, combined.notes),
+        _round_event(state, record, combined.stacked),
+    ]
     events.extend(_compound_skipped(ctx, state))
     origin, origin_baseline = ledger.origin_commit, ledger.origin_baseline
     combination = combined.combination
@@ -421,7 +501,7 @@ def _deliver(
         "delivery", lambda: combine_kept(combiner, [change], rules, target)
     )
     raw = outcome.combination
-    stated = _stated(raw, delivered)
+    stated = _stated(raw, delivered, _recorded(ledger))
     kept = _delivered_ids(state, stated.applied_trial_ids) if raw.holds else []
     delta["combination"], delta["kept_verdict_ids"] = stated, kept
     said = "held" if raw.holds else "did not hold"
@@ -508,7 +588,7 @@ def _review(
     )
     changes = kept_changes(at_origin, trials, _by_id(state["hypotheses"]))
     rules = replace(_combine_rules(ctx, origin_baseline), accept=CONFIRMABLE)
-    outcome = combine_kept(combiner, changes, rules, target)
+    outcome, _ = _ordered_combine(combiner, at_origin, changes, trials, rules, target)
     combination = outcome.combination
     held = "held" if combination.holds else "did not hold"
     events.append(
@@ -527,6 +607,7 @@ def _review(
                 "holds": combination.holds,
                 "fallback": combination.fallback_trial_id is not None,
                 "delivered": len(outcome.kept_verdict_ids),
+                **_stacks_data(_site_stacks(combiner), combination),
             },
         )
     )

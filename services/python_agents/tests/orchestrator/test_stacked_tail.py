@@ -27,12 +27,14 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import itertools
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, cast
 
 import pytest
 from langgraph.graph import END, START
 
+from autonomous_ai_agents.common.config import SiteStacks
 from autonomous_ai_agents.common.errors import EngineError
 from autonomous_ai_agents.common.models import (
     METRIC_TESTS_PASSED,
@@ -60,6 +62,7 @@ from autonomous_ai_agents.common.models import (
     VerdictOutcome,
     Workload,
 )
+from autonomous_ai_agents.execution.combine import DryMerge
 from autonomous_ai_agents.execution.fakes import (
     FAKE_COMMIT,
     FAKE_SQUASH,
@@ -90,6 +93,7 @@ from autonomous_ai_agents.orchestrator.main import (
 )
 from autonomous_ai_agents.orchestrator.nodes import NODE_NAMES, NodeContext
 from autonomous_ai_agents.orchestrator.stacking import (
+    NOT_APPLIED_AT_DELIVERY,
     STACK_NODE,
     STACKED_TIP,
     stacked_combine,
@@ -119,6 +123,8 @@ class _Idea:
     output: str = SAME
     change_class: ChangeClass = ChangeClass.efficiency
     val_loss: float = 0.500
+    expected_gain: float = 0.2
+    """The score's input: ``rank_hypotheses`` orders candidates by it here."""
 
 
 A = _Idea("A cache", 1.05, "src/bridge/a.py")
@@ -285,11 +291,7 @@ class _Combiner:
             skips = tuple(CombineSkip(trial_id=c.trial_id, reason="nothing left to apply")
                           for c in kept)  # fmt: skip
             return CombineMeasured(base_commit, (), skips, (), ())
-        applied, skipped = list(kept), []
-        if look.conflict_last:
-            last = applied.pop()
-            skipped.append(CombineSkip(trial_id=last.trial_id, reason="merge conflict",
-                                       paths=("src/bridge/shared.py",)))  # fmt: skip
+        applied, skipped = self._split(kept, look)
         return CombineMeasured(
             tip_commit=look.tip, applied=tuple(c.trial_id for c in applied),
             skipped=tuple(skipped),
@@ -297,6 +299,17 @@ class _Combiner:
             combined=tuple(r for w in workloads
                            for r in _rows(w, look.wall, look.val_loss, suite=True)),
         )  # fmt: skip
+
+    def _split(
+        self, kept: Sequence[KeptChange], look: _Look
+    ) -> tuple[list[KeptChange], list[CombineSkip]]:
+        """The greedy merge's applied and skipped changes, in offered order."""
+        applied, skipped = list(kept), []
+        if look.conflict_last:
+            last = applied.pop()
+            skipped.append(CombineSkip(trial_id=last.trial_id, reason="merge conflict",
+                                       paths=("src/bridge/shared.py",)))  # fmt: skip
+        return applied, skipped
 
 
 @dataclasses.dataclass
@@ -315,7 +328,8 @@ class _World:
 def _hypothesis(project: Project, idea: _Idea) -> Hypothesis:
     return Hypothesis(project_id=project.id, source=HypothesisSource.playbook,
                       title=idea.title, rationale="r", change_class=idea.change_class,
-                      expected_gain=0.2, provability=0.8, risk=0.1)  # fmt: skip
+                      expected_gain=idea.expected_gain, provability=0.8,
+                      risk=0.1)  # fmt: skip
 
 
 def _world(
@@ -331,6 +345,7 @@ def _world(
     counts: Mapping[str, int] | None = None,
     preflight: FakePreflight | None = None,
     judges: Sequence[Judge] = (),
+    combiner: _Combiner | None = None,
 ) -> _World:
     hypotheses = {idea.title: _hypothesis(project, idea) for idea in ideas}
     hotspot = Hotspot(project_id=project.id, workload_id=workload.id,
@@ -340,7 +355,7 @@ def _world(
     baseline = _Baseline(StubBaselineRunner(_base_script()), counts)
     calibrator = _Calibrator()
     profiler = FakeProfiler((hotspot,))
-    combiner = _Combiner(looks)
+    combiner = _Combiner(looks) if combiner is None else combiner
     paths = {(ORIGIN, tip): (A.path,) for tip in (T1, T2, T3)}
     stacker = FakeStacker(paths=paths) if stacker is None else stacker
     publisher = FakePublisher("diff --git a/x b/x\n")
@@ -1308,3 +1323,363 @@ def test_the_delivered_rounds_skips_are_kept_only_with_the_squash(
     else:
         assert combination.skipped == () and combination.applied_trial_ids == ()
         assert state["kept_verdict_ids"] == []
+
+
+# ---------------------------------------------------------------------------
+# Gain order under stacking (O71 item 1, U5c)
+# ---------------------------------------------------------------------------
+
+X = _Idea("X score-first", 1.20, "src/bridge/x.py", expected_gain=0.5)
+"""The higher-scored side of a conflict pair: offered first in score order."""
+Y = _Idea("Y gain-first", 1.05, "src/bridge/y.py", expected_gain=0.3)
+"""The stronger side by measured gain (0.42 against X's 0.33)."""
+RX = _Idea("RX bf16", 1.50, "src/bridge/rx.py", change_class=ChangeClass.behaviour,
+           val_loss=0.503, expected_gain=0.5)  # fmt: skip
+RY = _Idea("RY fp8", 1.30, "src/bridge/ry.py", change_class=ChangeClass.behaviour,
+           val_loss=0.503, expected_gain=0.3)  # fmt: skip
+
+
+class _Probe(_Combiner):
+    """``_Combiner`` that can dry-merge (``ConflictProbe``), as ``GitCombiner``:
+    ``clash`` holds the trial pairs whose merge conflicts; the greedy merge
+    skips a change that clashes with one it applied ("merge conflict"), and
+    the dry merge reports every clashing pair it is offered (no diffs, so no
+    keep is a duplicate)."""
+
+    def __init__(
+        self, looks: Sequence[_Look | Exception], site_stacks: SiteStacks
+    ) -> None:
+        super().__init__(looks)
+        self.site_stacks: SiteStacks = site_stacks
+        self.clash: set[frozenset[str]] = set()
+        self.dry_calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def dry_merge(
+        self, project: Project, base_commit: str, kept: Sequence[KeptChange]
+    ) -> DryMerge:
+        ids = tuple(c.trial_id for c in kept)
+        self.dry_calls.append((base_commit, ids))
+        pairs = (frozenset(p) for p in itertools.combinations(ids, 2))
+        return DryMerge(frozenset(p for p in pairs if p in self.clash), {})
+
+    def _split(
+        self, kept: Sequence[KeptChange], look: _Look
+    ) -> tuple[list[KeptChange], list[CombineSkip]]:
+        applied: list[KeptChange] = []
+        skipped: list[CombineSkip] = []
+        for c in kept:
+            if any(frozenset({a.trial_id, c.trial_id}) in self.clash for a in applied):
+                skipped.append(
+                    CombineSkip(trial_id=c.trial_id, reason="merge conflict")
+                )
+            else:
+                applied.append(c)
+        return applied, skipped
+
+
+def _probed(
+    project: Project, workload: Workload, ideas: Sequence[_Idea],
+    looks: Sequence[_Look], mode: SiteStacks, clash: Sequence[tuple[_Idea, _Idea]],
+    *, per_round: int,
+) -> tuple[_World, _Probe]:  # fmt: skip
+    probe = _Probe(looks, mode)
+    world = _world(project, workload, ideas, looks, per_round=per_round, combiner=probe)
+    tid = {title: f"t-{h.id}" for title, h in world.ideas.items()}
+    probe.clash = {frozenset({tid[a.title], tid[b.title]}) for a, b in clash}
+    return world, probe
+
+
+GAIN_ORDER_CASES: Final = [("off", X, Y), ("record", X, Y), ("on", Y, X)]
+"""Per mode: the conflict pair's winner and loser on a two-round stacked run."""
+
+
+@pytest.mark.parametrize(("mode", "won", "lost"), GAIN_ORDER_CASES,
+                         ids=["off", "record", "on"])  # fmt: skip
+def test_each_round_combine_orders_a_conflict_pair_as_the_unstacked_node_does(
+    sample_project: Project, sample_workload: Workload, run_world: Any,
+    mode: SiteStacks, won: _Idea, lost: _Idea,
+) -> None:  # fmt: skip
+    """
+    GIVEN two stacked rounds: round 1 keeps X (scored first) and Y (the
+          stronger by gain), whose merges conflict; round 2 keeps C at T1
+    WHEN the run goes through the real graph with ``site_stacks`` ``mode``
+    THEN round 1's combine offers X first with ``off`` and ``record`` (no
+         selection changes) and Y first with ``on``, so the winner is applied
+         and adopted at T1; ``record`` and ``on`` dry-merge each round's keeps
+         on its base and record every keep and the conflict, ``off`` neither;
+         the loser started from the origin, so once the base moves it is
+         never offered again (round 2 offers C alone): its fate is the
+         unstacked one, dropped, recorded as round 1's skip and keep record
+         and in the delivered combination; the squash of T2 carries the
+         winner and C
+    """
+    looks = (_Look(T1), _Look(T2), _Look(DELIVERY_TIP))
+    world, probe = _probed(sample_project, sample_workload, (X, Y, C), looks, mode,
+                           [(X, Y)], per_round=2)  # fmt: skip
+    ran = run_world(world, max_rounds=2)
+    state = ran.state
+    assert ran.result.status == "done", state["error"]
+    x, y, c, w, lo = (_trial(state, world, i).id for i in (X, Y, C, won, lost))
+    gx, gy = (_verdict(state, world, i).gain for i in (X, Y))
+    assert gx is not None and gy is not None and gy > gx  # Y is the stronger
+
+    first = [y, x] if mode == "on" else [x, y]
+    assert [(k.base_commit, [t for t, _ in k.kept]) for k in world.combiner.calls] == [
+        (ORIGIN, first), (T1, [c]), (ORIGIN, [STACKED_TIP]),
+    ]  # fmt: skip
+    assert probe.dry_calls == ([] if mode == "off" else [(ORIGIN, (x, y)), (T1, (c,))])
+    assert _stack_calls(world)[-2:] == [
+        ("changed_paths", ORIGIN, T2),
+        ("squash", ORIGIN, T2),
+    ]
+
+    ledger = ran.ledger
+    one, two = ledger.rounds
+    assert one.adopted and one.tip_commit == T1 and not two.adopted
+    assert one.offered_trial_ids == (x, y) and two.offered_trial_ids == (c,)
+    r1 = one.combination
+    assert r1 is not None and r1.applied_trial_ids == (w,)
+    blocker = None if mode == "off" else w
+    assert r1.skipped == (
+        CombineSkip(trial_id=lo, reason="merge conflict", blocked_by=blocker),
+    )
+
+    combination = state["combination"]
+    assert combination is not None and combination.holds
+    assert combination.applied_trial_ids == (w, c)
+    assert combination.skipped == r1.skipped
+    assert state["kept_verdict_ids"] == [
+        _verdict(state, world, won).id, _verdict(state, world, C).id,
+    ]  # fmt: skip
+    kept = [(k.trial_id, k.delivered, k.skip_reason, k.blocked_by)
+            for k in combination.keeps]  # fmt: skip
+    rounds = [e.data for e in _coded(state, "stack_round")]
+    if mode == "off":
+        assert r1.keeps == () and r1.conflicts == ()
+        assert combination.keeps == () and combination.conflicts == ()
+        assert all("site_stacks" not in d and "skips" not in d for d in rounds)
+        return
+    assert kept == [(w, True, None, None), (lo, False, "merge conflict", w),
+                    (c, True, None, None)]  # fmt: skip
+    assert combination.conflicts == r1.conflicts == (tuple(sorted((x, y))),)
+    (rec_x,) = [k for k in r1.keeps if k.trial_id == x]
+    (rec_y,) = [k for k in r1.keeps if k.trial_id == y]
+    assert (rec_x.gain, rec_y.gain) == (gx, gy)
+    assert (rec_x.best_subset, rec_y.best_subset) == (False, True)
+    assert [d["site_stacks"] for d in rounds] == [mode, mode]
+    assert rounds[0]["skips"] == f"{lo[:8]}: merge conflict, blocked by {w[:8]}"
+    assert rounds[1]["skips"] == ""
+
+
+def test_the_delivery_squash_makes_no_choice_and_a_failed_one_delivers_no_keep(
+    sample_project: Project, sample_workload: Workload, run_world: Any
+) -> None:
+    """
+    GIVEN gain order on, round 1's conflict pair decided for Y and adopted,
+          round 2 keeping C, and the squash's re-test from the origin failing
+    THEN the squash is re-tested alone (no dry merge at delivery: one change,
+         no choice), nothing is delivered, and the carried keep records say
+         so: the delivered ones lost with the stacked re-test, X still lost
+         to its conflict
+    """
+    looks = (_Look(T1), _Look(T2), _Look(DELIVERY_TIP, wall=1.80))
+    world, probe = _probed(sample_project, sample_workload, (X, Y, C), looks, "on",
+                           [(X, Y)], per_round=2)  # fmt: skip
+    ran = run_world(world, max_rounds=2)
+    state = ran.state
+    assert ran.result.status == "done", state["error"]
+    x, y, c = (_trial(state, world, i).id for i in (X, Y, C))
+    assert [d[0] for d in probe.dry_calls] == [ORIGIN, T1]
+    assert world.combiner.calls[-1].kept == ((STACKED_TIP, SQUASH),)
+    combination = state["combination"]
+    assert combination is not None and not combination.holds
+    assert state["kept_verdict_ids"] == []
+    lost = "the stacked delivery re-test did not hold"
+    assert [(k.trial_id, k.delivered, k.skip_reason) for k in combination.keeps] == [
+        (y, False, lost), (x, False, "merge conflict"), (c, False, lost),
+    ]  # fmt: skip
+
+
+def test_the_review_set_from_the_origin_is_ordered_by_gain_too(
+    sample_project: Project, sample_workload: Workload, run_world: Any
+) -> None:
+    """
+    GIVEN one round on the origin keeping A and two review changes RX
+          (scored first) and RY (the stronger by gain) that conflict
+    WHEN the tail combines the review set with gain order on
+    THEN it dry-merges them on the origin and offers RY first, as the
+         unstacked node orders its review set; the review event carries
+         the site-stack fields and the review combination the records
+    """
+    looks = (_Look(DELIVERY_TIP), _Look(REVIEW_TIP, wall=1.30, val_loss=0.503))
+    world, probe = _probed(sample_project, sample_workload, (A, RX, RY), looks, "on",
+                           [(RX, RY)], per_round=3)  # fmt: skip
+    ran = run_world(world, max_rounds=1)
+    state = ran.state
+    assert ran.result.status == "done", state["error"]
+    a, rx, ry = (_trial(state, world, i).id for i in (A, RX, RY))
+    assert probe.dry_calls == [(ORIGIN, (a,)), (ORIGIN, (rx, ry))]
+    assert [t for t, _ in world.combiner.calls[1].kept] == [ry, rx]
+    review = state["review_combination"]
+    assert review is not None and review.holds
+    assert review.applied_trial_ids == (ry,)
+    assert [(k.trial_id, k.delivered, k.blocked_by) for k in review.keeps] == [
+        (ry, True, None), (rx, False, ry),
+    ]  # fmt: skip
+    (event,) = [e for e in state["events"] if e.data.get("set") == "review"
+                and "holds" in e.data]  # fmt: skip
+    assert event.data["site_stacks"] == "on"
+    assert event.data["skips"] == f"{rx[:8]}: merge conflict, blocked by {ry[:8]}"
+    assert event.data["kept"] == 2 and event.data["delivered"] == 1
+
+
+def test_a_round_with_nothing_offered_records_no_site_stack_fields(
+    sample_project: Project, sample_workload: Workload, run_world: Any
+) -> None:
+    """With gain order on, a round with no keep makes no dry merge and its
+    ``stack_round`` event is the ``off`` one, as the unstacked node's
+    "nothing kept" event carries no site-stack fields."""
+    world, probe = _probed(sample_project, sample_workload, (N1, N2), (), "on", [],
+                           per_round=1)  # fmt: skip
+    ran = run_world(world, max_rounds=2)
+    assert ran.result.status == "done", ran.state["error"]
+    assert probe.dry_calls == [] and world.combiner.calls == []
+    rounds = [e.data for e in _coded(ran.state, "stack_round")]
+    assert len(rounds) == 2 and all("site_stacks" not in d for d in rounds)
+
+
+# ---------------------------------------------------------------------------
+# Every offered keep's final record in state["combination"] (U5c review F1)
+# ---------------------------------------------------------------------------
+
+P = _Idea("P inline", 1.40, "src/bridge/p.py", expected_gain=0.2)
+Q = _Idea("Q unroll", 1.30, "src/bridge/q.py", expected_gain=0.1)
+
+
+def _each_offered_once(state: EngineState, ledger: StackLedger) -> None:
+    """The rule: every keep offered in any round has exactly one record in
+    ``state["combination"].keeps``, and every round's conflict is there."""
+    combination = state["combination"]
+    assert combination is not None
+    ids = [k.trial_id for k in combination.keeps]
+    offered = {t for r in ledger.rounds for t in r.offered_trial_ids}
+    assert len(ids) == len(set(ids)) and set(ids) == offered
+    pairs = {p for r in ledger.rounds if r.combination for p in r.combination.conflicts}
+    assert set(combination.conflicts) == pairs
+
+
+@pytest.mark.parametrize("mode", ["off", "on"])
+def test_a_last_round_that_did_not_hold_on_a_moved_base_keeps_its_records(
+    sample_project: Project, sample_workload: Workload, run_world: Any,
+    mode: SiteStacks,
+) -> None:  # fmt: skip
+    """
+    GIVEN round 1's conflict pair X/Y decided and adopted at T1, then round
+          2's conflict pair P/Q failing on T1 (greedy and fallback), so T1
+          is squashed and the delivery holds
+    THEN with ``on`` the combination carries round 1's records (Y delivered,
+         X lost to its conflict) and round 2's as that round recorded them,
+         never delivered, and both rounds' conflicts; with ``off`` it
+         carries no record and no conflict, as before
+    """
+    looks = (_Look(T1), _Look(T2, wall=1.80), _Look(T2, wall=1.80),
+             _Look(DELIVERY_TIP))  # fmt: skip
+    world, _ = _probed(sample_project, sample_workload, (X, Y, P, Q), looks, mode,
+                       [(X, Y), (P, Q)], per_round=2)  # fmt: skip
+    ran = run_world(world, max_rounds=2)
+    state = ran.state
+    assert ran.result.status == "done", state["error"]
+    one, two = ran.ledger.rounds
+    assert one.adopted and two.reason == "did not hold"
+    assert _stack_calls(world)[-1] == ("squash", ORIGIN, T1)
+    combination = state["combination"]
+    assert combination is not None and combination.holds
+    if mode == "off":
+        assert combination.keeps == () and combination.conflicts == ()
+        return
+    x, y, p, q = (_trial(state, world, i).id for i in (X, Y, P, Q))
+    assert state["kept_verdict_ids"] == [_verdict(state, world, Y).id]
+    r1, r2 = one.combination, two.combination
+    assert r1 is not None and r2 is not None and r2.keeps
+    assert combination.keeps == (*r1.keeps, *r2.keeps)
+    assert not any(k.delivered for k in r2.keeps)
+    assert {k.trial_id for k in r2.keeps} == {p, q}
+    fates = {k.trial_id: (k.delivered, k.blocked_by) for k in combination.keeps}
+    assert fates[y] == (True, None) and fates[x] == (False, y)
+    assert combination.conflicts == tuple(sorted([tuple(sorted((x, y))),
+                                                  tuple(sorted((p, q)))]))  # fmt: skip
+    _each_offered_once(state, ran.ledger)
+
+
+@pytest.mark.parametrize("mode", ["off", "on"])
+def test_a_squash_the_combiner_did_not_apply_loses_every_keep_on_record(
+    sample_project: Project, sample_workload: Workload, run_world: Any,
+    mode: SiteStacks,
+) -> None:  # fmt: skip
+    """
+    GIVEN round 1's conflict pair decided for Y and adopted, round 2 keeping
+          C, and a squash the combiner skips (U2's empty commit)
+    THEN nothing is applied or kept; with ``on`` every offered keep is still
+         on record, none delivered: Y and C lost to the delivery
+         (``NOT_APPLIED_AT_DELIVERY``), X to its conflict with Y, and the
+         conflict pair kept; with ``off`` no record, as before
+    """
+    looks = (_Look(T1), _Look(T2), _Look(ORIGIN, skip=True), _Look(ORIGIN, skip=True))
+    world, _ = _probed(sample_project, sample_workload, (X, Y, C), looks, mode,
+                       [(X, Y)], per_round=2)  # fmt: skip
+    ran = run_world(world, max_rounds=2)
+    state = ran.state
+    assert ran.result.status == "done", state["error"]
+    combination = state["combination"]
+    assert combination is not None and not combination.holds
+    assert combination.applied_trial_ids == () and state["kept_verdict_ids"] == []
+    if mode == "off":
+        assert combination.keeps == () and combination.conflicts == ()
+        return
+    x, y, c = (_trial(state, world, i).id for i in (X, Y, C))
+    lost = NOT_APPLIED_AT_DELIVERY
+    assert [(k.trial_id, k.delivered, k.skip_reason, k.blocked_by)
+            for k in combination.keeps] == [
+        (y, False, lost, None), (x, False, "merge conflict", y), (c, False, lost, None),
+    ]  # fmt: skip
+    assert combination.conflicts == (tuple(sorted((x, y))),)
+    _each_offered_once(state, ran.ledger)
+
+
+def test_a_refused_tip_reoffers_its_keeps_and_each_is_recorded_once(
+    sample_project: Project, sample_workload: Workload, run_world: Any
+) -> None:
+    """
+    GIVEN gain order on, round 1's X/Y combine holding at T1 but its tip
+          refused (the diff cannot be read), so round 2 on the origin offers
+          X and Y again with C
+    THEN round 2's combine on the origin is the delivery, and each of the
+         three keeps has exactly one record (round 1's are superseded)
+    """
+    stacker = FakeStacker(diffs={(ORIGIN, T1): EngineError("no diff")})
+    probe = _Probe((_Look(T1), _Look(DELIVERY_TIP)), "on")
+    world = _world(sample_project, sample_workload, (X, Y, C), (), per_round=2,
+                   combiner=probe, stacker=stacker)  # fmt: skip
+    tid = {title: f"t-{h.id}" for title, h in world.ideas.items()}
+    probe.clash = {frozenset({tid[X.title], tid[Y.title]})}
+    ran = run_world(world, max_rounds=2)
+    state = ran.state
+    assert ran.result.status == "done", state["error"]
+    one, two = ran.ledger.rounds
+    assert not one.adopted and two.base_commit == ORIGIN
+    assert len(two.offered_trial_ids) == 3
+    _each_offered_once(state, ran.ledger)
+
+
+def test_every_offered_keep_is_on_record_once_after_gain_ordered_rounds(
+    sample_project: Project, sample_workload: Workload, run_world: Any
+) -> None:
+    """The rule holds on the held two-round run and on a delivery that was
+    re-tested and failed (``LOST_AT_DELIVERY``)."""
+    for wall in (0.85, 1.80):
+        looks = (_Look(T1), _Look(T2), _Look(DELIVERY_TIP, wall=wall))
+        world, _ = _probed(sample_project, sample_workload, (X, Y, C), looks, "on",
+                           [(X, Y)], per_round=2)  # fmt: skip
+        ran = run_world(world, max_rounds=2)
+        assert ran.result.status == "done", ran.state["error"]
+        _each_offered_once(ran.state, ran.ledger)
