@@ -370,7 +370,7 @@ def test_the_default_context_keeps_every_step2_knob(
         "discovery_max_share": 0.25, "fix_retries_per_run": 1, "playbook": (),
         "quality": None, "default_output_check": True, "calibrator": ctx.baseline_runner,
         "calibration_blocks": 3, "confirm_winners": True, "portfolio_rounds": 0,
-        "near_miss_compounds": False,
+        "near_miss_compounds": False, "stack_rounds": False, "stacker": None,
     }  # fmt: skip
     assert {name: getattr(ctx, name) for name in new} == new
 

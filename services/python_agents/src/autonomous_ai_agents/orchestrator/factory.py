@@ -73,6 +73,22 @@ DEBUG log prints request options). A ``WORKTREE_ROOT`` that overlaps the
 checkout is refused with ``PreflightError``: trial worktrees and their
 cleanup must never live in, or contain, the user's repository.
 
+X2-DT (O63, amended by O71). With ``STACKED_ROUNDS`` on the context stacks
+rounds (``stack_rounds``) through one ``GitStacker`` on the combiner's own
+``GitWorkspace``; off, no stacker is built and both fields keep
+``NodeContext``'s defaults, so the context is today's. ``SITE_STACKS`` may
+be combined with stacking (O71: gain order is X2-DT's baseline): the
+combiner reads it as ever. Refused with ``ValueError`` before any transport
+is built (``refuse_stacking``): stacking with a quality check or with
+``DEFAULT_OUTPUT_CHECK`` off (a tip is adopted only on outputs equal to the
+original base's); and, for the stored state of a run this context will
+resume (``resumed``), an open stack ledger when the context would not
+stack (its base may be a round tip, and today's combine would deliver from
+it with no squash and no re-test from the original base), or, when it
+stacks, a stored baseline with no ``output_equivalence`` guardrail (the
+run's recorded mode: its tip rounds would be judged on outputs the frozen
+judge treats as not applicable).
+
 Everything else (``WORKTREE_ROOT``, ``MIN_RUNS``, the output caps) is read
 from ``settings`` by the modules themselves, so tests change ``settings``.
 """
@@ -113,12 +129,14 @@ from autonomous_ai_agents.common.models import (
     EventLevel,
     FrozenFile,
     Guardrail,
+    GuardrailKind,
     Hypothesis,
     Measurement,
     NoiseCalibration,
     Project,
     QualityCheck,
     RunPhase,
+    StackLedger,
     Trial,
     Workload,
 )
@@ -137,6 +155,7 @@ from autonomous_ai_agents.execution.protocols import (
 )
 from autonomous_ai_agents.execution.quality import FrozenScorer
 from autonomous_ai_agents.execution.runner import BaselineRunner, TrialRunner
+from autonomous_ai_agents.execution.stacking import GitStacker
 from autonomous_ai_agents.execution.trial_runner import (
     EditorFactory,
     GitBaselineRunner,
@@ -336,6 +355,50 @@ class RunNotes:
                 level=EventLevel.warning,
                 data={"code": "runner_note", "note": text},
             )
+        )
+
+
+def _open_ledger(stack: object) -> bool:
+    """Whether a stored ``stack`` may still be mid-run: anything but none or
+    a ``StackLedger`` the tail closed (``delivery`` or ``all_rounds_held``
+    set, as ``Orchestrator.resume`` reads it); a value of any other shape
+    cannot be shown closed, so it counts as open (fail closed)."""
+    if stack is None:
+        return False
+    if not isinstance(stack, StackLedger):
+        return True
+    return stack.delivery is None and stack.all_rounds_held is None
+
+
+def refuse_stacking(
+    quality: QualityCheck | None, resumed: Mapping[str, object] | None
+) -> None:
+    """``ValueError`` for a context the settings and the resumed run's
+    stored state must not give (module docstring, X2-DT)."""
+    stacking = settings.STACKED_ROUNDS
+    if stacking and quality is not None:
+        raise ValueError("STACKED_ROUNDS refuses a quality check: stack without one")
+    if stacking and not settings.DEFAULT_OUTPUT_CHECK:
+        raise ValueError(
+            "STACKED_ROUNDS needs DEFAULT_OUTPUT_CHECK: a tip is adopted only on"
+            " outputs equal to the original base's"
+        )
+    if resumed is None:
+        return
+    run_id = resumed.get("run_id")
+    if not stacking and _open_ledger(resumed.get("stack")):
+        raise ValueError(
+            f"run {run_id!r} has an open stack ledger: resume it with STACKED_ROUNDS on"
+        )
+    baseline = resumed.get("baseline")
+    exact = isinstance(baseline, Baseline) and any(
+        g.kind is GuardrailKind.output_equivalence for g in baseline.guardrails
+    )
+    if stacking and not exact:
+        raise ValueError(
+            f"run {run_id!r} was defined without the exact output check (no"
+            " output_equivalence guardrail on its stored baseline): it cannot"
+            " be resumed with STACKED_ROUNDS on"
         )
 
 
@@ -551,9 +614,12 @@ def build_context(
     run: RunOnce = run_once,
     sleep: Callable[[float], None] = time.sleep,
     quality: QualityCheck | None = None,
+    resumed: Mapping[str, object] | None = None,
 ) -> NodeContext:
     """The real context for ``project``; ``quality`` is the caller's confirmed
-    check (D40); the other keyword overrides are for tests.
+    check (D40); ``resumed`` is the stored state of the run this context
+    will resume (``Repository.get_run``, or the checkpoint's values), read
+    only by ``refuse_stacking``; the other keyword overrides are for tests.
 
     ``role_transports`` without ``transport=`` and with a key set builds the
     engine's transport and every role missing from it from the key; with
@@ -562,6 +628,7 @@ def build_context(
     so is a ``lane_transports`` key outside ``LANE_ROLE_LANES``, or ``None`` (G1).
     """
     _refuse_overlap(project)
+    refuse_stacking(quality, resumed)
     _pin_sdk_logger()
     given = dict(role_transports or {})
     if "engine" in given:
@@ -668,6 +735,7 @@ def build_context(
 
     runners = ConnectedRunners(project, runners_for, prefix=prefix, notes=notes)
     baseline_runner = ConnectedBaselineRunner(runners)
+    stacking = settings.STACKED_ROUNDS
     preflight = GitPreflight(
         executable=settings.GIT_EXECUTABLE,
         protected=protected,
@@ -728,4 +796,6 @@ def build_context(
         confirm_winners=settings.CONFIRM_WINNERS,
         portfolio_rounds=settings.PORTFOLIO_ROUNDS,
         near_miss_compounds=settings.NEAR_MISS_COMPOUNDS,
+        stack_rounds=stacking,
+        stacker=GitStacker(git=git) if stacking else None,
     )

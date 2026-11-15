@@ -363,6 +363,26 @@ afford it). Step 3 adds, each defaulting to Step 2's behaviour: `generator`,
   `ANTHROPIC_API_KEY` there is no transport: understand keeps its stub and the
   trials need an injected `editor`, else `LLMConfigError`. Keyword overrides
   (`transport`, `editor`, `run`, `network`, `fs`, `sleep`) exist for tests.
+- **Stacked rounds (X2-DT, O63 amended by O71), in the factory.**
+  `STACKED_ROUNDS` (off) is read only here: on, the context gets
+  `stack_rounds=True` and one `GitStacker` on the combiner's own `GitWorkspace`;
+  off, no stacker is built and both fields keep `NodeContext`'s defaults, so the
+  context is today's. `SITE_STACKS` may be combined with stacking (O71: gain
+  order is X2-DT's baseline); the combiner reads it as ever, in every round's
+  combine and the tail's review set; the delivery squash makes no choice.
+  `build_context(..., resumed=)` takes the stored state of a run the context
+  will resume (`Repository.get_run` or the checkpoint's values). `ValueError`,
+  before any transport is built (`refuse_stacking`), refuses:
+  - stacking with a quality check (`quality=`);
+  - stacking with `DEFAULT_OUTPUT_CHECK` off (a tip is adopted only on outputs
+    equal to the original base's);
+  - a resumed run whose `stack` ledger is open (neither `delivery` nor
+    `all_rounds_held` set; any other non-`None` shape counts as open) when
+    `STACKED_ROUNDS` is off: its base may be a round tip, and today's combine
+    would deliver from it with no squash and no re-test from the original base
+    (`Orchestrator.resume` refuses it too);
+  - stacking a resumed run whose stored baseline has no `output_equivalence`
+    guardrail, or no baseline: the run's recorded mode, not only the context's.
 - `execution/runner.py`:
   `TrialRunner.run(hypothesis, workloads, baseline, *, round, branch, budget_usd, brief) -> Trial`
   and

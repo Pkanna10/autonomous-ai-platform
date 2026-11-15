@@ -117,6 +117,23 @@ if result.status == "needs_approval":  # a behaviour-changing hypothesis
 Every node emits `EngineEvent`s; `engine.stream(...)` yields them live together
 with state updates, which is what the Step 4 CLI log renders.
 
+## Stacked rounds (X2-DT)
+
+`STACKED_ROUNDS=true` makes each round start from the last round's held combine
+tip instead of the original base; the last held tip is squashed onto the
+original base and re-tested there for delivery. Only
+`orchestrator/factory.build_context` reads the setting: it adds a `GitStacker`
+on the combiner's workspace. Off (the default), the context, the graph and every
+request are today's. `SITE_STACKS` may be combined with it (gain order in every
+round's combine; the delivered squash carries those sets and makes no further
+choice). The factory refuses, with `ValueError`:
+
+- stacking with a quality check, or with `DEFAULT_OUTPUT_CHECK=false`;
+- resuming (`build_context(..., resumed=<stored state>)`) a run with an open
+  stack ledger while `STACKED_ROUNDS` is off;
+- stacking a resumed run whose stored baseline has no `output_equivalence`
+  guardrail.
+
 ## Testing and Quality
 
 ```bash
