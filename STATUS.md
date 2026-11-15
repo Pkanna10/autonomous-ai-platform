@@ -994,6 +994,34 @@ blocks it.
   5. **The `opentelemetry-api` fix goes to master as a one-line PR,** draft
      until CI is green; the owner merges it. **Opened:** PR #54 from
      `claude/awesome-ride-kmnd5q` (`04b4c80`, lockfile only).
+  - **Progress (2026-11-15, Lead):**
+    - **Built, reviewed by a second model, gated and committed:**
+      - U5c (`6cda9eb`): gain order in every stacked round combine and the
+        tail's review set, through the unstacked node's own planner; the refusal
+        is lifted and U4's checks re-reviewed.
+      - U6 (`817350b`): the stacking factory.
+      - U7 (`d9631a7`): the real-git E2E, passing on 3.13 and 3.11.
+      - The equivalence gate (`db97238`): record-only. Two blocking security
+        findings and one more on re-review were fixed: the hash seed in the
+        child, a FIFO `out.json`, and nested JSON.
+      - The gain-order-only replay of the three uncovered X2-D runs (`77e5d34`):
+        not dispatched, awaiting the owner's ruling.
+      - The engine's sitting harness and the sealed papers archive (`4e1df25`):
+        one paper a dispatch; the fuse admits a paper only when the running
+        spend plus 6.50 fits 12 USD. Not dispatched, awaiting the budget
+        decision (12 USD sits three papers; 14.50 sits four).
+    - **Harder exam:** four gated papers (tabulate, lark, toolz, PyYAML), each
+      with 4 plants, 2 decoys and 1-2 traps.
+      - All four reproduction scripts ended `OVERALL REPRODUCED` on the quiet
+        machine (load about 1), with a clean sitting interpreter.
+      - That interpreter has only pytest, because the previous one carried an
+        unplanted PyYAML.
+      - The key and build are provisionally sealed by hash and encryption.
+      - The two trial sitters have started.
+      - **The Lead's operational reading of "inside the band":** the mean of the
+        two sitters' four gated-paper scores lies in 40-80 %, with at least one
+        score below 70 % and one at or above it.
+
 - **O65. Two owner requests from round 3's study findings (owner, 2026-11-13;
   not a rule change).**
   1. **Equivalence audit, now, zero credit, outside the points.**
