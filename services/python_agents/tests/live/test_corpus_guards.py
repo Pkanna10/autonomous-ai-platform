@@ -1087,6 +1087,7 @@ SUITES = (
     "ideas-x2",  # X2a: evolution on the levers X1 kept (O48)
     "combine-replay",  # O62 item 5: the combine re-measure replay, no request
     "combine-order",  # O65 item 2: score order against gain order, no request
+    "exam-sitting",  # UEX (O71 item 4): one retired practical paper a dispatch
 )
 DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_sweep_live.py",
@@ -1110,6 +1111,7 @@ DISCOVERY = (  # X7's live modules beside the corpus ones: never in Stage A
     "tests/live/test_ideas_x2_live.py",  # X2a: the X2 engine runs
     "tests/live/test_combine_replay_live.py",  # O62 item 5: the combine replay
     "tests/live/test_combine_order_live.py",  # O65 item 2: the combine-order replay
+    "tests/live/test_exam_sitting_live.py",  # UEX (O71 item 4): the engine's sitting
 )
 EXPERIMENT_MINUTES = {
     # the sweeps on 37 repositories (v1 + hard + v2), from the Window 0 jobs on
@@ -1868,6 +1870,7 @@ def _suite_needs() -> dict[str, float]:
     x2 = importlib.import_module(f"{__package__}.ideas_x2")
     replay = importlib.import_module(f"{__package__}.combine_replay")
     order = importlib.import_module(f"{__package__}.order_cases")
+    exam = importlib.import_module(f"{__package__}.exam_sitting")
     one_library = {oss_ab.REPOS_ENV: OSS_AB_DISPATCH_REPO}
     return {
         "noise": noise.noise_need(noise.noise_plan({})),
@@ -1902,6 +1905,7 @@ def _suite_needs() -> dict[str, float]:
         "ideas-x2": x2.x2_need(x2.x2_plan(X2_DISPATCH)),
         "combine-replay": replay.replay_need(),
         "combine-order": order.order_need(),
+        "exam-sitting": exam.sitting_need(),  # UEX: one paper at its run cap
         "ideas-picks": picks.picks_need(picks.picks_plan({})),  # committed files
         "sweep": sweep.sweep_need(sweep.sweep_plan({})),
         "sweep-fable": sweep.sweep_need(sweep.sweep_plan(SWEEP_FABLE_ENV)),
@@ -1992,6 +1996,9 @@ def _dispatch(
     x2_dispatch: str | None = None,
     x2_replicate: str | None = None,
     order_batch: str | None = None,
+    key_slot: str | None = None,
+    exam_paper: str | None = None,
+    exam_spent_usd: str | None = None,
 ) -> tuple[int, str, str]:
     """The run step under bash -e with a fake ``uv`` that records its call
     (and, in ``rule.txt``, the noise rule, the editor and the noise path; in
@@ -2049,6 +2056,10 @@ def _dispatch(
         env["INPUT_X2_REPLICATE"] = x2_replicate
     if order_batch is not None:
         env["INPUT_ORDER_BATCH"] = order_batch
+    for name, value in (("INPUT_KEY_SLOT", key_slot), ("INPUT_EXAM_PAPER", exam_paper),
+                        ("INPUT_EXAM_SPENT_USD", exam_spent_usd)):  # fmt: skip
+        if value is not None:
+            env[name] = value
     proc = subprocess.run(
         ["bash", "-e", str(script)],
         env=env,
@@ -2651,9 +2662,9 @@ def test_the_ab_arms_input_is_a_strict_choice_reaching_the_run_via_env() -> None
     assert "INPUT_AB_ARMS: ${{ inputs.ab_arms }}" in step
     inputs = _ci_block("    inputs:\n", "\n\n")
     names = re.findall(r"^      (\w+):$", inputs, re.MULTILINE)
-    assert names[-4:] == ["ab_arms", "slice_repos", "x2_dispatch", "x2_replicate"]
-    # U-key, U-portfolio, O65's order_batch
-    assert len(names) == len(set(names)) == 18 <= 25
+    assert names[-4:] == ["x2_dispatch", "x2_replicate", "exam_paper", "exam_spent_usd"]
+    # U-key, U-portfolio, O65's order_batch, UEX's exam_paper and exam_spent_usd
+    assert len(names) == len(set(names)) == 20 <= 25
 
 
 @pytest.mark.parametrize(

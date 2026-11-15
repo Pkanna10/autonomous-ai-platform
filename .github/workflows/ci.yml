@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: 'Live suite: stage-a, corpus, attack, hard, oss, or an experiment (probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, ab-v2-p, ab-v2, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, evolve-p, heal-hard, build, grader, upstream-verify, upstream, agent-probes, heal-agent, research-agent, watch, watch-cleanup, ideas-probe, ideas-views, ideas-marker, ideas-validate, ideas-slice, ideas-pool, ideas-reaudit, ideas-picks, ideas-x2, combine-replay, combine-order) (one at a time: together they need more than the 150 USD ceiling)'
+        description: 'Live suite: stage-a, corpus, attack, hard, oss, or an experiment (probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, ab-v2-p, ab-v2, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, evolve-p, heal-hard, build, grader, upstream-verify, upstream, agent-probes, heal-agent, research-agent, watch, watch-cleanup, ideas-probe, ideas-views, ideas-marker, ideas-validate, ideas-slice, ideas-pool, ideas-reaudit, ideas-picks, ideas-x2, combine-replay, combine-order, exam-sitting) (one at a time: together they need more than the 150 USD ceiling)'
         type: choice
         options:
           [
@@ -63,6 +63,7 @@ on:
             ideas-x2,
             combine-replay,
             combine-order,
+            exam-sitting,
           ]
         default: stage-a
       mode:
@@ -81,7 +82,7 @@ on:
         options: [default, claude-sonnet-5-5]
         default: default
       suite_cap_usd:
-        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75 (corpus_select controls 15), hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 112, sweep-fable 41, sweep-record 24, ab 140, ab-v2-p 59, ab-v2 68 (L5b; ab_arms A, L5a, 17), escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, evolve-p 56, heal-hard 8, build 27, grader 2, upstream-verify 0 (no request, but the cap must be above 0), upstream 50, agent-probes 1, heal-agent 8, research-agent 8, watch 2, watch-cleanup 2, ideas-probe 57 (E1, four libraries of ideas_repos, one 15; ideas_arms count 9, C-low,C-high 20; X1 51 for three libraries of ideas_repos, under the 80 USD fuse, one 17; X1-1 33 for the four of run 1, one 9), ideas-views 0 (no request, but the cap must be above 0), ideas-marker 24 (Vb: 48 rank sets x Opus 5.5 and Opus 5), ideas-validate 8 (Vc: the Sonnet 5 and Fable 5 smoke requests, 17 Opus 5 label requests), ideas-slice 75 (Ve: two libraries of slice_repos x (4 configurations x 3 trials x 2.50 + the markers 2.00 + the pooled tournament 5.45), one 38; under the 80 USD fuse), ideas-pool 22 (V-O40: the pooled tournament on more_itertools, mistune, markdown and idna, 4 x 5.45), ideas-reaudit 3 (V-reaudit: the pooled re-audit of the X1-1 re-run, 4 libraries x one Opus 5.5 auditor request at its 0.70 cap; run 1 measured 1.445 for four), ideas-picks 8 (V-picks, O48: the seven would-try ideas of the blind reader, one engine loop per library, each loop at its measured spend plus the reservation of its dearest request: sqlparse 1.60, more_itertools 2.15, mistune 2.15, tomli 1.65; need 7.55 under the owner cap of 8), ideas-x2 38 (X2a: x2_dispatch one arm on four libraries, 4 runs x ideas_x2.run_cap, 9.35 for X2-0 and its twin, 9.45 for X2-V (X2-D 12.90 a run, two a dispatch, 26), each run capped by the engine reservation rules at X1 measured rates with round 1 trialling the whole idea result; one run 10; under the 80 USD fuse), combine-replay 0 (no request, but the cap must be above 0), combine-order 0 (no request, but the cap must be above 0)'
+        description: 'LIVE_SUITE_CAP_USD in USD, at most 150 and at least the suite need: stage-a 9, attack 12, corpus 75 (corpus_select controls 15), hard 50, oss 50, probes 1, triage 2, papers 10, web 52, prescreen 3, sweep 112, sweep-fable 41, sweep-record 24, ab 140, ab-v2-p 59, ab-v2 68 (L5b; ab_arms A, L5a, 17), escalation 43, acquire 1, noise 0 (no request, but the cap must be above 0), heal 6, oss-ab 103, evolve 104, evolve-more 138, evolve-p 56, heal-hard 8, build 27, grader 2, upstream-verify 0 (no request, but the cap must be above 0), upstream 50, agent-probes 1, heal-agent 8, research-agent 8, watch 2, watch-cleanup 2, ideas-probe 57 (E1, four libraries of ideas_repos, one 15; ideas_arms count 9, C-low,C-high 20; X1 51 for three libraries of ideas_repos, under the 80 USD fuse, one 17; X1-1 33 for the four of run 1, one 9), ideas-views 0 (no request, but the cap must be above 0), ideas-marker 24 (Vb: 48 rank sets x Opus 5.5 and Opus 5), ideas-validate 8 (Vc: the Sonnet 5 and Fable 5 smoke requests, 17 Opus 5 label requests), ideas-slice 75 (Ve: two libraries of slice_repos x (4 configurations x 3 trials x 2.50 + the markers 2.00 + the pooled tournament 5.45), one 38; under the 80 USD fuse), ideas-pool 22 (V-O40: the pooled tournament on more_itertools, mistune, markdown and idna, 4 x 5.45), ideas-reaudit 3 (V-reaudit: the pooled re-audit of the X1-1 re-run, 4 libraries x one Opus 5.5 auditor request at its 0.70 cap; run 1 measured 1.445 for four), ideas-picks 8 (V-picks, O48: the seven would-try ideas of the blind reader, one engine loop per library, each loop at its measured spend plus the reservation of its dearest request: sqlparse 1.60, more_itertools 2.15, mistune 2.15, tomli 1.65; need 7.55 under the owner cap of 8), ideas-x2 38 (X2a: x2_dispatch one arm on four libraries, 4 runs x ideas_x2.run_cap, 9.35 for X2-0 and its twin, 9.45 for X2-V (X2-D 12.90 a run, two a dispatch, 26), each run capped by the engine reservation rules at X1 measured rates with round 1 trialling the whole idea result; one run 10; under the 80 USD fuse), combine-replay 0 (no request, but the cap must be above 0), combine-order 0 (no request, but the cap must be above 0), exam-sitting 7 (UEX, O71 item 4: one retired practical paper a dispatch, exam_paper t1 to t4, X2-0 with SITE_STACKS=on, key_slot 2 only; exam_sitting.exam_run_cap 6.50, admitted only if exam_spent_usd + 6.50 is at most this cap; at most the owner budget of 12, which sits three papers at the archived X2-0 spends)'
         type: string
         default: '12'
       key_slot:
@@ -142,6 +143,14 @@ on:
         default: ''
       x2_replicate:
         description: 'ideas-x2 only, and required for X2-P and X2-F (the portfolio leap, U-portfolio): IDEAS_LEAP_DEAL_RUN, the replicate 1, 2 or 3, which the deal rotation reads (idea_frameworks.deal: library, run, round); every other arm ignores it'
+        type: string
+        default: ''
+      exam_paper:
+        description: 'exam-sitting only, and required there: LIVE_EXAM_PAPER, the one paper this dispatch sits, t1, t2, t3 or t4 (UEX, one paper a dispatch; the job timeout is the paper''s exam_sitting.paper_timeout: t1 115, t2 340, t3 175, t4 245 minutes)'
+        type: string
+        default: ''
+      exam_spent_usd:
+        description: 'exam-sitting only, and required there: LIVE_EXAM_SPENT_USD, the USD the earlier papers of the sitting spent (the Lead''s running total, 0 for the first); the paper is sat only if it plus the 6.50 run cap is at most suite_cap_usd, itself at most the owner budget of 12'
         type: string
         default: ''
 
@@ -727,7 +736,12 @@ jobs:
     # batches (order_batch: 47, 48 and 51); 15 for setup plus twice the largest.
     # order_batch b (O71 item 1: the three X2-D runs, gain order alone) is 9
     # (order_cases.B_PLAN_MINUTES), inside the same timeout.
-    timeout-minutes: ${{ inputs.suite == 'sweep' && 240 || inputs.suite == 'sweep-fable' && 180 || inputs.suite == 'sweep-record' && 150 || inputs.suite == 'ab' && 360 || inputs.suite == 'noise' && 90 || inputs.suite == 'oss-ab' && 120 || inputs.suite == 'evolve' && 300 || inputs.suite == 'evolve-more' && 300 || inputs.suite == 'evolve-p' && 300 || inputs.suite == 'ab-v2-p' && 300 || inputs.suite == 'ab-v2' && 300 || inputs.suite == 'build' && 120 || inputs.suite == 'upstream-verify' && 150 || inputs.suite == 'upstream' && 300 || inputs.suite == 'heal-agent' && 120 || inputs.suite == 'research-agent' && 45 || inputs.suite == 'ideas-probe' && 240 || inputs.suite == 'ideas-views' && 30 || inputs.suite == 'ideas-marker' && 240 || inputs.suite == 'ideas-validate' && 60 || inputs.suite == 'ideas-slice' && 150 || inputs.suite == 'ideas-pool' && 60 || inputs.suite == 'ideas-reaudit' && 30 || inputs.suite == 'ideas-picks' && 45 || inputs.suite == 'ideas-x2' && 360 || inputs.suite == 'combine-replay' && 105 || inputs.suite == 'combine-order' && 117 || inputs.suite == 'watch' && 90 || inputs.suite == 'escalation' && 90 || inputs.suite == 'triage' && 90 || inputs.suite == 'papers' && 60 || inputs.suite == 'web' && 90 || inputs.suite == 'corpus' && 120 || inputs.suite == 'oss' && 300 || inputs.suite == 'hard' && 90 || inputs.suite == 'attack' && 45 || 30 }}
+    # exam-sitting, one paper a dispatch (UEX): exam_sitting.paper_timeout,
+    # 1.25 x (10 setup + 1 clone + 2 pipeline calls at 8 + 21 trials' editor
+    # turns at 60 s + 702 workload runs and 45 suite runs, each at the
+    # paper's measured seconds + 1 s a launch), up to 5: t1 115, t2 340,
+    # t3 175, t4 245.
+    timeout-minutes: ${{ inputs.suite == 'sweep' && 240 || inputs.suite == 'sweep-fable' && 180 || inputs.suite == 'sweep-record' && 150 || inputs.suite == 'ab' && 360 || inputs.suite == 'noise' && 90 || inputs.suite == 'oss-ab' && 120 || inputs.suite == 'evolve' && 300 || inputs.suite == 'evolve-more' && 300 || inputs.suite == 'evolve-p' && 300 || inputs.suite == 'ab-v2-p' && 300 || inputs.suite == 'ab-v2' && 300 || inputs.suite == 'build' && 120 || inputs.suite == 'upstream-verify' && 150 || inputs.suite == 'upstream' && 300 || inputs.suite == 'heal-agent' && 120 || inputs.suite == 'research-agent' && 45 || inputs.suite == 'ideas-probe' && 240 || inputs.suite == 'ideas-views' && 30 || inputs.suite == 'ideas-marker' && 240 || inputs.suite == 'ideas-validate' && 60 || inputs.suite == 'ideas-slice' && 150 || inputs.suite == 'ideas-pool' && 60 || inputs.suite == 'ideas-reaudit' && 30 || inputs.suite == 'ideas-picks' && 45 || inputs.suite == 'ideas-x2' && 360 || inputs.suite == 'combine-replay' && 105 || inputs.suite == 'combine-order' && 117 || inputs.suite == 'exam-sitting' && inputs.exam_paper == 't1' && 115 || inputs.suite == 'exam-sitting' && inputs.exam_paper == 't2' && 340 || inputs.suite == 'exam-sitting' && inputs.exam_paper == 't3' && 175 || inputs.suite == 'exam-sitting' && inputs.exam_paper == 't4' && 245 || inputs.suite == 'watch' && 90 || inputs.suite == 'escalation' && 90 || inputs.suite == 'triage' && 90 || inputs.suite == 'papers' && 60 || inputs.suite == 'web' && 90 || inputs.suite == 'corpus' && 120 || inputs.suite == 'oss' && 300 || inputs.suite == 'hard' && 90 || inputs.suite == 'attack' && 45 || 30 }}
     defaults:
       run:
         working-directory: ./services/python_agents
@@ -843,6 +857,8 @@ jobs:
           INPUT_SLICE_REPOS: ${{ inputs.slice_repos }}
           INPUT_X2_DISPATCH: ${{ inputs.x2_dispatch }}
           INPUT_X2_REPLICATE: ${{ inputs.x2_replicate }}
+          INPUT_EXAM_PAPER: ${{ inputs.exam_paper }}
+          INPUT_EXAM_SPENT_USD: ${{ inputs.exam_spent_usd }}
           INPUT_ORDER_BATCH: ${{ inputs.order_batch }}
           LIVE_RESULTS_PATH: ${{ runner.temp }}/live-results.jsonl
         run: |
@@ -866,7 +882,7 @@ jobs:
             exit 1
           fi
           export LIVE_KEY_SLOT="${key_slot}"
-          corpus=(--ignore=tests/live/test_corpus_live.py --ignore=tests/live/test_attack_corpus_live.py --ignore=tests/live/test_hard_corpus_live.py --ignore=tests/live/test_oss_live.py --ignore=tests/live/experiments --ignore=tests/live/test_sweep_live.py --ignore=tests/live/test_ab_live.py --ignore=tests/live/test_escalation_live.py --ignore=tests/live/test_noise_live.py --ignore=tests/live/test_oss_ab_live.py --ignore=tests/live/test_evolution_live.py --ignore=tests/live/test_build_live.py --ignore=tests/live/test_grader_agreement_live.py --ignore=tests/live/test_upstream_verify_live.py --ignore=tests/live/test_upstream_live.py --ignore=tests/live/test_ideas_probe_live.py --ignore=tests/live/test_ideas_views_live.py --ignore=tests/live/test_ideas_marker_live.py --ignore=tests/live/test_ideas_validate_live.py --ignore=tests/live/test_ideas_slice_live.py --ignore=tests/live/test_ideas_pool_live.py --ignore=tests/live/test_ideas_reaudit_live.py --ignore=tests/live/test_ideas_picks_live.py --ignore=tests/live/test_ideas_x2_live.py --ignore=tests/live/test_combine_replay_live.py --ignore=tests/live/test_combine_order_live.py)
+          corpus=(--ignore=tests/live/test_corpus_live.py --ignore=tests/live/test_attack_corpus_live.py --ignore=tests/live/test_hard_corpus_live.py --ignore=tests/live/test_oss_live.py --ignore=tests/live/experiments --ignore=tests/live/test_sweep_live.py --ignore=tests/live/test_ab_live.py --ignore=tests/live/test_escalation_live.py --ignore=tests/live/test_noise_live.py --ignore=tests/live/test_oss_ab_live.py --ignore=tests/live/test_evolution_live.py --ignore=tests/live/test_build_live.py --ignore=tests/live/test_grader_agreement_live.py --ignore=tests/live/test_upstream_verify_live.py --ignore=tests/live/test_upstream_live.py --ignore=tests/live/test_ideas_probe_live.py --ignore=tests/live/test_ideas_views_live.py --ignore=tests/live/test_ideas_marker_live.py --ignore=tests/live/test_ideas_validate_live.py --ignore=tests/live/test_ideas_slice_live.py --ignore=tests/live/test_ideas_pool_live.py --ignore=tests/live/test_ideas_reaudit_live.py --ignore=tests/live/test_ideas_picks_live.py --ignore=tests/live/test_ideas_x2_live.py --ignore=tests/live/test_combine_replay_live.py --ignore=tests/live/test_combine_order_live.py --ignore=tests/live/test_exam_sitting_live.py)
           # need: the sum of the caps the suite's live tests ask the ledger for
           # (Stage A 8.55, corpus 15 x 5, attack 3 x 4, hard 10 x 5, oss at most
           # 10 x 5; the Window 0 experiments under tests/live/experiments: probes
@@ -936,6 +952,8 @@ jobs:
           # dispatch's libraries in its own block below), combine-replay 0
           # (O62 item 5: no request, the archived tips re-measured),
           # combine-order 0 (O65 item 2: no request, both conflict choices),
+          # exam-sitting 6.50 (UEX: one paper a dispatch at
+          # exam_sitting.exam_run_cap, its fuse on exam_spent_usd),
           # rounded up; a smaller cap would refuse, and fail, the later
           # tests of the suite.
           case "${INPUT_SUITE}" in
@@ -984,8 +1002,9 @@ jobs:
             ideas-x2) paths=(tests/live/test_ideas_x2_live.py); need=38 ;;
             combine-replay) paths=(tests/live/test_combine_replay_live.py); need=0 ;;
             combine-order) paths=(tests/live/test_combine_order_live.py); need=0 ;;
+            exam-sitting) paths=(tests/live/test_exam_sitting_live.py); need=7 ;;
             *)
-              echo "::error::unknown suite input (stage-a, corpus, attack, hard, oss, probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, ab-v2-p, ab-v2, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, evolve-p, heal-hard, build, grader, upstream-verify, upstream, agent-probes, heal-agent, research-agent, watch, watch-cleanup, ideas-probe, ideas-views, ideas-marker, ideas-validate, ideas-slice, ideas-pool, ideas-reaudit, ideas-picks, ideas-x2, combine-replay or combine-order)"
+              echo "::error::unknown suite input (stage-a, corpus, attack, hard, oss, probes, triage, papers, web, prescreen, sweep, sweep-fable, sweep-record, ab, ab-v2-p, ab-v2, escalation, acquire, noise, heal, oss-ab, evolve, evolve-more, evolve-p, heal-hard, build, grader, upstream-verify, upstream, agent-probes, heal-agent, research-agent, watch, watch-cleanup, ideas-probe, ideas-views, ideas-marker, ideas-validate, ideas-slice, ideas-pool, ideas-reaudit, ideas-picks, ideas-x2, combine-replay, combine-order or exam-sitting)"
               exit 1
               ;;
           esac
@@ -1229,6 +1248,44 @@ jobs:
             echo "::error::x2_dispatch is only for the ideas-x2 suite"
             exit 1
           fi
+          # UEX (O71 item 4): the engine sits the four retired practical
+          # papers, one X2-0 run each with the gain-ordered combine, on key 2
+          # only: X2-0's exports exactly, with SITE_STACKS=on
+          # (exam_sitting.X2_EX; test_exam_sitting_ci.py checks every value).
+          # The papers come from the committed archive, checked against its
+          # manifest's sha256 before any request (exam_archive).
+          exam_paper="${INPUT_EXAM_PAPER-}"
+          exam_spent="${INPUT_EXAM_SPENT_USD-}"
+          if [ "${INPUT_SUITE}" = exam-sitting ]; then
+            if [ "${key_slot}" != 2 ]; then
+              echo "::error::exam-sitting runs on key_slot 2 only"
+              exit 1
+            fi
+            case "${exam_paper}" in
+              t1 | t2 | t3 | t4) ;;
+              *)
+                echo "::error::exam-sitting needs exam_paper, t1, t2, t3 or t4 (one paper a dispatch)"
+                exit 1
+                ;;
+            esac
+            if ! [[ "${exam_spent}" =~ ^[0-9]{1,2}([.][0-9]{1,4})?$ ]]; then
+              echo "::error::exam-sitting needs exam_spent_usd, the USD the earlier papers spent (0 for the first)"
+              exit 1
+            fi
+            export LIVE_EXAM_PAPER="${exam_paper}" LIVE_EXAM_SPENT_USD="${exam_spent}"
+            export IDEA_PIPELINE=true PORTFOLIO_ROUNDS=2 MAX_TRIAL_ROUNDS=2 GENERATOR_MAX_CALLS=2
+            export IDEAS_ROUND_SEEDS=true NEAR_MISS_COMPOUNDS=true OP_COUNT_JUDGE=true
+            export GENERATOR_LESSONS=false IDEAS_SEQUENTIAL_LANES=false IDEAS_MECHANISM_DEDUPE=false
+            export IDEAS_RELAX_LANES='[]' IDEAS_THINK_LINE_ALL=false IDEAS_LANE_FRAMEWORKS=false
+            export IDEAS_LENSES='["eliminate","assume_less","name_the_problem","recombine","resolve_tradeoff","far"]'
+            export IDEAS_LANE_MODEL=claude-sonnet-5-5 IDEAS_LANE_MODELS='{"eliminate":"claude-haiku-5-5"}'
+            export IDEAS_LEAP_MODEL=claude-opus-5-5 IDEAS_REVIEWER_MODEL=claude-opus-5-5
+            export IDEAS_LANE_VIEWS='{}' IDEAS_COUNT_CONTRACT=off SITE_STACKS=on
+            export IDEAS_VIEW_RECORD=true SHADOW_VERIFY=off
+          elif [ -n "${exam_paper}" ] || [ -n "${exam_spent}" ]; then
+            echo "::error::exam_paper and exam_spent_usd are only for the exam-sitting suite"
+            exit 1
+          fi
           if [ "${INPUT_SUITE}" = sweep-fable ]; then
             # Fable 5.1 (the research plan's optional arm) beside the one arm
             # whose per-repository run phase 1 shares
@@ -1342,7 +1399,7 @@ jobs:
           # suites (their timeouts and Window 0 comparisons; an A/A floor of a
           # millisecond workload can pass 100 % and stop the run).
           case "${INPUT_SUITE}" in
-            noise | corpus | hard | oss | upstream-verify | upstream | ideas-slice | ideas-picks | ideas-x2 | combine-replay | combine-order) noise_rule=step3 ;;
+            noise | corpus | hard | oss | upstream-verify | upstream | ideas-slice | ideas-picks | ideas-x2 | combine-replay | combine-order | exam-sitting) noise_rule=step3 ;;
             stage-a | attack | probes | triage | papers | web | prescreen) noise_rule=step2 ;;
             sweep | sweep-fable | sweep-record | ab | ab-v2-p | ab-v2 | escalation | acquire) noise_rule=step2 ;;
             heal | oss-ab | evolve | evolve-more | evolve-p | heal-hard | build | grader | agent-probes | heal-agent | research-agent) noise_rule=step2 ;;

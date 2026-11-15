@@ -91,6 +91,7 @@ STEP3_SUITES = frozenset(  # L0, L1a/b, L2a/b; V9's upstream verify and live
         "ideas-x2",  # X2a: normal engine runs (spec-idea-lab 9.3)
         "combine-replay",  # O62 item 5: the X2 combine re-test, measured again
         "combine-order",  # O65 item 2: the X2 combine re-test, both choices
+        "exam-sitting",  # UEX (O71 item 4): one normal X2-0 run a dispatch
     }
 )
 RULES = {  # PAIRED_TRIALS, CONFIRM_WINNERS, NOISE_CALIBRATION_BLOCKS
@@ -316,9 +317,11 @@ def test_every_suite_sets_its_noise_rule_explicitly(
     mode = "wired" if suite == "upstream" else "aimed"  # upstream: wired only
     slices = "tomli" if suite == "ideas-slice" else None  # names its libraries
     x2 = "X2-0:tomli" if suite == "ideas-x2" else None  # an arm and its libraries
+    exam = suite == "exam-sitting"  # UEX: key 2, one paper and the running spend
     code, output, _ = _dispatch(
         tmp_path, suite, "claude-opus-5-5", "150", mode=mode, oss_repo=repo,
-        slice_repos=slices, x2_dispatch=x2,
+        slice_repos=slices, x2_dispatch=x2, key_slot="2" if exam else None,
+        exam_paper="t1" if exam else None, exam_spent_usd="0" if exam else None,
     )  # fmt: skip
     assert code == 0, output
     found = _rule(tmp_path)
