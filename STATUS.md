@@ -905,6 +905,95 @@ blocks it.
   - **U8a's look windows stand as labelled.** No snapshot is taken between an
     ABBA and its suite, the engine source stays untouched, and the wide window
     is accepted.
+- **O71. Gain order, the equivalence gate, the harder exam, the engine's sitting
+  and the dependency PR (owner, 2026-11-15).**
+  1. **Gain order becomes the labelled combine baseline before the 20 X2-DT
+     runs.**
+     - X2-DT runs with `SITE_STACKS="on"` in every round's combine and at
+       delivery. The start-up refusal of `SITE_STACKS` under stacking (U4's
+       `_check_stack_knobs`, and U6's planned factory refusal) is lifted, and
+       that unit is re-reviewed.
+     - **The pre-registered comparator, replacing O62's:** the 20 X2-D runs'
+       delivered gain as replayed under gain order (the O65 rows). The X2-D runs
+       not yet covered are replayed, and the two excluded mistune runs get a
+       ruling before any X2-DT run.
+     - The bar is the same: a two-sided p <= 0.10, and a higher median on 3 of
+       the 4 libraries. The secondaries are the same.
+     - **The record states it:** the comparator is replay-measured; X2-DT is
+       live-measured.
+     - **Reconciliation with round 1's X2-S no-harm failure** (written before
+       any further work, as the owner asked):
+       - **What X2-S compared.** Round 1's X2-S arm ran the same setting live
+         (E1 `42264126014`, E2 `42272888210`), one run per library. It failed
+         the no-harm bar on tomli, more_itertools and sqlparse's E2 run.
+       - **Why that does not test the order.** X2-S compared different live
+         runs, whose keep sets differed before any combine: tomli 4 against
+         X2-0's 6, more_itertools 0 against 2, sqlparse E2 3 against 9. Three of
+         the four failures were therefore decided upstream of the delivery
+         order, by run-to-run variance in ideation and judging. The twin bands
+         put that variance at up to 18.7 points of combine on sqlparse.
+       - **What the replay measures.** It holds each run's keeps, base and
+         benchmark fixed and changes only the conflict choice, so that variance
+         cancels and only the order is measured: +2.29 points of mean delivered
+         gain over 58 runs, better in 22 of the 27 runs that differ.
+       - **Why the two agree.** An effect of about two points cannot be seen
+         under a between-run spread of 7 to 19 points with one run per library.
+         Round 1's one run with more keeps (E1 sqlparse, 11 against 9) combined
+         lower, but inside its twin gap.
+       - **Two differences stay open,** and the X2-DT read must not lean on
+         them:
+         - The replay ordered on first-look gains, where the live engine orders
+           on the mean of two confirmations. The replay is the noisier of the
+           two, so if anything this works against gain order.
+         - The replay was measured on quiet runners, while live floors are 2 to
+           3 times higher (O63 item 4), so a conflict decided past the floor in
+           the replay may sit inside it live.
+       - **Conclusion.** Neither record shows harm from the order itself. Round
+         1 shows that one live run per library cannot measure it. With 20 runs a
+         side, X2-DT against the replayed comparator averages the between-run
+         spread rather than cancelling it.
+     - **Not yet covered by the replay (Lead's finding):** of the 20 X2-D runs,
+       17 have rows.
+       - Uncovered: tomli `43159144063` (one keep, so no conflict choice),
+         mistune `43145496896` (today's set did not hold, nothing was delivered)
+         and mistune `43159154661` (the fallback was delivered, and today's
+         greedy set is not recorded).
+       - All three have their kept diffs archived.
+       - **The Lead's proposal for the owner's ruling:** replay all three under
+         gain order only, through the engine's own re-test, hold and fallback
+         rules. The comparator needs only the gain-ordered side, so the original
+         exclusion reason (today's side cannot be measured) no longer applies.
+       - A set that does not hold, with no fallback holding, counts as 0, as it
+         did live.
+       - The one-keep tomli run is measured the same way, so that every
+         comparator value is replay-measured.
+  2. **The equivalence gate is approved to build as record-only.**
+     - It covers the API differential corpus and the type-aware fingerprint, for
+       the four development libraries, recorded in the X2-DT runs.
+     - It decides nothing yet.
+     - The proposal gains a section on how a generator is obtained for a library
+       the engine has never seen.
+  3. **Exam: go for a harder paper.**
+     - **The Lead's reading:** more plants; plants away from the top of the
+       profile, spread across functions and files, in data structures, and
+       visible only at realistic sizes; decoys and traps that actually tempt.
+     - **A trial first:** before any seat sits it, two agents that hold no seat
+       sit it as a trial. The paper is adjusted until the trial lands inside the
+       40-80 % band, then sealed.
+     - **Stage 3 (the seminar) may start now.** The right to propose still comes
+       from the valid exam.
+  4. **The engine sits the four retired papers.**
+     - One unmodified X2-0 run per paper, on key 2, with the gain-ordered
+       combine.
+     - Lessons and the example bank are isolated, so that nothing from the
+       papers persists.
+     - **The report:** per plant, whether the engine found it, beside the
+       students' 14 of 14, and what it kept that was not a plant. A diagnostic,
+       not a reading.
+     - **Budget:** 12 USD.
+  5. **The `opentelemetry-api` fix goes to master as a one-line PR,** draft
+     until CI is green; the owner merges it. **Opened:** PR #54 from
+     `claude/awesome-ride-kmnd5q` (`04b4c80`, lockfile only).
 - **O65. Two owner requests from round 3's study findings (owner, 2026-11-13;
   not a rule change).**
   1. **Equivalence audit, now, zero credit, outside the points.**
