@@ -1315,7 +1315,7 @@ def test_the_ci_row_batch_need_timeout_rule_and_stage_a_ignore(tmp_path: Path) -
     cap_help = _ci_block("      suite_cap_usd:", "\n\n")
     assert "combine-order 0 (no request, but the cap must be above 0)" in cap_help
     batch = _ci_block("      order_batch:", "\n      idea_pipeline:")
-    assert "options: ['1', '2', '3']" in batch and "default: '1'" in batch
+    assert "options: ['1', '2', '3', 'b']" in batch and "default: '1'" in batch
     block = _ci_block("  live-smoke:", "    defaults:")
     assert f"inputs.suite == 'combine-order' && {oc.ORDER_JOB_MINUTES} ||" in block
     assert EXPERIMENT_MINUTES["combine-order"] == oc.ORDER_JOB_MINUTES
@@ -1350,13 +1350,18 @@ def test_the_ci_row_batch_need_timeout_rule_and_stage_a_ignore(tmp_path: Path) -
                                 order_batch="2")  # fmt: skip
     env = (tmp_path / "two" / "env.txt").read_text(encoding="utf-8").splitlines()
     assert code == 0 and f"{oc.BATCH_ENV}=2" in env, output
+    (tmp_path / "b").mkdir()  # O71 item 1: the (b)-only cases
+    code, output, _ = _dispatch(tmp_path / "b", "combine-order", "claude-opus-5-5", "1",
+                                order_batch="b")  # fmt: skip
+    env = (tmp_path / "b" / "env.txt").read_text(encoding="utf-8").splitlines()
+    assert code == 0 and f"{oc.BATCH_ENV}=b" in env, output
     code, output, calls = _dispatch(tmp_path / "bad", "combine-order", "claude-opus-5-5", "1",
                                     order_batch="4")  # fmt: skip
-    assert (code, calls) == (1, "") and "order_batch must be 1, 2 or 3" in output
+    assert (code, calls) == (1, "") and "order_batch must be 1, 2, 3 or b" in output
     (tmp_path / "empty").mkdir()
     code, output, calls = _dispatch(tmp_path / "empty", "combine-order", "claude-opus-5-5",
                                     "1", order_batch="")  # fmt: skip
-    assert (code, calls) == (1, "") and "order_batch must be 1, 2 or 3" in output
+    assert (code, calls) == (1, "") and "order_batch must be 1, 2, 3 or b" in output
     code, output, calls = _dispatch(
         tmp_path / "zero", "combine-order", "claude-opus-5-5", "0"
     )

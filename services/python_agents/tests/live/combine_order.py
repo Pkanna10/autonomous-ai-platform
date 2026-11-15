@@ -51,6 +51,15 @@ a ``skipped`` row per data gap, a ``library`` row, then the tables
 its choice's whole set and left its rows (and its fallback did, when one
 ran); a run is complete when every look and single did.
 
+**(b) alone** (O71 item 1, ``order_cases.B_RUNS``, ``$LIVE_ORDER_BATCH``
+``b``): the three X2-D runs the comparator lacks, measured on the
+gain-ordered side only (``measure_run`` on ``LoadedB``): no (a) set rebuilt,
+no delivered tip committed, no greedy probe; (b)'s plan, its two looks b, b
+with each failed set's fallback, and the singles of each conflicting pair,
+as the both-sides run measures (b). A recorder is one kind (``sides``): the
+(b)-only dispatch never measures one of the 58, nor the both-sides one these
+three, and writes its own table with no census exclusions.
+
 **Failures:** an integrity mismatch before the clone, a crash or a guard
 breach writes an ``error`` row and raises. A run whose rebuilt (a) is not the
 delivered patch is an ``error`` row, and the library goes on. An
@@ -60,6 +69,7 @@ complete nor skipped fails its case after every run and row.
 
 from __future__ import annotations
 
+import statistics
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -85,17 +95,19 @@ from .ideas_x2 import LIBRARIES
 from .order_cases import (
     NOT_PROVABLE,
     ORDER_EXPERIMENT,
-    RUNS,
+    SIDES_AB,
+    SIDES_B,
     SKIPPED,
     Loaded,
+    LoadedB,
     OrderRun,
     Skipped,
+    cases,
     exclusion_line,
+    load_b_run,
     load_run,
 )
 from .order_readings import (
-    LOOK_PLAN,
-    SAME_PLAN,
     LibraryResult,
     Pair,
     RunResult,
@@ -215,17 +227,11 @@ def _look(index: int, name: str, measurer: OrderMeasurer, offered: Sequence[Kept
                    candidate.trial_id, single, clock() - at)  # fmt: skip
 
 
-def measure_run(index: int, loaded: Loaded, measurer: OrderMeasurer,
-                commits: Mapping[str, str], clock: Callable[[], float]) -> RunResult:  # fmt: skip
-    """(a) rebuilt and checked, (b) planned, the looks a, b, b, a with each
-    failed set's fallback, then the singles."""
-    run, started = loaded.run, clock()
-    found = RunResult(run)
-    changes = {k.trial_id: KeptChange(k.trial_id, k.hypothesis_id, "replay",
-                                      commits[k.trial_id], 0.0, k.gain)
-               for k in run.keeps}  # fmt: skip
-    offer_a = [changes[t] for t in run.applied]
-    a = measurer.merged(offer_a)
+def _rebuilt(run: OrderRun, measurer: OrderMeasurer, changes: Mapping[str, KeptChange],
+             commits: Mapping[str, str]) -> Merged:  # fmt: skip
+    """(a) rebuilt from its applied trials, checked against the delivered
+    tree, and proven today's greedy merge."""
+    a = measurer.merged([changes[t] for t in run.applied])
     if a.applied != run.applied:
         raise IntegrityError(f"{run.id}: (a) rebuilt from its applied trials applied"
                              f" {len(a.applied)} of {len(run.applied)}")  # fmt: skip
@@ -234,20 +240,41 @@ def measure_run(index: int, loaded: Loaded, measurer: OrderMeasurer,
             f"{run.id}: (a)'s rebuilt tip is not the delivered patch's tree"
         )
     _greedy(run, measurer, changes)
+    return a
+
+
+def measure_run(index: int, loaded: Loaded | LoadedB, measurer: OrderMeasurer,
+                commits: Mapping[str, str], clock: Callable[[], float]) -> RunResult:  # fmt: skip
+    """(a) rebuilt and checked, (b) planned, the looks a, b, b, a with each
+    failed set's fallback, then the singles; a ``LoadedB`` run (b) alone,
+    its looks b, b."""
+    run, started = loaded.run, clock()
+    found = RunResult(run)
+    changes = {k.trial_id: KeptChange(k.trial_id, k.hypothesis_id, "replay",
+                                      commits[k.trial_id], 0.0, k.gain)
+               for k in run.keeps}  # fmt: skip
+    a = (
+        None
+        if isinstance(loaded, LoadedB)
+        else _rebuilt(run, measurer, changes, commits)
+    )
     gains: dict[str, float | None] = {k.trial_id: k.gain for k in run.keeps}
     plan = measurer.plan(list(changes.values()), gains)
     b = measurer.merged(plan.order)
-    found.a_applied, found.b_applied = a.applied, b.applied
-    found.same = measurer.same_tree(a.tip, b.tip)
+    found.b_applied = b.applied
+    # (a)'s fallback draws on every keep, as the node's does on all it was
+    # offered; (b)'s on its plan, which is every keep in gain order
+    choices = {"b": (list(plan.order), b.applied, list(plan.order))}
+    if a is not None:
+        found.a_applied = a.applied
+        found.same = measurer.same_tree(a.tip, b.tip)
+        choices["a"] = ([changes[t] for t in run.applied], a.applied,
+                        list(changes.values()))  # fmt: skip
     found.duplicates = len(plan.duplicate_of)
     found.conflicts = sorted((x, y) for x, y in (sorted(p) for p in plan.conflicts))
     found.plan_s = clock() - started
-    # (a)'s fallback draws on every keep, as the node's does on all it was
-    # offered; (b)'s on its plan, which is every keep in gain order
-    choices = {"a": (offer_a, a.applied, list(changes.values())),
-               "b": (list(plan.order), b.applied, list(plan.order))}  # fmt: skip
     try:
-        for name in SAME_PLAN if found.same else LOOK_PLAN:
+        for name in found.plan:
             offered, applied, pool = choices[name[0]]
             found.looks.append(
                 _look(index, name, measurer, offered, applied, pool, clock)
@@ -261,7 +288,7 @@ def measure_run(index: int, loaded: Loaded, measurer: OrderMeasurer,
     for x, y in found.conflicts:
         sx, sy = found.singles.get(x), found.singles.get(y)
         found.pairs.append(Pair(
-            x, y, _kept(a.applied, (x, y)), _kept(b.applied, (x, y)),
+            x, y, _kept(found.a_applied, (x, y)), _kept(b.applied, (x, y)),
             (None if sx is None else sx.gain, None if sy is None else sy.gain),
             (None if sx is None else sx.floor, None if sy is None else sy.floor),
         ))  # fmt: skip
@@ -277,7 +304,12 @@ def measure_library(library: str, runs: Sequence[OrderRun], measurer: OrderMeasu
     started = clock()
     found = LibraryResult(library, ids=tuple(r.id for r in runs))
     try:
-        loaded = [load_run(r, archive) for r in runs]
+        other = [r.id for r in runs if r.sides != recorder.sides]
+        if other:
+            raise ValueError(f"{library}: this dispatch measures sides {recorder.sides},"
+                             f" not {', '.join(other)}")  # fmt: skip
+        loaded = [load_b_run(r, archive) if r.sides == SIDES_B else load_run(r, archive)
+                  for r in runs]  # fmt: skip
         base = measurer.prepare()
         if any(r.case.base_commit != base for r in runs):
             raise IntegrityError(
@@ -286,7 +318,8 @@ def measure_library(library: str, runs: Sequence[OrderRun], measurer: OrderMeasu
         commits: dict[str, dict[str, str]] = {}
         for item in loaded:
             run = item.run
-            tips = {DELIVERED_KEY: measurer.commit_tip(item.delivered, f"{run.id}-d")}
+            tips = ({} if isinstance(item, LoadedB)
+                    else {DELIVERED_KEY: measurer.commit_tip(item.delivered, f"{run.id}-d")})  # fmt: skip
             for keep, path in item.diffs:
                 tips[keep.trial_id] = measurer.commit_tip(
                     path, f"{run.id}-{keep.trial_id[:8]}"
@@ -370,6 +403,15 @@ PAIR_HEAD: Final = (
     "| run | pair | (a) kept | (b) kept | single gains | single floors | stronger "
     "| past the floor |"
 )
+B_HEAD: Final = (
+    "| run | keeps | why no (a) | (b) applied | (b) delivered | mean (b) delivered "
+    "| conflicting pairs | (b) stronger (past floor) | archived gain | complete |"
+)
+B_LINE: Final = (
+    "(b) alone (O71 item 1): the comparator is the X2-D runs' delivered gain under"
+    " gain order, so (a) is not measured on these runs; each row's (a) fields are"
+    " null and a_null_reason says why."
+)
 LIBRARY_HEAD: Final = (
     "| library | runs | errors | baseline floor | clone and tips | preflight "
     "| baseline | calibration | case | stopped |"
@@ -381,10 +423,13 @@ def _head(text: str) -> list[str]:
 
 
 class OrderRecorder:
-    """Rows to the sink as they come, a note per library, the tables."""
+    """Rows to the sink as they come, a note per library, the tables; one
+    kind of case (``sides``: both choices, or (b) alone)."""
 
-    def __init__(self, sink: ResultsSink) -> None:
-        self.sink = sink
+    def __init__(self, sink: ResultsSink, sides: str = SIDES_AB) -> None:
+        if sides not in (SIDES_AB, SIDES_B):
+            raise ValueError(f"sides must be {SIDES_AB} or {SIDES_B}, got {sides!r}")
+        self.sink, self.sides = sink, sides
         self.runs: list[RunResult] = []
         self.libraries: list[LibraryResult] = []
         self.errors: list[tuple[str, str]] = []
@@ -418,6 +463,8 @@ class OrderRecorder:
         live.note(_fit(f"ORDER {name}: error {error}"))
 
     def markdown(self) -> str:
+        if self.sides == SIDES_B:
+            return self._b_markdown()
         width = RUN_HEAD.count("|") - 1
         lines = ["## Combine order replay (O65 item 2: score order (a) against gain order (b))",
                  "", BASIS_LINE, "", *_head(RUN_HEAD)]  # fmt: skip
@@ -448,8 +495,36 @@ class OrderRecorder:
         flagged = [r.run.id for r in self.runs if r.run.greedy == NOT_PROVABLE]
         lines += ["", self._totals(), "", self._exclusion(),
                   f"Not counted (a look or single lost): {', '.join(lost) or 'none'}",
-                  f"Greedy not provable (measured, flagged): {', '.join(flagged) or 'none'}",
-                  "", *_head(PAIR_HEAD)]  # fmt: skip
+                  f"Greedy not provable (measured, flagged): {', '.join(flagged) or 'none'}"]  # fmt: skip
+        return "\n".join(lines + self._tail())
+
+    def _b_markdown(self) -> str:
+        """(b) alone: its table, the counted runs' mean, the pairs, the times."""
+        width = B_HEAD.count("|") - 1
+        lines = ["## Combine order replay, (b) only (O71 item 1: the comparator's uncovered runs)",
+                 "", BASIS_LINE, "", B_LINE, "", *_head(B_HEAD)]  # fmt: skip
+        for r in self.runs:
+            b, pb = r.counts("b"), r.counts("b", past=True)
+            lines.append(cells([
+                r.run.id, len(r.run.keeps), r.run.why_no_a or "-", len(r.b_applied),
+                _gains(r, "b"), _f(_pct(r.mean("b"))), len(r.pairs),
+                f"{b[0]} of {b[1]} ({pb[0]} of {pb[1]})", _f(r.run.archived_gain_pct),
+                flag(r.complete),
+            ]))  # fmt: skip
+        for name, error in self.errors:
+            lines.append(cells([name, "error", error, *("-",) * (width - 3)]))
+        counted = [
+            g for r in self.runs if r.complete and (g := r.mean("b")) is not None
+        ]
+        mean = statistics.fmean(counted) if counted else None
+        lines += ["", f"{len(counted)} run(s) counted, {len(self.runs) - len(counted)} not"
+                  f" counted (incomplete), {len(self.errors)} error(s); mean (b) delivered"
+                  f" over the counted runs: {_f(_pct(mean))}"]  # fmt: skip
+        return "\n".join(lines + self._tail())
+
+    def _tail(self) -> list[str]:
+        """The pair table and the wall times."""
+        lines = ["", *_head(PAIR_HEAD)]
         for r in self.runs:
             for p in r.pairs:
                 lines.append(cells([
@@ -470,7 +545,7 @@ class OrderRecorder:
                 _f(None if base is None else base.calibration_s), _f(x.wall_s),
                 x.stopped or "-",
             ]))  # fmt: skip
-        return "\n".join(lines)
+        return lines
 
     def _totals(self) -> str:
         """The run counts, the preferences clear and inside the floor, and
@@ -512,8 +587,8 @@ class OrderRecorder:
         )
 
     def finish(self, echo: Callable[[str], None]) -> None:
-        """The census's exclusions to the sink, then the tables."""
-        for x in self._excluded():
+        """The census's exclusions to the sink (both sides only), then the tables."""
+        for x in self._excluded() if self.sides == SIDES_AB else ():
             self.sink.write({"experiment": ORDER_EXPERIMENT, "kind": "excluded",
                              "id": x.id, "library": x.library, "reason": x.reason,
                              "data": x.data, "keeps": x.keeps})  # fmt: skip
@@ -522,8 +597,11 @@ class OrderRecorder:
 
 def order_live(library: str, live: LiveRun, root: Path, isolation: Isolation,
                recorder: OrderRecorder, *, policy: GitPolicy = PRODUCTION) -> LibraryResult:  # fmt: skip
-    """One library on the engine measurer: its runs, its own directory."""
+    """One library on the engine measurer: its runs of the recorder's kind,
+    its own directory."""
+    name = f"order-{library}" if recorder.sides == SIDES_AB else f"order-b-{library}"
     measurer = EngineOrderMeasurer(LIBRARIES[library], root / library, isolation,
-                                   run_id=f"order-{library}", policy=policy)  # fmt: skip
-    runs = [r for r in RUNS if r.library == library]
-    return measure_library(library, runs, measurer, recorder, live)
+                                   run_id=name, policy=policy)  # fmt: skip
+    return measure_library(
+        library, cases(library, recorder.sides), measurer, recorder, live
+    )

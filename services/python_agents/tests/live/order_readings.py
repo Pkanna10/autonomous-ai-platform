@@ -19,6 +19,12 @@ re-measured gains differ (``higher``), and a stronger side past the floor
 when they differ by more than the larger of the two singles' floors
 (``decided``). Both counts are reported: which choice kept the stronger side
 (``a_higher``) and which kept it past the floor (``a_beyond``).
+
+**(b) alone** (O71 item 1, ``OrderRun.sides`` ``b``): the looks are b, b
+(``B_PLAN``, the looks the existing (b) side takes), each with its fallback,
+read by the same rules; the row keeps the schema, says ``sides`` ``b``, and
+leaves every field that reads (a) null (``A_FIELDS``, and each pair's) with
+``a_null_reason`` saying why.
 """
 
 from __future__ import annotations
@@ -27,11 +33,20 @@ import statistics
 from dataclasses import dataclass, field
 from typing import Final
 
-from .order_cases import ORDER_BASIS, ORDER_EXPERIMENT, OrderRun
+from .order_cases import ORDER_BASIS, ORDER_EXPERIMENT, SIDES_B, OrderRun
 from .replay_engine import BaselineLook, RetestLook
 
 LOOK_PLAN: Final = ("a1", "b1", "b2", "a2")  # two tips, a, b, b, a
 SAME_PLAN: Final = ("a1", "a2")  # both choices give one tree: one tip
+B_PLAN: Final = ("b1", "b2")  # (b) alone: its own two looks (O71 item 1)
+A_FIELDS: Final = (  # a run row's fields that read (a): null on (b) alone
+    "applied_a", "same", "a_gains_pct", "a_set_gains_pct", "a_holds", "a_outcomes",
+    "a_floors_pct", "a_fallbacks", "a_fallback_gains_pct", "a_fallback_holds",
+    "a_no_rows", "a_fallback_no_rows", "mean_a_pct", "raw_mean_a_pct", "greedy",
+    "greedy_reason", "prefers", "clear", "a_higher", "decided_a", "a_beyond",
+    "beyond_a",
+)  # fmt: skip
+A_PAIR_FIELDS: Final = ("a_kept", "a_higher", "a_beyond")
 _TIE: Final = 1e-9
 
 
@@ -250,11 +265,21 @@ class RunResult:
         return abs(diff) > floor
 
     @property
+    def b_only(self) -> bool:
+        return self.run.sides == SIDES_B
+
+    @property
+    def plan(self) -> tuple[str, ...]:
+        """The looks the run takes: (b)'s two alone, else one tip's or two's."""
+        if self.b_only:
+            return B_PLAN
+        return SAME_PLAN if self.same else LOOK_PLAN
+
+    @property
     def complete(self) -> bool:
-        plan = SAME_PLAN if self.same else LOOK_PLAN
         return (
-            self.stopped is None and self.same is not None
-            and tuple(x.name for x in self.looks) == plan
+            self.stopped is None and (self.b_only or self.same is not None)
+            and tuple(x.name for x in self.looks) == self.plan
             and all(x.complete for x in self.looks)
             and all(s.gain is not None for s in self.singles.values())
         )  # fmt: skip
@@ -290,7 +315,7 @@ class RunResult:
                 f"{s}_fallback_no_rows": [x.fallback_no_rows for x in looks],
                 f"mean_{s}_pct": _pct(self.mean(s)), f"raw_mean_{s}_pct": _pct(self.raw_mean(s)),
             })  # fmt: skip
-        return {
+        row: dict[str, object] = {
             "experiment": ORDER_EXPERIMENT, "kind": "run", "id": r.id, "arm": r.case.arm,
             "dispatch": r.case.dispatch, "library": r.library, "keeps": len(r.keeps),
             "applied_a": list(self.a_applied), "applied_b": list(self.b_applied),
@@ -311,7 +336,14 @@ class RunResult:
             "fallback_s": [x.fallback_s for x in self.looks],
             "singles_s": {t: s.seconds for t, s in self.singles.items()},
             "wall_s": self.wall_s, "stopped": self.stopped, "complete": self.complete,
+            "sides": r.sides, "a_null_reason": r.why_no_a,
         }  # fmt: skip
+        if self.b_only:
+            row.update(dict.fromkeys(A_FIELDS))
+            row["pairs"] = [
+                {**p.row(), **dict.fromkeys(A_PAIR_FIELDS)} for p in self.pairs
+            ]
+        return row
 
 
 @dataclass

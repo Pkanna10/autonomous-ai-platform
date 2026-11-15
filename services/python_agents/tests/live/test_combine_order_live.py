@@ -10,7 +10,9 @@ each dispatch fits its job), ``combine_order.order_live``: every run's files
 through integrity, the clone, one calibration, then per run today's score
 order (a) and the measured-gain choice (b) re-tested a, b, b, a through the
 combine node's path, each failed set's fallback as the engine would, and each
-conflicting keep once alone.
+conflicting keep once alone. ``$LIVE_ORDER_BATCH`` ``b`` (O71 item 1)
+selects only the three X2-D runs the comparator lacks, measured on the
+gain-ordered side alone (``order_cases.sides``, ``B_RUNS``).
 Recorded, never asserted (one JSON line per run and per library to
 ``$LIVE_RESULTS_PATH``, the tables to the job summary). A mismatch, a crash
 or a breach fails the library after its ``error`` row; a library with any
@@ -29,7 +31,7 @@ from e2e.conftest import Isolation
 from .combine_order import OrderRecorder, order_live
 from .conftest import StartLive
 from .discovery_io import ResultsSink
-from .order_cases import ORDER_RUN_CAP_USD, batch
+from .order_cases import ORDER_RUN_CAP_USD, batch, sides
 from .replay_engine import check_settings
 
 pytestmark = pytest.mark.live
@@ -42,7 +44,7 @@ def recorder() -> Iterator[OrderRecorder]:
     """The settings and the sink, checked before any test clones; the
     tables at the end."""
     check_settings()
-    found = OrderRecorder(ResultsSink(os.environ))
+    found = OrderRecorder(ResultsSink(os.environ), sides(os.environ))
     yield found
     found.finish(print)
 
