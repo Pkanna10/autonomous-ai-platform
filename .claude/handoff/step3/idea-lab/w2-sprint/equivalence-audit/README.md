@@ -73,6 +73,65 @@ Strengthening only, and a proposal only: no judge was edited.
 
 The remaining risks are a timeout under CI load (mitigate with a generous per-input alarm, then a retry), hash-seed ordering (the engine already forces `PYTHONHASHSEED=0`), and changes to exception types on invalid input, which the gate would correctly flag.
 
+**Approved and built as record-only (O71 item 2, UEQ):** items 1 and 2 for the four libraries, in `services/python_agents/tests/live/x2_equiv.py`, recorded on the X2-DT rows and deciding nothing. The generators are this audit's, ported draw for draw (the first 3,000 cases at seeds 1, 2 and 7 equal `corpus.py`'s). Each library call runs in the engine's own sandbox (`run_once`, network and writes `required`, a per-input alarm). The child is `python -s -S -B -P`, not `-I`: `-I` implies `-E`, which ignores `PYTHONHASHSEED`. A library whose output holds a set then mismatched against itself in 31 of 40 cases, so the child now refuses to start unless `sys.flags.hash_randomization` is off. This audit's own runs used `python3 -I`, so they ran with random hash seeds; their eight base-against-base controls still gave 0 on these four libraries.
+
+## How a generator is obtained for a library the engine has never seen
+
+The four generators above were written by hand, after reading each library. A library the engine has never seen needs the same thing built by the engine at baseline, before any trial exists, and checked before it may gate anything. The harness already has the shape: an *adapter* file (`ADAPTER` with `generate`, `seeds`, `workload`, `mutate` and `evaluator`), loaded by path in the sandbox (`EquivSettings.adapter`; its own tests drive the gate with exactly such a file). The plan below fills that file for an unknown library.
+
+**1. Where the inputs come from, in this order.** Each source is found mechanically; none needs the model.
+- **The library's own tests and fixtures.** Data files under `tests/` whose extension matches the input the workload passes (`*.toml`, `*.sql`, `*.txt`, `*.md`, `*.json`), and the string and bytes literals of the test files, read with `ast.parse` and never run. This is the largest source here: tomli 972 seed cases (744 files), sqlparse 1,277 (17 scripts and the literals), mistune 909 (652 CommonMark and 257 fixture examples) and markdown 2,414 (104 texts and the literals).
+- **The docs' examples.** `>>>` doctest inputs and code fences whose language matches the input type, in `README*` and `docs/`.
+- **The benchmark's workload.** The engine always has it, because it defines "better". Use windows of one to three units of its input, byte-mutated, as here (`workload` source).
+- **A grammar or schema in the repository.** A `.lark`, `.g4` or EBNF file, a JSON Schema, or the lexer's token table (sqlparse's `SQL_REGEX` in `keywords.py`). These give the token vocabulary for the generator.
+- **Types from signatures and stubs.** For an API that takes structured values rather than text, use `inspect.signature`, annotations, `py.typed` and `.pyi` stubs to get the argument types. Each type gets a value strategy: Hypothesis-style `from_type`, with the seed values as examples.
+
+**2. How the generator is derived, and by whom.**
+- **The harness owns the generic parts.** Seed reading, workload windows, the byte mutator (`RARE` gets the grammar's punctuation and the seeds' rarest characters), the fingerprint, the alarm, the sandbox, minimisation and the record are all harness code. The model never writes them.
+- **The engine writes only two functions,** in one `ENGINE_MODEL` request at the BASELINE step:
+  - `generate`: a grammar-shaped generator built from the seeds, the grammar or token table, and the public API the workload calls (from the workload's imports and the profile);
+  - `evaluator`: the list of public calls and configurations, taken from the workload's own calls plus each documented option. The audit's lesson applies here: mistune's second configuration and markdown's reused instance found what the defaults did not.
+- **The file is frozen with the judges,** as the healer's reproducer is in Step 3c:
+  - written before the first trial, outside every worktree;
+  - its sha256 and the corpus's sha256 (`corpus_sha256`, already on every record) go on the run row;
+  - it is loaded by path inside the sandbox, because it is model-written code (UEQ already runs every generator there, and its no-network test proves the confinement).
+- **A fallback that needs no model.** If the request fails or the file fails its checks, the corpus is *seeds and workload only*, recorded as such. It is still a corpus: for tomli the seed set alone carries the `1__0` fault (M8's shape), which the generator meets 18 times in 60,000.
+
+**3. The checks before it may gate anything.** They run once per run, at baseline, and their results go on the run row. Until a library passes them, its records stay record-only, whatever the owner rules for the four.
+- **Determinism, base against base.** Build the corpus twice and get the same sha256. Run the base twice in two processes and get 0 mismatches. This audit had 8 of 8 controls at 0, and UEQ's tests check it per library. A nondeterministic call (a clock, an id, an address in a `repr`) shows as mismatches here. It is dropped from `evaluator`, or its output normalised, before any trial.
+- **The planted-mutant catch rate.** Make about ten mechanical mutants of the functions the hypotheses target (the profile's top functions):
+  - a comparison flipped, a constant moved by one, a branch deleted, a regex quantifier changed (`_?` to `_*`, M8's shape), an escape dropped (MM1's);
+  - keep only the mutants the test suite does not kill, since those are the ones the gate is for;
+  - the generator must catch at least 80% of them (this audit: 17 of 17, where the frozen checks caught 8).
+  - Below that, the record says `weak generator` with the rate. The fix is the one the audit used for MM2 and MM3: add the missed tokens (`\)`, `HTTPS://`) and re-check.
+- **Coverage of the touched functions.** Run the corpus once under `sys.settrace` in the sandbox. Record line and branch coverage of every function a trial's diff touches; the base's coverage map is computed once. A touched function the corpus never enters gets `uncovered` in its record: the gate is blind there and says so.
+- **Power for rare faults.** A fault that changes a fraction `p` of outputs needs about `3/p` inputs for 95% detection. M8 (18 of 60,000) needs about 10,000. The size rule is the one UEQ uses: about 10 s of evaluation per tree (`SIZES`), with `p` stated on the row.
+
+**4. When none can be obtained.** If there is no adapter, no seeds and no workload input the gate can parse, the record is `status: "no generator"` with `mismatches: null` (`equivalence_record` already does this for a library without an adapter). It never shows as 0 mismatches. A seed-only corpus is recorded as `seeds only`, so a reader can weigh it.
+
+**5. The cost, and the anti-cheating rule.**
+- **Cost:**
+  - one model request per run for the two functions (about the size of the understand request);
+  - the checks: two base runs and about ten mutants at about 10 s each, roughly 2 minutes once per run;
+  - each trial tree: about 10 s at the sizes here. UEQ measured the four at full size at load 9 to 14 on 4 cores: 9 to 18 s per tree, the base once in 12 to 21 s, and up to 30 s of minimisation per tree that differs. That is 2 to 9 minutes per X2-DT run for 5 to 10 diffs.
+- **Anti-cheating:**
+  - A trial can never edit the generator or its corpus. They sit outside the repository, so no diff can name them. They are chosen by the run, not read from the trial's tree. They are hashed before the first trial, and the hash is on every record.
+  - The corpus is built once, from the *base* tree's tests and benchmark. A trial's edit to its own tests (which anticheat already rejects) cannot change the seeds.
+  - The evaluation runs with no network, so a trial cannot fetch a different answer.
+
+**6. The record-only bound: a condition on promotion.** Today the trial's own code runs in the process that computes its fingerprints. That process can do four things:
+- **Detect the gate.** It can tell the gate from the benchmark (`sys.argv` names `x2_equiv.py`) and answer as the base does. A trial that returns the base's output only under the gate records 0 mismatches; UEQ's test `test_record_only_bound_...` shows it.
+- **Write the result file itself.** UEQ reads that file only as a plain file (no link, no FIFO), bounded in size, with its error text redacted and clipped, but its content cannot be trusted.
+- **Read the base tree** (Landlock confines writes, not reads), so it could reproduce the base's outputs.
+- **Know the corpus.** `corpus.json` is readable.
+
+So the records are evidence against honest mistakes, not against a trial that targets the gate. **Before the gate may decide anything,** three changes are needed:
+- **Compute the fingerprints outside the trial's process.** The trial's process only hands each raw output, as plain data, through a pipe it did not open; a separate harness process hashes it. That closes the forged result file.
+- **Hide the base and the corpus from the trial's sandbox.** Its run must not be able to read the base tree or `corpus.json` (cases are fed one at a time through the pipe). That closes reproducing the base.
+- **Make the gate's runs look like the workload's:** the same entry point and `argv` shape, with inputs arriving as the benchmark's do. Even then, a trial that recognises the gate's inputs could still behave differently, so a promoted gate must also be covered by the anti-cheating review, as the judges are.
+
+Until then, every record stays record-only.
+
 Everything is in `/tmp/claude-0/-home-user-autonomous-ai-platform/b0055c45-9f04-5276-ac4b-c180c851948e/scratchpad/audit/`. Every number above comes from a script in `scripts/`:
 - **Inventory and setup:** `inventory.py`, `prepare.py`
 - **Generators and corpus:** `gen_tomli.py`, `gen_sql.py`, `gen_md.py`, `corpus.py`
