@@ -20,6 +20,38 @@ the measured CI minutes (section 6). The idea is combine proposal item 2
     without a held delivery.
   - The secondaries: the conflict rate at delivery and the unique keeps per
     round.
+- **Pre-registration amendments, recorded before any X2-DT run:**
+  - **O71 item 1, the baseline and the comparator.**
+    - X2-DT runs with `SITE_STACKS="on"` (gain order) in every round's combine
+      and at delivery.
+    - The comparator replaces O62's: the 20 X2-D runs' delivered gain as
+      replayed under gain order on quiet runners (the O65 rows, plus the three
+      O72 item 2 replays).
+    - The bar and the secondaries are unchanged.
+    - The comparator is replay-measured; X2-DT's primary is live-measured.
+      Every report states both labels.
+  - **O71 item 2:** the equivalence gate's fields (the API differential corpus
+    and the type-aware fingerprint) are recorded in every X2-DT run. They are
+    record-only and decide nothing.
+  - **O72 item 2, the three uncovered X2-D runs.**
+    - tomli `43159144063`, mistune `43145496896` and mistune `43159154661` are
+      replayed under gain order only, through the engine's own re-test, hold
+      and fallback rules.
+    - A set with nothing holding counts as 0, as it did live.
+    - The 20 comparator values are fixed in `o65/comparator.md` before any
+      X2-DT run, and are not changed afterwards.
+  - **O72 item 3, a replay-measured secondary.**
+    - After each X2-DT run, its delivered tree (the squash) is replayed on a
+      quiet runner under the same replay rules as the comparator: the same
+      harness, base, benchmark and runner type, with no API spend.
+    - The live delivered gain stays the primary measure.
+    - The replayed X2-DT gain against the replayed comparator is a
+      pre-registered secondary, read at the same bar: two-sided p <= 0.10 and
+      a higher median on at least 3 of the 4 libraries. It is reported beside
+      the primary.
+    - A run with no held delivery counts as 0 on both measures.
+    - If the primary and this secondary disagree, the report says so and
+      chooses neither.
 - **Pilot:** one run on key 1 before 2026-11-20, to measure the real minutes
   and check the mechanics.
   - Key 1 has 5.29 USD left, and X2-D runs measured 2.75 to 4.11.

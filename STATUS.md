@@ -905,6 +905,37 @@ blocks it.
   - **U8a's look windows stand as labelled.** No snapshot is taken between an
     ABBA and its suite, the engine source stays untouched, and the wide window
     is accepted.
+- **O72. The sitting's budget, the three replays, a replay secondary for X2-DT,
+  the exam's last trial and the seminar (owner, 2026-11-16).**
+  1. **Engine sitting:** a 14.50 USD budget, all four retired papers; dispatch.
+     `EXAM_BUDGET_USD` is raised from 12 to 14.50, so the fuse admits the fourth
+     paper while the first three spent at most 8.00.
+  2. **The three uncovered X2-D runs** (tomli `43159144063`, mistune
+     `43145496896`, mistune `43159154661`) are replayed under gain order only,
+     through the engine's own re-test, hold and fallback rules; a set with
+     nothing holding counts as 0. Dispatch (`order_batch=b`), then fix the 20
+     comparator values in the record before any X2-DT run.
+  3. **Added to X2-DT's pre-registration before any run:** after each X2-DT run,
+     its delivered tree is replayed on a quiet runner under the comparator's
+     replay rules, with no API spend.
+     - The live delivered gain stays the primary measure.
+     - The replay-measured gain against the replayed comparator is a
+       pre-registered secondary with the same bar (two-sided p <= 0.10, a higher
+       median on 3 of 4 libraries), reported beside the primary.
+     - If the two disagree, the record says so and does not choose between them.
+  4. **Dispatch order.** With items 2 and 3 recorded and the pilot clean, the 20
+     X2-DT runs may be dispatched on key 2. The pilot runs on key 1 as ruled in
+     O63 (cap 5.00), before 2026-11-20.
+  5. **Exam: one more trial, then seal.** trial-e and trial-f sit the revised
+     docutils paper and the ply re-sit.
+     - If docutils is still outside the Lead's band reading afterwards, the gate
+       is sealed on lark plus whichever paper is inside the band, and the other
+       is recorded as a diagnostic paper. The examiner is not sent round again.
+     - The remaining re-sit paper (docutils math) is built only if a seat fails
+       the gate.
+  6. **Stage 3, the seminar,** runs now, in parallel, if it has not started; the
+     Lead reports its state.
+  7. **PR #54** (`opentelemetry-api`): the owner merges it.
 - **O71. Gain order, the equivalence gate, the harder exam, the engine's sitting
   and the dependency PR (owner, 2026-11-15).**
   1. **Gain order becomes the labelled combine baseline before the 20 X2-DT
