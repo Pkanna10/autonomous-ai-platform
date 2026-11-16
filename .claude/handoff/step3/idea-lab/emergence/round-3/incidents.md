@@ -106,3 +106,20 @@ The owner holds the passphrase. It is in no file in the repository, STATUS, the 
 | 3 | 2026-11-14, after marking | as version 2, plus `marks.tar.gz` (the marking folder: logs with the load average, every `mark.py` output, the per-plant probes, the speciality tally, `marks.json`) | `08354b0a222568c68b7430715a1688e11717aa4b520eea44285577de11d037ff` |
 
 It is refreshed and re-committed once when the last seat has sat, and once more after marking with the marks included.
+
+## Seminar (stage 3, O72 item 6), 2026-11-16: guard denials
+
+**Guard changes before any seat was resumed.**
+- Seats may not name the new exam (`exam2`, the trial briefs, the examiner's brief) before they sit it.
+- No agent may name the board file (`board.jsonl`), so challenges stay blind; seats get their inbox only.
+- Three denials in the log under s1-perf-eng's and trial-e's agent ids were the Lead's own guard tests, not those agents' calls.
+
+**Denials during turns 1 to 4c.** Every one was denied before it ran, and none was retried by another route.
+- Another seat's scratch folder: s3-equivalence (fp-compose's), z3-contrarian (s3-equivalence's), fp-measure (s4-algorithms'), s7-cpython (s8-expert's), fp-compose (the folder of all seats).
+- Git commands that enumerate repository files: s5-search, trial-f, the U8b builder (twice, one a history listing without a pathspec).
+- A recursive search rooted above a sealed folder: s4-algorithms.
+- **A call naming `heldout`: z2-contradiction, turn 4b.**
+  - The token was in a `grep -v` filter, added to exclude such paths from a recursive grep over `idea-lab/` for the X2-DT design. The whole call was denied, so nothing was searched.
+  - z2 then grepped only `w2-sprint/stacked-plan.md`.
+  - Asked by the Lead, z2 states it never opened, listed or read the held-out brief, `heldout.sha256`, anything they name, or the upstream corpus.
+  - Lead's reading: no breach, no misconduct.
