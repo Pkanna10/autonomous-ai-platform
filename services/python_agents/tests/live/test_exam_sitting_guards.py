@@ -15,7 +15,8 @@ the cap arithmetic and the isolation of the sitting, offline.
 - **Arm**: X2-0's mapping plus ``SITE_STACKS="on"``, nothing else.
 - **Cap**: ``ideas_x2.run_cap``'s share term (6.50); no archived X2-0 run
   came near it or would have had its seeded call refused under it; the
-  owner's 12 USD sits three papers at the archive's dearest spends.
+  owner's 14.50 USD (O72 item 1) sits all four papers at the archive's
+  dearest spends, where O71's 12 sat three.
 - **Isolation**: no archive reader globs the sitting's rows folder, or the
   papers' archive; ``sit_one`` makes ``run_one``'s calls in its order.
 """
@@ -716,7 +717,7 @@ def test_no_archived_x2_0_run_came_near_the_cap() -> None:
         assert first + x2.X1_S1_USD + s2 <= cfg.IDEAS_DISCOVERY_MAX_SHARE * cap
 
 
-def test_the_fuse_sits_three_papers_on_12_usd_and_never_passes_it() -> None:
+def test_the_fuse_sits_four_papers_on_14_50_usd_and_never_passes_it() -> None:
     rows = _archived_x2_0()
     dearest = {lib: max(r["cost_usd"] for r in rows if r["repo"] == lib)
                for lib in {r["repo"] for r in rows}}  # fmt: skip
@@ -730,7 +731,12 @@ def test_the_fuse_sits_three_papers_on_12_usd_and_never_passes_it() -> None:
     cap = ex.exam_run_cap(x2.arm_settings(ex.X2_EX))
     assert ex.admitted(12.0, dearest, cap) == ("p1", "p2", "p3")
     assert ex.admitted(12.0, mean, cap) == ("p1", "p2", "p3")
-    assert ex.admitted(14.5, dearest, cap) == ex.X2_EX.repos
+    assert ex.EXAM_BUDGET_USD == 14.5  # O72 item 1: the owner's budget
+    assert ex.admitted(ex.EXAM_BUDGET_USD, dearest, cap) == ex.X2_EX.repos
+    assert ex.admitted(ex.EXAM_BUDGET_USD, mean, cap) == ex.X2_EX.repos
+    assert ex.fuse_refusal(8.0, 6.5, 14.5) is None
+    four = ex.fuse_refusal(8.01, 6.5, 14.5)
+    assert four is not None and "14.50 USD suite cap" in four
     assert ex.fuse_refusal(5.5, 6.5, 12.0) is None
     refusal = ex.fuse_refusal(5.51, 6.5, 12.0)
     assert (
@@ -780,9 +786,9 @@ W2 = {"LIVE_KEY_SLOT": "2", SUITE_CAP_ENV: "12", ex.PAPER_ENV: "t2", ex.SPENT_EN
     ({ex.SPENT_ENV: ""}, "earlier papers spent"),
     ({ex.SPENT_ENV: "nan"}, "earlier papers spent"),
     ({ex.SPENT_ENV: "-1"}, "earlier papers spent"),
-    ({ex.SPENT_ENV: "12.5"}, "earlier papers spent"),
+    ({ex.SPENT_ENV: "14.51"}, "earlier papers spent"),
     ({SUITE_CAP_ENV: "6.45"}, "needs 6.50"),
-    ({SUITE_CAP_ENV: "12.01"}, "owner's 12"),
+    ({SUITE_CAP_ENV: "14.51"}, "owner's 14.5"),
     ({ex.SPENT_ENV: "5.51"}, "5.51 USD spent \\+ the 6.50"),
 ])  # fmt: skip
 def test_the_plan_refuses_before_any_request(

@@ -27,7 +27,7 @@ run whose ``unaffordable`` count is not 0 is not X2-0's). A dispatch names
 its paper (``LIVE_EXAM_PAPER``) and what the earlier papers spent
 (``LIVE_EXAM_SPENT_USD``, the Lead's running total); ``exam_plan`` refuses,
 before any request, unless spent + 6.50 is at most the suite cap, itself at
-most the owner's 12 (``EXAM_BUDGET_USD``).
+most the owner's 14.50 (``EXAM_BUDGET_USD``, O72 item 1).
 
 **The minutes.** ``paper_minutes``: every launch a run can make, counted
 from the judges' rules (``launches``), at the paper's measured workload and
@@ -82,7 +82,7 @@ SITTING_ROWS: Final = (
 )
 WORKLOADS: Final = TESTS_DIR / "fixtures" / "exam_sitting" / "workloads"
 BENCH_SCRIPT: Final = "bench.py"
-EXAM_BUDGET_USD: Final = 12.0  # O71 item 4: the owner's budget for the four runs
+EXAM_BUDGET_USD: Final = 14.5  # O72 item 1: the owner's budget (O71: 12)
 EXAM_WINDOW: Final = "W2"  # key 2 (U-key)
 PAPER_ENV: Final = "LIVE_EXAM_PAPER"
 SPENT_ENV: Final = "LIVE_EXAM_SPENT_USD"
